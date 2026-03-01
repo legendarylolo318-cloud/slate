@@ -42,12 +42,35 @@
     <color type="primary" scheme_preference="dark">#130F1A</color>
   </branding>
 
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/lullabyX/sone/v0.6.5/data/sone_drawer_metainfo.png</image>
+      <caption>Now playing drawer with synced lyrics</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/lullabyX/sone/v0.6.5/data/sone_homepage_metainfo.png</image>
+      <caption>Home page with TIDAL streaming library</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/lullabyX/sone/v0.6.5/data/sone_search_metainfo.png</image>
+      <caption>Search and explore</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/lullabyX/sone/v0.6.5/data/sone_theme_metainfo.png</image>
+      <caption>Custom theme with full color customization</caption>
+    </screenshot>
+    <screenshot>
+      <video container="webm" codec="av1" width="1920" height="1080">https://raw.githubusercontent.com/lullabyX/sone/v0.6.5/data/sone_demo_metainfo.webm</video>
+      <caption>SONE in action</caption>
+    </screenshot>
+  </screenshots>
+
   <content_rating type="oars-1.1" />
 
   <releases>
-    <release version="0.6.2" date="2025-02-26">
+    <release version="0.6.5" date="2026-03-01">
       <description>
-        <p>Initial Flathub release.</p>
+        <p>First public release.</p>
       </description>
     </release>
   </releases>
