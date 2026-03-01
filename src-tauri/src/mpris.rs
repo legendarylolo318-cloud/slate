@@ -39,7 +39,7 @@ impl MprisHandle {
             let local = tokio::task::LocalSet::new();
 
             local.block_on(&rt, async move {
-                let player = match Player::builder("sone")
+                let player = match Player::builder("io.github.lullabyX.sone")
                     .can_play(true)
                     .can_pause(true)
                     .can_go_next(true)
@@ -58,7 +58,7 @@ impl MprisHandle {
 
                 // Identity + desktop entry so KDE/GNOME can associate with the window
                 player.set_identity("SONE").await.ok();
-                player.set_desktop_entry("sone").await.ok();
+                player.set_desktop_entry("io.github.lullabyX.sone").await.ok();
 
                 // Wire control callbacks — reuse existing tray event system
                 let app = app_handle.clone();
