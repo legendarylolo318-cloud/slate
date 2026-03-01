@@ -7,3 +7,6 @@ Icon=io.github.lullabyX.sone
 Terminal=false
 Type=Application
 StartupWMClass=sone
+GenericName=TIDAL Music Client
+StartupNotify=true
+Keywords=music;audio;streaming;tidal;player;hifi;lossless;flac;
