@@ -2,7 +2,7 @@
 Name=SONE
 Comment=Native Linux client for TIDAL — lossless and bit-perfect audio streaming
 Categories=Audio;Music;AudioVideo;
-Exec=sone
+Exec=io.github.lullabyX.sone
 Icon=io.github.lullabyX.sone
 Terminal=false
 Type=Application
