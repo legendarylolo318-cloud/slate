@@ -11,6 +11,7 @@
 > [!IMPORTANT]
 > Requires an active [TIDAL](https://tidal.com) subscription. Not affiliated with TIDAL.
 
+https://github.com/user-attachments/assets/67d7a8ed-352b-4ce6-8b9c-70b7427a5f22
 
 <p align="center">
   <img src="data/sone_homepage_readme.png" width="32%" alt="SONE Linux TIDAL client — home page with lossless streaming library" />
