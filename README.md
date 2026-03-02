@@ -223,24 +223,6 @@ This is a known issue with NVIDIA's proprietary drivers and WebKitGTK hardware a
 ## FAQ
 
 <details>
-<summary>What are Client ID and Client Secret?</summary>
-
-They are OAuth application credentials used to connect to TIDAL's API. Official TIDAL apps (Android, iOS, desktop) have these built in. Since SONE is an unofficial client, it does not ship with any credentials — you provide your own.
-
-SONE requires credentials from a **native TIDAL application** (such as the Android or desktop client). Credentials from the [TIDAL Developer Portal](https://developer.tidal.com/) (`developer.tidal.com`) **will not work** — those are for TIDAL's public catalog API, which is a different system that does not support authentication or streaming.
-
-SONE does not provide or endorse any specific method for obtaining credentials. You may find guidance by searching online.
-
-**Do I need both?** No. There are two login methods:
-
-- **Device Code** — works with Client ID alone (CD-quality lossless, 16-bit/44.1kHz). Adding Client Secret unlocks Hi-Res up to 24-bit/192kHz.
-- **PKCE** — requires both Client ID and Client Secret. Supports Hi-Res up to 24-bit/192kHz.
-
-**Are my credentials safe?** Client ID and Client Secret identify an application, not your personal account. Your TIDAL login is handled separately through TIDAL's standard OAuth 2.0 flow — the same mechanism used by all official TIDAL applications. Credentials are stored locally (encrypted at rest with AES-256-GCM) and only sent to TIDAL's authentication servers.
-
-</details>
-
-<details>
 <summary>I'm getting a "Device busy" error in exclusive or bit-perfect mode</summary>
 
 Your system's sound server (PulseAudio or PipeWire) or another application is already using the ALSA device. Exclusive and bit-perfect modes need direct hardware access — only one application can hold the device at a time.
