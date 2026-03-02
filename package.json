@@ -9,7 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "version": "node sync-version.mjs && cargo update --manifest-path src-tauri/Cargo.toml --workspace && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock build-scripts/build/PKGBUILD",
+    "version": "node sync-version.mjs && cargo update --manifest-path src-tauri/Cargo.toml --workspace && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock build-scripts/build/PKGBUILD data/io.github.lullabyX.sone.metainfo.xml",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\""
   },
