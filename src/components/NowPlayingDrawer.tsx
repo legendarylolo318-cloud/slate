@@ -655,11 +655,11 @@ const SuggestedTab = memo(function SuggestedTab() {
     );
   }
 
-  if (error) {
+  if (error || tracks.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-th-text-disabled">
         <Sparkles size={40} className="mb-3" />
-        <p className="text-sm">Suggested tracks not available</p>
+        <p className="text-sm">No suggested tracks available for this track</p>
       </div>
     );
   }
