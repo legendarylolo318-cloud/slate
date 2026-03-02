@@ -10,6 +10,28 @@ use crate::Settings;
 use crate::SoneError;
 use crate::tidal_api::{AuthTokens, DeviceAuthResponse};
 
+/// Check if the given credentials match the embedded defaults.
+fn are_embedded_defaults(id: &str, secret: &str) -> bool {
+    crate::embedded_config::has_stream_keys()
+        && id == crate::embedded_config::stream_key_a()
+        && secret == crate::embedded_config::stream_key_b()
+}
+
+/// Resolve credentials from saved settings, falling back to embedded defaults.
+fn resolve_credentials(settings: &Settings) -> (String, String) {
+    let id = if settings.client_id.is_empty() {
+        crate::embedded_config::stream_key_a()
+    } else {
+        settings.client_id.clone()
+    };
+    let secret = if settings.client_secret.is_empty() {
+        crate::embedded_config::stream_key_b()
+    } else {
+        settings.client_secret.clone()
+    };
+    (id, secret)
+}
+
 /// Extract a value for `key=<value>` from URL-encoded / form-data text.
 fn extract_form_value(text: &str, key: &str) -> Option<String> {
     let pattern = format!("{}=", key);
@@ -80,17 +102,17 @@ pub async fn load_saved_auth(state: State<'_, AppState>) -> Result<Option<AuthTo
     log::debug!("[load_saved_auth]: path={:?}", state.settings_path);
     if let Some(settings) = state.load_settings() {
         log::debug!("[load_saved_auth]: auth_tokens present: {}, has_credentials: {}", settings.auth_tokens.is_some(), !settings.client_id.is_empty());
-        if let Some(tokens) = settings.auth_tokens {
-            // Restore tokens and credentials to client
+        if let Some(ref tokens) = settings.auth_tokens {
+            let (id, secret) = resolve_credentials(&settings);
             let mut client = state.tidal_client.lock().await;
             client.tokens = Some(tokens.clone());
-            client.set_credentials(&settings.client_id, &settings.client_secret);
+            client.set_credentials(&id, &secret);
             // Fetch session info to populate country_code for search
             match client.get_session_info().await {
                 Ok(_) => log::debug!("[load_saved_auth]: tokens restored, country_code: {}", client.country_code),
                 Err(e) => log::debug!("[load_saved_auth]: tokens restored but session info failed (will use default country_code): {}", e),
             }
-            return Ok(Some(tokens));
+            return Ok(Some(tokens.clone()));
         }
     } else {
         log::debug!("[load_saved_auth]: no settings file found");
@@ -98,12 +120,28 @@ pub async fn load_saved_auth(state: State<'_, AppState>) -> Result<Option<AuthTo
     Ok(None)
 }
 
-/// Returns saved client credentials so the Login page can pre-fill them.
+/// Returns saved client credentials so the Login page can pre-fill the advanced view.
+/// Only returns user-provided credentials, never embedded defaults.
 #[tauri::command]
 pub fn get_saved_credentials(state: State<'_, AppState>) -> Result<(String, String), SoneError> {
     log::debug!("[get_saved_credentials]");
     if let Some(settings) = state.load_settings() {
         Ok((settings.client_id, settings.client_secret))
+    } else {
+        Ok((String::new(), String::new()))
+    }
+}
+
+/// Returns the embedded default credentials (for the simple login flow).
+/// Returns empty strings if only placeholders are compiled in.
+#[tauri::command]
+pub fn get_default_credentials() -> Result<(String, String), SoneError> {
+    log::debug!("[get_default_credentials]");
+    if crate::embedded_config::has_stream_keys() {
+        Ok((
+            crate::embedded_config::stream_key_a(),
+            crate::embedded_config::stream_key_b(),
+        ))
     } else {
         Ok((String::new(), String::new()))
     }
@@ -183,8 +221,11 @@ pub async fn import_session(
         bit_perfect: false,
     });
     settings.auth_tokens = Some(final_tokens.clone());
-    settings.client_id = client_id;
-    settings.client_secret = client_secret;
+    // Only persist user-provided credentials, not embedded defaults
+    if !are_embedded_defaults(&client_id, &client_secret) {
+        settings.client_id = client_id;
+        settings.client_secret = client_secret;
+    }
     state.save_settings(&settings)?;
     Ok(final_tokens)
 }
@@ -228,8 +269,11 @@ pub async fn poll_device_auth(
                 bit_perfect: false,
             });
             settings.auth_tokens = Some(tokens.clone());
-            settings.client_id = client_id;
-            settings.client_secret = client_secret;
+            // Only persist user-provided credentials, not embedded defaults
+            if !are_embedded_defaults(&client_id, &client_secret) {
+                settings.client_id = client_id;
+                settings.client_secret = client_secret;
+            }
             state.save_settings(&settings)?;
 
             Ok(Some(tokens))
@@ -326,8 +370,11 @@ pub async fn complete_pkce_auth(
         bit_perfect: false,
     });
     settings.auth_tokens = Some(tokens.clone());
-    settings.client_id = client_id;
-    settings.client_secret = client_secret;
+    // Only persist user-provided credentials, not embedded defaults
+    if !are_embedded_defaults(&client_id, &client_secret) {
+        settings.client_id = client_id;
+        settings.client_secret = client_secret;
+    }
     state.save_settings(&settings)?;
 
     Ok(tokens)

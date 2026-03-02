@@ -2,6 +2,7 @@ mod audio;
 pub mod cache;
 mod commands;
 mod crypto;
+mod embedded_config;
 mod error;
 #[cfg(target_os = "linux")]
 mod mpris;
@@ -372,6 +373,7 @@ pub fn run() {
             commands::auth::greet,
             commands::auth::load_saved_auth,
             commands::auth::get_saved_credentials,
+            commands::auth::get_default_credentials,
             commands::auth::parse_token_data,
             commands::auth::import_session,
             commands::auth::start_device_auth,
