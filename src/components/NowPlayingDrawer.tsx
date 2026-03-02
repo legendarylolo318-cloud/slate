@@ -11,7 +11,7 @@ import {
   ListPlus,
   GripVertical,
 } from "lucide-react";
-import { useState, useEffect, useRef, useCallback, memo, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, memo, useMemo } from "react";
 import { useAtomValue } from "jotai";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -186,11 +186,21 @@ const QueueTab = memo(function QueueTab({
     ],
   );
 
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+
+  useLayoutEffect(() => {
+    if (listRef.current) {
+      setScrollMargin(listRef.current.offsetTop);
+    }
+  }, [history.length, !!currentTrack]);
+
   const virtualizer = useVirtualizer({
     count: queue.length,
     getScrollElement: () => scrollEl,
     estimateSize: () => QUEUE_ROW_HEIGHT,
     overscan: 10,
+    scrollMargin,
   });
 
   return (
@@ -248,6 +258,7 @@ const QueueTab = memo(function QueueTab({
             </button>
           </div>
           <div
+            ref={listRef}
             style={{ height: virtualizer.getTotalSize(), position: "relative" }}
           >
             {virtualizer.getVirtualItems().map((vItem) => {
@@ -263,7 +274,6 @@ const QueueTab = memo(function QueueTab({
                 <div
                   key={`queue-${track.id}-${i}`}
                   data-index={i}
-                  ref={virtualizer.measureElement}
                   draggable
                   onDragStart={(e) => handleDragStart(e, i)}
                   onDragOver={(e) => handleDragOver(e, i)}
@@ -273,7 +283,7 @@ const QueueTab = memo(function QueueTab({
                   className={`absolute left-0 right-0 flex items-center gap-1 rounded-md transition-opacity duration-150 ${
                     isDragged ? "opacity-30" : "opacity-100"
                   }`}
-                  style={{ top: 0, transform: `translateY(${vItem.start}px)` }}
+                  style={{ top: `${vItem.start - scrollMargin}px` }}
                 >
                   {/* Drop indicator line — above */}
                   {showDropAbove && (
