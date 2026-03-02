@@ -883,6 +883,21 @@ export async function getSavedCredentials(): Promise<{
   }
 }
 
+export async function getDefaultCredentials(): Promise<{
+  clientId: string;
+  clientSecret: string;
+}> {
+  try {
+    const [clientId, clientSecret] = await invoke<[string, string]>(
+      "get_default_credentials",
+    );
+    return { clientId, clientSecret };
+  } catch (error) {
+    console.error("Failed to get default credentials:", error);
+    return { clientId: "", clientSecret: "" };
+  }
+}
+
 export async function parseTokenData(rawText: string): Promise<{
   clientId?: string;
   clientSecret?: string;

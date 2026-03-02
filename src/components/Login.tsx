@@ -1,6 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "../hooks/useAuth";
-import { getSavedCredentials, parseTokenData } from "../api/tidal";
+import {
+  getSavedCredentials,
+  getDefaultCredentials,
+  parseTokenData,
+} from "../api/tidal";
 import { formatSoneError } from "../lib/errorUtils";
 import {
   Loader2,
@@ -15,11 +19,47 @@ import {
   Import,
   HelpCircle,
   X,
+  ArrowLeft,
+  AlertTriangle,
 } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import Icon from "./Icon";
 
 type AuthMethod = "device" | "pkce" | "import";
+type View = "simple" | "advanced";
+
+/** Check if a Tauri IPC error looks like a credential/auth rejection (401/403). */
+function isCredentialRelatedError(err: unknown): boolean {
+  const parsed =
+    typeof err === "string"
+      ? (() => {
+          try {
+            return JSON.parse(err);
+          } catch {
+            return null;
+          }
+        })()
+      : err;
+  if (!parsed || typeof parsed !== "object") return false;
+  const p = parsed as any;
+  // SoneError::Api { status, body } → { kind: "Api", message: { status, body } }
+  if (p.kind === "Api" && p.message?.status) {
+    const s = p.message.status;
+    return s === 401 || s === 403;
+  }
+  // Fallback: check body text for common credential-error keywords
+  const body = typeof p.message === "string" ? p.message : p.message?.body;
+  if (typeof body === "string") {
+    const lower = body.toLowerCase();
+    return (
+      lower.includes("invalid_client") ||
+      lower.includes("unauthorized") ||
+      (lower.includes("client") && lower.includes("not found"))
+    );
+  }
+  return false;
+}
 
 export default function Login() {
   const {
@@ -31,12 +71,15 @@ export default function Login() {
     getUserPlaylists,
   } = useAuth();
 
+  const [view, setView] = useState<View>("simple");
   const [step, setStep] = useState<
     "idle" | "device_pending" | "pkce_waiting" | "exchanging"
   >("idle");
   const [authMethod, setAuthMethod] = useState<AuthMethod>("device");
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState("");
+  const [credentialError, setCredentialError] = useState(false);
+  const [hasDefaults, setHasDefaults] = useState(false);
 
   // Credentials
   const [clientId, setClientId] = useState("");
@@ -47,6 +90,7 @@ export default function Login() {
   // Device code state
   const [userCode, setUserCode] = useState("");
   const [verificationUri, setVerificationUri] = useState("");
+  const [qrCodeUrl, setQrCodeUrl] = useState("");
   const deviceCodeRef = useRef<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -69,13 +113,28 @@ export default function Login() {
   // Help modal
   const [showHelp, setShowHelp] = useState(false);
 
-  // Load saved credentials on mount
+  // Credentials used for the simple flow (stored separately so they don't
+  // get overwritten if the user edits the advanced fields).
+  const simpleCredsRef = useRef<{
+    clientId: string;
+    clientSecret: string;
+  } | null>(null);
+
+  // Load saved credentials on mount and decide initial view
   useEffect(() => {
     const loadCreds = async () => {
       const { clientId: savedId, clientSecret: savedSecret } =
         await getSavedCredentials();
       if (savedId) setClientId(savedId);
       if (savedSecret) setClientSecret(savedSecret);
+
+      const defaults = await getDefaultCredentials();
+      if (defaults.clientId) {
+        setHasDefaults(true);
+      } else {
+        setView("advanced");
+      }
+
       setCredentialsLoaded(true);
     };
     loadCreds();
@@ -98,32 +157,33 @@ export default function Login() {
 
   const hasSecret = clientSecret.trim().length > 0;
 
-  // ==================== Device Code Flow ====================
+  const ensureUrl = (uri: string) =>
+    uri.startsWith("http") ? uri : `https://${uri}`;
 
-  const handleDeviceLogin = async () => {
-    if (!clientId.trim()) {
-      setError("Client ID is required.");
-      return;
-    }
+  // ==================== Shared Device Code Flow ====================
 
+  const startDeviceFlow = async (
+    id: string,
+    secret: string,
+    onError: (err: unknown) => void,
+  ) => {
     try {
       setError(null);
+      setCredentialError(false);
       setStatus("Starting device authorization...");
 
-      const resp = await startDeviceAuth(clientId.trim(), clientSecret.trim());
+      const resp = await startDeviceAuth(id, secret);
 
       deviceCodeRef.current = resp.deviceCode;
       setUserCode(resp.userCode);
 
-      // Ensure the URI has a protocol prefix
-      const ensureUrl = (uri: string) =>
-        uri.startsWith("http") ? uri : `https://${uri}`;
       const vUri = ensureUrl(resp.verificationUri);
       const vUriComplete = resp.verificationUriComplete
         ? ensureUrl(resp.verificationUriComplete)
         : null;
 
       setVerificationUri(vUri);
+      setQrCodeUrl(vUriComplete || vUri);
       setStep("device_pending");
       setStatus("");
 
@@ -137,11 +197,7 @@ export default function Login() {
       pollIntervalRef.current = setInterval(async () => {
         if (!deviceCodeRef.current) return;
         try {
-          const tokens = await pollDeviceAuth(
-            deviceCodeRef.current,
-            clientId.trim(),
-            clientSecret.trim(),
-          );
+          const tokens = await pollDeviceAuth(deviceCodeRef.current, id, secret);
           if (tokens) {
             if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
             pollIntervalRef.current = null;
@@ -154,15 +210,44 @@ export default function Login() {
         } catch (err: any) {
           if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
           pollIntervalRef.current = null;
-          setError(formatSoneError(err));
+          onError(err);
           setStep("idle");
         }
       }, interval);
     } catch (err: any) {
-      setError(formatSoneError(err));
+      onError(err);
       setStep("idle");
       setStatus("");
     }
+  };
+
+  // ==================== Simple Flow (embedded credentials) ====================
+
+  const handleSimpleLogin = async () => {
+    const creds = await getDefaultCredentials();
+    if (!creds.clientId) {
+      setError("No embedded credentials available.");
+      return;
+    }
+    simpleCredsRef.current = creds;
+    await startDeviceFlow(creds.clientId, creds.clientSecret, (err) => {
+      setError(formatSoneError(err));
+      if (isCredentialRelatedError(err)) {
+        setCredentialError(true);
+      }
+    });
+  };
+
+  // ==================== Device Code Flow (advanced) ====================
+
+  const handleDeviceLogin = async () => {
+    if (!clientId.trim()) {
+      setError("Client ID is required.");
+      return;
+    }
+    await startDeviceFlow(clientId.trim(), clientSecret.trim(), (err) => {
+      setError(formatSoneError(err));
+    });
   };
 
   // ==================== PKCE Flow ====================
@@ -318,14 +403,17 @@ export default function Login() {
 
   const reset = useCallback(() => {
     setError(null);
+    setCredentialError(false);
     setStep("idle");
     setStatus("");
     setPasteUrl("");
     setAuthorizeUrl("");
     setUserCode("");
     setVerificationUri("");
+    setQrCodeUrl("");
     pkceRef.current = null;
     deviceCodeRef.current = null;
+    simpleCredsRef.current = null;
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
@@ -351,9 +439,144 @@ export default function Login() {
           <h1 className="text-4xl font-bold tracking-tight text-white">ONE</h1>
         </div>
 
-        {/* ==================== Idle ==================== */}
-        {step === "idle" && (
+        {/* ==================== Simple View — Idle ==================== */}
+        {view === "simple" && step === "idle" && (
           <>
+            <p className="text-th-text-muted mb-8 text-lg">
+              Connect your TIDAL account
+            </p>
+
+            {/* Error banner */}
+            {error && (
+              <div className="mb-6 p-4 bg-red-900/30 border border-red-700/50 rounded-lg text-red-400 text-sm text-left break-words overflow-hidden">
+                <p
+                  className="whitespace-pre-wrap break-words"
+                  style={{ overflowWrap: "anywhere" }}
+                >
+                  {error}
+                </p>
+                {credentialError && (
+                  <button
+                    onClick={() => {
+                      setError(null);
+                      setCredentialError(false);
+                      setView("advanced");
+                    }}
+                    className="mt-3 flex items-center gap-2 text-[13px] text-amber-400 hover:text-amber-300 transition-colors"
+                  >
+                    <AlertTriangle size={14} />
+                    Credentials may need updating — use custom credentials
+                  </button>
+                )}
+                {!credentialError && (
+                  <button
+                    onClick={() => setError(null)}
+                    className="mt-2 block w-full text-center underline text-red-300 hover:text-red-200"
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </div>
+            )}
+
+            {status ? (
+              <div className="flex flex-col items-center gap-4 py-4">
+                <Loader2 className="animate-spin text-th-accent" size={24} />
+                <p className="text-th-text-muted text-[14px]">{status}</p>
+              </div>
+            ) : (
+              <button
+                onClick={handleSimpleLogin}
+                className="w-full px-6 py-3.5 bg-th-accent text-black font-bold rounded-full hover:scale-[1.02] hover:brightness-110 transition-all text-[16px] shadow-xl"
+              >
+                Get Login Code
+              </button>
+            )}
+
+            <button
+              onClick={() => {
+                setError(null);
+                setCredentialError(false);
+                setView("advanced");
+              }}
+              className="mt-6 text-[12px] text-th-text-faint hover:text-th-text-muted transition-colors"
+            >
+              Use custom credentials
+            </button>
+          </>
+        )}
+
+        {/* ==================== Device Pending (shared) ==================== */}
+        {step === "device_pending" && (
+          <div className="flex flex-col gap-5">
+            <div className="text-left bg-th-overlay rounded-xl p-6 border border-th-border-subtle">
+              <p className="text-[14px] text-th-text-muted mb-4">
+                Scan the QR code or enter this code:
+              </p>
+              <div className="flex items-center justify-center py-3">
+                <span className="text-4xl font-mono font-bold tracking-[0.3em] text-white">
+                  {userCode}
+                </span>
+              </div>
+
+              {/* QR Code */}
+              {qrCodeUrl && (
+                <div className="flex justify-center my-4">
+                  <div className="bg-white rounded-xl p-3">
+                    <QRCodeSVG value={qrCodeUrl} size={160} level="M" />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-center gap-2 mt-2 mb-4">
+                <span className="text-[13px] text-th-text-faint">
+                  {verificationUri}
+                </span>
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    await openUrl(verificationUri);
+                  } catch {
+                    window.open(verificationUri, "_blank");
+                  }
+                }}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white/[0.08] hover:bg-th-inset rounded-full text-[13px] text-white font-medium transition-colors"
+              >
+                <ExternalLink size={14} />
+                Open {verificationUri}
+              </button>
+            </div>
+            <div className="flex items-center justify-center gap-3 text-th-text-faint">
+              <Loader2 className="animate-spin" size={16} />
+              <span className="text-[13px]">Waiting for authorization...</span>
+            </div>
+            <button
+              onClick={reset}
+              className="text-[12px] text-th-text-faint hover:text-th-text-muted transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {/* ==================== Advanced View — Idle ==================== */}
+        {view === "advanced" && step === "idle" && (
+          <>
+            {/* Back button — only shown when embedded defaults are available */}
+            {hasDefaults && (
+              <button
+                onClick={() => {
+                  setError(null);
+                  setView("simple");
+                }}
+                className="flex items-center gap-1.5 text-[13px] text-th-text-faint hover:text-th-text-muted transition-colors mb-4"
+              >
+                <ArrowLeft size={14} />
+                Back
+              </button>
+            )}
+
             <p className="text-th-text-muted mb-2 text-lg">
               Connect your TIDAL account to start streaming
             </p>
@@ -479,7 +702,7 @@ export default function Login() {
                     ["pkce", Globe, "PKCE"],
                     ["import", Import, "Token Import"],
                   ] as const
-                ).map(([id, Icon, label]) => (
+                ).map(([id, TabIcon, label]) => (
                   <button
                     key={id}
                     onClick={() => {
@@ -493,7 +716,7 @@ export default function Login() {
                         : "text-th-text-faint hover:text-th-text-faint"
                     }`}
                   >
-                    <Icon size={13} />
+                    <TabIcon size={13} />
                     {label}
                   </button>
                 ))}
@@ -505,7 +728,9 @@ export default function Login() {
                   <>
                     <p className="text-[12px] text-th-text-faint mb-2">
                       Get a code, visit{" "}
-                      <span className="text-th-text-faint">link.tidal.com</span>
+                      <span className="text-th-text-faint">
+                        link.tidal.com
+                      </span>
                       , and enter it to log in. No redirect URLs needed.
                     </p>
                     <p className="text-[11px] text-amber-400/70 mb-4">
@@ -682,50 +907,6 @@ export default function Login() {
           </>
         )}
 
-        {/* ==================== Device Code Pending ==================== */}
-        {step === "device_pending" && (
-          <div className="flex flex-col gap-5">
-            <div className="text-left bg-th-overlay rounded-xl p-6 border border-th-border-subtle">
-              <p className="text-[14px] text-th-text-muted mb-4">
-                Go to the link below and enter this code:
-              </p>
-              <div className="flex items-center justify-center py-4">
-                <span className="text-4xl font-mono font-bold tracking-[0.3em] text-white">
-                  {userCode}
-                </span>
-              </div>
-              <div className="flex items-center justify-center gap-2 mt-2 mb-4">
-                <span className="text-[13px] text-th-text-faint">
-                  {verificationUri}
-                </span>
-              </div>
-              <button
-                onClick={async () => {
-                  try {
-                    await openUrl(verificationUri);
-                  } catch {
-                    window.open(verificationUri, "_blank");
-                  }
-                }}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white/[0.08] hover:bg-th-inset rounded-full text-[13px] text-white font-medium transition-colors"
-              >
-                <ExternalLink size={14} />
-                Open {verificationUri}
-              </button>
-            </div>
-            <div className="flex items-center justify-center gap-3 text-th-text-faint">
-              <Loader2 className="animate-spin" size={16} />
-              <span className="text-[13px]">Waiting for authorization...</span>
-            </div>
-            <button
-              onClick={reset}
-              className="text-[12px] text-th-text-faint hover:text-th-text-faint transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-
         {/* ==================== PKCE Waiting ==================== */}
         {step === "pkce_waiting" && (
           <div className="flex flex-col gap-5">
@@ -815,7 +996,7 @@ export default function Login() {
             </div>
             <button
               onClick={reset}
-              className="text-[12px] text-th-text-faint hover:text-th-text-faint transition-colors"
+              className="text-[12px] text-th-text-faint hover:text-th-text-muted transition-colors"
             >
               Cancel
             </button>
@@ -832,8 +1013,8 @@ export default function Login() {
           </div>
         )}
 
-        {/* ==================== Error ==================== */}
-        {error && (
+        {/* ==================== Error (advanced view) ==================== */}
+        {view === "advanced" && error && step === "idle" && (
           <div className="mt-5 p-4 bg-red-900/30 border border-red-700/50 rounded-lg text-red-400 text-sm text-left break-words overflow-hidden">
             <p
               className="whitespace-pre-wrap break-words"
@@ -876,8 +1057,7 @@ export default function Login() {
               <p>
                 They are OAuth application credentials used to connect to
                 TIDAL's API. Official TIDAL apps (Android, iOS, desktop) have
-                these built in. Since SONE is an unofficial client, it does not
-                ship with any credentials — you provide your own.
+                these built in.
               </p>
 
               <p>
