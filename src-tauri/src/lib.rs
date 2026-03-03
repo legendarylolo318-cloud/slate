@@ -478,6 +478,16 @@ pub fn run() {
             commands::playback::load_playback_queue,
             commands::playback::update_mpris_metadata,
             commands::playback::update_mpris_playback_status,
+            // scrobble
+            commands::scrobble::notify_track_started,
+            commands::scrobble::notify_track_paused,
+            commands::scrobble::notify_track_resumed,
+            commands::scrobble::notify_track_seeked,
+            commands::scrobble::notify_track_stopped,
+            commands::scrobble::get_scrobble_status,
+            commands::scrobble::get_scrobble_queue_size,
+            commands::scrobble::connect_listenbrainz,
+            commands::scrobble::disconnect_provider,
             // utility
             commands::utility::get_image_bytes,
             commands::utility::get_cache_stats,
