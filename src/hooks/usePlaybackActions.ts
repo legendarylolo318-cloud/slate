@@ -107,6 +107,19 @@ export function usePlaybackActions() {
         store.set(streamInfoAtom, info);
         store.set(currentTrackAtom, normalized);
         store.set(isPlayingAtom, true);
+
+        // Notify backend for scrobbling
+        invoke("notify_track_started", {
+          payload: {
+            artist: normalized.artist?.name || "Unknown",
+            title: normalized.title,
+            album: normalized.album?.title || null,
+            albumArtist: null,
+            durationSecs: normalized.duration || 0,
+            trackNumber: normalized.trackNumber || null,
+            chosenByUser: true,
+          },
+        }).catch(() => {});
       } catch (error: any) {
         console.error("Failed to play track:", error);
         store.set(isPlayingAtom, false);
