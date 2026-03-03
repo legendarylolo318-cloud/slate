@@ -68,9 +68,14 @@
   <content_rating type="oars-1.1" />
 
   <releases>
-    <release version="0.6.9" date="2026-03-02">
+    <release version="0.6.10" date="2026-03-03">
       <description>
-        <p>First public release.</p>
+        <ul>
+          <li>Simplified login — one-click device code flow with QR code</li>
+          <li>Improved session handling and login screen UI</li>
+          <li>Fixed empty state when no suggested tracks available</li>
+          <li>Fixed play queue scroll gap and drag ghost in now-playing drawer</li>
+        </ul>
       </description>
     </release>
   </releases>
