@@ -27,6 +27,25 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tidal_api::{AuthTokens, TidalClient};
 
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct LastfmCredentials {
+    pub session_key: String,
+    pub username: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ListenBrainzCredentials {
+    pub token: String,
+    pub username: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ScrobbleSettings {
+    pub lastfm: Option<LastfmCredentials>,
+    pub librefm: Option<LastfmCredentials>,
+    pub listenbrainz: Option<ListenBrainzCredentials>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub auth_tokens: Option<AuthTokens>,
@@ -46,6 +65,8 @@ pub struct Settings {
     pub exclusive_device: Option<String>,
     #[serde(default)]
     pub bit_perfect: bool,
+    #[serde(default)]
+    pub scrobble: ScrobbleSettings,
 }
 
 pub struct AppState {
