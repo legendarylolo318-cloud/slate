@@ -557,6 +557,9 @@ pub fn run() {
             commands::scrobble::get_scrobble_status,
             commands::scrobble::get_scrobble_queue_size,
             commands::scrobble::connect_listenbrainz,
+            commands::scrobble::connect_lastfm,
+            commands::scrobble::connect_librefm,
+            commands::scrobble::complete_audioscrobbler_auth,
             commands::scrobble::disconnect_provider,
             // utility
             commands::utility::get_image_bytes,

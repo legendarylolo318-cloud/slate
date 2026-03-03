@@ -3,7 +3,7 @@ use tauri::State;
 
 use crate::scrobble::listenbrainz::ListenBrainzProvider;
 use crate::scrobble::{ProviderStatus, ScrobbleTrack};
-use crate::{AppState, ListenBrainzCredentials, SoneError};
+use crate::{AppState, LastfmCredentials, ListenBrainzCredentials, SoneError};
 
 // ---------------------------------------------------------------------------
 // Payload types
@@ -121,4 +121,106 @@ pub async fn disconnect_provider(
 
     state.scrobble_manager.remove_provider(&provider).await;
     Ok(())
+}
+
+/// Return the Last.fm auth URL for the frontend to open in a browser.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn connect_lastfm() -> Result<String, SoneError> {
+    if !crate::embedded_lastfm::has_stream_keys() {
+        return Err(SoneError::Scrobble("Last.fm not configured".into()));
+    }
+    let api_key = crate::embedded_lastfm::stream_key_a();
+    Ok(format!(
+        "https://www.last.fm/api/auth/?api_key={}",
+        api_key
+    ))
+}
+
+/// Return the Libre.fm auth URL for the frontend to open in a browser.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn connect_librefm() -> Result<String, SoneError> {
+    if !crate::embedded_librefm::has_stream_keys() {
+        return Err(SoneError::Scrobble("Libre.fm not configured".into()));
+    }
+    let api_key = crate::embedded_librefm::stream_key_a();
+    Ok(format!(
+        "https://libre.fm/api/auth/?api_key={}",
+        api_key
+    ))
+}
+
+/// Exchange an auth token for a permanent session key.
+/// The frontend calls this after the user authorizes in the browser and
+/// provides the token.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn complete_audioscrobbler_auth(
+    state: State<'_, AppState>,
+    provider_name: String,
+    token: String,
+) -> Result<String, SoneError> {
+    let (api_key, api_secret, api_url) = match provider_name.as_str() {
+        "lastfm" => {
+            if !crate::embedded_lastfm::has_stream_keys() {
+                return Err(SoneError::Scrobble("Last.fm not configured".into()));
+            }
+            (
+                crate::embedded_lastfm::stream_key_a(),
+                crate::embedded_lastfm::stream_key_b(),
+                "https://ws.audioscrobbler.com/2.0/",
+            )
+        }
+        "librefm" => {
+            if !crate::embedded_librefm::has_stream_keys() {
+                return Err(SoneError::Scrobble("Libre.fm not configured".into()));
+            }
+            (
+                crate::embedded_librefm::stream_key_a(),
+                crate::embedded_librefm::stream_key_b(),
+                crate::scrobble::librefm::LIBREFM_API_URL,
+            )
+        }
+        _ => {
+            return Err(SoneError::Scrobble(format!(
+                "Unknown provider: {provider_name}"
+            )));
+        }
+    };
+
+    let provider = crate::scrobble::lastfm::AudioscrobblerProvider::new(
+        if provider_name == "lastfm" {
+            "lastfm"
+        } else {
+            "librefm"
+        },
+        api_url,
+        api_key,
+        api_secret,
+    );
+
+    let (session_key, username) = provider.get_session(&token).await?;
+    provider
+        .set_session(session_key.clone(), username.clone())
+        .await;
+
+    // Save credentials
+    if let Some(mut settings) = state.load_settings() {
+        let creds = LastfmCredentials {
+            session_key,
+            username: username.clone(),
+        };
+        match provider_name.as_str() {
+            "lastfm" => settings.scrobble.lastfm = Some(creds),
+            "librefm" => settings.scrobble.librefm = Some(creds),
+            _ => {}
+        }
+        state.save_settings(&settings)?;
+    }
+
+    // Register provider with the scrobble manager
+    state
+        .scrobble_manager
+        .add_provider(Box::new(provider))
+        .await;
+
+    Ok(username)
 }
