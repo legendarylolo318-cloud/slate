@@ -4,6 +4,8 @@ mod scrobble;
 mod commands;
 mod crypto;
 mod embedded_config;
+mod embedded_lastfm;
+mod embedded_librefm;
 mod error;
 #[cfg(target_os = "linux")]
 mod mpris;
