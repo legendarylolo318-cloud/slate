@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
@@ -93,6 +93,7 @@ pub struct AppState {
     pub last_peak_amplitude: AtomicU64,
     #[cfg(target_os = "linux")]
     pub mpris: mpris::MprisHandle,
+    pub scrobble_manager: scrobble::ScrobbleManager,
 }
 
 pub fn now_secs() -> u64 {
@@ -156,6 +157,12 @@ impl AppState {
         let bit_perfect = saved.as_ref().map(|s| s.bit_perfect).unwrap_or(false);
         let exclusive_device = saved.as_ref().and_then(|s| s.exclusive_device.clone());
 
+        let scrobble_manager = scrobble::ScrobbleManager::new(
+            app_handle.clone(),
+            crypto.clone(),
+            &config_dir,
+        );
+
         Self {
             audio_player: AudioPlayer::new(app_handle.clone()),
             tidal_client: Mutex::new(TidalClient::new()),
@@ -173,6 +180,7 @@ impl AppState {
             last_peak_amplitude: AtomicU64::new(f64::NAN.to_bits()),
             #[cfg(target_os = "linux")]
             mpris: mpris::MprisHandle::new(app_handle),
+            scrobble_manager,
         }
     }
 
@@ -257,6 +265,68 @@ pub fn run() {
                         let state = handle.state::<AppState>();
                         *state.cached_audio_devices.lock().unwrap() = Some(devices);
                     }
+                });
+            }
+
+            // Initialize scrobble providers from saved credentials
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = handle.state::<AppState>();
+                    if let Some(settings) = state.load_settings() {
+                        // Last.fm
+                        if let Some(ref creds) = settings.scrobble.lastfm {
+                            if crate::embedded_lastfm::has_stream_keys() {
+                                let provider = crate::scrobble::lastfm::AudioscrobblerProvider::new(
+                                    "lastfm",
+                                    "https://ws.audioscrobbler.com/2.0/",
+                                    crate::embedded_lastfm::stream_key_a(),
+                                    crate::embedded_lastfm::stream_key_b(),
+                                );
+                                provider.set_session(creds.session_key.clone(), creds.username.clone()).await;
+                                state.scrobble_manager.add_provider(Box::new(provider)).await;
+                                log::info!("Last.fm scrobbling enabled for {}", creds.username);
+                            }
+                        }
+
+                        // Libre.fm
+                        if let Some(ref creds) = settings.scrobble.librefm {
+                            if crate::embedded_librefm::has_stream_keys() {
+                                let provider = crate::scrobble::lastfm::AudioscrobblerProvider::new(
+                                    "librefm",
+                                    crate::scrobble::librefm::LIBREFM_API_URL,
+                                    crate::embedded_librefm::stream_key_a(),
+                                    crate::embedded_librefm::stream_key_b(),
+                                );
+                                provider.set_session(creds.session_key.clone(), creds.username.clone()).await;
+                                state.scrobble_manager.add_provider(Box::new(provider)).await;
+                                log::info!("Libre.fm scrobbling enabled for {}", creds.username);
+                            }
+                        }
+
+                        // ListenBrainz
+                        if let Some(ref creds) = settings.scrobble.listenbrainz {
+                            let provider = crate::scrobble::listenbrainz::ListenBrainzProvider::new();
+                            provider.set_token(creds.token.clone(), creds.username.clone()).await;
+                            state.scrobble_manager.add_provider(Box::new(provider)).await;
+                            log::info!("ListenBrainz scrobbling enabled for {}", creds.username);
+                        }
+                    }
+
+                    // Drain retry queue in background
+                    state.scrobble_manager.drain_queue().await;
+                });
+            }
+
+            // Scrobble on track-finished (backend listener)
+            {
+                let handle = app.handle().clone();
+                app.listen("track-finished", move |_| {
+                    let handle = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let state = handle.state::<AppState>();
+                        state.scrobble_manager.on_track_finished().await;
+                    });
                 });
             }
 
@@ -505,6 +575,14 @@ pub fn run() {
             commands::utility::set_exclusive_device,
             commands::utility::list_audio_devices,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                let state = app.state::<AppState>();
+                tauri::async_runtime::block_on(async {
+                    state.scrobble_manager.flush().await;
+                });
+            }
+        });
 }
