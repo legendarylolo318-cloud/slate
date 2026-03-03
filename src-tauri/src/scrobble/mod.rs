@@ -1,7 +1,7 @@
 pub mod queue;
-// pub mod lastfm;
-// pub mod listenbrainz;
-// pub mod librefm;
+pub mod lastfm;
+pub mod listenbrainz;
+pub mod librefm;
 
 use std::path::Path;
 use std::sync::Arc;
