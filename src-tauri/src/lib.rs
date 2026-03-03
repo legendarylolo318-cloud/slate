@@ -1,5 +1,6 @@
 mod audio;
 pub mod cache;
+mod scrobble;
 mod commands;
 mod crypto;
 mod embedded_config;
