@@ -202,9 +202,8 @@ Output goes to `dist/<format>/`. Pass `--no-cache` to force a clean Docker build
 ## Usage
 
 1. Launch the app
-2. Enter your Client ID (and optionally Client Secret for Hi-Res — [see FAQ](#faq))
-3. Click **Get Login Code** and enter the displayed code at [link.tidal.com](https://link.tidal.com)
-4. Your library loads automatically — browse and play
+2. Click **Get Login Code**. You'll be automatically redirected to the official [link.tidal.com](https://link.tidal.com) to login and approve the code. Optionally, you can scan the **QR Code** to login via your mobile device.
+3. Your library loads automatically — browse and play!
 
 > [!NOTE]
 > **NVIDIA GPU users:** If you see a blank window, rendering glitches, or a Wayland protocol error on launch, start the app with:
