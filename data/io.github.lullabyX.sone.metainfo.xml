@@ -7,7 +7,7 @@
   <summary>Native Linux client for TIDAL — lossless and bit-perfect audio streaming</summary>
 
   <developer id="io.github.lullabyX">
-    <name>lullabyX</name>
+    <name>Hassan Rabbi</name>
   </developer>
 
   <description>
@@ -38,8 +38,8 @@
   <url type="vcs-browser">https://github.com/lullabyX/sone</url>
 
   <branding>
-    <color type="primary" scheme_preference="light">#E9D5FF</color>
-    <color type="primary" scheme_preference="dark">#130F1A</color>
+    <color type="primary" scheme_preference="light">#FDF2F8</color>
+    <color type="primary" scheme_preference="dark">#31274F</color>
   </branding>
 
   <screenshots>
