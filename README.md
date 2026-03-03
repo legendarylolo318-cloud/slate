@@ -6,6 +6,10 @@
   [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
   [![Platform: Linux](https://img.shields.io/badge/Platform-Linux-yellow.svg)]()
   [![Built with Tauri 2](https://img.shields.io/badge/Built_with-Tauri_2-orange.svg)](https://v2.tauri.app/)
+
+  <a href="https://flathub.org/apps/io.github.lullabyX.sone">
+    <img width="200" alt="Download on Flathub" src="https://flathub.org/api/badge?locale=en"/>
+  </a>
 </div>
 
 > [!IMPORTANT]
@@ -64,26 +68,43 @@ SONE is a lightweight, native alternative to the official TIDAL web player and E
 - **Encrypted at rest** — credentials, cache, and settings are encrypted with AES-256-GCM
 - **No telemetry, no tracking** — fully open source under GPL-3.0. Your listening data stays on your machine
 
-## Installation
+## Installation / Download
 
-### Download
+### OS Packages
 
 Pre-built packages for Ubuntu/Debian (.deb), Fedora (.rpm), openSUSE (.rpm), and Arch Linux (PKGBUILD) are available on the [GitHub Releases](https://github.com/lullabyX/sone/releases) page.
 
 <p align="center">
   <a href="https://github.com/lullabyX/sone/releases/latest">
-    <img src="https://img.shields.io/badge/Debian%20/%20Ubuntu-.deb-A81D33?style=for-the-badge&logo=debian" height="30" alt="Download SONE .deb package for Debian and Ubuntu" />
+    <img src="https://img.shields.io/badge/Debian%20/%20Ubuntu-.deb-A81D33?style=for-the-badge&logo=debian" height="60" alt="Download SONE .deb package for Debian and Ubuntu" />
   </a>
   <a href="https://github.com/lullabyX/sone/releases/latest">
-    <img src="https://img.shields.io/badge/Fedora-.rpm-51A2DA?style=for-the-badge&logo=fedora" height="30" alt="Download SONE .rpm package for Fedora Linux" />
+    <img src="https://img.shields.io/badge/Fedora-.rpm-51A2DA?style=for-the-badge&logo=fedora" height="60" alt="Download SONE .rpm package for Fedora Linux" />
   </a>
   <a href="https://github.com/lullabyX/sone/releases/latest">
-    <img src="https://img.shields.io/badge/openSUSE-.rpm-73BA25?style=for-the-badge&logo=opensuse" height="30" alt="Download SONE .rpm package for openSUSE Linux" />
+    <img src="https://img.shields.io/badge/openSUSE-.rpm-73BA25?style=for-the-badge&logo=opensuse" height="60" alt="Download SONE .rpm package for openSUSE Linux" />
   </a>
   <a href="https://github.com/lullabyX/sone/releases/latest">
-    <img src="https://img.shields.io/badge/Arch%20Linux-PKGBUILD-1793D1?style=for-the-badge&logo=archlinux" height="30" alt="Download SONE PKGBUILD for Arch Linux and Manjaro" />
+    <img src="https://img.shields.io/badge/Arch%20Linux-PKGBUILD-1793D1?style=for-the-badge&logo=archlinux" height="60" alt="Download SONE PKGBUILD for Arch Linux and Manjaro" />
   </a>
 </p>
+
+### Flathub
+SONE is also officially available on Flathub, making it easy to install on any Linux distribution. You can install it via your software center or by using the CLI:
+  
+**Install the application**
+```
+flatpak install flathub io.github.lullabyX.sone
+```
+
+**Run the application**
+```
+flatpak run io.github.lullabyX.sone
+```
+
+<a href="https://flathub.org/apps/io.github.lullabyX.sone">
+  <img width="200" alt="Download on Flathub" src="https://flathub.org/api/badge?locale=en"/>
+</a>
 
 ### Building from source
 
