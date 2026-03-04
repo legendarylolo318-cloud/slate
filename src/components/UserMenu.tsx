@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   LogOut,
   Palette,
   RefreshCw,
@@ -49,6 +50,7 @@ export default function UserMenu() {
   const [themeOpen, setThemeOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(false);
+  const [decorations, setDecorations] = useState(true);
   const [volumeNormalization, setVolumeNormalization] = useState(false);
   const [exclusiveMode, setExclusiveMode] = useAtom(exclusiveModeAtom);
   const [bitPerfect, setBitPerfect] = useAtom(bitPerfectAtom);
@@ -68,6 +70,9 @@ export default function UserMenu() {
       .catch(() => {});
     invoke<boolean>("get_volume_normalization")
       .then(setVolumeNormalization)
+      .catch(() => {});
+    invoke<boolean>("get_decorations")
+      .then(setDecorations)
       .catch(() => {});
   }, []);
 
@@ -350,6 +355,29 @@ export default function UserMenu() {
               <div
                 className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
                   minimizeToTray ? "translate-x-[16px]" : "translate-x-[2px]"
+                }`}
+              />
+            </div>
+          </button>
+
+          <button
+            onClick={() => {
+              const next = !decorations;
+              setDecorations(next);
+              invoke("set_decorations", { enabled: next }).catch(() => {});
+            }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+          >
+            <AppWindow size={16} />
+            <span className="flex-1 text-left">Window decorations</span>
+            <div
+              className={`w-8 h-[18px] rounded-full transition-colors ${
+                decorations ? "bg-th-accent" : "bg-th-border-subtle"
+              }`}
+            >
+              <div
+                className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
+                  decorations ? "translate-x-[16px]" : "translate-x-[2px]"
                 }`}
               />
             </div>

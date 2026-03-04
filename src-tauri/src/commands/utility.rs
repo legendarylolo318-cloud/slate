@@ -65,6 +65,25 @@ pub async fn clear_disk_cache(state: State<'_, AppState>) -> Result<(), SoneErro
 }
 
 #[tauri::command]
+pub fn get_decorations(state: State<'_, AppState>) -> bool {
+    state.decorations.load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+pub fn set_decorations(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), SoneError> {
+    state.decorations.store(enabled, Ordering::Relaxed);
+    window.set_decorations(enabled).map_err(SoneError::from)?;
+    let mut settings = state.load_settings().unwrap_or_default();
+    settings.decorations = enabled;
+    state.save_settings(&settings)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_minimize_to_tray(state: State<'_, AppState>) -> bool {
     state.minimize_to_tray.load(Ordering::Relaxed)
 }
@@ -72,18 +91,7 @@ pub fn get_minimize_to_tray(state: State<'_, AppState>) -> bool {
 #[tauri::command]
 pub fn set_minimize_to_tray(state: State<'_, AppState>, enabled: bool) -> Result<(), SoneError> {
     state.minimize_to_tray.store(enabled, Ordering::Relaxed);
-    let mut settings = state.load_settings().unwrap_or(crate::Settings {
-        auth_tokens: None,
-        volume: 1.0,
-        last_track_id: None,
-        client_id: String::new(),
-        client_secret: String::new(),
-        minimize_to_tray: false,
-        volume_normalization: false,
-        exclusive_mode: false,
-        exclusive_device: None,
-        bit_perfect: false,
-    });
+    let mut settings = state.load_settings().unwrap_or_default();
     settings.minimize_to_tray = enabled;
     state.save_settings(&settings)?;
     Ok(())
@@ -115,19 +123,7 @@ pub fn set_volume_normalization(
         .audio_player
         .set_normalization_gain(norm_gain)
         .map_err(SoneError::Audio)?;
-
-    let mut settings = state.load_settings().unwrap_or(crate::Settings {
-        auth_tokens: None,
-        volume: 1.0,
-        last_track_id: None,
-        client_id: String::new(),
-        client_secret: String::new(),
-        minimize_to_tray: false,
-        volume_normalization: false,
-        exclusive_mode: false,
-        exclusive_device: None,
-        bit_perfect: false,
-    });
+    let mut settings = state.load_settings().unwrap_or_default();
     settings.volume_normalization = enabled;
     state.save_settings(&settings)?;
     Ok(())
@@ -156,18 +152,7 @@ pub fn set_exclusive_mode(state: State<'_, AppState>, enabled: bool) -> Result<(
         .set_exclusive_mode(enabled, device)
         .map_err(SoneError::Audio)?;
 
-    let mut settings = state.load_settings().unwrap_or(crate::Settings {
-        auth_tokens: None,
-        volume: 1.0,
-        last_track_id: None,
-        client_id: String::new(),
-        client_secret: String::new(),
-        minimize_to_tray: false,
-        volume_normalization: false,
-        exclusive_mode: false,
-        exclusive_device: None,
-        bit_perfect: false,
-    });
+    let mut settings = state.load_settings().unwrap_or_default();
     settings.exclusive_mode = enabled;
     if !enabled {
         settings.bit_perfect = false;
@@ -199,18 +184,7 @@ pub fn set_bit_perfect(state: State<'_, AppState>, enabled: bool) -> Result<(), 
         .set_bit_perfect(enabled)
         .map_err(SoneError::Audio)?;
 
-    let mut settings = state.load_settings().unwrap_or(crate::Settings {
-        auth_tokens: None,
-        volume: 1.0,
-        last_track_id: None,
-        client_id: String::new(),
-        client_secret: String::new(),
-        minimize_to_tray: false,
-        volume_normalization: false,
-        exclusive_mode: false,
-        exclusive_device: None,
-        bit_perfect: false,
-    });
+    let mut settings = state.load_settings().unwrap_or_default();
     settings.bit_perfect = enabled;
     if enabled {
         settings.exclusive_mode = true;
@@ -233,19 +207,7 @@ pub fn set_exclusive_device(state: State<'_, AppState>, device: String) -> Resul
         .audio_player
         .set_exclusive_mode(enabled, Some(device.clone()))
         .map_err(SoneError::Audio)?;
-
-    let mut settings = state.load_settings().unwrap_or(crate::Settings {
-        auth_tokens: None,
-        volume: 1.0,
-        last_track_id: None,
-        client_id: String::new(),
-        client_secret: String::new(),
-        minimize_to_tray: false,
-        volume_normalization: false,
-        exclusive_mode: false,
-        exclusive_device: None,
-        bit_perfect: false,
-    });
+    let mut settings = state.load_settings().unwrap_or_default();
     settings.exclusive_device = Some(device);
     state.save_settings(&settings)?;
     Ok(())
