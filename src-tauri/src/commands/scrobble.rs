@@ -1,9 +1,15 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::scrobble::listenbrainz::ListenBrainzProvider;
 use crate::scrobble::{ProviderStatus, ScrobbleTrack};
 use crate::{AppState, LastfmCredentials, ListenBrainzCredentials, SoneError};
+
+#[derive(Debug, Serialize)]
+pub struct AuthStartResponse {
+    pub url: String,
+    pub token: String,
+}
 
 // ---------------------------------------------------------------------------
 // Payload types
@@ -19,6 +25,8 @@ pub struct TrackStartedPayload {
     pub duration_secs: u32,
     pub track_number: Option<u32>,
     pub chosen_by_user: bool,
+    pub isrc: Option<String>,
+    pub track_id: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -39,6 +47,9 @@ pub async fn notify_track_started(
         track_number: payload.track_number,
         timestamp: crate::now_secs() as i64,
         chosen_by_user: payload.chosen_by_user,
+        isrc: payload.isrc,
+        track_id: payload.track_id,
+        recording_mbid: None,
     };
     state.scrobble_manager.on_track_started(track).await;
     Ok(())
@@ -87,6 +98,14 @@ pub async fn connect_listenbrainz(
 ) -> Result<String, SoneError> {
     let username = ListenBrainzProvider::validate_token(&token).await?;
 
+    // Create and register the provider
+    let provider = ListenBrainzProvider::new();
+    provider.set_token(token.clone(), username.clone()).await;
+    state
+        .scrobble_manager
+        .add_provider(Box::new(provider))
+        .await;
+
     // Save credentials to settings
     if let Some(mut settings) = state.load_settings() {
         settings.scrobble.listenbrainz = Some(ListenBrainzCredentials {
@@ -123,30 +142,38 @@ pub async fn disconnect_provider(
     Ok(())
 }
 
-/// Return the Last.fm auth URL for the frontend to open in a browser.
+/// Fetch a request token and return the auth URL + token for Last.fm desktop auth.
 #[tauri::command(rename_all = "camelCase")]
-pub async fn connect_lastfm() -> Result<String, SoneError> {
+pub async fn connect_lastfm() -> Result<AuthStartResponse, SoneError> {
     if !crate::embedded_lastfm::has_stream_keys() {
         return Err(SoneError::Scrobble("Last.fm not configured".into()));
     }
-    let api_key = crate::embedded_lastfm::stream_key_a();
-    Ok(format!(
-        "https://www.last.fm/api/auth/?api_key={}",
-        api_key
-    ))
+    let provider = crate::scrobble::lastfm::AudioscrobblerProvider::new(
+        "lastfm",
+        "https://ws.audioscrobbler.com/2.0/",
+        crate::embedded_lastfm::stream_key_a(),
+        crate::embedded_lastfm::stream_key_b(),
+    );
+    let token = provider.get_token().await?;
+    let url = provider.auth_url_with_token(&token);
+    Ok(AuthStartResponse { url, token })
 }
 
-/// Return the Libre.fm auth URL for the frontend to open in a browser.
+/// Fetch a request token and return the auth URL + token for Libre.fm desktop auth.
 #[tauri::command(rename_all = "camelCase")]
-pub async fn connect_librefm() -> Result<String, SoneError> {
+pub async fn connect_librefm() -> Result<AuthStartResponse, SoneError> {
     if !crate::embedded_librefm::has_stream_keys() {
         return Err(SoneError::Scrobble("Libre.fm not configured".into()));
     }
-    let api_key = crate::embedded_librefm::stream_key_a();
-    Ok(format!(
-        "https://libre.fm/api/auth/?api_key={}",
-        api_key
-    ))
+    let provider = crate::scrobble::lastfm::AudioscrobblerProvider::new(
+        "librefm",
+        crate::scrobble::librefm::LIBREFM_API_URL,
+        crate::embedded_librefm::stream_key_a(),
+        crate::embedded_librefm::stream_key_b(),
+    );
+    let token = provider.get_token().await?;
+    let url = provider.auth_url_with_token(&token);
+    Ok(AuthStartResponse { url, token })
 }
 
 /// Exchange an auth token for a permanent session key.

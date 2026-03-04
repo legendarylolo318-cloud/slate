@@ -67,17 +67,54 @@ impl AudioscrobblerProvider {
         session.as_ref().map(|s| s.username.clone())
     }
 
-    /// Generate the browser auth URL for the user to grant access.
-    pub fn auth_url(&self, callback_url: &str) -> String {
+    /// Fetch an unauthorized request token from the API (desktop auth step 2).
+    pub async fn get_token(&self) -> Result<String, SoneError> {
+        let mut params = BTreeMap::new();
+        params.insert("method", "auth.getToken".to_string());
+        params.insert("api_key", self.api_key.clone());
+
+        let sig = self.sign(&params);
+        params.insert("api_sig", sig);
+        params.insert("format", "json".to_string());
+
+        let resp = self
+            .client
+            .get(self.api_url)
+            .query(&params)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|e| SoneError::Scrobble(format!("auth.getToken request failed: {e}")))?;
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| SoneError::Scrobble(format!("auth.getToken parse failed: {e}")))?;
+
+        if let Some(err_code) = Self::parse_error_code(&body) {
+            return Err(SoneError::Scrobble(format!(
+                "auth.getToken error {err_code}: {}",
+                body.get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown error")
+            )));
+        }
+
+        body.get("token")
+            .and_then(|t| t.as_str())
+            .map(|t| t.to_string())
+            .ok_or_else(|| SoneError::Scrobble("auth.getToken: missing token".into()))
+    }
+
+    /// Generate the browser auth URL for the user to grant access (desktop auth step 3).
+    /// The token must be obtained from `get_token()` first.
+    pub fn auth_url_with_token(&self, token: &str) -> String {
         let base = if self.name == "lastfm" {
             "https://www.last.fm/api/auth/"
         } else {
             "https://libre.fm/api/auth/"
         };
-        format!(
-            "{}?api_key={}&cb={}",
-            base, self.api_key, callback_url
-        )
+        format!("{}?api_key={}&token={}", base, self.api_key, token)
     }
 
     /// Exchange an auth token for a permanent session key.
@@ -207,6 +244,11 @@ impl ScrobbleProvider for AudioscrobblerProvider {
         50
     }
 
+    async fn username(&self) -> Option<String> {
+        let session = self.session.read().await;
+        session.as_ref().map(|s| s.username.clone())
+    }
+
     async fn now_playing(&self, track: &ScrobbleTrack) -> ScrobbleResult {
         let sk = match self.session_key().await {
             Ok(sk) => sk,
@@ -297,6 +339,9 @@ impl ScrobbleProvider for AudioscrobblerProvider {
             }
             if !track.chosen_by_user {
                 params.push((format!("chosenByUser[{i}]"), "0".to_string()));
+            }
+            if let Some(ref mbid) = track.recording_mbid {
+                params.push((format!("mbid[{i}]"), mbid.clone()));
             }
         }
 

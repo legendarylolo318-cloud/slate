@@ -14,7 +14,7 @@ interface ProviderStatus {
   username: string | null;
 }
 
-type AuthStep = "idle" | "waiting" | "token" | "submitting";
+type AuthStep = "idle" | "waiting" | "authorized" | "submitting";
 
 interface AudioscrobblerState {
   step: AuthStep;
@@ -110,9 +110,9 @@ export default function ScrobbleModal({ open, onClose }: ScrobbleModalProps) {
     try {
       const command =
         provider === "lastfm" ? "connect_lastfm" : "connect_librefm";
-      const url = await invoke<string>(command);
+      const { url, token } = await invoke<{ url: string; token: string }>(command);
       await openUrl(url);
-      setState((s) => ({ ...s, step: "token" }));
+      setState((s) => ({ ...s, step: "authorized", token }));
     } catch (err: unknown) {
       const msg =
         err instanceof Error ? err.message : "Failed to start auth flow";
@@ -125,19 +125,19 @@ export default function ScrobbleModal({ open, onClose }: ScrobbleModalProps) {
     state: AudioscrobblerState,
     setState: React.Dispatch<React.SetStateAction<AudioscrobblerState>>,
   ) => {
-    if (!state.token.trim()) return;
+    if (!state.token) return;
     setState((s) => ({ ...s, step: "submitting", error: null }));
     try {
       await invoke<string>("complete_audioscrobbler_auth", {
         providerName: provider,
-        token: state.token.trim(),
+        token: state.token,
       });
       setState({ step: "idle", token: "", error: null });
       await fetchStatus();
     } catch (err: unknown) {
       const msg =
         err instanceof Error ? err.message : "Authentication failed";
-      setState((s) => ({ ...s, step: "token", error: msg }));
+      setState((s) => ({ ...s, step: "authorized", error: msg }));
     }
   };
 
@@ -226,38 +226,23 @@ export default function ScrobbleModal({ open, onClose }: ScrobbleModalProps) {
               </div>
             )}
 
-            {(state.step === "token" || state.step === "submitting") && (
+            {(state.step === "authorized" || state.step === "submitting") && (
               <div className="space-y-2">
                 <p className="text-[12px] text-th-text-muted">
-                  After authorizing, click "Yes, allow access" then come back
-                  and click Submit below.
+                  Authorize in the browser, then come back and click below.
                 </p>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={state.token}
-                    onChange={(e) =>
-                      setState((s) => ({ ...s, token: e.target.value }))
-                    }
-                    placeholder="Paste token from browser"
-                    disabled={state.step === "submitting"}
-                    className="flex-1 px-3 py-1.5 text-[13px] bg-th-inset border border-th-border-subtle rounded-lg text-white placeholder:text-th-text-muted focus:outline-none focus:border-th-accent transition-colors disabled:opacity-50"
-                  />
-                  <button
-                    onClick={() =>
-                      handleAudioscrobblerSubmit(provider, state, setState)
-                    }
-                    disabled={
-                      state.step === "submitting" || !state.token.trim()
-                    }
-                    className="px-4 py-1.5 text-[13px] font-bold rounded-full bg-th-accent text-black hover:brightness-110 active:scale-95 transition-all duration-150 disabled:opacity-50 disabled:pointer-events-none flex items-center gap-1.5"
-                  >
-                    {state.step === "submitting" && (
-                      <Loader2 size={13} className="animate-spin" />
-                    )}
-                    Submit
-                  </button>
-                </div>
+                <button
+                  onClick={() =>
+                    handleAudioscrobblerSubmit(provider, state, setState)
+                  }
+                  disabled={state.step === "submitting"}
+                  className="px-4 py-1.5 text-[13px] font-bold rounded-full bg-th-accent text-black hover:brightness-110 active:scale-95 transition-all duration-150 disabled:opacity-50 disabled:pointer-events-none flex items-center gap-1.5"
+                >
+                  {state.step === "submitting" && (
+                    <Loader2 size={13} className="animate-spin" />
+                  )}
+                  I've authorized
+                </button>
                 {state.error && (
                   <p className="text-[12px] text-red-400">{state.error}</p>
                 )}
