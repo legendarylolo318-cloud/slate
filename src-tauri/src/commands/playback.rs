@@ -113,14 +113,15 @@ pub async fn play_tidal_track(
         selected_rg,
         selected_peak
     );
-    state
-        .audio_player
-        .set_normalization_gain(norm_gain)
-        .map_err(SoneError::Audio)?;
 
-    state
-        .audio_player
-        .play_url(&uri)
+    let player = state.audio_player.clone();
+    let uri_clone = uri.clone();
+    tokio::task::spawn_blocking(move || {
+        player.set_normalization_gain(norm_gain)?;
+        player.play_url(&uri_clone)
+    })
+        .await
+        .map_err(|e| SoneError::Audio(e.to_string()))?
         .map_err(SoneError::Audio)?;
 
     // Save last played track

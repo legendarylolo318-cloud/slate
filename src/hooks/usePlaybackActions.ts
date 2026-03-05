@@ -8,9 +8,9 @@
  * (play, pause, queue, etc.) but don't need to read playback state.
  */
 
-import { useCallback } from "react";
 import { useStore } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useRef } from "react";
 import {
   isPlayingAtom,
   currentTrackAtom,
@@ -88,8 +88,11 @@ export function usePlaybackActions() {
   const store = useStore();
   const { showToast } = useToast();
 
+  const playGenerationRef = useRef(0);
+
   const playTrack = useCallback(
     async (track: Track) => {
+      const generation = ++playGenerationRef.current;
       try {
         const current = store.get(currentTrackAtom);
         if (current) {
@@ -104,10 +107,13 @@ export function usePlaybackActions() {
             showToast("Preparing exclusive audio…", "info");
           },
         );
+
+        if (generation !== playGenerationRef.current) return;
         store.set(streamInfoAtom, info);
         store.set(currentTrackAtom, normalized);
         store.set(isPlayingAtom, true);
       } catch (error: any) {
+        if (generation !== playGenerationRef.current) return;
         console.error("Failed to play track:", error);
         store.set(isPlayingAtom, false);
         window.dispatchEvent(
