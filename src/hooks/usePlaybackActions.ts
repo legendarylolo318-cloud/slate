@@ -682,6 +682,54 @@ export function usePlaybackActions() {
     [store, playTrack],
   );
 
+  const playFromSource = useCallback(
+    async (
+      track: Track,
+      allTracks: Track[],
+      options?: {
+        source?: { type: string; id: string | number; name: string; allTracks: Track[] };
+        albumMode?: boolean;
+      },
+    ) => {
+      const idx = allTracks.findIndex((t) => t.id === track.id);
+      const rest =
+        idx >= 0
+          ? [...allTracks.slice(idx + 1), ...allTracks.slice(0, idx)]
+          : allTracks.filter((t) => t.id !== track.id);
+      if (store.get(shuffleAtom)) {
+        setShuffledQueue(rest, options);
+      } else {
+        setQueueTracks(rest, options);
+      }
+      await playTrack(track);
+    },
+    [store, playTrack, setQueueTracks, setShuffledQueue],
+  );
+
+  const playAllFromSource = useCallback(
+    async (
+      allTracks: Track[],
+      options?: {
+        source?: { type: string; id: string | number; name: string; allTracks: Track[] };
+        albumMode?: boolean;
+      },
+    ) => {
+      if (allTracks.length === 0) return;
+      if (store.get(shuffleAtom)) {
+        const firstIdx = Math.floor(Math.random() * allTracks.length);
+        const first = allTracks[firstIdx];
+        const rest = allTracks.filter((_, i) => i !== firstIdx);
+        setShuffledQueue(rest, options);
+        await playTrack(first);
+      } else {
+        const [first, ...rest] = allTracks;
+        setQueueTracks(rest, options);
+        await playTrack(first);
+      }
+    },
+    [store, playTrack, setQueueTracks, setShuffledQueue],
+  );
+
   const clearQueue = useCallback(() => {
     store.set(queueAtom, []);
     store.set(manualQueueAtom, []);
@@ -706,5 +754,7 @@ export function usePlaybackActions() {
     playPrevious,
     toggleShuffle,
     setShuffledQueue,
+    playFromSource,
+    playAllFromSource,
   };
 }

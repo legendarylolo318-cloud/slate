@@ -26,7 +26,7 @@ interface MixPageProps {
 export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
   const isPlaying = useAtomValue(isPlayingAtom);
   const currentTrack = useAtomValue(currentTrackAtom);
-  const { playTrack, setQueueTracks, pauseTrack, resumeTrack, setShuffledQueue } =
+  const { playTrack, pauseTrack, resumeTrack, setShuffledQueue, playFromSource, playAllFromSource } =
     usePlaybackActions();
 
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -78,10 +78,9 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
   const mixSource = { type: "mix" as const, id: mixId, name: mixInfo?.title || "Mix", allTracks: tracks };
 
 
-  const handlePlayTrack = async (track: Track, index: number) => {
+  const handlePlayTrack = async (track: Track, _index: number) => {
     try {
-      setQueueTracks(tracks.slice(index + 1), { source: mixSource });
-      await playTrack(track);
+      await playFromSource(track, tracks, { source: mixSource });
     } catch (err) {
       console.error("Failed to play mix track:", err);
     }
@@ -100,8 +99,7 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
     }
 
     try {
-      setQueueTracks(tracks.slice(1), { source: mixSource });
-      await playTrack(tracks[0]);
+      await playAllFromSource(tracks, { source: mixSource });
     } catch (err) {
       console.error("Failed to play mix:", err);
     }

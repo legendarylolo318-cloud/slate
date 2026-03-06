@@ -45,7 +45,7 @@ export default function ArtistPage({
   onBack,
 }: ArtistPageProps) {
   const store = useStore();
-  const { playTrack, setQueueTracks, pauseTrack, resumeTrack, setShuffledQueue } =
+  const { playTrack, pauseTrack, resumeTrack, setShuffledQueue, playFromSource, playAllFromSource } =
     usePlaybackActions();
   const {
     followedArtistIds,
@@ -132,14 +132,13 @@ export default function ArtistPage({
 
   const handlePlayTrack = async (
     track: any,
-    index: number,
+    _index: number,
     trackList: any[],
   ) => {
     try {
-      setQueueTracks(trackList.slice(index + 1), {
+      await playFromSource(track, trackList, {
         source: { type: "artist", id: artistId, name: displayName, allTracks: trackList },
       });
-      await playTrack(track);
     } catch (err) {
       console.error("Failed to play artist track:", err);
     }
@@ -160,10 +159,9 @@ export default function ArtistPage({
     }
 
     try {
-      setQueueTracks(topTracks.slice(1), {
+      await playAllFromSource(topTracks, {
         source: { type: "artist", id: artistId, name: displayName, allTracks: topTracks },
       });
-      await playTrack(topTracks[0]);
     } catch (err) {
       console.error("Failed to play artist tracks:", err);
     }

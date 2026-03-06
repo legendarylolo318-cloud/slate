@@ -16,7 +16,7 @@ import {
   startTransition,
 } from "react";
 import { useStore } from "jotai";
-import { isPlayingAtom, currentTrackAtom } from "../atoms/playback";
+import { isPlayingAtom, currentTrackAtom, shuffleAtom } from "../atoms/playback";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { useFavorites } from "../hooks/useFavorites";
 import { getPlaylistTracksPage } from "../api/tidal";
@@ -46,7 +46,7 @@ export default function PlaylistView({
   onBack,
 }: PlaylistViewProps) {
   const store = useStore();
-  const { playTrack, setQueueTracks, pauseTrack, resumeTrack, setShuffledQueue } =
+  const { playTrack, setQueueTracks, pauseTrack, resumeTrack, setShuffledQueue, playFromSource, playAllFromSource } =
     usePlaybackActions();
 
   const PAGE_SIZE = 100;
@@ -206,11 +206,7 @@ export default function PlaylistView({
 
   const handlePlayTrack = async (track: Track, _index: number) => {
     try {
-      // Always queue from the full unfiltered list based on the track's original position
-      const originalIndex = tracks.findIndex((t) => t.id === track.id);
-      const queueStart = originalIndex >= 0 ? originalIndex + 1 : 0;
-      setQueueTracks(tracks.slice(queueStart), { source: playlistSource(tracks) });
-      await playTrack(track);
+      await playFromSource(track, tracks, { source: playlistSource(tracks) });
 
       // Kick off background fetch for the rest if needed
       if (hasMoreRef.current && !bgFetchingRef.current) {
@@ -218,7 +214,12 @@ export default function PlaylistView({
         const full = allTracksRef.current;
         const playedIndex = full.findIndex((t) => t.id === track.id);
         if (playedIndex >= 0) {
-          setQueueTracks(full.slice(playedIndex + 1), { source: playlistSource(full) });
+          const rest = [...full.slice(playedIndex + 1), ...full.slice(0, playedIndex)];
+          if (store.get(shuffleAtom)) {
+            setShuffledQueue(rest, { source: playlistSource(full) });
+          } else {
+            setQueueTracks(rest, { source: playlistSource(full) });
+          }
         }
       }
     } catch (err) {
@@ -241,14 +242,22 @@ export default function PlaylistView({
     }
 
     try {
-      setQueueTracks(tracks.slice(1), { source: playlistSource(tracks) });
-      await playTrack(tracks[0]);
+      await playAllFromSource(tracks, { source: playlistSource(tracks) });
 
       if (hasMoreRef.current && !bgFetchingRef.current) {
         await fetchRemaining();
         const full = allTracksRef.current;
-        if (full.length > 1) {
-          setQueueTracks(full.slice(1), { source: playlistSource(full) });
+        const current = store.get(currentTrackAtom);
+        if (full.length > 1 && current) {
+          const idx = full.findIndex((t) => t.id === current.id);
+          const rest = idx >= 0
+            ? [...full.slice(idx + 1), ...full.slice(0, idx)]
+            : full.filter((t) => t.id !== current.id);
+          if (store.get(shuffleAtom)) {
+            setShuffledQueue(rest, { source: playlistSource(full) });
+          } else {
+            setQueueTracks(rest, { source: playlistSource(full) });
+          }
         }
       }
     } catch (err) {

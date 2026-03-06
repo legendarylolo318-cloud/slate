@@ -20,7 +20,7 @@ export default function ArtistTracksPage({
 }: ArtistTracksPageProps) {
   const isPlaying = useAtomValue(isPlayingAtom);
   const currentTrack = useAtomValue(currentTrackAtom);
-  const { playTrack, setQueueTracks, pauseTrack, resumeTrack, setShuffledQueue } =
+  const { playTrack, pauseTrack, resumeTrack, setShuffledQueue, playFromSource, playAllFromSource } =
     usePlaybackActions();
 
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -105,10 +105,9 @@ export default function ArtistTracksPage({
   const artistSource = { type: "artist-tracks" as const, id: artistId, name: artistName, allTracks: tracks };
 
 
-  const handlePlayTrack = async (track: Track, index: number) => {
+  const handlePlayTrack = async (track: Track, _index: number) => {
     try {
-      setQueueTracks(tracks.slice(index + 1), { source: artistSource });
-      await playTrack(track);
+      await playFromSource(track, tracks, { source: artistSource });
     } catch (err) {
       console.error("Failed to play track:", err);
     }
@@ -122,8 +121,7 @@ export default function ArtistTracksPage({
       return;
     }
     try {
-      setQueueTracks(tracks.slice(1), { source: artistSource });
-      await playTrack(tracks[0]);
+      await playAllFromSource(tracks, { source: artistSource });
     } catch (err) {
       console.error("Failed to play all:", err);
     }
