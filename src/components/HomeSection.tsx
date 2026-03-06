@@ -112,10 +112,13 @@ export default function HomeSection({ section }: HomeSectionProps) {
     if (isTrackItem(item, section.sectionType)) {
       // Play the track
       const trackIndex = items.indexOf(item);
+      const allTrackItems = items.filter((t: any) => isTrackItem(t, section.sectionType));
       const remainingTracks = items
         .slice(trackIndex + 1)
         .filter((t: any) => isTrackItem(t, section.sectionType));
-      setQueueTracks(remainingTracks);
+      setQueueTracks(remainingTracks, {
+        source: { type: "home-section", id: section.title, name: section.title, allTracks: allTrackItems },
+      });
       playTrack(item);
     } else if (isMixItem(item, section.sectionType)) {
       // Mix or radio station - navigate to mix page
@@ -351,7 +354,9 @@ function TrackListSection({
 
   const handlePlayTrack = (item: any, index: number) => {
     const remainingTracks = items.slice(index + 1);
-    setQueueTracks(remainingTracks);
+    setQueueTracks(remainingTracks, {
+      source: { type: "home-section", id: section.title, name: section.title, allTracks: items },
+    });
     playTrack(item);
   };
 

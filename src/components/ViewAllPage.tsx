@@ -110,7 +110,10 @@ export default function ViewAllPage({
   const handleItemClick = (item: any) => {
     if (isTrackItem(item)) {
       const idx = items.indexOf(item);
-      setQueueTracks(items.slice(idx + 1).filter((t) => isTrackItem(t)));
+      const allTrackItems = items.filter((t) => isTrackItem(t));
+      setQueueTracks(items.slice(idx + 1).filter((t) => isTrackItem(t)), {
+        source: { type: "view-all", id: title, name: title, allTracks: allTrackItems },
+      });
       playTrack(item);
     } else if (isArtistItem(item)) {
       navigateToArtist(item.id, {

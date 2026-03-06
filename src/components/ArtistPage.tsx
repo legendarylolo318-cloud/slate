@@ -45,7 +45,7 @@ export default function ArtistPage({
   onBack,
 }: ArtistPageProps) {
   const store = useStore();
-  const { playTrack, setQueueTracks, pauseTrack, resumeTrack } =
+  const { playTrack, setQueueTracks, pauseTrack, resumeTrack, setShuffledQueue } =
     usePlaybackActions();
   const {
     followedArtistIds,
@@ -160,7 +160,9 @@ export default function ArtistPage({
     }
 
     try {
-      setQueueTracks(topTracks.slice(1));
+      setQueueTracks(topTracks.slice(1), {
+        source: { type: "artist", id: artistId, name: displayName, allTracks: topTracks },
+      });
       await playTrack(topTracks[0]);
     } catch (err) {
       console.error("Failed to play artist tracks:", err);
@@ -169,14 +171,14 @@ export default function ArtistPage({
 
   const handleShuffle = async () => {
     if (topTracks.length === 0) return;
-    const shuffled = [...topTracks];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
+    const firstIdx = Math.floor(Math.random() * topTracks.length);
+    const first = topTracks[firstIdx];
+    const rest = topTracks.filter((_, i) => i !== firstIdx);
     try {
-      setQueueTracks(shuffled.slice(1));
-      await playTrack(shuffled[0]);
+      setShuffledQueue(rest, {
+        source: { type: "artist", id: artistId, name: displayName, allTracks: topTracks },
+      });
+      await playTrack(first);
     } catch (err) {
       console.error("Failed to shuffle artist tracks:", err);
     }

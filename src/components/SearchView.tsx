@@ -151,7 +151,9 @@ export default function SearchView({ query, onBack }: SearchViewProps) {
 
   const handlePlayTrack = (track: Track, index: number) => {
     const allTracks = results?.tracks || [];
-    setQueueTracks(allTracks.slice(index + 1));
+    setQueueTracks(allTracks.slice(index + 1), {
+      source: { type: "search", id: query, name: `Search: ${query}`, allTracks },
+    });
     playTrack(track);
   };
 

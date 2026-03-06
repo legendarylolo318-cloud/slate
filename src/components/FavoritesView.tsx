@@ -187,12 +187,19 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
     }
   }, [fetchRemaining]);
 
+  const favoritesSource = (allTracks: Track[]) => ({
+    type: "favorites" as const,
+    id: "favorites" as const,
+    name: "Loved Tracks",
+    allTracks,
+  });
+
   const handlePlayTrack = async (track: Track, _index: number) => {
     try {
       // Always queue from the full unfiltered list based on the track's original position
       const originalIndex = tracks.findIndex((t) => t.id === track.id);
       const queueStart = originalIndex >= 0 ? originalIndex + 1 : 0;
-      setQueueTracks(tracks.slice(queueStart));
+      setQueueTracks(tracks.slice(queueStart), { source: favoritesSource(tracks) });
       await playTrack(track);
 
       // Kick off background fetch for the rest if needed
@@ -203,7 +210,7 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
         );
         const playedIndex = full.findIndex((t) => t.id === track.id);
         if (playedIndex >= 0) {
-          setQueueTracks(full.slice(playedIndex + 1));
+          setQueueTracks(full.slice(playedIndex + 1), { source: favoritesSource(full) });
         }
       }
     } catch (err) {

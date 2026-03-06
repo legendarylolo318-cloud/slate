@@ -71,9 +71,11 @@ export default function TrackRadioPage({
     [tracks],
   );
 
+  const radioSource = { type: "radio" as const, id: trackId, name: trackInfo?.title ? `${trackInfo.title} Radio` : "Track Radio", allTracks: tracks };
+
   const handlePlayTrack = async (track: Track, index: number) => {
     try {
-      setQueueTracks(tracks.slice(index + 1));
+      setQueueTracks(tracks.slice(index + 1), { source: radioSource });
       await playTrack(track);
     } catch (err) {
       console.error("Failed to play radio track:", err);
@@ -93,7 +95,7 @@ export default function TrackRadioPage({
     }
 
     try {
-      setQueueTracks(tracks.slice(1));
+      setQueueTracks(tracks.slice(1), { source: radioSource });
       await playTrack(tracks[0]);
     } catch (err) {
       console.error("Failed to play radio:", err);

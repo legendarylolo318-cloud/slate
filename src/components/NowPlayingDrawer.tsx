@@ -84,9 +84,12 @@ const QueueTab = memo(function QueueTab({
     usePlaybackActions();
   const { favoriteTrackIds, addFavoriteTrack, removeFavoriteTrack } =
     useFavorites();
-  const { navigateToArtist, navigateToAlbum, navigateToPlaylist, navigateToMix, navigateToArtistTracks } = useNavigation();
+  const { navigateToArtist, navigateToAlbum, navigateToPlaylist, navigateToMix, navigateToArtistTracks, navigateToFavorites, navigateToTrackRadio } = useNavigation();
   const { setDrawerOpen } = useDrawer();
   const { showToast } = useToast();
+
+  const navigableSourceTypes = new Set(["album", "playlist", "mix", "artist", "artist-tracks", "favorites", "radio"]);
+  const sourceIsNavigable = source && navigableSourceTypes.has(source.type);
 
   const navigateToSource = useCallback(() => {
     if (!source) return;
@@ -107,8 +110,14 @@ const QueueTab = memo(function QueueTab({
       case "artist-tracks":
         navigateToArtistTracks(source.id as number, source.name);
         break;
+      case "favorites":
+        navigateToFavorites();
+        break;
+      case "radio":
+        navigateToTrackRadio(source.id as number);
+        break;
     }
-  }, [source, setDrawerOpen, navigateToAlbum, navigateToPlaylist, navigateToMix, navigateToArtist, navigateToArtistTracks]);
+  }, [source, setDrawerOpen, navigateToAlbum, navigateToPlaylist, navigateToMix, navigateToArtist, navigateToArtistTracks, navigateToFavorites, navigateToTrackRadio]);
 
   // Use refs so drag/drop handlers always read the current values
   const dragIdxRef = useRef<number | null>(null);
@@ -311,7 +320,9 @@ const QueueTab = memo(function QueueTab({
               {manualQueue.length > 0
                 ? "Next in queue"
                 : source
-                  ? <>Next from{" "}<button onClick={navigateToSource} className="uppercase hover:text-white transition-colors hover:underline">{source.name}</button></>
+                  ? <>Next from{" "}{sourceIsNavigable
+                      ? <button onClick={navigateToSource} className="uppercase hover:text-white transition-colors hover:underline">{source.name}</button>
+                      : <span className="uppercase">{source.name}</span>}</>
                   : "Next up"}
             </h3>
             <button
@@ -343,7 +354,9 @@ const QueueTab = memo(function QueueTab({
                     }}
                   >
                     <span className="text-[13px] font-bold text-th-text-muted uppercase tracking-wider pb-3">
-                      {source ? <>Next from{" "}<button onClick={navigateToSource} className="uppercase hover:text-white transition-colors hover:underline">{source.name}</button></> : "Next up"}
+                      {source ? <>Next from{" "}{sourceIsNavigable
+                        ? <button onClick={navigateToSource} className="uppercase hover:text-white transition-colors hover:underline">{source.name}</button>
+                        : <span className="uppercase">{source.name}</span>}</> : "Next up"}
                     </span>
                   </div>
                 );

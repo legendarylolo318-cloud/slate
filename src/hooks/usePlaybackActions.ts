@@ -106,10 +106,10 @@ export function usePlaybackActions() {
   const autoplayIdsRef = useRef(new Set<number>());
 
   const playTrack = useCallback(
-    async (track: Track, opts?: { chosenByUser?: boolean }) => {
+    async (track: Track, opts?: { chosenByUser?: boolean; skipHistoryPush?: boolean }) => {
       try {
         const current = store.get(currentTrackAtom);
-        if (current) {
+        if (current && !opts?.skipHistoryPush) {
           store.set(historyAtom, [...store.get(historyAtom), current]);
         }
         const stamped = ensureQid(normalizeTrack(track));
@@ -415,7 +415,7 @@ export function usePlaybackActions() {
             ? all.filter((t) => t._qid !== first._qid)
             : null,
         );
-        await playTrack(first);
+        await playTrack(first, { skipHistoryPush: true });
       } else {
         store.set(isPlayingAtom, false);
       }

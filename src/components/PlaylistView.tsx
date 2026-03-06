@@ -46,7 +46,7 @@ export default function PlaylistView({
   onBack,
 }: PlaylistViewProps) {
   const store = useStore();
-  const { playTrack, setQueueTracks, pauseTrack, resumeTrack } =
+  const { playTrack, setQueueTracks, pauseTrack, resumeTrack, setShuffledQueue } =
     usePlaybackActions();
 
   const PAGE_SIZE = 100;
@@ -218,7 +218,7 @@ export default function PlaylistView({
         const full = allTracksRef.current;
         const playedIndex = full.findIndex((t) => t.id === track.id);
         if (playedIndex >= 0) {
-          setQueueTracks(full.slice(playedIndex + 1));
+          setQueueTracks(full.slice(playedIndex + 1), { source: playlistSource(full) });
         }
       }
     } catch (err) {
@@ -241,14 +241,14 @@ export default function PlaylistView({
     }
 
     try {
-      setQueueTracks(tracks.slice(1));
+      setQueueTracks(tracks.slice(1), { source: playlistSource(tracks) });
       await playTrack(tracks[0]);
 
       if (hasMoreRef.current && !bgFetchingRef.current) {
         await fetchRemaining();
         const full = allTracksRef.current;
         if (full.length > 1) {
-          setQueueTracks(full.slice(1));
+          setQueueTracks(full.slice(1), { source: playlistSource(full) });
         }
       }
     } catch (err) {
@@ -265,14 +265,12 @@ export default function PlaylistView({
     }
 
     const all = allTracksRef.current.length > 0 ? allTracksRef.current : tracks;
-    const shuffled = [...all];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
+    const firstIdx = Math.floor(Math.random() * all.length);
+    const first = all[firstIdx];
+    const rest = all.filter((_, i) => i !== firstIdx);
     try {
-      setQueueTracks(shuffled.slice(1));
-      await playTrack(shuffled[0]);
+      setShuffledQueue(rest, { source: playlistSource(all) });
+      await playTrack(first);
     } catch (err) {
       console.error("Failed to shuffle play:", err);
     }

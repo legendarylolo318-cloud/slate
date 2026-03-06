@@ -26,7 +26,7 @@ interface MixPageProps {
 export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
   const isPlaying = useAtomValue(isPlayingAtom);
   const currentTrack = useAtomValue(currentTrackAtom);
-  const { playTrack, setQueueTracks, pauseTrack, resumeTrack } =
+  const { playTrack, setQueueTracks, pauseTrack, resumeTrack, setShuffledQueue } =
     usePlaybackActions();
 
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -100,7 +100,7 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
     }
 
     try {
-      setQueueTracks(tracks.slice(1));
+      setQueueTracks(tracks.slice(1), { source: mixSource });
       await playTrack(tracks[0]);
     } catch (err) {
       console.error("Failed to play mix:", err);
@@ -109,14 +109,12 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
 
   const handleShuffle = async () => {
     if (tracks.length === 0) return;
-    const shuffled = [...tracks];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
+    const firstIdx = Math.floor(Math.random() * tracks.length);
+    const first = tracks[firstIdx];
+    const rest = tracks.filter((_, i) => i !== firstIdx);
     try {
-      setQueueTracks(shuffled.slice(1));
-      await playTrack(shuffled[0]);
+      setShuffledQueue(rest, { source: mixSource });
+      await playTrack(first);
     } catch (err) {
       console.error("Failed to shuffle play:", err);
     }
