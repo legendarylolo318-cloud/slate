@@ -272,6 +272,7 @@ export function usePlaybackActions() {
       }
       store.set(useTrackGainAtom, !options?.albumMode);
       store.set(originalQueueAtom, null);
+      store.set(manualQueueAtom, []);
       store.set(
         playbackSourceAtom,
         options?.source
@@ -292,10 +293,33 @@ export function usePlaybackActions() {
 
   const removeFromQueue = useCallback(
     (index: number) => {
-      store.set(
-        queueAtom,
-        store.get(queueAtom).filter((_, i) => i !== index),
-      );
+      const manual = store.get(manualQueueAtom);
+      if (index < manual.length) {
+        // Remove from manual queue
+        store.set(
+          manualQueueAtom,
+          manual.filter((_, i) => i !== index),
+        );
+      } else {
+        // Remove from context queue (adjust index)
+        const ctxIndex = index - manual.length;
+        const queue = store.get(queueAtom);
+        const removed = queue[ctxIndex];
+        store.set(
+          queueAtom,
+          queue.filter((_, i) => i !== ctxIndex),
+        );
+        // Sync originalQueueAtom for context tracks
+        if (removed) {
+          const orig = store.get(originalQueueAtom);
+          if (orig) {
+            store.set(
+              originalQueueAtom,
+              orig.filter((t) => t._qid !== removed._qid),
+            );
+          }
+        }
+      }
     },
     [store],
   );
@@ -344,7 +368,7 @@ export function usePlaybackActions() {
     if (manual.length > 0) {
       const [nextTrack, ...rest] = manual;
       store.set(manualQueueAtom, rest);
-      await playTrack(nextTrack);
+      await playTrack(nextTrack, { chosenByUser: !!options?.explicit });
       return;
     }
 
@@ -539,6 +563,21 @@ export function usePlaybackActions() {
             store.set(streamInfoAtom, info);
             store.set(currentTrackAtom, prevTrack);
             store.set(isPlayingAtom, true);
+
+            // Notify backend for scrobbling
+            invoke("notify_track_started", {
+              payload: {
+                artist: prevTrack.artist?.name || "Unknown",
+                title: prevTrack.title,
+                album: prevTrack.album?.title || null,
+                albumArtist: null,
+                durationSecs: prevTrack.duration || 0,
+                trackNumber: prevTrack.trackNumber || null,
+                chosenByUser: true,
+                isrc: prevTrack.isrc || null,
+                trackId: prevTrack.id || null,
+              },
+            }).catch(() => {});
           } catch (error: any) {
             console.error("Failed to play previous track:", error);
             store.set(isPlayingAtom, false);
@@ -587,6 +626,7 @@ export function usePlaybackActions() {
       },
     ) => {
       const stamped = stampQids(tracks.map(normalizeTrack));
+      store.set(manualQueueAtom, []);
       store.set(originalQueueAtom, stamped);
       store.set(queueAtom, fisherYatesShuffle(stamped));
       store.set(useTrackGainAtom, !options?.albumMode);
@@ -608,18 +648,34 @@ export function usePlaybackActions() {
 
   const playFromQueue = useCallback(
     async (index: number) => {
+      const manual = store.get(manualQueueAtom);
       const queue = store.get(queueAtom);
-      if (index < 0 || index >= queue.length) return;
-      const track = queue[index];
-      const newQueue = queue.filter((_, i) => i !== index);
-      store.set(queueAtom, newQueue);
-      // Sync originalQueueAtom
-      const orig = store.get(originalQueueAtom);
-      if (orig) {
+      if (index < 0 || index >= manual.length + queue.length) return;
+
+      let track: Track;
+      if (index < manual.length) {
+        // Playing from manual queue
+        track = manual[index];
         store.set(
-          originalQueueAtom,
-          orig.filter((t) => t._qid !== track._qid),
+          manualQueueAtom,
+          manual.filter((_, i) => i !== index),
         );
+      } else {
+        // Playing from context queue
+        const ctxIndex = index - manual.length;
+        track = queue[ctxIndex];
+        store.set(
+          queueAtom,
+          queue.filter((_, i) => i !== ctxIndex),
+        );
+        // Sync originalQueueAtom for context tracks
+        const orig = store.get(originalQueueAtom);
+        if (orig) {
+          store.set(
+            originalQueueAtom,
+            orig.filter((t) => t._qid !== track._qid),
+          );
+        }
       }
       await playTrack(track);
     },

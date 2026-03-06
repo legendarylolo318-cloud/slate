@@ -71,12 +71,15 @@ const QueueTab = memo(function QueueTab({
   scrollEl: HTMLDivElement;
 }) {
   const currentTrack = useAtomValue(currentTrackAtom);
-  const queue = useAtomValue(queueAtom);
+  const contextQueue = useAtomValue(queueAtom);
   const history = useAtomValue(historyAtom);
   const isPlaying = useAtomValue(isPlayingAtom);
   const source = useAtomValue(playbackSourceAtom);
   const manualQueue = useAtomValue(manualQueueAtom);
-  const contextQueue = queue.slice(manualQueue.length);
+  const combinedQueue = useMemo(
+    () => [...manualQueue, ...contextQueue],
+    [manualQueue, contextQueue],
+  );
   const { playTrack, setQueueTracks, removeFromQueue, playFromQueue, clearQueue } =
     usePlaybackActions();
   const { favoriteTrackIds, addFavoriteTrack, removeFavoriteTrack } =
@@ -109,8 +112,8 @@ const QueueTab = memo(function QueueTab({
 
   // Use refs so drag/drop handlers always read the current values
   const dragIdxRef = useRef<number | null>(null);
-  const queueRef = useRef(queue);
-  queueRef.current = queue;
+  const queueRef = useRef(combinedQueue);
+  queueRef.current = combinedQueue;
   const manualCountRef = useRef(manualQueue.length);
   manualCountRef.current = manualQueue.length;
   const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -250,7 +253,7 @@ const QueueTab = memo(function QueueTab({
   }, [history.length, !!currentTrack]);
 
   const virtualizer = useVirtualizer({
-    count: queue.length + (hasDivider ? 1 : 0),
+    count: combinedQueue.length + (hasDivider ? 1 : 0),
     getScrollElement: () => scrollEl,
     estimateSize: (index) =>
       hasDivider && index === dividerVIdx
@@ -301,7 +304,7 @@ const QueueTab = memo(function QueueTab({
       )}
 
       {/* Next Up — virtualized, draggable */}
-      {queue.length > 0 && (
+      {combinedQueue.length > 0 && (
         <section>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-[13px] font-bold text-th-text-muted uppercase tracking-wider">
@@ -349,7 +352,7 @@ const QueueTab = memo(function QueueTab({
               // Map virtual index to real queue index (skip the divider slot)
               const queueIdx =
                 hasDivider && vIdx > dividerVIdx ? vIdx - 1 : vIdx;
-              const track = queue[queueIdx];
+              const track = combinedQueue[queueIdx];
               const isDragged = dragIdx === queueIdx;
               const showDropAbove =
                 dragIdx !== null && dropIdx === queueIdx && dragIdx > queueIdx;
@@ -407,7 +410,7 @@ const QueueTab = memo(function QueueTab({
         </section>
       )}
 
-      {queue.length === 0 && !currentTrack && (
+      {combinedQueue.length === 0 && !currentTrack && (
         <div className="flex flex-col items-center justify-center py-16 text-th-text-disabled">
           <Music size={40} className="mb-3" />
           <p className="text-sm">Queue is empty</p>
