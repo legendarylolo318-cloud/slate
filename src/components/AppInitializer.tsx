@@ -427,6 +427,30 @@ export function AppInitializer() {
   }, [store, showToast]);
 
   // ================================================================
+  //  SCROBBLE AUTH ERROR — toast when a provider's session expires
+  // ================================================================
+  useEffect(() => {
+    const unlisten = listen<string>("scrobble-auth-error", (event) => {
+      const provider = event.payload;
+      const name =
+        provider === "lastfm"
+          ? "Last.fm"
+          : provider === "listenbrainz"
+            ? "ListenBrainz"
+            : provider === "librefm"
+              ? "Libre.fm"
+              : provider;
+      showToast(
+        `${name} session expired — reconnect in Scrobbling settings`,
+        "error",
+      );
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [showToast]);
+
+  // ================================================================
   //  SYNC PLAYBACK ERROR HANDLING
   //  Catches invoke failures from playTrack/resumeTrack/playPrevious
   // ================================================================
