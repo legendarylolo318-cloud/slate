@@ -76,15 +76,18 @@ struct TrackPlayback {
     accumulated_secs: f64,
     last_resumed_at: Option<Instant>,
     scrobbled: bool,
+    started_at: Instant,
 }
 
 impl TrackPlayback {
     fn new(track: ScrobbleTrack) -> Self {
+        let now = Instant::now();
         Self {
             track,
             accumulated_secs: 0.0,
-            last_resumed_at: Some(Instant::now()),
+            last_resumed_at: Some(now),
             scrobbled: false,
+            started_at: now,
         }
     }
 
@@ -110,19 +113,19 @@ impl TrackPlayback {
     }
 
     /// After a seek, reset the live timer but keep accumulated time.
+    /// If paused (last_resumed_at is None), do nothing — stay paused.
     fn on_seek(&mut self) {
-        // Flush current live segment into accumulated, restart timer
         if let Some(resumed) = self.last_resumed_at.take() {
             self.accumulated_secs += resumed.elapsed().as_secs_f64();
+            self.last_resumed_at = Some(Instant::now());
         }
-        self.last_resumed_at = Some(Instant::now());
     }
 
     /// Meets the scrobble threshold:
     /// - track is longer than 30 seconds
     /// - listened to at least 50% of the track OR at least 4 minutes
     fn meets_threshold(&self) -> bool {
-        if self.track.duration_secs < 30 {
+        if self.track.duration_secs <= 30 {
             return false;
         }
         let listened = self.elapsed();
@@ -193,34 +196,36 @@ impl ScrobbleManager {
 
     /// Called when a new track begins playing.
     pub async fn on_track_started(&self, track: ScrobbleTrack) {
-        // Check previous track for scrobble threshold
-        {
+        // 1. Single lock: extract previous, set new immediately
+        let prev_track = {
             let mut current = self.current_track.lock().await;
-            if let Some(prev) = current.take() {
-                if !prev.scrobbled && prev.meets_threshold() {
-                    let t = prev.track.clone();
-                    drop(current);
-                    self.dispatch_scrobble(t).await;
+            let prev = current.take().and_then(|p| {
+                if !p.scrobbled && p.meets_threshold() {
+                    Some(p.track)
                 } else {
-                    drop(current);
+                    None
                 }
-            }
-        }
+            });
+            *current = Some(TrackPlayback::new(track.clone()));
+            prev
+        };
+        // Lock released — new track is live with correct Instant::now()
 
-        // Fire now_playing for the new track
-        self.fire_now_playing(&track).await;
+        // 2. Network I/O runs concurrently, AFTER track is set
+        tokio::join!(
+            async {
+                if let Some(prev) = prev_track {
+                    self.dispatch_scrobble(prev).await;
+                }
+            },
+            self.fire_now_playing(&track),
+        );
 
-        // Set new current track
+        // 3. Spawn fire-and-forget MBID lookup (only if we have ISRC + track_id for guard)
         let isrc = track.isrc.clone();
         let track_name = track.track.clone();
         let artist_name = track.artist.clone();
         let expected_id = track.track_id;
-
-        let mut current = self.current_track.lock().await;
-        *current = Some(TrackPlayback::new(track));
-        drop(current);
-
-        // Spawn fire-and-forget MBID lookup (only if we have ISRC + track_id for guard)
         if let (Some(isrc), Some(expected_id)) = (isrc, expected_id) {
             let mb = Arc::clone(&self.mb_lookup);
             let ct = Arc::clone(&self.current_track);
@@ -258,16 +263,45 @@ impl ScrobbleManager {
         }
     }
 
-    /// Called when the current track finishes playing naturally.
-    pub async fn on_track_finished(&self) {
-        let mut current = self.current_track.lock().await;
-        if let Some(mut playback) = current.take() {
-            if !playback.scrobbled && playback.meets_threshold() {
-                playback.scrobbled = true;
-                let track = playback.track.clone();
-                drop(current);
-                self.dispatch_scrobble(track).await;
+    /// Called when the audio stream ends naturally (EOS event).
+    /// Peeks at the current track and scrobbles if threshold is met, but
+    /// NEVER removes it from `current_track`. This prevents a stale EOS
+    /// event from destroying a newly-started track's tracking state.
+    pub async fn try_scrobble_finished(&self) {
+        let track_to_scrobble = {
+            let mut current = self.current_track.lock().await;
+            if let Some(ref mut playback) = *current {
+                if !playback.scrobbled && playback.meets_threshold() {
+                    playback.scrobbled = true;
+                    Some(playback.track.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
             }
+        };
+        if let Some(track) = track_to_scrobble {
+            self.dispatch_scrobble(track).await;
+        }
+    }
+
+    /// Called on explicit stop (user action). Scrobbles if threshold is met
+    /// and unconditionally clears the current track.
+    pub async fn on_track_stopped(&self) {
+        let track_to_scrobble = {
+            let mut current = self.current_track.lock().await;
+            current.take().and_then(|mut p| {
+                if !p.scrobbled && p.meets_threshold() {
+                    p.scrobbled = true;
+                    Some(p.track)
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(track) = track_to_scrobble {
+            self.dispatch_scrobble(track).await;
         }
     }
 
@@ -342,10 +376,127 @@ impl ScrobbleManager {
         }
     }
 
-    /// Placeholder for draining the retry queue on startup.
+    /// Drain the retry queue: send queued scrobbles to their providers.
+    /// Called once on startup after providers are registered.
     pub async fn drain_queue(&self) {
-        // Will be implemented when providers are ready
-        log::debug!("drain_queue: not yet implemented");
+        // Clean up entries for disconnected providers / expired entries first
+        let connected: Vec<String> = {
+            let providers = self.providers.read().await;
+            providers
+                .iter()
+                .filter(|p| p.is_authenticated())
+                .map(|p| p.name().to_string())
+                .collect()
+        };
+        self.queue.cleanup(&connected).await;
+
+        let total = self.queue.len().await;
+        if total == 0 {
+            return;
+        }
+        log::info!("Draining scrobble retry queue ({total} entries)");
+
+        for provider_name in &connected {
+            let pending = self.queue.take_for_provider(provider_name).await;
+            if pending.is_empty() {
+                continue;
+            }
+            log::info!(
+                "Retrying {} queued scrobbles for {provider_name}",
+                pending.len()
+            );
+
+            let batch_size = {
+                let providers = self.providers.read().await;
+                providers
+                    .iter()
+                    .find(|p| p.name() == provider_name)
+                    .map(|p| p.max_batch_size())
+                    .unwrap_or(50)
+            };
+
+            let mut failed: Vec<(ScrobbleTrack, u32)> = Vec::new();
+            let chunks: Vec<&[(ScrobbleTrack, u32)]> =
+                pending.chunks(batch_size).collect();
+            let mut chunk_idx = 0;
+            while chunk_idx < chunks.len() {
+                let chunk = chunks[chunk_idx];
+                chunk_idx += 1;
+                let tracks: Vec<ScrobbleTrack> =
+                    chunk.iter().map(|(t, _)| t.clone()).collect();
+
+                // Acquire lock, find provider, drop lock before network call
+                let provider_exists = {
+                    let providers = self.providers.read().await;
+                    providers.iter().any(|p| p.name() == provider_name)
+                };
+                if !provider_exists {
+                    // Provider removed — requeue this chunk and all remaining
+                    failed.extend(chunk.iter().cloned());
+                    for remaining in &chunks[chunk_idx..] {
+                        failed.extend(remaining.iter().cloned());
+                    }
+                    break;
+                }
+
+                let result = {
+                    let providers = self.providers.read().await;
+                    let provider =
+                        providers.iter().find(|p| p.name() == provider_name).unwrap();
+                    tokio::time::timeout(
+                        Duration::from_secs(15),
+                        provider.scrobble(&tracks),
+                    )
+                    .await
+                };
+
+                match result {
+                    Ok(ScrobbleResult::Ok) => {
+                        log::debug!(
+                            "Retried {} scrobbles to {provider_name}",
+                            tracks.len()
+                        );
+                    }
+                    _ => {
+                        match &result {
+                            Ok(ScrobbleResult::AuthError(msg)) => {
+                                log::warn!(
+                                    "Auth error draining queue for {provider_name}: {msg}"
+                                );
+                                let _ = self
+                                    .app_handle
+                                    .emit("scrobble-auth-error", provider_name);
+                            }
+                            Ok(ScrobbleResult::Retryable(msg)) => {
+                                log::warn!(
+                                    "Retry failed for {provider_name}: {msg}"
+                                );
+                            }
+                            Err(_) => {
+                                log::warn!(
+                                    "Timeout draining queue for {provider_name}"
+                                );
+                            }
+                            _ => {}
+                        }
+                        // Requeue current chunk + all remaining unprocessed chunks
+                        failed.extend(chunk.iter().cloned());
+                        for remaining in &chunks[chunk_idx..] {
+                            failed.extend(remaining.iter().cloned());
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if !failed.is_empty() {
+                log::info!(
+                    "Re-queuing {} failed scrobbles for {provider_name}",
+                    failed.len()
+                );
+                self.queue.requeue(provider_name, failed).await;
+            }
+        }
     }
 
     pub async fn queue_size(&self) -> usize {

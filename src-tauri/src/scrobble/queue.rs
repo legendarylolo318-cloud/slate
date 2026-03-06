@@ -18,6 +18,8 @@ struct QueueEntry {
     track: ScrobbleTrack,
     attempts: u32,
     last_attempt: Option<i64>,
+    #[serde(default)]
+    queued_at: i64,
 }
 
 pub struct ScrobbleQueue {
@@ -61,10 +63,12 @@ impl ScrobbleQueue {
     }
 
     pub async fn persist(&self) -> Result<(), SoneError> {
-        let entries = self.entries.lock().await;
-        let json = serde_json::to_vec(&*entries)?;
+        let snapshot = self.entries.lock().await.clone();
+        let json = serde_json::to_vec(&snapshot)?;
         let encrypted = self.crypto.encrypt(&json)?;
-        std::fs::write(&self.path, encrypted)?;
+        let tmp_path = self.path.with_extension("bin.tmp");
+        std::fs::write(&tmp_path, &encrypted)?;
+        std::fs::rename(&tmp_path, &self.path)?;
         Ok(())
     }
 
@@ -75,6 +79,7 @@ impl ScrobbleQueue {
             track,
             attempts: 0,
             last_attempt: None,
+            queued_at: crate::now_secs() as i64,
         });
 
         // Cap at MAX_ENTRIES, drop oldest
@@ -105,10 +110,15 @@ impl ScrobbleQueue {
     /// Remove entries for disconnected providers and entries that have exceeded
     /// the maximum retry attempts.
     pub async fn cleanup(&self, connected_providers: &[String]) {
+        let now = crate::now_secs() as i64;
+        let max_age_secs = 14 * 86400; // 14 days
         let mut entries = self.entries.lock().await;
         let before = entries.len();
         entries.retain(|e| {
             if e.attempts >= MAX_ATTEMPTS {
+                return false;
+            }
+            if e.queued_at > 0 && now - e.queued_at > max_age_secs {
                 return false;
             }
             connected_providers.contains(&e.provider)
@@ -123,14 +133,14 @@ impl ScrobbleQueue {
         }
     }
 
-    /// Remove and return all entries for a given provider.
-    pub async fn take_for_provider(&self, provider: &str) -> Vec<ScrobbleTrack> {
+    /// Remove and return all entries for a given provider (with attempt counts).
+    pub async fn take_for_provider(&self, provider: &str) -> Vec<(ScrobbleTrack, u32)> {
         let mut entries = self.entries.lock().await;
         let mut taken = Vec::new();
         let mut remaining = Vec::new();
         for entry in entries.drain(..) {
             if entry.provider == provider {
-                taken.push(entry.track);
+                taken.push((entry.track, entry.attempts));
             } else {
                 remaining.push(entry);
             }
@@ -148,20 +158,19 @@ impl ScrobbleQueue {
     }
 
     /// Re-add failed tracks with incremented attempt count.
-    pub async fn requeue(&self, provider: &str, tracks: Vec<ScrobbleTrack>) {
+    pub async fn requeue(&self, provider: &str, tracks: Vec<(ScrobbleTrack, u32)>) {
         if tracks.is_empty() {
             return;
         }
         let now = crate::now_secs() as i64;
         let mut entries = self.entries.lock().await;
-        for track in tracks {
-            // Find and increment existing attempt count, or start at 1
-            let attempts = 1; // first re-queue attempt
+        for (track, prev_attempts) in tracks {
             entries.push(QueueEntry {
                 provider: provider.to_string(),
                 track,
-                attempts,
+                attempts: prev_attempts + 1,
                 last_attempt: Some(now),
+                queued_at: now,
             });
         }
 

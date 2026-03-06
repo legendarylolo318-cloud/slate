@@ -280,6 +280,7 @@ pub fn run() {
                                 let provider = crate::scrobble::lastfm::AudioscrobblerProvider::new(
                                     "lastfm",
                                     "https://ws.audioscrobbler.com/2.0/",
+                                    "https://www.last.fm/api/auth/",
                                     crate::embedded_lastfm::stream_key_a(),
                                     crate::embedded_lastfm::stream_key_b(),
                                 );
@@ -295,6 +296,7 @@ pub fn run() {
                                 let provider = crate::scrobble::lastfm::AudioscrobblerProvider::new(
                                     "librefm",
                                     crate::scrobble::librefm::LIBREFM_API_URL,
+                                    "https://libre.fm/api/auth/",
                                     crate::embedded_librefm::stream_key_a(),
                                     crate::embedded_librefm::stream_key_b(),
                                 );
@@ -325,7 +327,7 @@ pub fn run() {
                     let handle = handle.clone();
                     tauri::async_runtime::spawn(async move {
                         let state = handle.state::<AppState>();
-                        state.scrobble_manager.on_track_finished().await;
+                        state.scrobble_manager.try_scrobble_finished().await;
                     });
                 });
             }

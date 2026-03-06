@@ -75,7 +75,7 @@ pub async fn notify_track_seeked(state: State<'_, AppState>) -> Result<(), SoneE
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn notify_track_stopped(state: State<'_, AppState>) -> Result<(), SoneError> {
-    state.scrobble_manager.on_track_finished().await;
+    state.scrobble_manager.on_track_stopped().await;
     Ok(())
 }
 
@@ -151,6 +151,7 @@ pub async fn connect_lastfm() -> Result<AuthStartResponse, SoneError> {
     let provider = crate::scrobble::lastfm::AudioscrobblerProvider::new(
         "lastfm",
         "https://ws.audioscrobbler.com/2.0/",
+        "https://www.last.fm/api/auth/",
         crate::embedded_lastfm::stream_key_a(),
         crate::embedded_lastfm::stream_key_b(),
     );
@@ -168,6 +169,7 @@ pub async fn connect_librefm() -> Result<AuthStartResponse, SoneError> {
     let provider = crate::scrobble::lastfm::AudioscrobblerProvider::new(
         "librefm",
         crate::scrobble::librefm::LIBREFM_API_URL,
+        "https://libre.fm/api/auth/",
         crate::embedded_librefm::stream_key_a(),
         crate::embedded_librefm::stream_key_b(),
     );
@@ -185,7 +187,7 @@ pub async fn complete_audioscrobbler_auth(
     provider_name: String,
     token: String,
 ) -> Result<String, SoneError> {
-    let (api_key, api_secret, api_url) = match provider_name.as_str() {
+    let (api_key, api_secret, api_url, auth_base_url) = match provider_name.as_str() {
         "lastfm" => {
             if !crate::embedded_lastfm::has_stream_keys() {
                 return Err(SoneError::Scrobble("Last.fm not configured".into()));
@@ -194,6 +196,7 @@ pub async fn complete_audioscrobbler_auth(
                 crate::embedded_lastfm::stream_key_a(),
                 crate::embedded_lastfm::stream_key_b(),
                 "https://ws.audioscrobbler.com/2.0/",
+                "https://www.last.fm/api/auth/",
             )
         }
         "librefm" => {
@@ -204,6 +207,7 @@ pub async fn complete_audioscrobbler_auth(
                 crate::embedded_librefm::stream_key_a(),
                 crate::embedded_librefm::stream_key_b(),
                 crate::scrobble::librefm::LIBREFM_API_URL,
+                "https://libre.fm/api/auth/",
             )
         }
         _ => {
@@ -220,6 +224,7 @@ pub async fn complete_audioscrobbler_auth(
             "librefm"
         },
         api_url,
+        auth_base_url,
         api_key,
         api_secret,
     );

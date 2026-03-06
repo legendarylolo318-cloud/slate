@@ -26,6 +26,7 @@ pub struct SessionData {
 pub struct AudioscrobblerProvider {
     name: &'static str,
     api_url: &'static str,
+    auth_base_url: &'static str,
     api_key: String,
     api_secret: String,
     session: RwLock<Option<SessionData>>,
@@ -36,12 +37,14 @@ impl AudioscrobblerProvider {
     pub fn new(
         name: &'static str,
         api_url: &'static str,
+        auth_base_url: &'static str,
         api_key: String,
         api_secret: String,
     ) -> Self {
         Self {
             name,
             api_url,
+            auth_base_url,
             api_key,
             api_secret,
             session: RwLock::new(None),
@@ -109,12 +112,10 @@ impl AudioscrobblerProvider {
     /// Generate the browser auth URL for the user to grant access (desktop auth step 3).
     /// The token must be obtained from `get_token()` first.
     pub fn auth_url_with_token(&self, token: &str) -> String {
-        let base = if self.name == "lastfm" {
-            "https://www.last.fm/api/auth/"
-        } else {
-            "https://libre.fm/api/auth/"
-        };
-        format!("{}?api_key={}&token={}", base, self.api_key, token)
+        format!(
+            "{}?api_key={}&token={}",
+            self.auth_base_url, self.api_key, token
+        )
     }
 
     /// Exchange an auth token for a permanent session key.
@@ -289,14 +290,17 @@ impl ScrobbleProvider for AudioscrobblerProvider {
             Ok(resp) => {
                 if let Ok(body) = resp.json::<serde_json::Value>().await {
                     if let Some(code) = Self::parse_error_code(&body) {
-                        log::warn!(
-                            "{}: now_playing error {code}: {}",
-                            self.name,
-                            body.get("message")
-                                .and_then(|m| m.as_str())
-                                .unwrap_or("unknown")
-                        );
-                        // Per Last.fm spec, now_playing failures are not retried
+                        let msg = body
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        log::warn!("{}: now_playing error {code}: {msg}", self.name);
+                        // Auth errors must be surfaced so the provider gets disconnected
+                        if matches!(code, 9 | 10 | 26) {
+                            return ScrobbleResult::AuthError(msg);
+                        }
+                        // All other now_playing failures are non-critical
                         return ScrobbleResult::Ok;
                     }
                 }
@@ -304,7 +308,7 @@ impl ScrobbleProvider for AudioscrobblerProvider {
             }
             Err(e) => {
                 log::warn!("{}: now_playing failed: {e}", self.name);
-                // now_playing failures are non-critical
+                // Network failures for now_playing are non-critical
                 ScrobbleResult::Ok
             }
         }
@@ -374,11 +378,16 @@ impl ScrobbleProvider for AudioscrobblerProvider {
                         .to_string();
 
                     return match code {
-                        // 9 = Invalid session key
-                        9 => ScrobbleResult::AuthError(msg),
-                        // 11 = Service offline, 16 = Temporarily unavailable, 29 = Rate limit
-                        11 | 16 | 29 => ScrobbleResult::Retryable(msg),
-                        _ => ScrobbleResult::Retryable(format!("error {code}: {msg}")),
+                        // 9 = Invalid session, 10 = Invalid API key, 26 = Key suspended
+                        9 | 10 | 26 => ScrobbleResult::AuthError(msg),
+                        // 8 = Temporary error, 11 = Service offline,
+                        // 16 = Temporarily unavailable, 29 = Rate limit
+                        8 | 11 | 16 | 29 => ScrobbleResult::Retryable(msg),
+                        // All other errors are permanent failures — do not retry
+                        _ => {
+                            log::error!("{}: permanent scrobble error {code}: {msg}", self.name);
+                            ScrobbleResult::Ok
+                        }
                     };
                 }
 

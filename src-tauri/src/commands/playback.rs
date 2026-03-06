@@ -127,7 +127,7 @@ pub async fn stop_track(state: State<'_, AppState>) -> Result<(), SoneError> {
     let result = state.audio_player.stop().map_err(SoneError::Audio);
     #[cfg(target_os = "linux")]
     state.mpris.send(crate::mpris::MprisCommand::Stop);
-    state.scrobble_manager.on_track_finished().await;
+    state.scrobble_manager.on_track_stopped().await;
     result
 }
 
