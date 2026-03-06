@@ -1,6 +1,6 @@
 import { atom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
-import type { Track, StreamInfo } from "../types";
+import type { Track, StreamInfo, PlaybackSource } from "../types";
 
 export const isPlayingAtom = atom(false);
 export const currentTrackAtom = atom<Track | null>(null);
@@ -13,6 +13,12 @@ export const autoplayAtom = atomWithStorage("sone.autoplay.v1", false);
 
 /** true = use track replay gain (shuffle/mixed queue), false = use album replay gain (album in order) */
 export const useTrackGainAtom = atom(true);
+
+export const repeatAtom = atomWithStorage("sone.repeat.v1", 0); // 0 = off, 1 = repeat-all, 2 = repeat-one
+export const shuffleAtom = atomWithStorage("sone.shuffle.v1", false);
+export const manualQueueAtom = atom<Track[]>([]);
+export const originalQueueAtom = atom<Track[] | null>(null);
+export const playbackSourceAtom = atom<PlaybackSource | null>(null);
 
 export const exclusiveModeAtom = atom(false);
 export const bitPerfectAtom = atom(false);

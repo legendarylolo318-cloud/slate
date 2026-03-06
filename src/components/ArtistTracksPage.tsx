@@ -20,7 +20,7 @@ export default function ArtistTracksPage({
 }: ArtistTracksPageProps) {
   const isPlaying = useAtomValue(isPlayingAtom);
   const currentTrack = useAtomValue(currentTrackAtom);
-  const { playTrack, setQueueTracks, pauseTrack, resumeTrack } =
+  const { playTrack, pauseTrack, resumeTrack, setShuffledQueue, playFromSource, playAllFromSource } =
     usePlaybackActions();
 
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -102,10 +102,12 @@ export default function ArtistTracksPage({
     [tracks],
   );
 
-  const handlePlayTrack = async (track: Track, index: number) => {
+  const artistSource = { type: "artist-tracks" as const, id: artistId, name: artistName, allTracks: tracks };
+
+
+  const handlePlayTrack = async (track: Track, _index: number) => {
     try {
-      setQueueTracks(tracks.slice(index + 1));
-      await playTrack(track);
+      await playFromSource(track, tracks, { source: artistSource });
     } catch (err) {
       console.error("Failed to play track:", err);
     }
@@ -119,8 +121,7 @@ export default function ArtistTracksPage({
       return;
     }
     try {
-      setQueueTracks(tracks.slice(1));
-      await playTrack(tracks[0]);
+      await playAllFromSource(tracks, { source: artistSource });
     } catch (err) {
       console.error("Failed to play all:", err);
     }
@@ -128,14 +129,12 @@ export default function ArtistTracksPage({
 
   const handleShuffle = async () => {
     if (tracks.length === 0) return;
-    const shuffled = [...tracks];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
+    const firstIdx = Math.floor(Math.random() * tracks.length);
+    const first = tracks[firstIdx];
+    const rest = tracks.filter((_, i) => i !== firstIdx);
     try {
-      setQueueTracks(shuffled.slice(1));
-      await playTrack(shuffled[0]);
+      setShuffledQueue(rest, { source: artistSource });
+      await playTrack(first);
     } catch (err) {
       console.error("Failed to shuffle:", err);
     }

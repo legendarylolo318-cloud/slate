@@ -45,7 +45,7 @@ export default function ArtistPage({
   onBack,
 }: ArtistPageProps) {
   const store = useStore();
-  const { playTrack, setQueueTracks, pauseTrack, resumeTrack } =
+  const { playTrack, pauseTrack, resumeTrack, setShuffledQueue, playFromSource, playAllFromSource } =
     usePlaybackActions();
   const {
     followedArtistIds,
@@ -132,12 +132,13 @@ export default function ArtistPage({
 
   const handlePlayTrack = async (
     track: any,
-    index: number,
+    _index: number,
     trackList: any[],
   ) => {
     try {
-      setQueueTracks(trackList.slice(index + 1));
-      await playTrack(track);
+      await playFromSource(track, trackList, {
+        source: { type: "artist", id: artistId, name: displayName, allTracks: trackList },
+      });
     } catch (err) {
       console.error("Failed to play artist track:", err);
     }
@@ -158,8 +159,9 @@ export default function ArtistPage({
     }
 
     try {
-      setQueueTracks(topTracks.slice(1));
-      await playTrack(topTracks[0]);
+      await playAllFromSource(topTracks, {
+        source: { type: "artist", id: artistId, name: displayName, allTracks: topTracks },
+      });
     } catch (err) {
       console.error("Failed to play artist tracks:", err);
     }
@@ -167,14 +169,14 @@ export default function ArtistPage({
 
   const handleShuffle = async () => {
     if (topTracks.length === 0) return;
-    const shuffled = [...topTracks];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
+    const firstIdx = Math.floor(Math.random() * topTracks.length);
+    const first = topTracks[firstIdx];
+    const rest = topTracks.filter((_, i) => i !== firstIdx);
     try {
-      setQueueTracks(shuffled.slice(1));
-      await playTrack(shuffled[0]);
+      setShuffledQueue(rest, {
+        source: { type: "artist", id: artistId, name: displayName, allTracks: topTracks },
+      });
+      await playTrack(first);
     } catch (err) {
       console.error("Failed to shuffle artist tracks:", err);
     }
