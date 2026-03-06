@@ -43,6 +43,9 @@ import {
   exclusiveModeAtom,
   bitPerfectAtom,
   exclusiveDeviceAtom,
+  originalQueueAtom,
+  manualQueueAtom,
+  playbackSourceAtom,
 } from "../atoms/playback";
 import { drawerOpenAtom } from "../atoms/ui";
 
@@ -63,10 +66,15 @@ import {
   getFavoritePlaylists,
 } from "../api/tidal";
 
-import type { AuthTokens, Track, PlaybackSnapshot } from "../types";
+import type { AuthTokens, Track, QueuedTrack, PlaybackSnapshot } from "../types";
 import { getTidalImageUrl } from "../types";
+import { ensureQid, advanceCounterPast } from "../lib/qid";
 
 const PLAYBACK_STATE_KEY = "sone.playback-state.v1";
+
+function isValidTrack(t: unknown): t is Track {
+  return !!t && typeof (t as Track).id === "number";
+}
 
 export function AppInitializer() {
   // Preload subscribes to auth state (single re-render on login)
@@ -89,6 +97,9 @@ export function AppInitializer() {
   const setCurrentTrack = useSetAtom(currentTrackAtom);
   const setQueue = useSetAtom(queueAtom);
   const setHistory = useSetAtom(historyAtom);
+  const setOriginalQueue = useSetAtom(originalQueueAtom);
+  const setManualQueue = useSetAtom(manualQueueAtom);
+  const setPlaybackSource = useSetAtom(playbackSourceAtom);
 
   // ---- Stable playback actions (no subscriptions) ----
   const { playNext, playPrevious, pauseTrack, resumeTrack, setVolume } =
@@ -298,6 +309,44 @@ export function AppInitializer() {
           ),
         );
       }
+
+      if (Array.isArray(parsed.originalQueue)) {
+        setOriginalQueue(
+          parsed.originalQueue
+            .filter(isValidTrack)
+            .map((t) => ensureQid(t as QueuedTrack)),
+        );
+      } else {
+        setOriginalQueue(null);
+      }
+
+      if (Array.isArray(parsed.manualQueue)) {
+        setManualQueue(
+          parsed.manualQueue
+            .filter(isValidTrack)
+            .map((t) => ensureQid(t as QueuedTrack)),
+        );
+      }
+
+      if (parsed.playbackSource) {
+        setPlaybackSource({
+          ...parsed.playbackSource,
+          tracks: parsed.playbackSource.tracks
+            .filter(isValidTrack)
+            .map((t) => ensureQid(t as QueuedTrack)),
+        });
+      }
+
+      // Advance QID counter past all restored _qid values to prevent collisions
+      const allRestored = [
+        ...(parsed.queue || []),
+        ...(parsed.history || []),
+        ...(parsed.manualQueue || []),
+        ...(parsed.currentTrack ? [parsed.currentTrack] : []),
+      ]
+        .filter(isValidTrack)
+        .map((t) => ensureQid(t as QueuedTrack));
+      advanceCounterPast(allRestored);
     };
 
     const restore = async () => {

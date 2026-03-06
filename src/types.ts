@@ -65,6 +65,11 @@ export interface Track {
   audioModes?: string[]; // "STEREO" | "DOLBY_ATMOS"
   mediaMetadata?: MediaMetadata;
   mixes?: { TRACK_MIX?: string; MASTER_TRACK_MIX?: string };
+  _qid?: string;
+}
+
+export interface QueuedTrack extends Track {
+  _qid: string;
 }
 
 export interface AlbumDetail {
@@ -436,10 +441,26 @@ export interface FavoriteMix {
   };
 }
 
+export interface PlaybackSource {
+  type: string;
+  id: string | number;
+  name: string;
+  tracks: QueuedTrack[];
+}
+
+
 export interface PlaybackSnapshot {
   currentTrack: Track | null;
   queue: Track[];
   history: Track[];
+  originalQueue?: Track[] | null;
+  manualQueue?: Track[];
+  playbackSource?: {
+    type: string;
+    id: string | number;
+    name: string;
+    tracks: Track[];
+  } | null;
 }
 
 /** @public */

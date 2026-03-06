@@ -102,9 +102,12 @@ export default function ArtistTracksPage({
     [tracks],
   );
 
+  const artistSource = { type: "artist-tracks" as const, id: artistId, name: artistName, allTracks: tracks };
+
+
   const handlePlayTrack = async (track: Track, index: number) => {
     try {
-      setQueueTracks(tracks.slice(index + 1));
+      setQueueTracks(tracks.slice(index + 1), { source: artistSource });
       await playTrack(track);
     } catch (err) {
       console.error("Failed to play track:", err);

@@ -136,7 +136,9 @@ export default function ArtistPage({
     trackList: any[],
   ) => {
     try {
-      setQueueTracks(trackList.slice(index + 1));
+      setQueueTracks(trackList.slice(index + 1), {
+        source: { type: "artist", id: artistId, name: displayName, allTracks: trackList },
+      });
       await playTrack(track);
     } catch (err) {
       console.error("Failed to play artist track:", err);

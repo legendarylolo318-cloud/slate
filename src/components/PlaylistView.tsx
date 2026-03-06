@@ -196,12 +196,20 @@ export default function PlaylistView({
     [tracks],
   );
 
+  const playlistSource = (allTracks: Track[]) => ({
+    type: "playlist" as const,
+    id: playlistId,
+    name: playlistInfo?.title || "Playlist",
+    allTracks,
+  });
+
+
   const handlePlayTrack = async (track: Track, _index: number) => {
     try {
       // Always queue from the full unfiltered list based on the track's original position
       const originalIndex = tracks.findIndex((t) => t.id === track.id);
       const queueStart = originalIndex >= 0 ? originalIndex + 1 : 0;
-      setQueueTracks(tracks.slice(queueStart));
+      setQueueTracks(tracks.slice(queueStart), { source: playlistSource(tracks) });
       await playTrack(track);
 
       // Kick off background fetch for the rest if needed

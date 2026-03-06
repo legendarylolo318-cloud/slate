@@ -75,9 +75,12 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
     [tracks],
   );
 
+  const mixSource = { type: "mix" as const, id: mixId, name: mixInfo?.title || "Mix", allTracks: tracks };
+
+
   const handlePlayTrack = async (track: Track, index: number) => {
     try {
-      setQueueTracks(tracks.slice(index + 1));
+      setQueueTracks(tracks.slice(index + 1), { source: mixSource });
       await playTrack(track);
     } catch (err) {
       console.error("Failed to play mix track:", err);
