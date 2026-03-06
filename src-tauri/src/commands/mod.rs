@@ -3,5 +3,6 @@ pub mod library;
 pub mod metadata;
 pub mod pages;
 pub mod playback;
+pub mod scrobble;
 pub mod search;
 pub mod utility;

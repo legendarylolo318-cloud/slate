@@ -134,23 +134,28 @@ pub async fn play_tidal_track(
 }
 
 #[tauri::command]
-pub fn pause_track(state: State<'_, AppState>) -> Result<(), SoneError> {
+pub async fn pause_track(state: State<'_, AppState>) -> Result<(), SoneError> {
     log::debug!("[pause_track]");
-    state.audio_player.pause().map_err(SoneError::Audio)
+    let result = state.audio_player.pause().map_err(SoneError::Audio);
+    state.scrobble_manager.on_pause().await;
+    result
 }
 
 #[tauri::command]
-pub fn resume_track(state: State<'_, AppState>) -> Result<(), SoneError> {
+pub async fn resume_track(state: State<'_, AppState>) -> Result<(), SoneError> {
     log::debug!("[resume_track]");
-    state.audio_player.resume().map_err(SoneError::Audio)
+    let result = state.audio_player.resume().map_err(SoneError::Audio);
+    state.scrobble_manager.on_resume().await;
+    result
 }
 
 #[tauri::command]
-pub fn stop_track(state: State<'_, AppState>) -> Result<(), SoneError> {
+pub async fn stop_track(state: State<'_, AppState>) -> Result<(), SoneError> {
     log::debug!("[stop_track]");
     let result = state.audio_player.stop().map_err(SoneError::Audio);
     #[cfg(target_os = "linux")]
     state.mpris.send(crate::mpris::MprisCommand::Stop);
+    state.scrobble_manager.on_track_stopped().await;
     result
 }
 
@@ -181,7 +186,7 @@ pub fn get_playback_position(state: State<'_, AppState>) -> Result<f32, SoneErro
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn seek_track(state: State<'_, AppState>, position_secs: f32) -> Result<(), SoneError> {
+pub async fn seek_track(state: State<'_, AppState>, position_secs: f32) -> Result<(), SoneError> {
     log::debug!("[seek_track]: position_secs={:.1}", position_secs);
     let result = state
         .audio_player
@@ -191,6 +196,7 @@ pub fn seek_track(state: State<'_, AppState>, position_secs: f32) -> Result<(), 
     state.mpris.send(crate::mpris::MprisCommand::Seeked {
         position_secs: position_secs as f64,
     });
+    state.scrobble_manager.on_seek().await;
     result
 }
 

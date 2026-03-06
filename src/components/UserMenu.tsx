@@ -12,6 +12,7 @@ import {
   Headphones,
   Shield,
   ChevronDown,
+  Radio,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -26,6 +27,7 @@ import {
 } from "../atoms/playback";
 import { useToast } from "../contexts/ToastContext";
 import ThemeEditor from "./ThemeEditor";
+import ScrobbleModal from "./ScrobbleModal";
 
 const SHORTCUTS = [
   { keys: "Space", desc: "Play / Pause" },
@@ -48,6 +50,7 @@ export default function UserMenu() {
   const { userName, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
+  const [scrobbleOpen, setScrobbleOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(false);
   const [decorations, setDecorations] = useState(true);
@@ -360,11 +363,15 @@ export default function UserMenu() {
             </div>
           </button>
 
+          {/* Window decorations */}
           <button
             onClick={() => {
               const next = !decorations;
               setDecorations(next);
-              invoke("set_decorations", { enabled: next }).catch(() => {});
+              invoke("set_decorations", { enabled: next }).catch(() => {
+                setDecorations(!next);
+                showToast("Failed to update window decorations");
+              });
             }}
             className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
           >
@@ -383,6 +390,18 @@ export default function UserMenu() {
             </div>
           </button>
 
+          {/* Scrobbling */}
+          <button
+            onClick={() => {
+              setOpen(false);
+              setScrobbleOpen(true);
+            }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+          >
+            <Radio size={16} />
+            Scrobbling
+          </button>
+
           {/* Logout */}
           <button
             onClick={() => {
@@ -398,6 +417,10 @@ export default function UserMenu() {
       )}
 
       <ThemeEditor open={themeOpen} onClose={() => setThemeOpen(false)} />
+      <ScrobbleModal
+        open={scrobbleOpen}
+        onClose={() => setScrobbleOpen(false)}
+      />
 
       {/* Shortcuts modal */}
       {shortcutsOpen && (

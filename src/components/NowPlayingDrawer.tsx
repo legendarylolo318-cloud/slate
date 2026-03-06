@@ -27,6 +27,8 @@ import {
   currentTrackAtom,
   queueAtom,
   historyAtom,
+  manualQueueAtom,
+  playbackSourceAtom,
 } from "../atoms/playback";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { useDrawer } from "../hooks/useDrawer";
@@ -61,6 +63,7 @@ const TABS: { id: TabId; label: string; icon: typeof ListMusic }[] = [
 // ─── Queue Tab ───────────────────────────────────────────────────────────────
 
 const QUEUE_ROW_HEIGHT = 56; // px — matches py-2 (8+8) + h-10 (40) content
+const SECTION_DIVIDER_HEIGHT = 52; // px — gap above (24) + label (16) + gap below (12), matches gap-6 + mb-3
 
 const QueueTab = memo(function QueueTab({
   scrollEl,
@@ -68,20 +71,60 @@ const QueueTab = memo(function QueueTab({
   scrollEl: HTMLDivElement;
 }) {
   const currentTrack = useAtomValue(currentTrackAtom);
-  const queue = useAtomValue(queueAtom);
+  const contextQueue = useAtomValue(queueAtom);
   const history = useAtomValue(historyAtom);
   const isPlaying = useAtomValue(isPlayingAtom);
-  const { playTrack, setQueueTracks, removeFromQueue } = usePlaybackActions();
+  const source = useAtomValue(playbackSourceAtom);
+  const manualQueue = useAtomValue(manualQueueAtom);
+  const combinedQueue = useMemo(
+    () => [...manualQueue, ...contextQueue],
+    [manualQueue, contextQueue],
+  );
+  const { playTrack, setQueueTracks, removeFromQueue, playFromQueue, clearQueue } =
+    usePlaybackActions();
   const { favoriteTrackIds, addFavoriteTrack, removeFavoriteTrack } =
     useFavorites();
-  const { navigateToArtist, navigateToAlbum } = useNavigation();
+  const { navigateToArtist, navigateToAlbum, navigateToPlaylist, navigateToMix, navigateToArtistTracks, navigateToFavorites, navigateToTrackRadio } = useNavigation();
   const { setDrawerOpen } = useDrawer();
   const { showToast } = useToast();
 
+  const navigableSourceTypes = new Set(["album", "playlist", "mix", "artist", "artist-tracks", "favorites", "radio"]);
+  const sourceIsNavigable = source && navigableSourceTypes.has(source.type);
+
+  const navigateToSource = useCallback(() => {
+    if (!source) return;
+    setDrawerOpen(false);
+    switch (source.type) {
+      case "album":
+        navigateToAlbum(source.id as number);
+        break;
+      case "playlist":
+        navigateToPlaylist(source.id as string);
+        break;
+      case "mix":
+        navigateToMix(source.id as string);
+        break;
+      case "artist":
+        navigateToArtist(source.id as number);
+        break;
+      case "artist-tracks":
+        navigateToArtistTracks(source.id as number, source.name);
+        break;
+      case "favorites":
+        navigateToFavorites();
+        break;
+      case "radio":
+        navigateToTrackRadio(source.id as number);
+        break;
+    }
+  }, [source, setDrawerOpen, navigateToAlbum, navigateToPlaylist, navigateToMix, navigateToArtist, navigateToArtistTracks, navigateToFavorites, navigateToTrackRadio]);
+
   // Use refs so drag/drop handlers always read the current values
   const dragIdxRef = useRef<number | null>(null);
-  const queueRef = useRef(queue);
-  queueRef.current = queue;
+  const queueRef = useRef(combinedQueue);
+  queueRef.current = combinedQueue;
+  const manualCountRef = useRef(manualQueue.length);
+  manualCountRef.current = manualQueue.length;
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dropIdx, setDropIdx] = useState<number | null>(null);
 
@@ -114,10 +157,20 @@ const QueueTab = memo(function QueueTab({
         return;
       }
       const currentQueue = queueRef.current;
+      const mc = manualCountRef.current;
       const reordered = [...currentQueue];
       const [moved] = reordered.splice(sourceIdx, 1);
       reordered.splice(targetIdx, 0, moved);
-      setQueueTracks(reordered);
+      // Compute new manual/context boundary after cross-section drag
+      let newManualCount = mc;
+      if (sourceIdx < mc && targetIdx >= mc) {
+        // Dragged from manual into context
+        newManualCount = mc - 1;
+      } else if (sourceIdx >= mc && targetIdx < mc) {
+        // Dragged from context into manual
+        newManualCount = mc + 1;
+      }
+      setQueueTracks(reordered, { reorder: true, manualCount: newManualCount });
       dragIdxRef.current = null;
       setDragIdx(null);
       setDropIdx(null);
@@ -197,6 +250,11 @@ const QueueTab = memo(function QueueTab({
   const listRef = useRef<HTMLDivElement>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
+  // Whether we need a section divider between manual and context queues
+  const hasDivider = manualQueue.length > 0 && contextQueue.length > 0;
+  // The virtual index where the divider sits (right after the last manual item)
+  const dividerVIdx = manualQueue.length;
+
   useLayoutEffect(() => {
     if (listRef.current) {
       setScrollMargin(listRef.current.offsetTop);
@@ -204,9 +262,12 @@ const QueueTab = memo(function QueueTab({
   }, [history.length, !!currentTrack]);
 
   const virtualizer = useVirtualizer({
-    count: queue.length,
+    count: combinedQueue.length + (hasDivider ? 1 : 0),
     getScrollElement: () => scrollEl,
-    estimateSize: () => QUEUE_ROW_HEIGHT,
+    estimateSize: (index) =>
+      hasDivider && index === dividerVIdx
+        ? SECTION_DIVIDER_HEIGHT
+        : QUEUE_ROW_HEIGHT,
     overscan: 10,
     scrollMargin,
   });
@@ -252,14 +313,20 @@ const QueueTab = memo(function QueueTab({
       )}
 
       {/* Next Up — virtualized, draggable */}
-      {queue.length > 0 && (
+      {combinedQueue.length > 0 && (
         <section>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-[13px] font-bold text-th-text-muted uppercase tracking-wider">
-              Next up
+              {manualQueue.length > 0
+                ? "Next in queue"
+                : source
+                  ? <>Next from{" "}{sourceIsNavigable
+                      ? <button onClick={navigateToSource} className="uppercase hover:text-white transition-colors hover:underline">{source.name}</button>
+                      : <span className="uppercase">{source.name}</span>}</>
+                  : "Next up"}
             </h3>
             <button
-              onClick={() => setQueueTracks([])}
+              onClick={() => clearQueue()}
               className="text-[11px] text-th-text-muted hover:text-white transition-colors"
             >
               Clear
@@ -267,31 +334,60 @@ const QueueTab = memo(function QueueTab({
           </div>
           <div
             ref={listRef}
-            style={{ height: virtualizer.getTotalSize(), position: "relative" }}
+            style={{
+              height: virtualizer.getTotalSize(),
+              position: "relative",
+            }}
           >
             {virtualizer.getVirtualItems().map((vItem) => {
-              const i = vItem.index;
-              const track = queue[i];
-              const isDragged = dragIdx === i;
+              const vIdx = vItem.index;
+
+              // Render the section divider as its own virtual item
+              if (hasDivider && vIdx === dividerVIdx) {
+                return (
+                  <div
+                    key="section-divider"
+                    className="absolute left-0 right-0 flex items-end"
+                    style={{
+                      top: `${vItem.start - scrollMargin}px`,
+                      height: `${vItem.size}px`,
+                    }}
+                  >
+                    <span className="text-[13px] font-bold text-th-text-muted uppercase tracking-wider pb-3">
+                      {source ? <>Next from{" "}{sourceIsNavigable
+                        ? <button onClick={navigateToSource} className="uppercase hover:text-white transition-colors hover:underline">{source.name}</button>
+                        : <span className="uppercase">{source.name}</span>}</> : "Next up"}
+                    </span>
+                  </div>
+                );
+              }
+
+              // Map virtual index to real queue index (skip the divider slot)
+              const queueIdx =
+                hasDivider && vIdx > dividerVIdx ? vIdx - 1 : vIdx;
+              const track = combinedQueue[queueIdx];
+              const isDragged = dragIdx === queueIdx;
               const showDropAbove =
-                dragIdx !== null && dropIdx === i && dragIdx > i;
+                dragIdx !== null && dropIdx === queueIdx && dragIdx > queueIdx;
               const showDropBelow =
-                dragIdx !== null && dropIdx === i && dragIdx < i;
+                dragIdx !== null && dropIdx === queueIdx && dragIdx < queueIdx;
 
               return (
                 <div
-                  key={`queue-${track.id}-${i}`}
-                  data-index={i}
+                  key={`queue-${(track as any)._qid || track.id}-${queueIdx}`}
+                  data-index={queueIdx}
                   draggable
-                  onDragStart={(e) => handleDragStart(e, i)}
-                  onDragOver={(e) => handleDragOver(e, i)}
+                  onDragStart={(e) => handleDragStart(e, queueIdx)}
+                  onDragOver={(e) => handleDragOver(e, queueIdx)}
                   onDragLeave={handleDragLeave}
-                  onDrop={(e) => handleDrop(e, i)}
+                  onDrop={(e) => handleDrop(e, queueIdx)}
                   onDragEnd={handleDragEnd}
                   className={`absolute left-0 right-0 flex items-center gap-1 rounded-md transition-opacity duration-150 ${
                     isDragged ? "opacity-30" : "opacity-100"
                   }`}
-                  style={{ top: `${vItem.start - scrollMargin}px` }}
+                  style={{
+                    top: `${vItem.start - scrollMargin}px`,
+                  }}
                 >
                   {/* Drop indicator line — above */}
                   {showDropAbove && (
@@ -308,12 +404,8 @@ const QueueTab = memo(function QueueTab({
                       track={track}
                       isActive={false}
                       isPlaying={false}
-                      onClick={() => {
-                        const remaining = queue.slice(i + 1);
-                        setQueueTracks(remaining);
-                        playTrack(track);
-                      }}
-                      onRemove={() => removeFromQueue(i)}
+                      onClick={() => playFromQueue(queueIdx)}
+                      onRemove={() => removeFromQueue(queueIdx)}
                       {...trackRowNav(track)}
                     />
                   </div>
@@ -331,7 +423,7 @@ const QueueTab = memo(function QueueTab({
         </section>
       )}
 
-      {queue.length === 0 && !currentTrack && (
+      {combinedQueue.length === 0 && !currentTrack && (
         <div className="flex flex-col items-center justify-center py-16 text-th-text-disabled">
           <Music size={40} className="mb-3" />
           <p className="text-sm">Queue is empty</p>

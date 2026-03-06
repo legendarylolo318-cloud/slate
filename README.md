@@ -87,6 +87,9 @@ Pre-built packages for Ubuntu/Debian (.deb), Fedora (.rpm), openSUSE (.rpm), and
   <a href="https://github.com/lullabyX/sone/releases/latest">
     <img src="https://img.shields.io/badge/Arch%20Linux-PKGBUILD-1793D1?style=for-the-badge&logo=archlinux" height="60" alt="Download SONE PKGBUILD for Arch Linux and Manjaro" />
   </a>
+  <a href="https://aur.archlinux.org/packages/sone-bin">
+    <img src="https://img.shields.io/badge/AUR-sone--bin-1793D1?style=for-the-badge&logo=archlinux" height="60" alt="Install SONE from AUR" />
+  </a>
 </p>
 
 ### Flathub
@@ -159,6 +162,19 @@ sudo dnf install -y gstreamer1-plugins-base-tools
 
 <details>
 <summary>Arch Linux</summary>
+
+#### AUR
+
+SONE is available on the [AUR](https://aur.archlinux.org/packages/sone-bin) as `sone-bin` — a pre-built binary package, no compilation required.
+
+**Install with your AUR helper:**
+```bash
+yay -S sone-bin
+# or
+paru -S sone-bin
+```
+
+#### Manual Install
 
 ```bash
 sudo pacman -S --needed \

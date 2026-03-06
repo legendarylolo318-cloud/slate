@@ -43,6 +43,9 @@ import {
   exclusiveModeAtom,
   bitPerfectAtom,
   exclusiveDeviceAtom,
+  originalQueueAtom,
+  manualQueueAtom,
+  playbackSourceAtom,
 } from "../atoms/playback";
 import { drawerOpenAtom } from "../atoms/ui";
 
@@ -63,10 +66,15 @@ import {
   getFavoritePlaylists,
 } from "../api/tidal";
 
-import type { AuthTokens, Track, PlaybackSnapshot } from "../types";
+import type { AuthTokens, Track, QueuedTrack, PlaybackSnapshot } from "../types";
 import { getTidalImageUrl } from "../types";
+import { ensureQid, advanceCounterPast } from "../lib/qid";
 
 const PLAYBACK_STATE_KEY = "sone.playback-state.v1";
+
+function isValidTrack(t: unknown): t is Track {
+  return !!t && typeof (t as Track).id === "number";
+}
 
 export function AppInitializer() {
   // Preload subscribes to auth state (single re-render on login)
@@ -89,6 +97,9 @@ export function AppInitializer() {
   const setCurrentTrack = useSetAtom(currentTrackAtom);
   const setQueue = useSetAtom(queueAtom);
   const setHistory = useSetAtom(historyAtom);
+  const setOriginalQueue = useSetAtom(originalQueueAtom);
+  const setManualQueue = useSetAtom(manualQueueAtom);
+  const setPlaybackSource = useSetAtom(playbackSourceAtom);
 
   // ---- Stable playback actions (no subscriptions) ----
   const { playNext, playPrevious, pauseTrack, resumeTrack, setVolume } =
@@ -273,6 +284,9 @@ export function AppInitializer() {
     let unsub1: (() => void) | null = null;
     let unsub2: (() => void) | null = null;
     let unsub3: (() => void) | null = null;
+    let unsub4: (() => void) | null = null;
+    let unsub5: (() => void) | null = null;
+    let unsub6: (() => void) | null = null;
     let backendTimer: ReturnType<typeof setTimeout> | null = null;
     let latestJson: string | null = null;
 
@@ -298,6 +312,46 @@ export function AppInitializer() {
           ),
         );
       }
+
+      if (Array.isArray(parsed.originalQueue)) {
+        setOriginalQueue(
+          parsed.originalQueue
+            .filter(isValidTrack)
+            .map((t) => ensureQid(t as QueuedTrack)),
+        );
+      } else {
+        setOriginalQueue(null);
+      }
+
+      if (Array.isArray(parsed.manualQueue)) {
+        setManualQueue(
+          parsed.manualQueue
+            .filter(isValidTrack)
+            .map((t) => ensureQid(t as QueuedTrack)),
+        );
+      }
+
+      if (parsed.playbackSource) {
+        setPlaybackSource({
+          ...parsed.playbackSource,
+          tracks: parsed.playbackSource.tracks
+            .filter(isValidTrack)
+            .map((t) => ensureQid(t as QueuedTrack)),
+        });
+      }
+
+      // Advance QID counter past all restored _qid values to prevent collisions
+      const allRestored = [
+        ...(parsed.queue || []),
+        ...(parsed.history || []),
+        ...(parsed.manualQueue || []),
+        ...(parsed.originalQueue || []),
+        ...(parsed.playbackSource?.tracks || []),
+        ...(parsed.currentTrack ? [parsed.currentTrack] : []),
+      ]
+        .filter(isValidTrack)
+        .map((t) => ensureQid(t as QueuedTrack));
+      advanceCounterPast(allRestored);
     };
 
     const restore = async () => {
@@ -325,6 +379,9 @@ export function AppInitializer() {
           currentTrack: store.get(currentTrackAtom),
           queue: store.get(queueAtom),
           history: store.get(historyAtom),
+          manualQueue: store.get(manualQueueAtom),
+          originalQueue: store.get(originalQueueAtom),
+          playbackSource: store.get(playbackSourceAtom),
         };
         const json = JSON.stringify(snapshot);
         latestJson = json;
@@ -350,6 +407,9 @@ export function AppInitializer() {
       unsub1 = store.sub(currentTrackAtom, persist);
       unsub2 = store.sub(queueAtom, persist);
       unsub3 = store.sub(historyAtom, persist);
+      unsub4 = store.sub(manualQueueAtom, persist);
+      unsub5 = store.sub(originalQueueAtom, persist);
+      unsub6 = store.sub(playbackSourceAtom, persist);
     };
 
     restore().finally(() => {
@@ -361,6 +421,9 @@ export function AppInitializer() {
       unsub1?.();
       unsub2?.();
       unsub3?.();
+      unsub4?.();
+      unsub5?.();
+      unsub6?.();
       if (backendTimer) clearTimeout(backendTimer);
       // Flush pending save on unmount
       if (latestJson) {
@@ -427,6 +490,30 @@ export function AppInitializer() {
   }, [store, showToast]);
 
   // ================================================================
+  //  SCROBBLE AUTH ERROR — toast when a provider's session expires
+  // ================================================================
+  useEffect(() => {
+    const unlisten = listen<string>("scrobble-auth-error", (event) => {
+      const provider = event.payload;
+      const name =
+        provider === "lastfm"
+          ? "Last.fm"
+          : provider === "listenbrainz"
+            ? "ListenBrainz"
+            : provider === "librefm"
+              ? "Libre.fm"
+              : provider;
+      showToast(
+        `${name} session expired — reconnect in Scrobbling settings`,
+        "error",
+      );
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [showToast]);
+
+  // ================================================================
   //  SYNC PLAYBACK ERROR HANDLING
   //  Catches invoke failures from playTrack/resumeTrack/playPrevious
   // ================================================================
@@ -452,7 +539,7 @@ export function AppInitializer() {
       }
     });
     const unlistenNext = listen("tray:next-track", () => {
-      playNext();
+      playNext({ explicit: true });
     });
     const unlistenPrev = listen("tray:prev-track", () => {
       playPrevious();
@@ -557,7 +644,7 @@ export function AppInitializer() {
           case "ArrowRight":
             if (e.repeat) return;
             e.preventDefault();
-            playNext();
+            playNext({ explicit: true });
             return;
           case "ArrowLeft":
             if (e.repeat) return;
