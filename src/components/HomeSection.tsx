@@ -35,7 +35,7 @@ interface HomeSectionProps {
 }
 
 export default function HomeSection({ section }: HomeSectionProps) {
-  const { playTrack, setQueueTracks } = usePlaybackActions();
+  const { playFromSource } = usePlaybackActions();
   const playMedia = useMediaPlay();
   const {
     navigateToAlbum,
@@ -110,13 +110,10 @@ export default function HomeSection({ section }: HomeSectionProps) {
       return;
     }
     if (isTrackItem(item, section.sectionType)) {
-      // Play the track
-      const trackIndex = items.indexOf(item);
-      const remainingTracks = items
-        .slice(trackIndex + 1)
-        .filter((t: any) => isTrackItem(t, section.sectionType));
-      setQueueTracks(remainingTracks);
-      playTrack(item);
+      const allTrackItems = items.filter((t: any) => isTrackItem(t, section.sectionType));
+      playFromSource(item, allTrackItems, {
+        source: { type: "home-section", id: section.title, name: section.title, allTracks: allTrackItems },
+      });
     } else if (isMixItem(item, section.sectionType)) {
       // Mix or radio station - navigate to mix page
       const mixId = item.mixId || item.id?.toString();
@@ -340,7 +337,7 @@ function TrackListSection({
   section: HomeSectionType;
   items: any[];
 }) {
-  const { playTrack, setQueueTracks } = usePlaybackActions();
+  const { playFromSource } = usePlaybackActions();
   const { navigateToAlbum, navigateToArtist, navigateToViewAll } =
     useNavigation();
   const [trackContextMenu, setTrackContextMenu] = useState<{
@@ -349,10 +346,10 @@ function TrackListSection({
     position: { x: number; y: number };
   } | null>(null);
 
-  const handlePlayTrack = (item: any, index: number) => {
-    const remainingTracks = items.slice(index + 1);
-    setQueueTracks(remainingTracks);
-    playTrack(item);
+  const handlePlayTrack = (item: any, _index: number) => {
+    playFromSource(item, items, {
+      source: { type: "home-section", id: section.title, name: section.title, allTracks: items },
+    });
   };
 
   const openTrackMenu = (e: React.MouseEvent, item: any, index: number) => {

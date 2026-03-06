@@ -44,7 +44,7 @@ interface SearchViewProps {
 }
 
 export default function SearchView({ query, onBack }: SearchViewProps) {
-  const { playTrack, setQueueTracks } = usePlaybackActions();
+  const { playTrack, setQueueTracks, playFromSource } = usePlaybackActions();
   const playMedia = useMediaPlay();
   const { navigateToAlbum, navigateToPlaylist, navigateToArtist } =
     useNavigation();
@@ -149,10 +149,11 @@ export default function SearchView({ query, onBack }: SearchViewProps) {
     };
   }, [query]);
 
-  const handlePlayTrack = (track: Track, index: number) => {
+  const handlePlayTrack = (track: Track, _index: number) => {
     const allTracks = results?.tracks || [];
-    setQueueTracks(allTracks.slice(index + 1));
-    playTrack(track);
+    playFromSource(track, allTracks, {
+      source: { type: "search", id: query, name: `Search: ${query}`, allTracks },
+    });
   };
 
   if (loading) {

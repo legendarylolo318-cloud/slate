@@ -7,11 +7,12 @@ import {
   useMemo,
   startTransition,
 } from "react";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useStore } from "jotai";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { useAuth } from "../hooks/useAuth";
 import { getFavoriteTracks } from "../api/tidal";
 import { favoriteTrackIdsAtom } from "../atoms/favorites";
+import { shuffleAtom } from "../atoms/playback";
 import { type Track } from "../types";
 import TrackList from "./TrackList";
 import DebouncedFilterInput from "./DebouncedFilterInput";
@@ -24,8 +25,9 @@ interface FavoritesViewProps {
 const PAGE_SIZE = 100;
 
 export default function FavoritesView({ onBack }: FavoritesViewProps) {
+  const store = useStore();
   const { authTokens } = useAuth();
-  const { playTrack, setQueueTracks } = usePlaybackActions();
+  const { playFromSource, setQueueTracks, setShuffledQueue } = usePlaybackActions();
   const favoriteTrackIds = useAtomValue(favoriteTrackIdsAtom);
 
   const [allTracks, setAllTracks] = useState<Track[]>([]);
@@ -187,13 +189,16 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
     }
   }, [fetchRemaining]);
 
+  const favoritesSource = (allTracks: Track[]) => ({
+    type: "favorites" as const,
+    id: "favorites" as const,
+    name: "Loved Tracks",
+    allTracks,
+  });
+
   const handlePlayTrack = async (track: Track, _index: number) => {
     try {
-      // Always queue from the full unfiltered list based on the track's original position
-      const originalIndex = tracks.findIndex((t) => t.id === track.id);
-      const queueStart = originalIndex >= 0 ? originalIndex + 1 : 0;
-      setQueueTracks(tracks.slice(queueStart));
-      await playTrack(track);
+      await playFromSource(track, tracks, { source: favoritesSource(tracks) });
 
       // Kick off background fetch for the rest if needed
       if (hasMoreRef.current && !bgFetchingRef.current) {
@@ -203,7 +208,12 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
         );
         const playedIndex = full.findIndex((t) => t.id === track.id);
         if (playedIndex >= 0) {
-          setQueueTracks(full.slice(playedIndex + 1));
+          const rest = [...full.slice(playedIndex + 1), ...full.slice(0, playedIndex)];
+          if (store.get(shuffleAtom)) {
+            setShuffledQueue(rest, { source: favoritesSource(full) });
+          } else {
+            setQueueTracks(rest, { source: favoritesSource(full) });
+          }
         }
       }
     } catch (err) {

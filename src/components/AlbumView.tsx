@@ -73,7 +73,7 @@ export default function AlbumView({
 }: AlbumViewProps) {
   const isPlaying = useAtomValue(isPlayingAtom);
   const currentTrack = useAtomValue(currentTrackAtom);
-  const { playTrack, setQueueTracks, pauseTrack, resumeTrack } =
+  const { playTrack, pauseTrack, resumeTrack, setShuffledQueue, playFromSource, playAllFromSource } =
     usePlaybackActions();
   const {
     favoriteAlbumIds,
@@ -156,11 +156,12 @@ export default function AlbumView({
   }, [tracks]);
   const isMultiVolume = volumeGroups.size > 1;
 
-  const handlePlayTrack = async (track: Track, index: number) => {
+  const albumSource = { type: "album" as const, id: albumId, name: album?.title || albumInfo?.title || "Album", allTracks: tracks };
+
+
+  const handlePlayTrack = async (track: Track, _index: number) => {
     try {
-      const remaining = tracks.slice(index + 1);
-      setQueueTracks(remaining, { albumMode: true });
-      await playTrack(track);
+      await playFromSource(track, tracks, { albumMode: true, source: albumSource });
     } catch (err) {
       console.error("Failed to play track:", err);
     }
@@ -179,8 +180,7 @@ export default function AlbumView({
     }
 
     try {
-      setQueueTracks(tracks.slice(1), { albumMode: true });
-      await playTrack(tracks[0]);
+      await playAllFromSource(tracks, { albumMode: true, source: albumSource });
     } catch (err) {
       console.error("Failed to play all:", err);
     }
@@ -193,9 +193,10 @@ export default function AlbumView({
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
+    const [first, ...rest] = shuffled;
     try {
-      setQueueTracks(shuffled.slice(1));
-      await playTrack(shuffled[0]);
+      setShuffledQueue(rest, { source: albumSource, albumMode: true });
+      await playTrack(first);
     } catch (err) {
       console.error("Failed to shuffle play:", err);
     }

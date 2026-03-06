@@ -22,7 +22,7 @@ export default function TrackRadioPage({
 }: TrackRadioPageProps) {
   const isPlaying = useAtomValue(isPlayingAtom);
   const currentTrack = useAtomValue(currentTrackAtom);
-  const { playTrack, setQueueTracks, pauseTrack, resumeTrack } =
+  const { pauseTrack, resumeTrack, playFromSource, playAllFromSource } =
     usePlaybackActions();
 
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -71,10 +71,11 @@ export default function TrackRadioPage({
     [tracks],
   );
 
-  const handlePlayTrack = async (track: Track, index: number) => {
+  const radioSource = { type: "radio" as const, id: trackId, name: trackInfo?.title ? `${trackInfo.title} Radio` : "Track Radio", allTracks: tracks };
+
+  const handlePlayTrack = async (track: Track, _index: number) => {
     try {
-      setQueueTracks(tracks.slice(index + 1));
-      await playTrack(track);
+      await playFromSource(track, tracks, { source: radioSource });
     } catch (err) {
       console.error("Failed to play radio track:", err);
     }
@@ -93,8 +94,7 @@ export default function TrackRadioPage({
     }
 
     try {
-      setQueueTracks(tracks.slice(1));
-      await playTrack(tracks[0]);
+      await playAllFromSource(tracks, { source: radioSource });
     } catch (err) {
       console.error("Failed to play radio:", err);
     }

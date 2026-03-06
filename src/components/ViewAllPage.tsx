@@ -35,7 +35,7 @@ export default function ViewAllPage({
   apiPath,
   artistId,
 }: ViewAllPageProps) {
-  const { playTrack, setQueueTracks } = usePlaybackActions();
+  const { playFromSource } = usePlaybackActions();
   const playMedia = useMediaPlay();
   const {
     navigateToAlbum,
@@ -109,9 +109,10 @@ export default function ViewAllPage({
 
   const handleItemClick = (item: any) => {
     if (isTrackItem(item)) {
-      const idx = items.indexOf(item);
-      setQueueTracks(items.slice(idx + 1).filter((t) => isTrackItem(t)));
-      playTrack(item);
+      const allTrackItems = items.filter((t) => isTrackItem(t));
+      playFromSource(item, allTrackItems, {
+        source: { type: "view-all", id: title, name: title, allTracks: allTrackItems },
+      });
     } else if (isArtistItem(item)) {
       navigateToArtist(item.id, {
         name: item.name || getItemTitle(item),
