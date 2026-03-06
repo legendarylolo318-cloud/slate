@@ -8,7 +8,7 @@
  * (play, pause, queue, etc.) but don't need to read playback state.
  */
 
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { useStore } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -88,8 +88,10 @@ export function usePlaybackActions() {
   const store = useStore();
   const { showToast } = useToast();
 
+  const autoplayIdsRef = useRef(new Set<number>());
+
   const playTrack = useCallback(
-    async (track: Track) => {
+    async (track: Track, opts?: { chosenByUser?: boolean }) => {
       try {
         const current = store.get(currentTrackAtom);
         if (current) {
@@ -107,6 +109,21 @@ export function usePlaybackActions() {
         store.set(streamInfoAtom, info);
         store.set(currentTrackAtom, normalized);
         store.set(isPlayingAtom, true);
+
+        // Notify backend for scrobbling
+        invoke("notify_track_started", {
+          payload: {
+            artist: normalized.artist?.name || "Unknown",
+            title: normalized.title,
+            album: normalized.album?.title || null,
+            albumArtist: null,
+            durationSecs: normalized.duration || 0,
+            trackNumber: normalized.trackNumber || null,
+            chosenByUser: opts?.chosenByUser ?? true,
+            isrc: normalized.isrc || null,
+            trackId: normalized.id || null,
+          },
+        }).catch(() => {});
       } catch (error: any) {
         console.error("Failed to play track:", error);
         store.set(isPlayingAtom, false);
@@ -145,6 +162,21 @@ export function usePlaybackActions() {
           },
         );
         store.set(streamInfoAtom, info);
+
+        // Notify backend so the replay is scrobbled
+        invoke("notify_track_started", {
+          payload: {
+            artist: track.artist?.name || "Unknown",
+            title: track.title,
+            album: track.album?.title || null,
+            albumArtist: null,
+            durationSecs: track.duration || 0,
+            trackNumber: track.trackNumber || null,
+            chosenByUser: true,
+            isrc: track.isrc || null,
+            trackId: track.id || null,
+          },
+        }).catch(() => {});
       } else {
         await invoke("resume_track");
       }
@@ -225,8 +257,10 @@ export function usePlaybackActions() {
     const queue = store.get(queueAtom);
     if (queue.length > 0) {
       const [nextTrack, ...rest] = queue;
+      const isAutoplay = autoplayIdsRef.current.has(nextTrack.id);
+      autoplayIdsRef.current.delete(nextTrack.id);
       store.set(queueAtom, rest);
-      await playTrack(nextTrack);
+      await playTrack(nextTrack, { chosenByUser: !isAutoplay });
     } else if (store.get(autoplayAtom)) {
       const current = store.get(currentTrackAtom);
       if (current) {
@@ -237,9 +271,10 @@ export function usePlaybackActions() {
           const fresh = radio.filter((t) => !historyIds.has(t.id));
           if (fresh.length > 0) {
             const [next, ...rest] = fresh;
+            autoplayIdsRef.current = new Set(rest.map((t) => t.id));
             store.set(queueAtom, rest);
             store.set(useTrackGainAtom, true); // radio = mixed context
-            await playTrack(next);
+            await playTrack(next, { chosenByUser: false });
             return;
           }
         } catch {
@@ -286,6 +321,21 @@ export function usePlaybackActions() {
         store.set(streamInfoAtom, info);
         store.set(currentTrackAtom, prevTrack);
         store.set(isPlayingAtom, true);
+
+        // Notify backend for scrobbling
+        invoke("notify_track_started", {
+          payload: {
+            artist: prevTrack.artist?.name || "Unknown",
+            title: prevTrack.title,
+            album: prevTrack.album?.title || null,
+            albumArtist: null,
+            durationSecs: prevTrack.duration || 0,
+            trackNumber: prevTrack.trackNumber || null,
+            chosenByUser: true,
+            isrc: prevTrack.isrc || null,
+            trackId: prevTrack.id || null,
+          },
+        }).catch(() => {});
       } catch (error: any) {
         console.error("Failed to play previous track:", error);
         store.set(isPlayingAtom, false);

@@ -83,6 +83,7 @@ pub fn set_minimize_to_tray(state: State<'_, AppState>, enabled: bool) -> Result
         exclusive_mode: false,
         exclusive_device: None,
         bit_perfect: false,
+        scrobble: Default::default(),
     });
     settings.minimize_to_tray = enabled;
     state.save_settings(&settings)?;
@@ -127,6 +128,7 @@ pub fn set_volume_normalization(
         exclusive_mode: false,
         exclusive_device: None,
         bit_perfect: false,
+        scrobble: Default::default(),
     });
     settings.volume_normalization = enabled;
     state.save_settings(&settings)?;
@@ -167,6 +169,7 @@ pub fn set_exclusive_mode(state: State<'_, AppState>, enabled: bool) -> Result<(
         exclusive_mode: false,
         exclusive_device: None,
         bit_perfect: false,
+        scrobble: Default::default(),
     });
     settings.exclusive_mode = enabled;
     if !enabled {
@@ -210,6 +213,7 @@ pub fn set_bit_perfect(state: State<'_, AppState>, enabled: bool) -> Result<(), 
         exclusive_mode: false,
         exclusive_device: None,
         bit_perfect: false,
+        scrobble: Default::default(),
     });
     settings.bit_perfect = enabled;
     if enabled {
@@ -245,6 +249,7 @@ pub fn set_exclusive_device(state: State<'_, AppState>, device: String) -> Resul
         exclusive_mode: false,
         exclusive_device: None,
         bit_perfect: false,
+        scrobble: Default::default(),
     });
     settings.exclusive_device = Some(device);
     state.save_settings(&settings)?;

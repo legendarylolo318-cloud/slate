@@ -240,6 +240,7 @@ pub async fn import_session(
         exclusive_mode: false,
         exclusive_device: None,
         bit_perfect: false,
+        scrobble: Default::default(),
     });
     settings.auth_tokens = Some(final_tokens.clone());
     // Only persist user-provided credentials, not embedded defaults
@@ -288,6 +289,7 @@ pub async fn poll_device_auth(
                 exclusive_mode: false,
                 exclusive_device: None,
                 bit_perfect: false,
+                scrobble: Default::default(),
             });
             settings.auth_tokens = Some(tokens.clone());
             // Only persist user-provided credentials, not embedded defaults
@@ -321,6 +323,7 @@ pub async fn refresh_tidal_auth(state: State<'_, AppState>) -> Result<AuthTokens
         exclusive_mode: false,
         exclusive_device: None,
         bit_perfect: false,
+        scrobble: Default::default(),
     });
     settings.auth_tokens = Some(new_tokens.clone());
     state.save_settings(&settings)?;
@@ -389,6 +392,7 @@ pub async fn complete_pkce_auth(
         exclusive_mode: false,
         exclusive_device: None,
         bit_perfect: false,
+        scrobble: Default::default(),
     });
     settings.auth_tokens = Some(tokens.clone());
     // Only persist user-provided credentials, not embedded defaults

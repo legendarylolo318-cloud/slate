@@ -36,6 +36,10 @@ pub enum SoneError {
     /// Encryption / decryption failure.
     #[error("Crypto error: {0}")]
     Crypto(String),
+
+    /// Scrobbling service error.
+    #[error("Scrobble error: {0}")]
+    Scrobble(String),
 }
 
 impl From<std::io::Error> for SoneError {
