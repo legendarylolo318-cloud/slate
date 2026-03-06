@@ -59,3 +59,9 @@ impl From<reqwest::Error> for SoneError {
         SoneError::Network(e.to_string())
     }
 }
+
+impl From<tauri::Error> for SoneError {
+    fn from(e: tauri::Error) -> Self {
+        SoneError::Io(e.to_string())
+    }
+}

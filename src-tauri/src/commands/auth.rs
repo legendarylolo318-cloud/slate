@@ -229,19 +229,7 @@ pub async fn import_session(
         client.refresh_token().await?
     };
 
-    let mut settings = state.load_settings().unwrap_or(Settings {
-        auth_tokens: None,
-        volume: 1.0,
-        last_track_id: None,
-        client_id: String::new(),
-        client_secret: String::new(),
-        minimize_to_tray: false,
-        volume_normalization: false,
-        exclusive_mode: false,
-        exclusive_device: None,
-        bit_perfect: false,
-        scrobble: Default::default(),
-    });
+    let mut settings = state.load_settings().unwrap_or_default();
     settings.auth_tokens = Some(final_tokens.clone());
     // Only persist user-provided credentials, not embedded defaults
     if !are_embedded_defaults(&client_id, &client_secret) {
@@ -278,19 +266,7 @@ pub async fn poll_device_auth(
     match client.poll_device_token(&device_code).await? {
         Some(tokens) => {
             // Save tokens and credentials
-            let mut settings = state.load_settings().unwrap_or(Settings {
-                auth_tokens: None,
-                volume: 1.0,
-                last_track_id: None,
-                client_id: String::new(),
-                client_secret: String::new(),
-                minimize_to_tray: false,
-                volume_normalization: false,
-                exclusive_mode: false,
-                exclusive_device: None,
-                bit_perfect: false,
-                scrobble: Default::default(),
-            });
+            let mut settings = state.load_settings().unwrap_or_default();
             settings.auth_tokens = Some(tokens.clone());
             // Only persist user-provided credentials, not embedded defaults
             if !are_embedded_defaults(&client_id, &client_secret) {
@@ -312,19 +288,7 @@ pub async fn refresh_tidal_auth(state: State<'_, AppState>) -> Result<AuthTokens
     let new_tokens = client.refresh_token().await?;
 
     // Save refreshed tokens to settings
-    let mut settings = state.load_settings().unwrap_or(Settings {
-        auth_tokens: None,
-        volume: 1.0,
-        last_track_id: None,
-        client_id: client.client_id.clone(),
-        client_secret: client.client_secret.clone(),
-        minimize_to_tray: false,
-        volume_normalization: false,
-        exclusive_mode: false,
-        exclusive_device: None,
-        bit_perfect: false,
-        scrobble: Default::default(),
-    });
+    let mut settings = state.load_settings().unwrap_or_default();
     settings.auth_tokens = Some(new_tokens.clone());
     state.save_settings(&settings)?;
 
@@ -381,19 +345,7 @@ pub async fn complete_pkce_auth(
         .await?;
 
     // Save tokens and credentials
-    let mut settings = state.load_settings().unwrap_or(Settings {
-        auth_tokens: None,
-        volume: 1.0,
-        last_track_id: None,
-        client_id: String::new(),
-        client_secret: String::new(),
-        minimize_to_tray: false,
-        volume_normalization: false,
-        exclusive_mode: false,
-        exclusive_device: None,
-        bit_perfect: false,
-        scrobble: Default::default(),
-    });
+    let mut settings = state.load_settings().unwrap_or_default();
     settings.auth_tokens = Some(tokens.clone());
     // Only persist user-provided credentials, not embedded defaults
     if !are_embedded_defaults(&client_id, &client_secret) {

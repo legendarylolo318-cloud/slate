@@ -29,6 +29,11 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutSt
 use tidal_api::{AuthTokens, TidalClient};
 use tokio::sync::Mutex;
 
+mod defaults {
+    pub fn yes() -> bool { true }
+    pub fn volume() -> f32 { 1.0 }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct LastfmCredentials {
     pub session_key: String,
@@ -51,6 +56,7 @@ pub struct ScrobbleSettings {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub auth_tokens: Option<AuthTokens>,
+    #[serde(default = "defaults::volume")]
     pub volume: f32,
     pub last_track_id: Option<u64>,
     #[serde(default)]
@@ -59,6 +65,8 @@ pub struct Settings {
     pub client_secret: String,
     #[serde(default)]
     pub minimize_to_tray: bool,
+    #[serde(default = "defaults::yes")]
+    pub decorations: bool,
     #[serde(default)]
     pub volume_normalization: bool,
     #[serde(default)]
@@ -71,6 +79,25 @@ pub struct Settings {
     pub scrobble: ScrobbleSettings,
 }
 
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            auth_tokens: None,
+            volume: 1.0,
+            last_track_id: None,
+            client_id: String::new(),
+            client_secret: String::new(),
+            minimize_to_tray: false,
+            decorations: true,
+            volume_normalization: false,
+            exclusive_mode: false,
+            exclusive_device: None,
+            bit_perfect: false,
+            scrobble: Default::default(),
+        }
+    }
+}
+
 pub struct AppState {
     pub audio_player: AudioPlayer,
     pub tidal_client: Mutex<TidalClient>,
@@ -79,6 +106,7 @@ pub struct AppState {
     pub disk_cache: DiskCache,
     pub crypto: Arc<Crypto>,
     pub minimize_to_tray: AtomicBool,
+    pub decorations: AtomicBool,
     pub volume_normalization: AtomicBool,
     pub exclusive_mode: AtomicBool,
     pub bit_perfect: AtomicBool,
@@ -151,6 +179,7 @@ impl AppState {
         }
 
         let minimize_to_tray = saved.as_ref().map(|s| s.minimize_to_tray).unwrap_or(false);
+        let decorations = saved.as_ref().map(|s| s.decorations).unwrap_or(true);
         let volume_normalization = saved
             .as_ref()
             .map(|s| s.volume_normalization)
@@ -170,6 +199,7 @@ impl AppState {
             disk_cache,
             crypto,
             minimize_to_tray: AtomicBool::new(minimize_to_tray),
+            decorations: AtomicBool::new(decorations),
             volume_normalization: AtomicBool::new(volume_normalization),
             exclusive_mode: AtomicBool::new(exclusive_mode),
             bit_perfect: AtomicBool::new(bit_perfect),
@@ -238,7 +268,14 @@ pub fn run() {
     env_logger::init();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        & !tauri_plugin_window_state::StateFlags::DECORATIONS,
+                )
+                .build(),
+        )
         .setup(|app| {
             app.manage(AppState::new(app.handle().clone()));
 
@@ -350,6 +387,7 @@ pub fn run() {
             }
 
             if let Some(window) = app.get_webview_window("main") {
+                let state = app.state::<AppState>();
                 // Set window icon at runtime (needed for dev mode taskbar icon)
                 let icon_bytes = include_bytes!("../icons/icon.png");
                 if let Ok(image) = image::load_from_memory(icon_bytes) {
@@ -378,6 +416,14 @@ pub fn run() {
                         })
                         .ok();
                 }
+                
+                let decorations = state.decorations.load(Ordering::Relaxed);
+
+                if !decorations {
+                    window.set_decorations(false).ok();
+                }
+
+                let _ = window.show();
             }
 
             // System tray icon
@@ -602,6 +648,8 @@ pub fn run() {
             commands::utility::clear_disk_cache,
             commands::utility::get_minimize_to_tray,
             commands::utility::set_minimize_to_tray,
+            commands::utility::get_decorations,
+            commands::utility::set_decorations,
             commands::utility::get_volume_normalization,
             commands::utility::set_volume_normalization,
             commands::utility::update_tray_tooltip,
