@@ -268,7 +268,14 @@ pub fn run() {
     env_logger::init();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        & !tauri_plugin_window_state::StateFlags::DECORATIONS,
+                )
+                .build(),
+        )
         .setup(|app| {
             app.manage(AppState::new(app.handle().clone()));
 
@@ -415,6 +422,8 @@ pub fn run() {
                 if !decorations {
                     window.set_decorations(false).ok();
                 }
+
+                let _ = window.show();
             }
 
             // System tray icon
