@@ -300,8 +300,44 @@ export function usePlaybackActions() {
     [store],
   );
 
-  const playNext = useCallback(async () => {
+  const playNext = useCallback(async (options?: { explicit?: boolean }) => {
     const repeatMode = store.get(repeatAtom);
+
+    // Repeat-one: replay current track unless explicit skip
+    if (repeatMode === 2 && !options?.explicit) {
+      const current = store.get(currentTrackAtom);
+      if (current) {
+        try {
+          const info = await invokePlayWithRetry(
+            current.id,
+            store.get(useTrackGainAtom),
+            () => {
+              store.set(isPlayingAtom, false);
+              showToast("Preparing exclusive audio…", "info");
+            },
+          );
+          store.set(streamInfoAtom, info);
+          store.set(isPlayingAtom, true);
+          invoke("notify_track_started", {
+            payload: {
+              artist: current.artist?.name || "Unknown",
+              title: current.title,
+              album: current.album?.title || null,
+              albumArtist: null,
+              durationSecs: current.duration || 0,
+              trackNumber: current.trackNumber || null,
+              chosenByUser: false,
+              isrc: current.isrc || null,
+              trackId: current.id || null,
+            },
+          }).catch(() => {});
+        } catch (error: any) {
+          console.error("Failed to repeat track:", error);
+          store.set(isPlayingAtom, false);
+        }
+        return;
+      }
+    }
 
     // Drain manual queue first
     const manual = store.get(manualQueueAtom);

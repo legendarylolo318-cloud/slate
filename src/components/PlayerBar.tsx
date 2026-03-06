@@ -24,6 +24,8 @@ import {
   streamInfoAtom,
   autoplayAtom,
   bitPerfectAtom,
+  repeatAtom,
+  shuffleAtom,
 } from "../atoms/playback";
 import { favoriteTrackIdsAtom } from "../atoms/favorites";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
@@ -296,18 +298,18 @@ const AutoplayButton = memo(function AutoplayButton() {
 
 const TransportControls = memo(function TransportControls() {
   const isPlaying = useAtomValue(isPlayingAtom);
-  const { pauseTrack, resumeTrack, playNext, playPrevious } =
+  const { pauseTrack, resumeTrack, playNext, playPrevious, toggleShuffle } =
     usePlaybackActions();
 
-  const [isShuffle, setIsShuffle] = useState(false);
-  const [repeatMode, setRepeatMode] = useState(0);
+  const isShuffle = useAtomValue(shuffleAtom);
+  const [repeatMode, setRepeatMode] = useAtom(repeatAtom);
 
   return (
     <div className="flex flex-col items-center w-[40%] max-w-[600px] gap-1">
       {/* Transport buttons */}
       <div className="flex items-center gap-4">
         <button
-          onClick={() => setIsShuffle(!isShuffle)}
+          onClick={toggleShuffle}
           className={`w-8 h-8 flex items-center justify-center rounded-full transition-[color,background-color,transform] duration-200 active:scale-90 relative ${
             isShuffle
               ? "text-th-accent"
@@ -336,13 +338,13 @@ const TransportControls = memo(function TransportControls() {
           )}
         </button>
         <button
-          onClick={playNext}
+          onClick={() => playNext({ explicit: true })}
           className="w-8 h-8 flex items-center justify-center rounded-full text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-[color,background-color,transform] duration-150 active:scale-90"
         >
           <SkipForward size={18} fill="currentColor" />
         </button>
         <button
-          onClick={() => setRepeatMode((repeatMode + 1) % 3)}
+          onClick={() => setRepeatMode(((repeatMode as number) + 1) % 3)}
           className={`w-8 h-8 flex items-center justify-center rounded-full transition-[color,background-color,transform] duration-200 active:scale-90 relative ${
             repeatMode > 0
               ? "text-th-accent"

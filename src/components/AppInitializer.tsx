@@ -525,7 +525,7 @@ export function AppInitializer() {
       }
     });
     const unlistenNext = listen("tray:next-track", () => {
-      playNext();
+      playNext({ explicit: true });
     });
     const unlistenPrev = listen("tray:prev-track", () => {
       playPrevious();
@@ -630,7 +630,7 @@ export function AppInitializer() {
           case "ArrowRight":
             if (e.repeat) return;
             e.preventDefault();
-            playNext();
+            playNext({ explicit: true });
             return;
           case "ArrowLeft":
             if (e.repeat) return;
