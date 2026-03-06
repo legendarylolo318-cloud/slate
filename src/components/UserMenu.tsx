@@ -385,7 +385,10 @@ export default function UserMenu() {
       )}
 
       <ThemeEditor open={themeOpen} onClose={() => setThemeOpen(false)} />
-      <ScrobbleModal open={scrobbleOpen} onClose={() => setScrobbleOpen(false)} />
+      <ScrobbleModal
+        open={scrobbleOpen}
+        onClose={() => setScrobbleOpen(false)}
+      />
 
       {/* Shortcuts modal */}
       {shortcutsOpen && (

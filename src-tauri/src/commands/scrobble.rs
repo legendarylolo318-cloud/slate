@@ -130,9 +130,7 @@ pub async fn disconnect_provider(
             "listenbrainz" => settings.scrobble.listenbrainz = None,
             "librefm" => settings.scrobble.librefm = None,
             _ => {
-                return Err(SoneError::Scrobble(format!(
-                    "unknown provider: {provider}"
-                )));
+                return Err(SoneError::Scrobble(format!("unknown provider: {provider}")));
             }
         }
         state.save_settings(&settings)?;

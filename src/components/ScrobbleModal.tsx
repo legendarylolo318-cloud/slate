@@ -110,7 +110,9 @@ export default function ScrobbleModal({ open, onClose }: ScrobbleModalProps) {
     try {
       const command =
         provider === "lastfm" ? "connect_lastfm" : "connect_librefm";
-      const { url, token } = await invoke<{ url: string; token: string }>(command);
+      const { url, token } = await invoke<{ url: string; token: string }>(
+        command,
+      );
       await openUrl(url);
       setState((s) => ({ ...s, step: "authorized", token }));
     } catch (err: unknown) {
@@ -135,8 +137,7 @@ export default function ScrobbleModal({ open, onClose }: ScrobbleModalProps) {
       setState({ step: "idle", token: "", error: null });
       await fetchStatus();
     } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : "Authentication failed";
+      const msg = err instanceof Error ? err.message : "Authentication failed";
       setState((s) => ({ ...s, step: "authorized", error: msg }));
     }
   };
@@ -151,8 +152,7 @@ export default function ScrobbleModal({ open, onClose }: ScrobbleModalProps) {
       setListenBrainz({ step: "idle", token: "", error: null });
       await fetchStatus();
     } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : "Invalid token";
+      const msg = err instanceof Error ? err.message : "Invalid token";
       setListenBrainz((s) => ({ ...s, step: "idle", error: msg }));
     }
   };
@@ -212,9 +212,7 @@ export default function ScrobbleModal({ open, onClose }: ScrobbleModalProps) {
                   Connect
                 </button>
                 {state.error && (
-                  <p className="mt-2 text-[12px] text-red-400">
-                    {state.error}
-                  </p>
+                  <p className="mt-2 text-[12px] text-red-400">{state.error}</p>
                 )}
               </>
             )}

@@ -75,9 +75,7 @@ impl ListenBrainzProvider {
                 .get("message")
                 .and_then(|m| m.as_str())
                 .unwrap_or("invalid token");
-            return Err(SoneError::Scrobble(format!(
-                "validate-token failed: {msg}"
-            )));
+            return Err(SoneError::Scrobble(format!("validate-token failed: {msg}")));
         }
 
         let username = body
@@ -178,10 +176,7 @@ impl ScrobbleProvider for ListenBrainzProvider {
     }
 
     fn is_authenticated(&self) -> bool {
-        self.token
-            .try_read()
-            .map(|t| t.is_some())
-            .unwrap_or(false)
+        self.token.try_read().map(|t| t.is_some()).unwrap_or(false)
     }
 
     fn max_batch_size(&self) -> usize {

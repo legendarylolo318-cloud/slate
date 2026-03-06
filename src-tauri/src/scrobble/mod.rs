@@ -1,8 +1,8 @@
-pub mod queue;
 pub mod lastfm;
-pub mod listenbrainz;
 pub mod librefm;
+pub mod listenbrainz;
 pub mod musicbrainz;
+pub mod queue;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -323,11 +323,8 @@ impl ScrobbleManager {
         };
 
         if let Some(track) = track_to_scrobble {
-            let _ = tokio::time::timeout(
-                Duration::from_secs(2),
-                self.dispatch_scrobble(track),
-            )
-            .await;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(2), self.dispatch_scrobble(track)).await;
         }
 
         self.queue.flush().await;
@@ -416,14 +413,12 @@ impl ScrobbleManager {
             };
 
             let mut failed: Vec<(ScrobbleTrack, u32)> = Vec::new();
-            let chunks: Vec<&[(ScrobbleTrack, u32)]> =
-                pending.chunks(batch_size).collect();
+            let chunks: Vec<&[(ScrobbleTrack, u32)]> = pending.chunks(batch_size).collect();
             let mut chunk_idx = 0;
             while chunk_idx < chunks.len() {
                 let chunk = chunks[chunk_idx];
                 chunk_idx += 1;
-                let tracks: Vec<ScrobbleTrack> =
-                    chunk.iter().map(|(t, _)| t.clone()).collect();
+                let tracks: Vec<ScrobbleTrack> = chunk.iter().map(|(t, _)| t.clone()).collect();
 
                 // Acquire lock, find provider, drop lock before network call
                 let provider_exists = {
@@ -441,41 +436,28 @@ impl ScrobbleManager {
 
                 let result = {
                     let providers = self.providers.read().await;
-                    let provider =
-                        providers.iter().find(|p| p.name() == provider_name).unwrap();
-                    tokio::time::timeout(
-                        Duration::from_secs(15),
-                        provider.scrobble(&tracks),
-                    )
-                    .await
+                    let provider = providers
+                        .iter()
+                        .find(|p| p.name() == provider_name)
+                        .unwrap();
+                    tokio::time::timeout(Duration::from_secs(15), provider.scrobble(&tracks)).await
                 };
 
                 match result {
                     Ok(ScrobbleResult::Ok) => {
-                        log::debug!(
-                            "Retried {} scrobbles to {provider_name}",
-                            tracks.len()
-                        );
+                        log::debug!("Retried {} scrobbles to {provider_name}", tracks.len());
                     }
                     _ => {
                         match &result {
                             Ok(ScrobbleResult::AuthError(msg)) => {
-                                log::warn!(
-                                    "Auth error draining queue for {provider_name}: {msg}"
-                                );
-                                let _ = self
-                                    .app_handle
-                                    .emit("scrobble-auth-error", provider_name);
+                                log::warn!("Auth error draining queue for {provider_name}: {msg}");
+                                let _ = self.app_handle.emit("scrobble-auth-error", provider_name);
                             }
                             Ok(ScrobbleResult::Retryable(msg)) => {
-                                log::warn!(
-                                    "Retry failed for {provider_name}: {msg}"
-                                );
+                                log::warn!("Retry failed for {provider_name}: {msg}");
                             }
                             Err(_) => {
-                                log::warn!(
-                                    "Timeout draining queue for {provider_name}"
-                                );
+                                log::warn!("Timeout draining queue for {provider_name}");
                             }
                             _ => {}
                         }
@@ -519,11 +501,8 @@ impl ScrobbleManager {
             let Some(provider) = providers.iter().find(|p| p.name() == name) else {
                 continue;
             };
-            let result = tokio::time::timeout(
-                Duration::from_secs(5),
-                provider.now_playing(track),
-            )
-            .await;
+            let result =
+                tokio::time::timeout(Duration::from_secs(5), provider.now_playing(track)).await;
             drop(providers);
 
             match result {

@@ -1,6 +1,5 @@
 mod audio;
 pub mod cache;
-mod scrobble;
 mod commands;
 mod crypto;
 mod embedded_config;
@@ -9,6 +8,7 @@ mod embedded_librefm;
 mod error;
 #[cfg(target_os = "linux")]
 mod mpris;
+mod scrobble;
 mod tidal_api;
 
 pub use error::SoneError;
@@ -21,13 +21,13 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{Emitter, Listener,Manager};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Listener, Manager};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
 use tidal_api::{AuthTokens, TidalClient};
+use tokio::sync::Mutex;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -160,11 +160,8 @@ impl AppState {
         let bit_perfect = saved.as_ref().map(|s| s.bit_perfect).unwrap_or(false);
         let exclusive_device = saved.as_ref().and_then(|s| s.exclusive_device.clone());
 
-        let scrobble_manager = scrobble::ScrobbleManager::new(
-            app_handle.clone(),
-            crypto.clone(),
-            &config_dir,
-        );
+        let scrobble_manager =
+            scrobble::ScrobbleManager::new(app_handle.clone(), crypto.clone(), &config_dir);
 
         Self {
             audio_player: AudioPlayer::new(app_handle.clone()),
@@ -289,8 +286,13 @@ pub fn run() {
                                     crate::embedded_lastfm::stream_key_a(),
                                     crate::embedded_lastfm::stream_key_b(),
                                 );
-                                provider.set_session(creds.session_key.clone(), creds.username.clone()).await;
-                                state.scrobble_manager.add_provider(Box::new(provider)).await;
+                                provider
+                                    .set_session(creds.session_key.clone(), creds.username.clone())
+                                    .await;
+                                state
+                                    .scrobble_manager
+                                    .add_provider(Box::new(provider))
+                                    .await;
                                 log::info!("Last.fm scrobbling enabled for {}", creds.username);
                             }
                         }
@@ -305,17 +307,28 @@ pub fn run() {
                                     crate::embedded_librefm::stream_key_a(),
                                     crate::embedded_librefm::stream_key_b(),
                                 );
-                                provider.set_session(creds.session_key.clone(), creds.username.clone()).await;
-                                state.scrobble_manager.add_provider(Box::new(provider)).await;
+                                provider
+                                    .set_session(creds.session_key.clone(), creds.username.clone())
+                                    .await;
+                                state
+                                    .scrobble_manager
+                                    .add_provider(Box::new(provider))
+                                    .await;
                                 log::info!("Libre.fm scrobbling enabled for {}", creds.username);
                             }
                         }
 
                         // ListenBrainz
                         if let Some(ref creds) = settings.scrobble.listenbrainz {
-                            let provider = crate::scrobble::listenbrainz::ListenBrainzProvider::new();
-                            provider.set_token(creds.token.clone(), creds.username.clone()).await;
-                            state.scrobble_manager.add_provider(Box::new(provider)).await;
+                            let provider =
+                                crate::scrobble::listenbrainz::ListenBrainzProvider::new();
+                            provider
+                                .set_token(creds.token.clone(), creds.username.clone())
+                                .await;
+                            state
+                                .scrobble_manager
+                                .add_provider(Box::new(provider))
+                                .await;
                             log::info!("ListenBrainz scrobbling enabled for {}", creds.username);
                         }
                     }

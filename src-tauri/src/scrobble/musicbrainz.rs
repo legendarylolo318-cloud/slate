@@ -24,7 +24,9 @@ impl MusicBrainzLookup {
 
         Self {
             client: reqwest::Client::builder()
-                .user_agent(format!("SONE/{APP_VERSION} (https://github.com/lullabyX/sone)"))
+                .user_agent(format!(
+                    "SONE/{APP_VERSION} (https://github.com/lullabyX/sone)"
+                ))
                 .build()
                 .unwrap_or_default(),
             cache: Mutex::new(cache),
@@ -187,12 +189,18 @@ impl MusicBrainzLookup {
         });
 
         if let Some(recording) = best {
-            return Ok(recording.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()));
+            return Ok(recording
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(|s| s.to_string()));
         }
 
         // Fall back to first title match
         if let Some(recording) = title_matched.first() {
-            return Ok(recording.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()));
+            return Ok(recording
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(|s| s.to_string()));
         }
 
         // Last resort: take first only if there's exactly one recording

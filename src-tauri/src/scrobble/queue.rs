@@ -85,9 +85,7 @@ impl ScrobbleQueue {
         // Cap at MAX_ENTRIES, drop oldest
         if entries.len() > MAX_ENTRIES {
             let excess = entries.len() - MAX_ENTRIES;
-            log::warn!(
-                "Scrobble queue exceeded {MAX_ENTRIES} entries, dropping {excess} oldest"
-            );
+            log::warn!("Scrobble queue exceeded {MAX_ENTRIES} entries, dropping {excess} oldest");
             entries.drain(..excess);
         }
 
