@@ -238,14 +238,16 @@ export function usePlaybackActions() {
 
   const addToQueue = useCallback(
     (track: Track) => {
-      store.set(queueAtom, [...store.get(queueAtom), normalizeTrack(track)]);
+      const stamped = stampQid(normalizeTrack(track));
+      store.set(manualQueueAtom, [...store.get(manualQueueAtom), stamped]);
     },
     [store],
   );
 
   const playNextInQueue = useCallback(
     (track: Track) => {
-      store.set(queueAtom, [normalizeTrack(track), ...store.get(queueAtom)]);
+      const stamped = stampQid(normalizeTrack(track));
+      store.set(manualQueueAtom, [stamped, ...store.get(manualQueueAtom)]);
     },
     [store],
   );
@@ -299,10 +301,21 @@ export function usePlaybackActions() {
   );
 
   const playNext = useCallback(async () => {
-    const queue = store.get(queueAtom);
     const repeatMode = store.get(repeatAtom);
+
+    // Drain manual queue first
+    const manual = store.get(manualQueueAtom);
+    if (manual.length > 0) {
+      const [nextTrack, ...rest] = manual;
+      store.set(manualQueueAtom, rest);
+      await playTrack(nextTrack);
+      return;
+    }
+
+    const queue = store.get(queueAtom);
     if (queue.length > 0) {
       const [nextTrack, ...rest] = queue;
+      const isAutoplay = autoplayIdsRef.current.has(nextTrack.id);
       autoplayIdsRef.current.delete(nextTrack.id);
       store.set(queueAtom, rest);
       // Bug F fix: sync originalQueueAtom when consuming context track
@@ -313,7 +326,7 @@ export function usePlaybackActions() {
           orig.filter((t) => t._qid !== nextTrack._qid),
         );
       }
-      await playTrack(nextTrack);
+      await playTrack(nextTrack, { chosenByUser: !isAutoplay });
     } else if (repeatMode === 1) {
       // Repeat-all: rebuild from source (Bug 2) or history+current fallback
       const source = store.get(playbackSourceAtom);
@@ -357,7 +370,7 @@ export function usePlaybackActions() {
           if (fresh.length > 0) {
             const [next, ...rest] = fresh;
             autoplayIdsRef.current = new Set(rest.map((t) => t.id));
-            store.set(queueAtom, rest);
+            store.set(queueAtom, stampQids(rest.map(normalizeTrack)));
             store.set(useTrackGainAtom, true); // radio = mixed context
             await playTrack(next, { chosenByUser: false });
             return;
