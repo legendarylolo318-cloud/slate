@@ -68,7 +68,7 @@
   <content_rating type="oars-1.1" />
 
   <releases>
-    <release version="0.6.10" date="2026-03-03">
+    <release version="0.7.0" date="2026-03-07">
       <description>
         <ul>
           <li>Scrobble your listening history to Last.fm, Libre.fm, and ListenBrainz — complete with ISRC and MusicBrainz metadata</li>
