@@ -260,6 +260,7 @@ fn spawn_alsa_writer(
     writer_gen: Arc<AtomicU64>,
     paused: Arc<AtomicBool>,
     bit_perfect: bool,
+    combined_vol: Arc<AtomicU32>,
 ) -> Result<(crossbeam_channel::Sender<WriterCommand>, JoinHandle<()>, PcmFormat), String> {
     let device = device.to_string();
     let initial_format = initial_format.clone();
@@ -369,6 +370,56 @@ fn spawn_alsa_writer(
                 true
             }
 
+            /// Scale raw PCM samples in-place by a volume multiplier.
+            fn apply_volume(data: &mut [u8], fmt: &PcmFormat, vol: f32) {
+                if (vol - 1.0).abs() < f32::EPSILON {
+                    return; // unity gain — no-op
+                }
+                match fmt.gst_format.as_str() {
+                    "S16LE" => {
+                        for chunk in data.chunks_exact_mut(2) {
+                            let s = i16::from_le_bytes([chunk[0], chunk[1]]);
+                            let v = (s as f32 * vol).round() as i32;
+                            let clamped = v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                            chunk.copy_from_slice(&clamped.to_le_bytes());
+                        }
+                    }
+                    "S32LE" => {
+                        for chunk in data.chunks_exact_mut(4) {
+                            let s = i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                            let v = (s as f64 * vol as f64).round() as i64;
+                            let clamped = v.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+                            chunk.copy_from_slice(&clamped.to_le_bytes());
+                        }
+                    }
+                    "S24_32LE" => {
+                        for chunk in data.chunks_exact_mut(4) {
+                            let s = i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                            let v = (s as f64 * vol as f64).round() as i64;
+                            let clamped = v.clamp(-8_388_608, 8_388_607) as i32;
+                            chunk.copy_from_slice(&clamped.to_le_bytes());
+                        }
+                    }
+                    "S24LE" => {
+                        for chunk in data.chunks_exact_mut(3) {
+                            let raw = chunk[0] as i32 | (chunk[1] as i32) << 8 | (chunk[2] as i8 as i32) << 16;
+                            let v = (raw as f64 * vol as f64).round() as i64;
+                            let clamped = v.clamp(-8_388_608, 8_388_607) as i32;
+                            chunk[0] = clamped as u8;
+                            chunk[1] = (clamped >> 8) as u8;
+                            chunk[2] = (clamped >> 16) as u8;
+                        }
+                    }
+                    "F32LE" => {
+                        for chunk in data.chunks_exact_mut(4) {
+                            let s = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                            chunk.copy_from_slice(&(s * vol).clamp(-1.0, 1.0).to_le_bytes());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             /// Close and reopen ALSA device with new format.
             /// Some hardware (e.g. XMOS USB controllers) can't reconfigure
             /// HW params in-place after snd_pcm_drop() — need full close+reopen.
@@ -403,7 +454,7 @@ fn spawn_alsa_writer(
 
             'main: loop {
                 match rx.recv_timeout(period_duration) {
-                    Ok(WriterCommand::Data(chunk)) => {
+                    Ok(WriterCommand::Data(mut chunk)) => {
                         if chunk.generation < writer_gen.load(Ordering::Acquire) {
                             continue; // discard stale data from old pipeline
                         }
@@ -459,6 +510,8 @@ fn spawn_alsa_writer(
                                 }
                             }
                         }
+                        let vol = f32::from_bits(combined_vol.load(Ordering::Relaxed));
+                        apply_volume(&mut chunk.data, &current_fmt, vol);
                         if let Err(kind) = write_bytes(&pcm, &chunk.data, &current_fmt, &frames_written, &silence_buf) {
                             app_handle.emit("audio-error", serde_json::json!({ "kind": kind })).ok();
                             tearing_down.store(true, Ordering::SeqCst);
@@ -514,7 +567,7 @@ fn spawn_alsa_writer(
                                 break 'main;
                             }
                             match rx.try_recv() {
-                                Ok(WriterCommand::Data(chunk)) => {
+                                Ok(WriterCommand::Data(mut chunk)) => {
                                     if chunk.generation < writer_gen.load(Ordering::Acquire) {
                                         continue; // discard stale data, stay in idle
                                     }
@@ -537,6 +590,8 @@ fn spawn_alsa_writer(
                                         pcm.drop().ok();
                                         pcm.prepare().ok();
                                     }
+                                    let vol = f32::from_bits(combined_vol.load(Ordering::Relaxed));
+                                    apply_volume(&mut chunk.data, &current_fmt, vol);
                                     if let Err(kind) = write_bytes(&pcm, &chunk.data, &current_fmt, &frames_written, &silence_buf) {
                                         app_handle.emit("audio-error", serde_json::json!({ "kind": kind })).ok();
                                         break 'main;
@@ -694,6 +749,7 @@ impl AudioPlayer {
             let current_sample_rate = Arc::new(AtomicU32::new(48000));
             let writer_gen = Arc::new(AtomicU64::new(0));
             let paused = Arc::new(AtomicBool::new(false));
+            let combined_vol = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
 
             let eos = Arc::new(AtomicBool::new(false));
             let tearing_down = Arc::new(AtomicBool::new(false));
@@ -815,6 +871,7 @@ impl AudioPlayer {
                                             Arc::clone(&writer_gen),
                                             Arc::clone(&paused),
                                             bit_perfect,
+                                            Arc::clone(&combined_vol),
                                         )?;
                                         writer_tx = Some(tx);
                                         writer_thread = Some(handle);
@@ -829,8 +886,6 @@ impl AudioPlayer {
                                         &uri,
                                         exclusive,
                                         bit_perfect,
-                                        current_volume,
-                                        current_norm_gain,
                                         wtx.clone(),
                                         Arc::clone(&writer_gen),
                                         fmt_for_pipeline,
@@ -1158,6 +1213,10 @@ impl AudioPlayer {
                         if let Some(vol) = backend.as_ref().and_then(|b| b.user_volume_el()) {
                             vol.set_property("volume", current_volume);
                         }
+                        combined_vol.store(
+                            ((current_volume * current_norm_gain) as f32).to_bits(),
+                            Ordering::Relaxed,
+                        );
                         reply.send(Ok(())).ok();
                     }
 
@@ -1166,6 +1225,10 @@ impl AudioPlayer {
                         if let Some(vol) = backend.as_ref().and_then(|b| b.norm_volume_el()) {
                             vol.set_property("volume", gain);
                         }
+                        combined_vol.store(
+                            ((current_volume * current_norm_gain) as f32).to_bits(),
+                            Ordering::Relaxed,
+                        );
                         reply.send(Ok(())).ok();
                     }
 
@@ -1338,8 +1401,6 @@ fn build_appsink_pipeline(
     uri: &str,
     exclusive: bool,
     bit_perfect: bool,
-    current_volume: f64,
-    current_norm_gain: f64,
     writer_tx: crossbeam_channel::Sender<WriterCommand>,
     writer_gen: Arc<AtomicU64>,
     negotiated_fmt: &PcmFormat,
@@ -1411,19 +1472,11 @@ fn build_appsink_pipeline(
 
         (None, None)
     } else {
-        // Exclusive (non-bit-perfect): volume elements in GStreamer, format+channels locked.
-        // Rate is unconstrained — source's native sample rate passes through (audioresample is passthrough).
+        // Exclusive (non-bit-perfect): volume applied in ALSA writer thread.
+        // Rate is unconstrained — source's native sample rate passes through.
         let audioresample = gst::ElementFactory::make("audioresample")
             .build()
             .map_err(|e| format!("Failed to create audioresample: {e}"))?;
-        let norm_vol = gst::ElementFactory::make("volume")
-            .property("volume", current_norm_gain)
-            .build()
-            .map_err(|e| format!("Failed to create norm volume: {e}"))?;
-        let user_vol = gst::ElementFactory::make("volume")
-            .property("volume", current_volume)
-            .build()
-            .map_err(|e| format!("Failed to create user volume: {e}"))?;
         let capsfilter = gst::ElementFactory::make("capsfilter")
             .property(
                 "caps",
@@ -1439,8 +1492,6 @@ fn build_appsink_pipeline(
             &uridecodebin,
             &audioconvert,
             &audioresample,
-            &norm_vol,
-            &user_vol,
             &capsfilter,
             appsink.upcast_ref(),
         ])
@@ -1448,14 +1499,12 @@ fn build_appsink_pipeline(
         gst::Element::link_many([
             &audioconvert,
             &audioresample,
-            &norm_vol,
-            &user_vol,
             &capsfilter,
             appsink.upcast_ref(),
         ])
         .map_err(|e| format!("Failed to link exclusive chain: {e}"))?;
 
-        (Some(user_vol), Some(norm_vol))
+        (None, None)
     };
 
     // Grab capsfilter weak ref for bit-perfect cap locking.
