@@ -103,15 +103,13 @@ export function usePlaybackActions() {
   const store = useStore();
   const { showToast } = useToast();
 
+  const playGenerationRef = useRef(0);
   const autoplayIdsRef = useRef(new Set<number>());
 
   const playTrack = useCallback(
     async (track: Track, opts?: { chosenByUser?: boolean; skipHistoryPush?: boolean }) => {
+      const generation = ++playGenerationRef.current;
       try {
-        const current = store.get(currentTrackAtom);
-        if (current && !opts?.skipHistoryPush) {
-          store.set(historyAtom, [...store.get(historyAtom), current]);
-        }
         const stamped = ensureQid(normalizeTrack(track));
         const info = await invokePlayWithRetry(
           stamped.id,
@@ -121,6 +119,12 @@ export function usePlaybackActions() {
             showToast("Preparing exclusive audio…", "info");
           },
         );
+
+        if (generation !== playGenerationRef.current) return;
+        const current = store.get(currentTrackAtom);
+        if (current && !opts?.skipHistoryPush) {
+          store.set(historyAtom, [...store.get(historyAtom), current]);
+        }
         store.set(streamInfoAtom, info);
         store.set(currentTrackAtom, stamped);
         store.set(isPlayingAtom, true);
@@ -140,6 +144,7 @@ export function usePlaybackActions() {
           },
         }).catch(() => {});
       } catch (error: any) {
+        if (generation !== playGenerationRef.current) return;
         console.error("Failed to play track:", error);
         store.set(isPlayingAtom, false);
         window.dispatchEvent(

@@ -562,6 +562,7 @@ enum AudioCommand {
 
 // ── AudioPlayer (public API unchanged) ─────────────────────────────────
 
+#[derive(Clone)]
 pub struct AudioPlayer {
     cmd_tx: mpsc::Sender<AudioCommand>,
 }
@@ -626,43 +627,20 @@ impl AudioPlayer {
                                         user_volume_el,
                                         ..
                                     } => {
-                                        // Normal mode: fade + EOS drain (unchanged)
-                                        if let Some(ref vol) = user_volume_el {
-                                            for i in (0..=10).rev() {
-                                                vol.set_property(
-                                                    "volume",
-                                                    current_volume * (i as f64 / 10.0),
-                                                );
-                                                std::thread::sleep(
-                                                    std::time::Duration::from_millis(10),
-                                                );
-                                            }
-                                        }
-                                        if !eos.load(Ordering::SeqCst) {
-                                            // Mid-track skip — need to drain
-                                            pipeline.send_event(gst::event::Eos::new());
-                                            eos.store(false, Ordering::SeqCst);
-                                            let start = std::time::Instant::now();
-                                            while !eos.load(Ordering::SeqCst)
-                                                && start.elapsed()
-                                                    < std::time::Duration::from_millis(500)
-                                            {
-                                                std::thread::sleep(
-                                                    std::time::Duration::from_millis(10),
-                                                );
-                                            }
-                                            log::debug!(
-                                                "[audio] teardown normal: EOS drain {:?}",
-                                                start.elapsed()
-                                            );
-                                        } else {
-                                            log::debug!("[audio] teardown normal: skipping drain (already EOS)");
-                                        }
                                         if let Some(bus) = pipeline.bus() {
                                             bus.set_flushing(true);
                                         }
-                                        pipeline.set_state(gst::State::Null).ok();
-                                        let _ = pipeline.state(gst::ClockTime::from_mseconds(500));
+                                        let old_pipe = pipeline;
+                                        std::thread::spawn(move || {
+                                            // Fade out
+                                            if let Some(ref vol) = user_volume_el {
+                                                for i in (0..=10).rev() {
+                                                    vol.set_property("volume", current_volume * (i as f64 / 10.0));
+                                                    std::thread::sleep(std::time::Duration::from_millis(10));
+                                                }
+                                            }
+                                            old_pipe.set_state(gst::State::Null).ok();
+                                        });
                                     }
                                     PlaybackBackend::DirectAlsa { pipeline, .. } => {
                                         // Unblock writer if paused, then bump generation —
@@ -1053,7 +1031,7 @@ impl AudioPlayer {
                                         WriterCommand::Shutdown,
                                         std::time::Duration::from_millis(200),
                                     );
-                                }
+                                }                                
                                 pipeline.set_state(gst::State::Null).ok();
                                 let _ = pipeline.state(gst::ClockTime::from_mseconds(500));
                                 drop(pipeline);
