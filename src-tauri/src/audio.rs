@@ -627,8 +627,10 @@ impl AudioPlayer {
                                         user_volume_el,
                                         ..
                                     } => {
+                                        if let Some(bus) = pipeline.bus() {
+                                            bus.set_flushing(true);
+                                        }
                                         let old_pipe = pipeline;
-                                        let eos_flag = Arc::clone(&eos);
                                         std::thread::spawn(move || {
                                             // Fade out
                                             if let Some(ref vol) = user_volume_el {
@@ -636,20 +638,6 @@ impl AudioPlayer {
                                                     vol.set_property("volume", current_volume * (i as f64 / 10.0));
                                                     std::thread::sleep(std::time::Duration::from_millis(10));
                                                 }
-                                            }
-                                            // EOS drain
-                                            if !eos_flag.load(Ordering::SeqCst) {
-                                                old_pipe.send_event(gst::event::Eos::new());
-                                                let start = std::time::Instant::now();
-                                                while !eos_flag.load(Ordering::SeqCst)
-                                                    && start.elapsed() < std::time::Duration::from_millis(200)
-                                                {
-                                                    std::thread::sleep(std::time::Duration::from_millis(10));
-                                                }
-                                            }
-
-                                            if let Some(bus) = old_pipe.bus() {
-                                                bus.set_flushing(true);
                                             }
                                             old_pipe.set_state(gst::State::Null).ok();
                                         });

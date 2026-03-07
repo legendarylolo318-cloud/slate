@@ -110,10 +110,6 @@ export function usePlaybackActions() {
     async (track: Track, opts?: { chosenByUser?: boolean; skipHistoryPush?: boolean }) => {
       const generation = ++playGenerationRef.current;
       try {
-        const current = store.get(currentTrackAtom);
-        if (current && !opts?.skipHistoryPush) {
-          store.set(historyAtom, [...store.get(historyAtom), current]);
-        }
         const stamped = ensureQid(normalizeTrack(track));
         const info = await invokePlayWithRetry(
           stamped.id,
@@ -125,6 +121,10 @@ export function usePlaybackActions() {
         );
 
         if (generation !== playGenerationRef.current) return;
+        const current = store.get(currentTrackAtom);
+        if (current && !opts?.skipHistoryPush) {
+          store.set(historyAtom, [...store.get(historyAtom), current]);
+        }
         store.set(streamInfoAtom, info);
         store.set(currentTrackAtom, stamped);
         store.set(isPlayingAtom, true);
