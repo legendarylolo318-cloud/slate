@@ -26,8 +26,14 @@ interface MixPageProps {
 export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
   const isPlaying = useAtomValue(isPlayingAtom);
   const currentTrack = useAtomValue(currentTrackAtom);
-  const { playTrack, pauseTrack, resumeTrack, setShuffledQueue, playFromSource, playAllFromSource } =
-    usePlaybackActions();
+  const {
+    playTrack,
+    pauseTrack,
+    resumeTrack,
+    setShuffledQueue,
+    playFromSource,
+    playAllFromSource,
+  } = usePlaybackActions();
 
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loading, setLoading] = useState(true);
@@ -75,8 +81,12 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
     [tracks],
   );
 
-  const mixSource = { type: "mix" as const, id: mixId, name: mixInfo?.title || "Mix", allTracks: tracks };
-
+  const mixSource = {
+    type: "mix" as const,
+    id: mixId,
+    name: mixInfo?.title || "Mix",
+    allTracks: tracks,
+  };
 
   const handlePlayTrack = async (track: Track, _index: number) => {
     try {

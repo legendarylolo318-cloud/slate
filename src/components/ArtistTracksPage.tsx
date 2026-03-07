@@ -20,8 +20,14 @@ export default function ArtistTracksPage({
 }: ArtistTracksPageProps) {
   const isPlaying = useAtomValue(isPlayingAtom);
   const currentTrack = useAtomValue(currentTrackAtom);
-  const { playTrack, pauseTrack, resumeTrack, setShuffledQueue, playFromSource, playAllFromSource } =
-    usePlaybackActions();
+  const {
+    playTrack,
+    pauseTrack,
+    resumeTrack,
+    setShuffledQueue,
+    playFromSource,
+    playAllFromSource,
+  } = usePlaybackActions();
 
   const [tracks, setTracks] = useState<Track[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -102,8 +108,12 @@ export default function ArtistTracksPage({
     [tracks],
   );
 
-  const artistSource = { type: "artist-tracks" as const, id: artistId, name: artistName, allTracks: tracks };
-
+  const artistSource = {
+    type: "artist-tracks" as const,
+    id: artistId,
+    name: artistName,
+    allTracks: tracks,
+  };
 
   const handlePlayTrack = async (track: Track, _index: number) => {
     try {

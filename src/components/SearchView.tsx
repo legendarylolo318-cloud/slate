@@ -152,7 +152,12 @@ export default function SearchView({ query, onBack }: SearchViewProps) {
   const handlePlayTrack = (track: Track, _index: number) => {
     const allTracks = results?.tracks || [];
     playFromSource(track, allTracks, {
-      source: { type: "search", id: query, name: `Search: ${query}`, allTracks },
+      source: {
+        type: "search",
+        id: query,
+        name: `Search: ${query}`,
+        allTracks,
+      },
     });
   };
 

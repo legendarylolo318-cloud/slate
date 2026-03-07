@@ -111,7 +111,12 @@ export default function ViewAllPage({
     if (isTrackItem(item)) {
       const allTrackItems = items.filter((t) => isTrackItem(t));
       playFromSource(item, allTrackItems, {
-        source: { type: "view-all", id: title, name: title, allTracks: allTrackItems },
+        source: {
+          type: "view-all",
+          id: title,
+          name: title,
+          allTracks: allTrackItems,
+        },
       });
     } else if (isArtistItem(item)) {
       navigateToArtist(item.id, {

@@ -448,7 +448,6 @@ export interface PlaybackSource {
   tracks: QueuedTrack[];
 }
 
-
 export interface PlaybackSnapshot {
   currentTrack: Track | null;
   queue: Track[];

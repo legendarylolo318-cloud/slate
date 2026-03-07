@@ -71,7 +71,12 @@ export default function TrackRadioPage({
     [tracks],
   );
 
-  const radioSource = { type: "radio" as const, id: trackId, name: trackInfo?.title ? `${trackInfo.title} Radio` : "Track Radio", allTracks: tracks };
+  const radioSource = {
+    type: "radio" as const,
+    id: trackId,
+    name: trackInfo?.title ? `${trackInfo.title} Radio` : "Track Radio",
+    allTracks: tracks,
+  };
 
   const handlePlayTrack = async (track: Track, _index: number) => {
     try {

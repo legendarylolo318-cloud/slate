@@ -107,7 +107,10 @@ export function usePlaybackActions() {
   const autoplayIdsRef = useRef(new Set<number>());
 
   const playTrack = useCallback(
-    async (track: Track, opts?: { chosenByUser?: boolean; skipHistoryPush?: boolean }) => {
+    async (
+      track: Track,
+      opts?: { chosenByUser?: boolean; skipHistoryPush?: boolean },
+    ) => {
       const generation = ++playGenerationRef.current;
       try {
         const stamped = ensureQid(normalizeTrack(track));
@@ -264,7 +267,12 @@ export function usePlaybackActions() {
         albumMode?: boolean;
         reorder?: boolean;
         manualCount?: number;
-        source?: { type: string; id: string | number; name: string; allTracks: Track[] };
+        source?: {
+          type: string;
+          id: string | number;
+          name: string;
+          allTracks: Track[];
+        };
       },
     ) => {
       if (options?.reorder) {
@@ -285,9 +293,7 @@ export function usePlaybackActions() {
               type: options.source.type,
               id: options.source.id,
               name: options.source.name,
-              tracks: stampQids(
-                options.source.allTracks.map(normalizeTrack),
-              ),
+              tracks: stampQids(options.source.allTracks.map(normalizeTrack)),
             }
           : null,
       );
@@ -329,126 +335,129 @@ export function usePlaybackActions() {
     [store],
   );
 
-  const playNext = useCallback(async (options?: { explicit?: boolean }) => {
-    const repeatMode = store.get(repeatAtom);
+  const playNext = useCallback(
+    async (options?: { explicit?: boolean }) => {
+      const repeatMode = store.get(repeatAtom);
 
-    // Repeat-one: replay current track unless explicit skip
-    if (repeatMode === 2 && !options?.explicit) {
-      const current = store.get(currentTrackAtom);
-      if (current) {
-        try {
-          const info = await invokePlayWithRetry(
-            current.id,
-            store.get(useTrackGainAtom),
-            () => {
-              store.set(isPlayingAtom, false);
-              showToast("Preparing exclusive audio…", "info");
-            },
-          );
-          store.set(streamInfoAtom, info);
-          store.set(isPlayingAtom, true);
-          invoke("notify_track_started", {
-            payload: {
-              artist: current.artist?.name || "Unknown",
-              title: current.title,
-              album: current.album?.title || null,
-              albumArtist: null,
-              durationSecs: current.duration || 0,
-              trackNumber: current.trackNumber || null,
-              chosenByUser: false,
-              isrc: current.isrc || null,
-              trackId: current.id || null,
-            },
-          }).catch(() => {});
-        } catch (error: any) {
-          console.error("Failed to repeat track:", error);
-          store.set(isPlayingAtom, false);
+      // Repeat-one: replay current track unless explicit skip
+      if (repeatMode === 2 && !options?.explicit) {
+        const current = store.get(currentTrackAtom);
+        if (current) {
+          try {
+            const info = await invokePlayWithRetry(
+              current.id,
+              store.get(useTrackGainAtom),
+              () => {
+                store.set(isPlayingAtom, false);
+                showToast("Preparing exclusive audio…", "info");
+              },
+            );
+            store.set(streamInfoAtom, info);
+            store.set(isPlayingAtom, true);
+            invoke("notify_track_started", {
+              payload: {
+                artist: current.artist?.name || "Unknown",
+                title: current.title,
+                album: current.album?.title || null,
+                albumArtist: null,
+                durationSecs: current.duration || 0,
+                trackNumber: current.trackNumber || null,
+                chosenByUser: false,
+                isrc: current.isrc || null,
+                trackId: current.id || null,
+              },
+            }).catch(() => {});
+          } catch (error: any) {
+            console.error("Failed to repeat track:", error);
+            store.set(isPlayingAtom, false);
+          }
+          return;
         }
+      }
+
+      // Drain manual queue first
+      const manual = store.get(manualQueueAtom);
+      if (manual.length > 0) {
+        const [nextTrack, ...rest] = manual;
+        store.set(manualQueueAtom, rest);
+        await playTrack(nextTrack, { chosenByUser: !!options?.explicit });
         return;
       }
-    }
 
-    // Drain manual queue first
-    const manual = store.get(manualQueueAtom);
-    if (manual.length > 0) {
-      const [nextTrack, ...rest] = manual;
-      store.set(manualQueueAtom, rest);
-      await playTrack(nextTrack, { chosenByUser: !!options?.explicit });
-      return;
-    }
-
-    const queue = store.get(queueAtom);
-    if (queue.length > 0) {
-      const [nextTrack, ...rest] = queue;
-      const isAutoplay = autoplayIdsRef.current.has(nextTrack.id);
-      autoplayIdsRef.current.delete(nextTrack.id);
-      store.set(queueAtom, rest);
-      // Bug F fix: sync originalQueueAtom when consuming context track
-      const orig = store.get(originalQueueAtom);
-      if (orig) {
-        store.set(
-          originalQueueAtom,
-          orig.filter((t) => t._qid !== nextTrack._qid),
-        );
-      }
-      await playTrack(nextTrack, { chosenByUser: !isAutoplay });
-    } else if (repeatMode === 1) {
-      // Repeat-all: rebuild from source (Bug 2) or history+current fallback
-      const source = store.get(playbackSourceAtom);
-      const sourceTracks = source?.tracks;
-      const all =
-        sourceTracks && sourceTracks.length > 0
-          ? stampQids(sourceTracks)
-          : stampQids([
-              ...store.get(historyAtom),
-              ...(store.get(currentTrackAtom)
-                ? [store.get(currentTrackAtom)!]
-                : []),
-            ]);
-
-      if (all.length > 0) {
-        store.set(historyAtom, []);
-        const ordered = store.get(shuffleAtom)
-          ? fisherYatesShuffle(all)
-          : all;
-        const [first, ...rest] = ordered;
+      const queue = store.get(queueAtom);
+      if (queue.length > 0) {
+        const [nextTrack, ...rest] = queue;
+        const isAutoplay = autoplayIdsRef.current.has(nextTrack.id);
+        autoplayIdsRef.current.delete(nextTrack.id);
         store.set(queueAtom, rest);
-        // Bug 6 fix: preserve originalQueueAtom when shuffle is on (exclude currently playing track)
-        store.set(
-          originalQueueAtom,
-          store.get(shuffleAtom)
-            ? all.filter((t) => t._qid !== first._qid)
-            : null,
-        );
-        await playTrack(first, { skipHistoryPush: true });
+        // Bug F fix: sync originalQueueAtom when consuming context track
+        const orig = store.get(originalQueueAtom);
+        if (orig) {
+          store.set(
+            originalQueueAtom,
+            orig.filter((t) => t._qid !== nextTrack._qid),
+          );
+        }
+        await playTrack(nextTrack, { chosenByUser: !isAutoplay });
+      } else if (repeatMode === 1) {
+        // Repeat-all: rebuild from source (Bug 2) or history+current fallback
+        const source = store.get(playbackSourceAtom);
+        const sourceTracks = source?.tracks;
+        const all =
+          sourceTracks && sourceTracks.length > 0
+            ? stampQids(sourceTracks)
+            : stampQids([
+                ...store.get(historyAtom),
+                ...(store.get(currentTrackAtom)
+                  ? [store.get(currentTrackAtom)!]
+                  : []),
+              ]);
+
+        if (all.length > 0) {
+          store.set(historyAtom, []);
+          const ordered = store.get(shuffleAtom)
+            ? fisherYatesShuffle(all)
+            : all;
+          const [first, ...rest] = ordered;
+          store.set(queueAtom, rest);
+          // Bug 6 fix: preserve originalQueueAtom when shuffle is on (exclude currently playing track)
+          store.set(
+            originalQueueAtom,
+            store.get(shuffleAtom)
+              ? all.filter((t) => t._qid !== first._qid)
+              : null,
+          );
+          await playTrack(first, { skipHistoryPush: true });
+        } else {
+          store.set(isPlayingAtom, false);
+        }
+      } else if (store.get(autoplayAtom)) {
+        const current = store.get(currentTrackAtom);
+        if (current) {
+          try {
+            const historyIds = new Set(store.get(historyAtom).map((t) => t.id));
+            historyIds.add(current.id);
+            const radio = await getTrackRadio(current.id, 30);
+            const fresh = radio.filter((t) => !historyIds.has(t.id));
+            if (fresh.length > 0) {
+              const [next, ...rest] = fresh;
+              autoplayIdsRef.current = new Set(rest.map((t) => t.id));
+              store.set(queueAtom, stampQids(rest.map(normalizeTrack)));
+              store.set(useTrackGainAtom, true); // radio = mixed context
+              await playTrack(next, { chosenByUser: false });
+              return;
+            }
+          } catch {
+            /* fall through to stop */
+          }
+        }
+        store.set(isPlayingAtom, false);
       } else {
         store.set(isPlayingAtom, false);
       }
-    } else if (store.get(autoplayAtom)) {
-      const current = store.get(currentTrackAtom);
-      if (current) {
-        try {
-          const historyIds = new Set(store.get(historyAtom).map((t) => t.id));
-          historyIds.add(current.id);
-          const radio = await getTrackRadio(current.id, 30);
-          const fresh = radio.filter((t) => !historyIds.has(t.id));
-          if (fresh.length > 0) {
-            const [next, ...rest] = fresh;
-            autoplayIdsRef.current = new Set(rest.map((t) => t.id));
-            store.set(queueAtom, stampQids(rest.map(normalizeTrack)));
-            store.set(useTrackGainAtom, true); // radio = mixed context
-            await playTrack(next, { chosenByUser: false });
-            return;
-          }
-        } catch {
-          /* fall through to stop */
-        }
-      }
-      store.set(isPlayingAtom, false);
-    } else {
-      store.set(isPlayingAtom, false);
-    }
-  }, [store, playTrack]);
+    },
+    [store, playTrack],
+  );
 
   const playPrevious = useCallback(async () => {
     try {
@@ -475,14 +484,20 @@ export function usePlaybackActions() {
         if (orig) {
           const source = store.get(playbackSourceAtom);
           if (source) {
-            const sourceIdx = source.tracks.findIndex((t) => t.id === current.id);
+            const sourceIdx = source.tracks.findIndex(
+              (t) => t.id === current.id,
+            );
             if (sourceIdx >= 0) {
               const insertIdx = orig.findIndex((t) => {
                 const tIdx = source.tracks.findIndex((s) => s.id === t.id);
                 return tIdx > sourceIdx;
               });
               const newOrig = [...orig];
-              newOrig.splice(insertIdx === -1 ? orig.length : insertIdx, 0, current);
+              newOrig.splice(
+                insertIdx === -1 ? orig.length : insertIdx,
+                0,
+                current,
+              );
               store.set(originalQueueAtom, newOrig);
             } else {
               store.set(originalQueueAtom, [current, ...orig]);
@@ -542,14 +557,20 @@ export function usePlaybackActions() {
           // Bug G fix: insert at correct position in originalQueueAtom
           const orig = store.get(originalQueueAtom);
           if (orig) {
-            const sourceIdx = source.tracks.findIndex((t) => t.id === current.id);
+            const sourceIdx = source.tracks.findIndex(
+              (t) => t.id === current.id,
+            );
             if (sourceIdx >= 0) {
               const insertIdx = orig.findIndex((t) => {
                 const tIdx = source.tracks.findIndex((s) => s.id === t.id);
                 return tIdx > sourceIdx;
               });
               const newOrig = [...orig];
-              newOrig.splice(insertIdx === -1 ? orig.length : insertIdx, 0, current);
+              newOrig.splice(
+                insertIdx === -1 ? orig.length : insertIdx,
+                0,
+                current,
+              );
               store.set(originalQueueAtom, newOrig);
             } else {
               store.set(originalQueueAtom, [current, ...orig]);
@@ -615,7 +636,10 @@ export function usePlaybackActions() {
       if (orig) {
         // Bug 7b fix: use _qid instead of .id for duplicate support
         const currentQids = new Set(store.get(queueAtom).map((t) => t._qid));
-        store.set(queueAtom, orig.filter((t) => currentQids.has(t._qid)));
+        store.set(
+          queueAtom,
+          orig.filter((t) => currentQids.has(t._qid)),
+        );
       }
       store.set(originalQueueAtom, null);
       store.set(shuffleAtom, false);
@@ -626,7 +650,12 @@ export function usePlaybackActions() {
     (
       tracks: Track[],
       options?: {
-        source?: { type: string; id: string | number; name: string; allTracks: Track[] };
+        source?: {
+          type: string;
+          id: string | number;
+          name: string;
+          allTracks: Track[];
+        };
         albumMode?: boolean;
       },
     ) => {
@@ -692,7 +721,12 @@ export function usePlaybackActions() {
       track: Track,
       allTracks: Track[],
       options?: {
-        source?: { type: string; id: string | number; name: string; allTracks: Track[] };
+        source?: {
+          type: string;
+          id: string | number;
+          name: string;
+          allTracks: Track[];
+        };
         albumMode?: boolean;
       },
     ) => {
@@ -715,7 +749,12 @@ export function usePlaybackActions() {
     async (
       allTracks: Track[],
       options?: {
-        source?: { type: string; id: string | number; name: string; allTracks: Track[] };
+        source?: {
+          type: string;
+          id: string | number;
+          name: string;
+          allTracks: Track[];
+        };
         albumMode?: boolean;
       },
     ) => {

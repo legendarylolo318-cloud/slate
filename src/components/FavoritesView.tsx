@@ -27,7 +27,8 @@ const PAGE_SIZE = 100;
 export default function FavoritesView({ onBack }: FavoritesViewProps) {
   const store = useStore();
   const { authTokens } = useAuth();
-  const { playFromSource, setQueueTracks, setShuffledQueue } = usePlaybackActions();
+  const { playFromSource, setQueueTracks, setShuffledQueue } =
+    usePlaybackActions();
   const favoriteTrackIds = useAtomValue(favoriteTrackIdsAtom);
 
   const [allTracks, setAllTracks] = useState<Track[]>([]);
@@ -208,7 +209,10 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
         );
         const playedIndex = full.findIndex((t) => t.id === track.id);
         if (playedIndex >= 0) {
-          const rest = [...full.slice(playedIndex + 1), ...full.slice(0, playedIndex)];
+          const rest = [
+            ...full.slice(playedIndex + 1),
+            ...full.slice(0, playedIndex),
+          ];
           if (store.get(shuffleAtom)) {
             setShuffledQueue(rest, { source: favoritesSource(full) });
           } else {

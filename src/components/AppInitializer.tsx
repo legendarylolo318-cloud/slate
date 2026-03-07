@@ -66,7 +66,12 @@ import {
   getFavoritePlaylists,
 } from "../api/tidal";
 
-import type { AuthTokens, Track, QueuedTrack, PlaybackSnapshot } from "../types";
+import type {
+  AuthTokens,
+  Track,
+  QueuedTrack,
+  PlaybackSnapshot,
+} from "../types";
 import { getTidalImageUrl } from "../types";
 import { ensureQid, advanceCounterPast } from "../lib/qid";
 
