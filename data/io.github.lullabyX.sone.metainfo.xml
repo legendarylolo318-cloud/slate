@@ -22,6 +22,7 @@
       <li>Lossless FLAC and Hi-Res streaming up to 24-bit/192kHz</li>
       <li>Exclusive ALSA output for bit-perfect streaming to USB DACs</li>
       <li>Volume normalization (ReplayGain) with automatic album/track switching</li>
+      <li>Scrobble to Last.fm, Libre.fm, and ListenBrainz with ISRC and MusicBrainz metadata</li>
       <li>Synced lyrics display</li>
       <li>Custom themes with full color picker</li>
       <li>Queue persistence across restarts</li>
