@@ -142,41 +142,26 @@ export default function UserMenu() {
             </div>
           </div>
 
-          {/* Theme */}
-          <button
-            onClick={() => {
-              setOpen(false);
-              setThemeOpen(true);
-            }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
-          >
-            <Palette size={16} />
-            Theme
-          </button>
+          {/* ── Playback ── */}
 
-          {/* Refresh */}
+          {/* Autoplay */}
           <button
-            onClick={async () => {
-              await clearAllCache();
-              setOpen(false);
-              window.location.reload();
-            }}
+            onClick={() => setAutoplay(!autoplay)}
             className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
           >
-            <RefreshCw size={16} />
-            Refresh App
-          </button>
-
-          {/* Shortcuts */}
-          <button
-            onClick={() => {
-              setOpen(false);
-              setShortcutsOpen(true);
-            }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
-          >
-            <Keyboard size={16} />
-            Shortcuts
+            <InfinityIcon size={16} />
+            <span className="flex-1 text-left">Autoplay</span>
+            <div
+              className={`w-8 h-[18px] rounded-full transition-colors ${
+                autoplay ? "bg-th-accent" : "bg-th-border-subtle"
+              }`}
+            >
+              <div
+                className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
+                  autoplay ? "translate-x-[16px]" : "translate-x-[2px]"
+                }`}
+              />
+            </div>
           </button>
 
           {/* Volume normalization */}
@@ -319,48 +304,31 @@ export default function UserMenu() {
             </button>
           )}
 
-          {/* Autoplay */}
-          <button
-            onClick={() => setAutoplay(!autoplay)}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
-          >
-            <InfinityIcon size={16} />
-            <span className="flex-1 text-left">Autoplay</span>
-            <div
-              className={`w-8 h-[18px] rounded-full transition-colors ${
-                autoplay ? "bg-th-accent" : "bg-th-border-subtle"
-              }`}
-            >
-              <div
-                className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
-                  autoplay ? "translate-x-[16px]" : "translate-x-[2px]"
-                }`}
-              />
-            </div>
-          </button>
-
-          {/* Close to tray */}
+          {/* Scrobbling */}
           <button
             onClick={() => {
-              const next = !minimizeToTray;
-              setMinimizeToTray(next);
-              invoke("set_minimize_to_tray", { enabled: next }).catch(() => {});
+              setOpen(false);
+              setScrobbleOpen(true);
             }}
             className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
           >
-            <MonitorDown size={16} />
-            <span className="flex-1 text-left">Close to tray</span>
-            <div
-              className={`w-8 h-[18px] rounded-full transition-colors ${
-                minimizeToTray ? "bg-th-accent" : "bg-th-border-subtle"
-              }`}
-            >
-              <div
-                className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
-                  minimizeToTray ? "translate-x-[16px]" : "translate-x-[2px]"
-                }`}
-              />
-            </div>
+            <Radio size={16} />
+            Scrobbling
+          </button>
+
+          {/* ── App settings ── */}
+          <div className="border-t border-th-border-subtle my-1" />
+
+          {/* Theme */}
+          <button
+            onClick={() => {
+              setOpen(false);
+              setThemeOpen(true);
+            }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+          >
+            <Palette size={16} />
+            Theme
           </button>
 
           {/* Window decorations */}
@@ -390,19 +358,60 @@ export default function UserMenu() {
             </div>
           </button>
 
-          {/* Scrobbling */}
+          {/* Close to tray */}
           <button
             onClick={() => {
-              setOpen(false);
-              setScrobbleOpen(true);
+              const next = !minimizeToTray;
+              setMinimizeToTray(next);
+              invoke("set_minimize_to_tray", { enabled: next }).catch(() => {});
             }}
             className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
           >
-            <Radio size={16} />
-            Scrobbling
+            <MonitorDown size={16} />
+            <span className="flex-1 text-left">Close to tray</span>
+            <div
+              className={`w-8 h-[18px] rounded-full transition-colors ${
+                minimizeToTray ? "bg-th-accent" : "bg-th-border-subtle"
+              }`}
+            >
+              <div
+                className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
+                  minimizeToTray ? "translate-x-[16px]" : "translate-x-[2px]"
+                }`}
+              />
+            </div>
+          </button>
+
+          {/* ── Utilities ── */}
+          <div className="border-t border-th-border-subtle my-1" />
+
+          {/* Shortcuts */}
+          <button
+            onClick={() => {
+              setOpen(false);
+              setShortcutsOpen(true);
+            }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+          >
+            <Keyboard size={16} />
+            Shortcuts
+          </button>
+
+          {/* Refresh */}
+          <button
+            onClick={async () => {
+              await clearAllCache();
+              setOpen(false);
+              window.location.reload();
+            }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+          >
+            <RefreshCw size={16} />
+            Refresh App
           </button>
 
           {/* Logout */}
+          <div className="border-t border-th-border-subtle my-1" />
           <button
             onClick={() => {
               setOpen(false);
