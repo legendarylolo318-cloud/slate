@@ -60,16 +60,6 @@ impl AudioscrobblerProvider {
         });
     }
 
-    pub async fn clear_session(&self) {
-        let mut session = self.session.write().await;
-        *session = None;
-    }
-
-    pub async fn username(&self) -> Option<String> {
-        let session = self.session.read().await;
-        session.as_ref().map(|s| s.username.clone())
-    }
-
     /// Fetch an unauthorized request token from the API (desktop auth step 2).
     pub async fn get_token(&self) -> Result<String, SoneError> {
         let mut params = BTreeMap::new();

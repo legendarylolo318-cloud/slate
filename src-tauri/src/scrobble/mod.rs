@@ -76,18 +76,15 @@ struct TrackPlayback {
     accumulated_secs: f64,
     last_resumed_at: Option<Instant>,
     scrobbled: bool,
-    started_at: Instant,
 }
 
 impl TrackPlayback {
     fn new(track: ScrobbleTrack) -> Self {
-        let now = Instant::now();
         Self {
             track,
             accumulated_secs: 0.0,
-            last_resumed_at: Some(now),
+            last_resumed_at: Some(Instant::now()),
             scrobbled: false,
-            started_at: now,
         }
     }
 
@@ -354,7 +351,7 @@ impl ScrobbleManager {
             let Some(provider) = providers.iter().find(|p| p.name() == name) else {
                 continue;
             };
-            let result = provider.scrobble(&[track.clone()]).await;
+            let result = provider.scrobble(std::slice::from_ref(&track)).await;
             drop(providers);
 
             match result {

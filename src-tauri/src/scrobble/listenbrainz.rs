@@ -43,16 +43,6 @@ impl ListenBrainzProvider {
         *data = Some(TokenData { token, username });
     }
 
-    pub async fn clear_token(&self) {
-        let mut data = self.token.write().await;
-        *data = None;
-    }
-
-    pub async fn username(&self) -> Option<String> {
-        let data = self.token.read().await;
-        data.as_ref().map(|d| d.username.clone())
-    }
-
     /// Validate a ListenBrainz user token. Returns the username on success.
     pub async fn validate_token(token: &str) -> Result<String, SoneError> {
         let client = reqwest::Client::new();
