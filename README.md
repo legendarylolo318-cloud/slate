@@ -54,6 +54,7 @@ https://github.com/user-attachments/assets/67d7a8ed-352b-4ce6-8b9c-70b7427a5f22
 - **Lyrics** — synced lyrics display for supported tracks
 - **Queue persistence** — picks up where you left off across restarts
 - **MPRIS integration** — media keys, desktop taskbar widgets, and system media controls
+- **Scrobbling** — track your listening history on Last.fm, Libre.fm, and ListenBrainz with full ISRC and MusicBrainz metadata
 - **System tray** with playback controls and minimize-to-tray
 - **Keyboard shortcuts** for all common actions with a built-in shortcut overlay
 
