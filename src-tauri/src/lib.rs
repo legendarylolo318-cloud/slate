@@ -426,80 +426,92 @@ pub fn run() {
                 let _ = window.show();
             }
 
-            // System tray icon
-            let show_item = MenuItemBuilder::with_id("show", "Show").build(app)?;
-            let play_pause = MenuItemBuilder::with_id("play-pause", "Play / Pause").build(app)?;
-            let next_track = MenuItemBuilder::with_id("next-track", "Next Track").build(app)?;
-            let prev_track = MenuItemBuilder::with_id("prev-track", "Previous Track").build(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
-            let menu = MenuBuilder::new(app)
-                .item(&show_item)
-                .separator()
-                .item(&play_pause)
-                .item(&next_track)
-                .item(&prev_track)
-                .separator()
-                .item(&quit_item)
-                .build()?;
+            // System tray icon (non-fatal — app should start even if tray fails)
+            match (|| -> Result<(), Box<dyn std::error::Error>> {
+                let show_item = MenuItemBuilder::with_id("show", "Show").build(app)?;
+                let play_pause =
+                    MenuItemBuilder::with_id("play-pause", "Play / Pause").build(app)?;
+                let next_track =
+                    MenuItemBuilder::with_id("next-track", "Next Track").build(app)?;
+                let prev_track =
+                    MenuItemBuilder::with_id("prev-track", "Previous Track").build(app)?;
+                let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+                let menu = MenuBuilder::new(app)
+                    .item(&show_item)
+                    .separator()
+                    .item(&play_pause)
+                    .item(&next_track)
+                    .item(&prev_track)
+                    .separator()
+                    .item(&quit_item)
+                    .build()?;
 
-            let icon_bytes = include_bytes!("../icons/icon.png");
-            let tray_icon = if let Ok(image) = image::load_from_memory(icon_bytes) {
-                let rgba = image.to_rgba8();
-                let (width, height) = rgba.dimensions();
-                let icon = tauri::image::Image::new(rgba.as_raw(), width, height);
-                TrayIconBuilder::with_id("main-tray")
-                    .icon(icon)
-                    .menu(&menu)
-                    .tooltip("Sone")
-                    .on_tray_icon_event(|tray, event| {
-                        if let TrayIconEvent::Click {
-                            button: MouseButton::Left,
-                            button_state: MouseButtonState::Up,
-                            ..
-                        } = event
-                        {
-                            let app = tray.app_handle();
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.unminimize();
-                                let _ = window.set_focus();
+                let icon_bytes = include_bytes!("../icons/icon.png");
+                let tray_icon = if let Ok(image) = image::load_from_memory(icon_bytes) {
+                    let rgba = image.to_rgba8();
+                    let (width, height) = rgba.dimensions();
+                    let icon = tauri::image::Image::new(rgba.as_raw(), width, height);
+                    TrayIconBuilder::with_id("main-tray")
+                        .icon(icon)
+                        .menu(&menu)
+                        .tooltip("Sone")
+                        .on_tray_icon_event(|tray, event| {
+                            if let TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Up,
+                                ..
+                            } = event
+                            {
+                                let app = tray.app_handle();
+                                if let Some(window) = app.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.unminimize();
+                                    let _ = window.set_focus();
+                                }
                             }
-                        }
-                    })
-                    .on_menu_event(|app, event| match event.id().as_ref() {
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.unminimize();
-                                let _ = window.set_focus();
+                        })
+                        .on_menu_event(|app, event| match event.id().as_ref() {
+                            "show" => {
+                                if let Some(window) = app.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.unminimize();
+                                    let _ = window.set_focus();
+                                }
                             }
-                        }
-                        "play-pause" => {
-                            app.emit("tray:toggle-play", ()).ok();
-                        }
-                        "next-track" => {
-                            app.emit("tray:next-track", ()).ok();
-                        }
-                        "prev-track" => {
-                            app.emit("tray:prev-track", ()).ok();
-                        }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
-                    })
-                    .build(app)?
-            } else {
-                TrayIconBuilder::with_id("main-tray")
-                    .menu(&menu)
-                    .tooltip("Sone")
-                    .build(app)?
-            };
-            // Keep tray icon alive
-            app.manage(tray_icon);
+                            "play-pause" => {
+                                app.emit("tray:toggle-play", ()).ok();
+                            }
+                            "next-track" => {
+                                app.emit("tray:next-track", ()).ok();
+                            }
+                            "prev-track" => {
+                                app.emit("tray:prev-track", ()).ok();
+                            }
+                            "quit" => {
+                                app.exit(0);
+                            }
+                            _ => {}
+                        })
+                        .build(app)?
+                } else {
+                    TrayIconBuilder::with_id("main-tray")
+                        .menu(&menu)
+                        .tooltip("Sone")
+                        .build(app)?
+                };
+                app.manage(tray_icon);
+                Ok(())
+            })() {
+                Ok(()) => {}
+                Err(e) => {
+                    log::warn!("Failed to create system tray icon: {e}");
+                    let state = app.state::<AppState>();
+                    state.minimize_to_tray.store(false, Ordering::Relaxed);
+                }
+            }
 
-            // Global media key shortcuts
-            app.handle().plugin(
+            // Global media key shortcuts (non-fatal)
+            if let Err(e) = app.handle().plugin(
                 tauri_plugin_global_shortcut::Builder::new()
                     .with_handler(move |app, shortcut, event| {
                         if event.state() != ShortcutState::Pressed {
@@ -519,15 +531,18 @@ pub fn run() {
                         };
                     })
                     .build(),
-            )?;
-            let shortcuts = [
-                ("MediaPlayPause", Code::MediaPlayPause),
-                ("MediaTrackNext", Code::MediaTrackNext),
-                ("MediaTrackPrevious", Code::MediaTrackPrevious),
-            ];
-            for (name, code) in shortcuts {
-                if let Err(e) = app.global_shortcut().register(Shortcut::new(None, code)) {
-                    log::warn!("Failed to register global {name} shortcut: {e}");
+            ) {
+                log::warn!("Failed to initialize global shortcut plugin: {e}");
+            } else {
+                let shortcuts = [
+                    ("MediaPlayPause", Code::MediaPlayPause),
+                    ("MediaTrackNext", Code::MediaTrackNext),
+                    ("MediaTrackPrevious", Code::MediaTrackPrevious),
+                ];
+                for (name, code) in shortcuts {
+                    if let Err(e) = app.global_shortcut().register(Shortcut::new(None, code)) {
+                        log::warn!("Failed to register global {name} shortcut: {e}");
+                    }
                 }
             }
 
