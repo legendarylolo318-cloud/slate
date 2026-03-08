@@ -48,6 +48,7 @@ import {
   playbackSourceAtom,
 } from "../atoms/playback";
 import { drawerOpenAtom } from "../atoms/ui";
+import { proxySettingsAtom, type ProxySettings } from "../atoms/proxy";
 
 // Stable action callbacks (no atom subscriptions)
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
@@ -170,6 +171,9 @@ export function AppInitializer() {
           .catch(() => {});
         invoke<string | null>("get_exclusive_device")
           .then((v) => store.set(exclusiveDeviceAtom, v))
+          .catch(() => {});
+        invoke<ProxySettings>("get_proxy_settings")
+          .then((v) => store.set(proxySettingsAtom, v))
           .catch(() => {});
 
         // Playlists

@@ -228,3 +228,54 @@ pub fn list_audio_devices(state: State<'_, AppState>) -> Result<Vec<AudioDevice>
     *state.cached_audio_devices.lock().unwrap() = Some(devices.clone());
     Ok(devices)
 }
+
+#[tauri::command]
+pub fn get_proxy_settings(state: State<'_, AppState>) -> crate::ProxySettings {
+    state
+        .load_settings()
+        .map(|s| s.proxy)
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn set_proxy_settings(
+    state: State<'_, AppState>,
+    settings: crate::ProxySettings,
+) -> Result<(), SoneError> {
+    // Rebuild the HTTP client with new proxy config
+    {
+        let mut client = state.tidal_client.lock().await;
+        client.rebuild_client(&settings);
+    }
+
+    // Save to disk
+    let mut app_settings = state.load_settings().unwrap_or_default();
+    app_settings.proxy = settings;
+    state.save_settings(&app_settings)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn test_proxy_connection(
+    settings: crate::ProxySettings,
+) -> Result<String, String> {
+    let client = crate::tidal_api::build_http_client(&settings)
+        .map_err(|e| format!("Failed to create client: {e}"))?;
+
+    match client
+        .get("https://api.tidal.com/v1/ping")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() || status.as_u16() == 404 || status.as_u16() == 401 {
+                Ok("Connection successful".to_string())
+            } else {
+                Ok(format!("Tidal responded with status {status}"))
+            }
+        }
+        Err(e) => Err(format!("Connection failed: {e}")),
+    }
+}

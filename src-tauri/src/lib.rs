@@ -715,6 +715,9 @@ pub fn run() {
             commands::utility::get_exclusive_device,
             commands::utility::set_exclusive_device,
             commands::utility::list_audio_devices,
+            commands::utility::get_proxy_settings,
+            commands::utility::set_proxy_settings,
+            commands::utility::test_proxy_connection,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
