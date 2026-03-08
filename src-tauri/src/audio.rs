@@ -132,6 +132,34 @@ fn alsa_format_to_gst(alsa_fmt: alsa::pcm::Format) -> (&'static str, u32) {
     }
 }
 
+/// Probe which GStreamer format strings an ALSA device supports.
+/// Returns a list like `["S32LE", "S24_32LE", "S16LE"]`.
+#[cfg(target_os = "linux")]
+fn probe_supported_gst_formats(pcm: &alsa::PCM) -> Vec<&'static str> {
+    use alsa::pcm::{Format, HwParams};
+
+    let Ok(hwp) = HwParams::any(pcm) else {
+        return vec!["S32LE"]; // safe fallback
+    };
+    let probe: &[(Format, &str)] = &[
+        (Format::S32LE, "S32LE"),
+        (Format::S24LE, "S24_32LE"),  // ALSA S24LE = GStreamer S24_32LE
+        (Format::S243LE, "S24LE"),    // ALSA S243LE = GStreamer S24LE
+        (Format::FloatLE, "F32LE"),
+        (Format::S16LE, "S16LE"),
+    ];
+    let supported: Vec<&str> = probe
+        .iter()
+        .filter(|(f, _)| hwp.test_format(*f).is_ok())
+        .map(|(_, name)| *name)
+        .collect();
+    if supported.is_empty() {
+        vec!["S32LE"] // safe fallback
+    } else {
+        supported
+    }
+}
+
 // ── ALSA writer thread ─────────────────────────────────────────────────
 
 #[cfg(target_os = "linux")]
@@ -261,7 +289,7 @@ fn spawn_alsa_writer(
     paused: Arc<AtomicBool>,
     bit_perfect: bool,
     combined_vol: Arc<AtomicU32>,
-) -> Result<(crossbeam_channel::Sender<WriterCommand>, JoinHandle<()>, PcmFormat), String> {
+) -> Result<(crossbeam_channel::Sender<WriterCommand>, JoinHandle<()>, PcmFormat, Vec<&'static str>), String> {
     let device = device.to_string();
     let initial_format = initial_format.clone();
     let (tx, rx) = crossbeam_channel::bounded::<WriterCommand>(256);
@@ -275,6 +303,9 @@ fn spawn_alsa_writer(
             format!("Failed to open ALSA device: {e}")
         }
     })?;
+
+    let supported_gst_formats = probe_supported_gst_formats(&pcm);
+    log::debug!("[alsa-writer] DAC supported GStreamer formats: {:?}", supported_gst_formats);
 
     let initial_format = configure_alsa_hwparams(&pcm, &initial_format, bit_perfect)?;
     pcm.prepare().map_err(|e| format!("pcm.prepare: {e}"))?;
@@ -657,7 +688,7 @@ fn spawn_alsa_writer(
         })
         .map_err(|e| format!("Failed to spawn ALSA writer thread: {e}"))?;
 
-    Ok((tx, handle, negotiated_fmt))
+    Ok((tx, handle, negotiated_fmt, supported_gst_formats))
 }
 
 // ── Audio command protocol ─────────────────────────────────────────────
@@ -745,6 +776,7 @@ impl AudioPlayer {
             let mut writer_tx: Option<crossbeam_channel::Sender<WriterCommand>> = None;
             let mut writer_thread: Option<JoinHandle<()>> = None;
             let mut writer_fmt: Option<PcmFormat> = None;
+            let mut writer_supported_fmts: Option<Vec<&'static str>> = None;
             let frames_written = Arc::new(AtomicU64::new(0));
             let current_sample_rate = Arc::new(AtomicU32::new(48000));
             let writer_gen = Arc::new(AtomicU64::new(0));
@@ -861,7 +893,7 @@ impl AudioPlayer {
                                         if let Some(h) = writer_thread.take() {
                                             h.join().ok();
                                         }
-                                        let (tx, handle, negotiated_fmt) = spawn_alsa_writer(
+                                        let (tx, handle, negotiated_fmt, supported_gst_fmts) = spawn_alsa_writer(
                                             dev,
                                             &default_fmt,
                                             app_handle.clone(),
@@ -876,12 +908,14 @@ impl AudioPlayer {
                                         writer_tx = Some(tx);
                                         writer_thread = Some(handle);
                                         writer_fmt = Some(negotiated_fmt);
+                                        writer_supported_fmts = Some(supported_gst_fmts);
                                     }
 
                                     let wtx = writer_tx.as_ref().unwrap().clone();
 
                                     // Build appsink pipeline
                                     let fmt_for_pipeline = writer_fmt.as_ref().unwrap_or(&default_fmt);
+                                    let supported_fmts_for_pipeline = writer_supported_fmts.as_deref().unwrap_or(&["S32LE"]);
                                     let (pipe, u_vol, n_vol) = build_appsink_pipeline(
                                         &uri,
                                         exclusive,
@@ -889,6 +923,7 @@ impl AudioPlayer {
                                         wtx.clone(),
                                         Arc::clone(&writer_gen),
                                         fmt_for_pipeline,
+                                        supported_fmts_for_pipeline,
                                     )?;
 
                                     // Start pipeline directly — errors come via bus watcher
@@ -1404,6 +1439,7 @@ fn build_appsink_pipeline(
     writer_tx: crossbeam_channel::Sender<WriterCommand>,
     writer_gen: Arc<AtomicU64>,
     negotiated_fmt: &PcmFormat,
+    _supported_gst_formats: &[&str],
 ) -> Result<(gst::Pipeline, Option<gst::Element>, Option<gst::Element>), String> {
     use gst_app::prelude::*;
 
