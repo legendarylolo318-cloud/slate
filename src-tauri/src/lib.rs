@@ -53,6 +53,35 @@ pub struct ScrobbleSettings {
     pub listenbrainz: Option<ListenBrainzCredentials>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyType {
+    Http,
+    Socks5,
+}
+
+impl Default for ProxyType {
+    fn default() -> Self {
+        Self::Http
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ProxySettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub proxy_type: ProxyType,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub auth_tokens: Option<AuthTokens>,
@@ -77,6 +106,8 @@ pub struct Settings {
     pub bit_perfect: bool,
     #[serde(default)]
     pub scrobble: ScrobbleSettings,
+    #[serde(default)]
+    pub proxy: ProxySettings,
 }
 
 impl Default for Settings {
@@ -94,6 +125,7 @@ impl Default for Settings {
             exclusive_device: None,
             bit_perfect: false,
             scrobble: Default::default(),
+            proxy: Default::default(),
         }
     }
 }
