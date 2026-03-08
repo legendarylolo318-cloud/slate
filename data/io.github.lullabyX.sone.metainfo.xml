@@ -69,6 +69,18 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.7.0" date="2026-03-09">
+      <description>
+        <ul>
+          <li>HTTP, HTTPS, and SOCKS5 proxy support with a new settings UI — all traffic routes through your configured proxy</li>
+          <li>Exclusive mode now probes your DAC's supported formats and sample rates, avoiding mismatches and falling back gracefully</li>
+          <li>Toast notifications when exclusive mode resamples audio or encounters unsupported sample rates</li>
+          <li>Playback stops cleanly on network errors instead of draining the queue, with user-friendly error toasts</li>
+          <li>ALSA writer respawns on device change — hot-swapping DACs no longer requires a restart</li>
+          <li>Tray icon and global shortcuts no longer prevent startup if unsupported</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.0" date="2026-03-07">
       <description>
         <ul>
