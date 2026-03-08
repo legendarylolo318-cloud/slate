@@ -510,8 +510,9 @@ fn spawn_alsa_writer(
             }
 
             log::info!(
-                "[alsa-writer] started, device={device}, format={}, rate={}Hz, channels={}, bps={}",
-                current_fmt.gst_format, current_fmt.sample_rate, current_fmt.channels, current_fmt.bytes_per_sample
+                "[alsa-writer] started, device={device}, format={}, rate={}Hz, channels={}, bps={}, combined_vol={}",
+                current_fmt.gst_format, current_fmt.sample_rate, current_fmt.channels, current_fmt.bytes_per_sample,
+                f32::from_bits(combined_vol.load(Ordering::Relaxed))
             );
 
             'main: loop {
@@ -836,6 +837,7 @@ impl AudioPlayer {
             let mut writer_fmt: Option<PcmFormat> = None;
             let mut writer_supported_fmts: Option<Vec<&'static str>> = None;
             let mut writer_supported_rates: Option<Vec<u32>> = None;
+            let mut writer_device: Option<String> = None;
             let frames_written = Arc::new(AtomicU64::new(0));
             let current_sample_rate = Arc::new(AtomicU32::new(48000));
             let writer_gen = Arc::new(AtomicU64::new(0));
@@ -944,7 +946,9 @@ impl AudioPlayer {
                                         .map(|h| !h.is_finished())
                                         .unwrap_or(false);
 
-                                    if !writer_alive || writer_tx.is_none() {
+                                    let device_changed = writer_device.as_deref() != Some(dev);
+
+                                    if !writer_alive || writer_tx.is_none() || device_changed {
                                         // Shut down old writer cleanly
                                         if let Some(tx) = writer_tx.take() {
                                             tx.try_send(WriterCommand::Shutdown).ok();
@@ -969,6 +973,7 @@ impl AudioPlayer {
                                         writer_fmt = Some(negotiated_fmt);
                                         writer_supported_fmts = Some(supported_gst_fmts);
                                         writer_supported_rates = Some(supported_rates);
+                                        writer_device = Some(dev.to_string());
                                     }
 
                                     let wtx = writer_tx.as_ref().unwrap().clone();
