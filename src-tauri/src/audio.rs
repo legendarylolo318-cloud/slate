@@ -429,7 +429,7 @@ fn spawn_alsa_writer(
                 sr: &AtomicU32,
                 sbuf: &mut Vec<u8>,
                 bit_perfect: bool,
-            ) -> Result<alsa::PCM, String> {
+            ) -> Result<(alsa::PCM, PcmFormat), String> {
                 let pcm = alsa::PCM::new(device, alsa::Direction::Playback, false)
                     .map_err(|e| format!("Failed to reopen ALSA device: {e}"))?;
                 let negotiated = configure_alsa_hwparams(&pcm, fmt, bit_perfect)?;
@@ -437,7 +437,7 @@ fn spawn_alsa_writer(
                 sr.store(negotiated.sample_rate, Ordering::Relaxed);
                 let silence_frames = (negotiated.sample_rate as usize * 50) / 1000;
                 *sbuf = vec![0u8; silence_frames * negotiated.channels as usize * negotiated.bytes_per_sample as usize];
-                Ok(pcm)
+                Ok((pcm, negotiated))
             }
 
             fn drain_writer_rx(rx: &crossbeam_channel::Receiver<WriterCommand>) -> bool {
@@ -498,9 +498,9 @@ fn spawn_alsa_writer(
                             log::info!("[alsa-writer] format change: {current_fmt:?} -> {:?}", chunk.format);
                             drop(pcm);
                             match reopen_alsa(&device, &chunk.format, &current_sample_rate, &mut silence_buf, bit_perfect) {
-                                Ok(new_pcm) => {
+                                Ok((new_pcm, negotiated)) => {
                                     pcm = new_pcm;
-                                    current_fmt = chunk.format;
+                                    current_fmt = negotiated;
                                 }
                                 Err(e) => {
                                     log::error!("[alsa-writer] reopen failed: {e}");
@@ -524,9 +524,9 @@ fn spawn_alsa_writer(
                             log::info!("[alsa-writer] format hint: {current_fmt:?} -> {new_fmt:?}");
                             drop(pcm);
                             match reopen_alsa(&device, &new_fmt, &current_sample_rate, &mut silence_buf, bit_perfect) {
-                                Ok(new_pcm) => {
+                                Ok((new_pcm, negotiated)) => {
                                     pcm = new_pcm;
-                                    current_fmt = new_fmt;
+                                    current_fmt = negotiated;
                                 }
                                 Err(e) => {
                                     log::error!("[alsa-writer] reopen for format hint failed: {e}");
@@ -575,9 +575,9 @@ fn spawn_alsa_writer(
                                         // reopen_alsa drops old PCM — buffer cleared implicitly
                                         drop(pcm);
                                         match reopen_alsa(&device, &chunk.format, &current_sample_rate, &mut silence_buf, bit_perfect) {
-                                            Ok(new_pcm) => {
+                                            Ok((new_pcm, negotiated)) => {
                                                 pcm = new_pcm;
-                                                current_fmt = chunk.format;
+                                                current_fmt = negotiated;
                                             }
                                             Err(e) => {
                                                 log::error!("[alsa-writer] reopen failed in idle: {e}");
@@ -605,9 +605,9 @@ fn spawn_alsa_writer(
                                         log::info!("[alsa-writer] format hint (idle): {current_fmt:?} -> {new_fmt:?}");
                                         drop(pcm);
                                         match reopen_alsa(&device, &new_fmt, &current_sample_rate, &mut silence_buf, bit_perfect) {
-                                            Ok(new_pcm) => {
+                                            Ok((new_pcm, negotiated)) => {
                                                 pcm = new_pcm;
-                                                current_fmt = new_fmt;
+                                                current_fmt = negotiated;
                                             }
                                             Err(e) => {
                                                 log::error!("[alsa-writer] reopen for format hint failed (idle): {e}");
