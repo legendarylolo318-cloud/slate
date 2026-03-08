@@ -268,8 +268,11 @@ fn configure_alsa_hwparams(
             fmt.gst_format, gst_fmt_str, fmt.gst_format
         );
     }
+    let actual_rate = pcm.hw_params_current()
+        .and_then(|p| p.get_rate())
+        .unwrap_or(fmt.sample_rate);
     Ok(PcmFormat {
-        sample_rate: fmt.sample_rate,
+        sample_rate: actual_rate,
         channels: fmt.channels,
         gst_format: gst_fmt_str.to_string(),
         bytes_per_sample: bps,
@@ -531,6 +534,16 @@ fn spawn_alsa_writer(
                             match reopen_alsa(&device, &chunk.format, &current_sample_rate, &mut silence_buf, bit_perfect) {
                                 Ok((new_pcm, negotiated)) => {
                                     pcm = new_pcm;
+                                    if negotiated.gst_format != chunk.format.gst_format {
+                                        log::error!(
+                                            "[alsa-writer] format mismatch after reopen: chunk={}, ALSA={}",
+                                            chunk.format.gst_format, negotiated.gst_format
+                                        );
+                                        app_handle.emit("audio-error",
+                                            serde_json::json!({ "kind": "device_changed" })).ok();
+                                        tearing_down.store(true, Ordering::SeqCst);
+                                        return;
+                                    }
                                     current_fmt = negotiated;
                                 }
                                 Err(e) => {
@@ -608,6 +621,16 @@ fn spawn_alsa_writer(
                                         match reopen_alsa(&device, &chunk.format, &current_sample_rate, &mut silence_buf, bit_perfect) {
                                             Ok((new_pcm, negotiated)) => {
                                                 pcm = new_pcm;
+                                                if negotiated.gst_format != chunk.format.gst_format {
+                                                    log::error!(
+                                                        "[alsa-writer] format mismatch after reopen (idle): chunk={}, ALSA={}",
+                                                        chunk.format.gst_format, negotiated.gst_format
+                                                    );
+                                                    app_handle.emit("audio-error",
+                                                        serde_json::json!({ "kind": "device_changed" })).ok();
+                                                    tearing_down.store(true, Ordering::SeqCst);
+                                                    return;
+                                                }
                                                 current_fmt = negotiated;
                                             }
                                             Err(e) => {
