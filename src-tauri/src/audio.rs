@@ -40,6 +40,7 @@ enum WriterCommand {
         generation: u64,
     },
     FormatHint(PcmFormat),
+    Resampling { from: u32, to: u32 },
     Flush,
     Shutdown,
 }
@@ -609,6 +610,12 @@ fn spawn_alsa_writer(
                         }
                     }
 
+                    Ok(WriterCommand::Resampling { from, to }) => {
+                        log::info!("[alsa-writer] resampling: {}kHz -> {}kHz", from / 1000, to / 1000);
+                        app_handle.emit("audio-resampled",
+                            serde_json::json!({ "from": from, "to": to })).ok();
+                    }
+
                     Ok(WriterCommand::EndOfTrack { emit_finished, generation }) => {
                         if generation < writer_gen.load(Ordering::Acquire) {
                             continue; // stale EOS from old pipeline
@@ -698,6 +705,7 @@ fn spawn_alsa_writer(
                                         }
                                     }
                                 }
+                                Ok(WriterCommand::Resampling { .. }) => {}
                                 Ok(_) => {}
                                 Err(crossbeam_channel::TryRecvError::Empty) => {}
                                 Err(crossbeam_channel::TryRecvError::Disconnected) => break 'main,
@@ -1617,6 +1625,9 @@ fn build_appsink_pipeline(
     // Connect uridecodebin's dynamic pad to audioconvert
     let convert_weak = audioconvert.downgrade();
     let supported_fmts_for_closure: Vec<String> = supported_gst_formats.iter().map(|s| s.to_string()).collect();
+    let supported_rates_for_closure: Vec<u32> = supported_rates.to_vec();
+    let resample_tx = writer_tx.clone();
+    let is_bit_perfect = bit_perfect;
     uridecodebin.connect_pad_added(move |_src, src_pad| {
         let Some(convert) = convert_weak.upgrade() else {
             return;
@@ -1638,6 +1649,27 @@ fn build_appsink_pipeline(
 
         if let Err(e) = src_pad.link(&sink_pad) {
             log::error!("Failed to link uridecodebin pad: {e:?}");
+        }
+
+        // Detect if resampling will occur (non-bit-perfect exclusive only)
+        if !is_bit_perfect {
+            if let Some(caps) = src_pad.current_caps() {
+                if let Some(s) = caps.structure(0) {
+                    if let Ok(native_rate) = s.get::<i32>("rate") {
+                        let native = native_rate as u32;
+                        if !supported_rates_for_closure.contains(&native) {
+                            let closest = supported_rates_for_closure
+                                .iter()
+                                .copied()
+                                .min_by_key(|&r| (r as i64 - native as i64).unsigned_abs())
+                                .unwrap_or(48000);
+                            let _ = resample_tx.try_send(
+                                WriterCommand::Resampling { from: native, to: closest },
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         // Bit-perfect: lock capsfilter to decoded format
