@@ -495,6 +495,24 @@ export function AppInitializer() {
   }, [store, showToast]);
 
   // ================================================================
+  //  RESAMPLING NOTIFICATION — toast when exclusive mode resamples
+  // ================================================================
+  useEffect(() => {
+    const unlisten = listen<{ from: number; to: number }>(
+      "audio-resampled",
+      (event) => {
+        const { from, to } = event.payload;
+        const fromKhz = from >= 1000 ? `${from / 1000}kHz` : `${from}Hz`;
+        const toKhz = to >= 1000 ? `${to / 1000}kHz` : `${to}Hz`;
+        showToast(`Resampling ${fromKhz} to ${toKhz}`, "info");
+      },
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [showToast]);
+
+  // ================================================================
   //  SCROBBLE AUTH ERROR — toast when a provider's session expires
   // ================================================================
   useEffect(() => {
