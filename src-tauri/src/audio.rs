@@ -1559,6 +1559,7 @@ fn build_appsink_pipeline(
 
     // Connect uridecodebin's dynamic pad to audioconvert
     let convert_weak = audioconvert.downgrade();
+    let supported_fmts_for_closure: Vec<String> = supported_gst_formats.iter().map(|s| s.to_string()).collect();
     uridecodebin.connect_pad_added(move |_src, src_pad| {
         let Some(convert) = convert_weak.upgrade() else {
             return;
@@ -1601,8 +1602,19 @@ fn build_appsink_pipeline(
                             s.get::<&str>("format"),
                         ) {
                             let locked = if format.starts_with("S24") {
+                                // Filter to S24/S32 formats the DAC actually supports
+                                let s24_candidates: Vec<&str> = supported_fmts_for_closure
+                                    .iter()
+                                    .map(|s| s.as_str())
+                                    .filter(|f| *f == "S24LE" || *f == "S24_32LE" || *f == "S32LE")
+                                    .collect();
+                                let fmts = if s24_candidates.is_empty() {
+                                    vec!["S32LE"] // safe fallback
+                                } else {
+                                    s24_candidates
+                                };
                                 gst::Caps::builder("audio/x-raw")
-                                    .field("format", gst::List::new(["S24LE", "S32LE"]))
+                                    .field("format", gst::List::new(fmts.iter().copied()))
                                     .field("rate", rate)
                                     .field("channels", channels)
                                     .build()
