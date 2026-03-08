@@ -27,6 +27,7 @@
       <li>Custom themes with full color picker</li>
       <li>Queue persistence across restarts</li>
       <li>MPRIS media controls and system tray</li>
+      <li>Proxy support — route traffic through HTTP, HTTPS, or SOCKS5 proxies</li>
     </ul>
     <p>Unofficial client — requires an active TIDAL subscription. SONE is a
        streaming client only and does not support offline downloads.</p>
