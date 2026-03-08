@@ -225,7 +225,9 @@ impl AppState {
 
         Self {
             audio_player: AudioPlayer::new(app_handle.clone()),
-            tidal_client: Mutex::new(TidalClient::new()),
+            tidal_client: Mutex::new(TidalClient::new(
+                &saved.as_ref().map(|s| s.proxy.clone()).unwrap_or_default(),
+            )),
             settings_path,
             cache_dir,
             disk_cache,

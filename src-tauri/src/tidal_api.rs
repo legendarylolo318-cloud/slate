@@ -1,8 +1,34 @@
+use crate::ProxySettings;
+use crate::ProxyType;
 use crate::SoneError;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
+
+/// Build a reqwest::Client with optional proxy configuration.
+pub fn build_http_client(proxy: &ProxySettings) -> Result<Client, reqwest::Error> {
+    let mut builder = Client::builder().timeout(Duration::from_secs(30));
+
+    if proxy.enabled && !proxy.host.is_empty() && proxy.port > 0 {
+        let scheme = match proxy.proxy_type {
+            ProxyType::Http => "http",
+            ProxyType::Socks5 => "socks5",
+        };
+        let proxy_url = format!("{}://{}:{}", scheme, proxy.host, proxy.port);
+        let mut proxy_obj = reqwest::Proxy::all(&proxy_url)?;
+
+        if let (Some(user), Some(pass)) = (&proxy.username, &proxy.password) {
+            if !user.is_empty() {
+                proxy_obj = proxy_obj.basic_auth(user, pass);
+            }
+        }
+
+        builder = builder.proxy(proxy_obj);
+    }
+
+    builder.build()
+}
 
 const TIDAL_AUTH_URL: &str = "https://auth.tidal.com/v1/oauth2";
 const TIDAL_API_URL: &str = "https://api.tidal.com/v1";
@@ -813,12 +839,14 @@ pub struct TidalClient {
 }
 
 impl TidalClient {
-    pub fn new() -> Self {
+    pub fn new(proxy: &ProxySettings) -> Self {
         Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .unwrap(),
+            client: build_http_client(proxy).unwrap_or_else(|_| {
+                Client::builder()
+                    .timeout(Duration::from_secs(30))
+                    .build()
+                    .unwrap()
+            }),
             tokens: None,
             client_id: String::new(),
             client_secret: String::new(),
@@ -829,6 +857,12 @@ impl TidalClient {
     pub fn set_credentials(&mut self, client_id: &str, client_secret: &str) {
         self.client_id = client_id.to_string();
         self.client_secret = client_secret.to_string();
+    }
+
+    pub fn rebuild_client(&mut self, proxy: &ProxySettings) {
+        if let Ok(client) = build_http_client(proxy) {
+            self.client = client;
+        }
     }
 
     pub async fn refresh_token(&mut self) -> Result<AuthTokens, SoneError> {
