@@ -70,6 +70,16 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.9.0" date="2026-03-10">
+      <description>
+        <ul>
+          <li>Full-screen maximized player with crossfade album art, blurred background, and auto-hiding controls</li>
+          <li>Karaoke-style synced lyrics in a two-column layout with responsive font sizing</li>
+          <li>Instant track transitions with progressive album art loading</li>
+          <li>Smoother interactions — GPU compositing and optimized state management eliminate lag in the maximized view</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.0" date="2026-03-08">
       <description>
         <ul>
