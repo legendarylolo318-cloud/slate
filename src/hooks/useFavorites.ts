@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useAtom, useAtomValue } from "jotai";
+import { useAtom, useAtomValue, useStore } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import {
   favoriteTrackIdsAtom,
@@ -7,6 +7,7 @@ import {
   favoritePlaylistUuidsAtom,
   followedArtistIdsAtom,
   favoriteMixIdsAtom,
+  optimisticFavoriteMixesAtom,
 } from "../atoms/favorites";
 import { favoritePlaylistsAtom } from "../atoms/playlists";
 import { authTokensAtom } from "../atoms/auth";
@@ -19,8 +20,9 @@ import {
   removePlaylistFromFavoritesCache,
   addArtistToFollowedCache,
   removeArtistFromFollowedCache,
+  invalidateCache,
 } from "../api/tidal";
-import type { Track, AlbumDetail, Playlist, ArtistDetail } from "../types";
+import type { Track, AlbumDetail, Playlist, ArtistDetail, FavoriteMix } from "../types";
 
 export function useFavorites() {
   const [favoriteTrackIds, setFavoriteTrackIds] = useAtom(favoriteTrackIdsAtom);
@@ -34,6 +36,7 @@ export function useFavorites() {
   );
   const [favoriteMixIds, setFavoriteMixIds] = useAtom(favoriteMixIdsAtom);
   const authTokens = useAtomValue(authTokensAtom);
+  const store = useStore();
 
   // NOTE: Initial loading of favorite IDs has been moved to
   // AppInitializer to avoid firing once per component that calls useFavorites().
@@ -254,9 +257,16 @@ export function useFavorites() {
   // ==================== Mixes ====================
 
   const addFavoriteMix = useCallback(
-    async (mixId: string): Promise<void> => {
+    async (mixId: string, mix?: FavoriteMix): Promise<void> => {
       if (!authTokens?.user_id) throw new Error("Not authenticated");
       setFavoriteMixIds((prev) => new Set([...prev, mixId]));
+      if (mix) {
+        store.set(optimisticFavoriteMixesAtom, (prev) => [
+          mix,
+          ...prev.filter((m) => m.id !== mixId),
+        ]);
+      }
+      invalidateCache("fav-mixes");
       try {
         await invoke("add_favorite_mix", { mixId });
       } catch (error: any) {
@@ -265,11 +275,16 @@ export function useFavorites() {
           next.delete(mixId);
           return next;
         });
+        if (mix) {
+          store.set(optimisticFavoriteMixesAtom, (prev) =>
+            prev.filter((m) => m.id !== mixId),
+          );
+        }
         console.error("Failed to favorite mix:", error);
         throw error;
       }
     },
-    [authTokens?.user_id, setFavoriteMixIds],
+    [authTokens?.user_id, setFavoriteMixIds, store],
   );
 
   const removeFavoriteMix = useCallback(
@@ -280,6 +295,10 @@ export function useFavorites() {
         next.delete(mixId);
         return next;
       });
+      store.set(optimisticFavoriteMixesAtom, (prev) =>
+        prev.filter((m) => m.id !== mixId),
+      );
+      invalidateCache("fav-mixes");
       try {
         await invoke("remove_favorite_mix", { mixId });
       } catch (error: any) {
@@ -288,7 +307,7 @@ export function useFavorites() {
         throw error;
       }
     },
-    [authTokens?.user_id, setFavoriteMixIds],
+    [authTokens?.user_id, setFavoriteMixIds, store],
   );
 
   return {

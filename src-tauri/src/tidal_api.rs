@@ -111,6 +111,16 @@ pub struct TidalTrack {
     pub mixes: Option<Value>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MixPageResult {
+    pub mix_id: String,
+    pub mix_type: Option<String>,
+    pub title: Option<String>,
+    pub subtitle: Option<String>,
+    pub tracks: Vec<TidalTrack>,
+}
+
 impl TidalTrack {
     /// If `artist` is None but `artists` has entries, fill from the first element.
     pub fn backfill_artist(&mut self) {
@@ -2647,73 +2657,6 @@ impl TidalClient {
         .await
     }
 
-    pub async fn get_track_radio(
-        &mut self,
-        track_id: u64,
-        limit: u32,
-    ) -> Result<Vec<TidalTrack>, SoneError> {
-        let cc = self.country_code.clone();
-
-        // Step 1: Fetch track detail to get mixes.TRACK_MIX
-        if let Ok(detail_body) = self
-            .api_get_body(&format!("/tracks/{}", track_id), &[("countryCode", &cc)])
-            .await
-        {
-            if let Ok(detail) = serde_json::from_str::<Value>(&detail_body) {
-                if let Some(track_mix_id) = detail
-                    .get("mixes")
-                    .and_then(|m| m.get("TRACK_MIX"))
-                    .and_then(|v| v.as_str())
-                {
-                    // Step 2: Use get_mix_items (pages/mix with legacy fallback)
-                    if let Ok(tracks) = self.get_mix_items(track_mix_id).await {
-                        if !tracks.is_empty() {
-                            return Ok(tracks);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Step 3: Fall back to legacy /tracks/{id}/radio
-        // 4xx errors mean "no radio available" — return empty vec instead of error.
-        match self.get_track_radio_legacy(track_id, limit).await {
-            Ok(tracks) => Ok(tracks),
-            Err(SoneError::Api { status, .. }) if (400..500).contains(&status) => Ok(vec![]),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Legacy track radio endpoint: `/tracks/{id}/radio`
-    async fn get_track_radio_legacy(
-        &mut self,
-        track_id: u64,
-        limit: u32,
-    ) -> Result<Vec<TidalTrack>, SoneError> {
-        let cc = self.country_code.clone();
-        let limit_str = limit.to_string();
-        let body = self
-            .api_get_body(
-                &format!("/tracks/{}/radio", track_id),
-                &[("countryCode", &cc), ("limit", &limit_str)],
-            )
-            .await?;
-
-        #[derive(Deserialize)]
-        struct RadioResponse {
-            items: Vec<TidalTrack>,
-        }
-
-        if let Ok(mut data) = serde_json::from_str::<RadioResponse>(&body) {
-            for t in &mut data.items {
-                t.backfill_artist();
-            }
-            return Ok(data.items);
-        }
-        serde_json::from_str::<Vec<TidalTrack>>(&body)
-            .map_err(|e| SoneError::Parse(format!("{} - Body: {}", e, body)))
-    }
-
     pub async fn search(
         &mut self,
         query: &str,
@@ -3712,36 +3655,68 @@ impl TidalClient {
 
     // ==================== Mix / Radio Items ====================
 
-    /// Parse tracks from a `pages/mix` JSON response body.
-    /// Finds the first `TRACK_LIST` module and extracts `pagedList.items`.
-    fn parse_mix_page_tracks(body: &str) -> Option<Vec<TidalTrack>> {
+    /// Parse a `pages/mix` JSON response body into a `MixPageResult`.
+    /// Extracts mix metadata from `MIX_HEADER` and tracks from `TRACK_LIST`.
+    fn parse_mix_page(mix_id: &str, body: &str) -> Option<MixPageResult> {
         let json: Value = serde_json::from_str(body).ok()?;
         let rows = json.get("rows")?.as_array()?;
+
+        let mut title: Option<String> = None;
+        let mut subtitle: Option<String> = None;
+        let mut mix_type: Option<String> = None;
+        let mut tracks: Vec<TidalTrack> = Vec::new();
+
         for row in rows {
-            let modules = row.get("modules")?.as_array()?;
+            let modules = row.get("modules").and_then(|m| m.as_array());
+            let Some(modules) = modules else { continue };
             for module in modules {
-                if module.get("type").and_then(|t| t.as_str()) == Some("TRACK_LIST") {
-                    let items = module.get("pagedList")?.get("items")?.as_array()?;
-                    let mut tracks: Vec<TidalTrack> = items
-                        .iter()
-                        .filter_map(|item| serde_json::from_value::<TidalTrack>(item.clone()).ok())
-                        .collect();
-                    for t in &mut tracks {
-                        t.backfill_artist();
+                let mod_type = module.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                match mod_type {
+                    "MIX_HEADER" => {
+                        if let Some(mix) = module.get("mix") {
+                            title = mix.get("title").and_then(|t| t.as_str()).map(String::from);
+                            subtitle = mix.get("subTitle").and_then(|s| s.as_str()).map(String::from);
+                            mix_type = mix.get("mixType").and_then(|t| t.as_str()).map(String::from);
+                        }
                     }
-                    return Some(tracks);
+                    "TRACK_LIST" => {
+                        if let Some(items) = module.get("pagedList")
+                            .and_then(|p| p.get("items"))
+                            .and_then(|i| i.as_array())
+                        {
+                            tracks = items
+                                .iter()
+                                .filter_map(|item| serde_json::from_value::<TidalTrack>(item.clone()).ok())
+                                .collect();
+                            for t in &mut tracks {
+                                t.backfill_artist();
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
-        None
+
+        if tracks.is_empty() {
+            return None;
+        }
+
+        Some(MixPageResult {
+            mix_id: mix_id.to_string(),
+            mix_type,
+            title,
+            subtitle,
+            tracks,
+        })
     }
 
     /// Fetch the tracks in a mix (custom mixes, radio stations, etc.)
     /// Tries `pages/mix` first, falls back to legacy `/mixes/{id}/items`.
-    pub async fn get_mix_items(&mut self, mix_id: &str) -> Result<Vec<TidalTrack>, SoneError> {
+    pub async fn get_mix_items(&mut self, mix_id: &str) -> Result<MixPageResult, SoneError> {
         let cc = self.country_code.clone();
 
-        // Primary: pages/mix endpoint (returns richer data, up to 100 tracks)
+        // Primary: pages/mix endpoint
         if let Ok(body) = self
             .api_get_body(
                 "/pages/mix",
@@ -3754,15 +3729,20 @@ impl TidalClient {
             )
             .await
         {
-            if let Some(tracks) = Self::parse_mix_page_tracks(&body) {
-                if !tracks.is_empty() {
-                    return Ok(tracks);
-                }
+            if let Some(result) = Self::parse_mix_page(mix_id, &body) {
+                return Ok(result);
             }
         }
 
-        // Fallback: legacy /mixes/{id}/items
-        self.get_mix_items_legacy(mix_id).await
+        // Fallback: legacy /mixes/{id}/items (no metadata available)
+        let tracks = self.get_mix_items_legacy(mix_id).await?;
+        Ok(MixPageResult {
+            mix_id: mix_id.to_string(),
+            mix_type: None,
+            title: None,
+            subtitle: None,
+            tracks,
+        })
     }
 
     /// Legacy mix endpoint: `/mixes/{id}/items`

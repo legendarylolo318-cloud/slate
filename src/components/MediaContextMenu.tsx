@@ -225,7 +225,12 @@ export default function MediaContextMenu({
           await removeFavoriteMix(item.mixId);
           showToast(`Removed "${itemLabel}" from library`);
         } else {
-          await addFavoriteMix(item.mixId);
+          await addFavoriteMix(item.mixId, {
+            id: item.mixId,
+            title: item.title,
+            subTitle: item.subtitle || "",
+            images: item.image ? { SMALL: { url: item.image }, MEDIUM: { url: item.image } } : undefined,
+          });
           showToast(`Added "${itemLabel}" to library`);
         }
       }

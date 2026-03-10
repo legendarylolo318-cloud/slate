@@ -77,19 +77,9 @@ export function useNavigation() {
   const navigateToMix = useCallback(
     (
       mixId: string,
-      mixInfo?: { title: string; image?: string; subtitle?: string },
+      mixInfo?: { title: string; image?: string; subtitle?: string; mixType?: string },
     ) => {
       navigate(setCurrentView, { type: "mix", mixId, mixInfo });
-    },
-    [setCurrentView],
-  );
-
-  const navigateToTrackRadio = useCallback(
-    (
-      trackId: number,
-      trackInfo?: { title: string; artistName?: string; cover?: string },
-    ) => {
-      navigate(setCurrentView, { type: "trackRadio", trackId, trackInfo });
     },
     [setCurrentView],
   );
@@ -130,7 +120,6 @@ export function useNavigation() {
     navigateToArtist,
     navigateToArtistTracks,
     navigateToMix,
-    navigateToTrackRadio,
     navigateToExplore,
     navigateToExplorePage,
     navigateToLibraryViewAll,

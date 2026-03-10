@@ -687,11 +687,28 @@ export async function getPlaylistTracksPage(
   );
 }
 
-export async function getMixItems(mixId: string): Promise<Track[]> {
+export interface MixPageResult {
+  mixId: string;
+  mixType: string | null;
+  title: string | null;
+  subtitle: string | null;
+  tracks: Track[];
+}
+
+export async function getMixItems(
+  mixId: string,
+): Promise<MixPageResult> {
   return cached(
-    `mix:${mixId}`,
-    ["mix"],
-    () => invoke<Track[]>("get_mix_items", { mixId }),
+    `mix-page:${mixId}`,
+    ["mix-page"],
+    async () => {
+      try {
+        return await invoke<MixPageResult>("get_mix_items", { mixId });
+      } catch (error: any) {
+        console.error("Failed to get mix items:", error);
+        throw error;
+      }
+    },
     TTL.MEDIUM,
   );
 }
@@ -707,7 +724,7 @@ export async function fetchMediaTracks(item: MediaItemType): Promise<Track[]> {
       return await getPlaylistTracks(item.uuid);
     }
     case "mix": {
-      return await getMixItems(item.mixId);
+      return (await getMixItems(item.mixId)).tracks;
     }
     case "artist": {
       return await getArtistTopTracks(item.id);
@@ -746,25 +763,6 @@ export async function getTrackCredits(trackId: number): Promise<Credit[]> {
       }
     },
     TTL.STATIC,
-  );
-}
-
-export async function getTrackRadio(
-  trackId: number,
-  limit: number = 20,
-): Promise<Track[]> {
-  return cached(
-    `track-radio:${trackId}:${limit}`,
-    ["track-radio"],
-    async () => {
-      try {
-        return await invoke<Track[]>("get_track_radio", { trackId, limit });
-      } catch (error: any) {
-        console.error("Failed to get track radio:", error);
-        throw error;
-      }
-    },
-    TTL.MEDIUM,
   );
 }
 

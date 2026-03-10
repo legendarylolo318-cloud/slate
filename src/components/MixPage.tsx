@@ -5,6 +5,7 @@ import {
   Shuffle,
   Heart,
   MoreHorizontal,
+  Radio,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useAtomValue } from "jotai";
@@ -19,7 +20,7 @@ import { DetailPageSkeleton } from "./PageSkeleton";
 
 interface MixPageProps {
   mixId: string;
-  mixInfo?: { title: string; image?: string; subtitle?: string };
+  mixInfo?: { title: string; image?: string; subtitle?: string; mixType?: string };
   onBack: () => void;
 }
 
@@ -38,6 +39,7 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [mixType, setMixType] = useState<string | null>(mixInfo?.mixType ?? null);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,9 +49,10 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
       setError(null);
 
       try {
-        const mixTracks = await getMixItems(mixId);
+        const result = await getMixItems(mixId);
         if (!cancelled) {
-          setTracks(mixTracks);
+          setTracks(result.tracks);
+          if (result.mixType) setMixType(result.mixType);
         }
       } catch (err: any) {
         if (!cancelled) {
@@ -81,10 +84,12 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
     [tracks],
   );
 
+  const isTrackRadio = mixType === "TRACK_MIX";
+
   const mixSource = {
-    type: "mix" as const,
+    type: isTrackRadio ? ("radio" as const) : ("mix" as const),
     id: mixId,
-    name: mixInfo?.title || "Mix",
+    name: mixInfo?.title || (isTrackRadio ? "Track Radio" : "Mix"),
     allTracks: tracks,
   };
 
@@ -143,7 +148,13 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
       if (mixFavorited) {
         await removeFavoriteMix(mixId);
       } else {
-        await addFavoriteMix(mixId);
+        await addFavoriteMix(mixId, {
+          id: mixId,
+          title: displayTitle,
+          subTitle: displaySubtitle || "",
+          mixType: mixType ?? undefined,
+          images: mixInfo?.image ? { SMALL: { url: mixInfo.image }, MEDIUM: { url: mixInfo.image } } : undefined,
+        });
       }
     } catch (err) {
       console.error("Failed to toggle mix favorite:", err);
@@ -167,8 +178,14 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
     return (
       <div className="flex-1 bg-linear-to-b from-th-surface to-th-base flex items-center justify-center">
         <div className="flex flex-col items-center gap-4 text-center px-8">
-          <Music size={48} className="text-th-text-disabled" />
-          <p className="text-white font-semibold text-lg">Couldn't load mix</p>
+          {isTrackRadio ? (
+            <Radio size={48} className="text-th-text-disabled" />
+          ) : (
+            <Music size={48} className="text-th-text-disabled" />
+          )}
+          <p className="text-white font-semibold text-lg">
+            {isTrackRadio ? "Couldn't load track radio" : "Couldn't load mix"}
+          </p>
           <p className="text-th-text-muted text-sm max-w-md">{error}</p>
           <button
             onClick={onBack}
@@ -184,23 +201,34 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
   return (
     <div className="flex-1 bg-linear-to-b from-th-surface to-th-base overflow-y-auto scrollbar-thin scrollbar-thumb-th-button scrollbar-track-transparent">
       <div className="px-8 pb-8 pt-8 flex items-end gap-7">
-        <div className="w-[232px] h-[232px] shrink-0 rounded-lg overflow-hidden shadow-2xl bg-th-surface-hover flex items-center justify-center">
+        <div className="w-[232px] h-[232px] shrink-0 rounded-lg overflow-hidden shadow-2xl bg-th-surface-hover flex items-center justify-center relative">
           {mixInfo?.image ? (
-            <img
-              src={mixInfo.image}
-              alt={displayTitle}
-              className="w-full h-full object-cover"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = "none";
-              }}
-            />
+            <>
+              <img
+                src={mixInfo.image}
+                alt={displayTitle}
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = "none";
+                }}
+              />
+              {isTrackRadio && (
+                <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                  <Radio size={64} className="text-white/80" />
+                </div>
+              )}
+            </>
           ) : (
-            <Music size={56} className="text-th-text-faint" />
+            isTrackRadio ? (
+              <Radio size={56} className="text-th-accent" />
+            ) : (
+              <Music size={56} className="text-th-text-faint" />
+            )
           )}
         </div>
         <div className="flex flex-col gap-2 pb-2 min-w-0">
           <span className="text-[12px] font-bold text-white/70 uppercase tracking-widest">
-            Mix
+            {isTrackRadio ? "Track Radio" : "Mix"}
           </span>
           <h1 className="text-[48px] font-extrabold text-white leading-none tracking-tight line-clamp-2">
             {displayTitle}
@@ -297,12 +325,18 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
 
         {tracks.length === 0 && (
           <div className="py-16 text-center">
-            <Music size={48} className="text-th-text-disabled mx-auto mb-4" />
+            {isTrackRadio ? (
+              <Radio size={48} className="text-th-text-disabled mx-auto mb-4" />
+            ) : (
+              <Music size={48} className="text-th-text-disabled mx-auto mb-4" />
+            )}
             <p className="text-white font-semibold text-lg mb-2">
-              This mix is empty
+              {isTrackRadio ? "No radio tracks found" : "This mix is empty"}
             </p>
             <p className="text-th-text-muted text-sm">
-              No tracks found in this mix.
+              {isTrackRadio
+                ? "We couldn't find similar tracks for this track."
+                : "No tracks found in this mix."}
             </p>
             <button
               onClick={onBack}

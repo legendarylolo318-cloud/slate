@@ -9,7 +9,6 @@ import ViewAllPage from "./components/ViewAllPage";
 import ArtistPage from "./components/ArtistPage";
 import ArtistTracksPage from "./components/ArtistTracksPage";
 import MixPage from "./components/MixPage";
-import TrackRadioPage from "./components/TrackRadioPage";
 import ExplorePage from "./components/ExplorePage";
 import ExploreSubPage from "./components/ExploreSubPage";
 import LibraryViewAll from "./components/LibraryViewAll";
@@ -157,15 +156,6 @@ function AppContent() {
             key={currentView.mixId}
             mixId={currentView.mixId}
             mixInfo={currentView.mixInfo}
-            onBack={navigateHome}
-          />
-        );
-      case "trackRadio":
-        return (
-          <TrackRadioPage
-            key={currentView.trackId}
-            trackId={currentView.trackId}
-            trackInfo={currentView.trackInfo}
             onBack={navigateHome}
           />
         );

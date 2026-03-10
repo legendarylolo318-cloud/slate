@@ -13,7 +13,7 @@ import { useFavorites } from "../hooks/useFavorites";
 import { useNavigation } from "../hooks/useNavigation";
 import { usePlaylists } from "../hooks/usePlaylists";
 import { useContextMenu } from "../hooks/useContextMenu";
-import type { Track } from "../types";
+import { getTidalImageUrl, type Track } from "../types";
 import AddToPlaylistMenu from "./AddToPlaylistMenu";
 import MenuPortal from "./MenuPortal";
 
@@ -43,7 +43,7 @@ export default function TrackContextMenu({
   const { addToQueue, playNextInQueue } = usePlaybackActions();
   const { favoriteTrackIds, addFavoriteTrack, removeFavoriteTrack } =
     useFavorites();
-  const { navigateToTrackRadio } = useNavigation();
+  const { navigateToMix } = useNavigation();
   const { removeTrackFromPlaylist } = usePlaylists();
   const { showToast } = useToast();
 
@@ -103,13 +103,16 @@ export default function TrackContextMenu({
   ]);
 
   const handleGoToTrackRadio = useCallback(() => {
-    navigateToTrackRadio(track.id, {
-      title: track.title,
-      artistName: track.artist?.name,
-      cover: track.album?.cover,
+    const trackMixId = track.mixes?.TRACK_MIX;
+    if (!trackMixId) return;
+    navigateToMix(trackMixId, {
+      title: `${track.title} Radio`,
+      image: track.album?.cover ? getTidalImageUrl(track.album.cover, 640) : undefined,
+      subtitle: `Based on ${track.artist?.name ?? ""}`,
+      mixType: "TRACK_MIX",
     });
     onClose();
-  }, [track, navigateToTrackRadio, onClose]);
+  }, [track, navigateToMix, onClose]);
 
   const handleRemoveFromPlaylist = useCallback(async () => {
     if (!playlistId) return;

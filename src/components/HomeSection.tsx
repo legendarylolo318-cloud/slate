@@ -130,6 +130,7 @@ export default function HomeSection({ section }: HomeSectionProps) {
           title: getItemTitle(item),
           image: getItemImage(item),
           subtitle: getItemSubtitle(item),
+          mixType: item.type || item.mixType,
         });
       }
     } else if (isArtistItem(item, section.sectionType)) {
@@ -282,7 +283,14 @@ export default function HomeSection({ section }: HomeSectionProps) {
                 if (favoriteMixIds.has(mixId)) {
                   removeFavoriteMix(mixId);
                 } else {
-                  addFavoriteMix(mixId);
+                  const img = getItemImage(item);
+                  addFavoriteMix(mixId, {
+                    id: mixId,
+                    title: getItemTitle(item),
+                    subTitle: getItemSubtitle(item),
+                    mixType: item.type || item.mixType,
+                    images: img ? { SMALL: { url: img }, MEDIUM: { url: img } } : undefined,
+                  });
                 }
               };
             }

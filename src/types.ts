@@ -169,12 +169,7 @@ export type AppView =
   | {
       type: "mix";
       mixId: string;
-      mixInfo?: { title: string; image?: string; subtitle?: string };
-    }
-  | {
-      type: "trackRadio";
-      trackId: number;
-      trackInfo?: { title: string; artistName?: string; cover?: string };
+      mixInfo?: { title: string; image?: string; subtitle?: string; mixType?: string };
     }
   | { type: "explore" }
   | { type: "explorePage"; apiPath: string; title: string }

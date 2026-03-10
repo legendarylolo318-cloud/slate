@@ -40,7 +40,7 @@ import { useNavigation } from "../hooks/useNavigation";
 import { useToast } from "../contexts/ToastContext";
 import { getInterpolatedPosition } from "../lib/playbackPosition";
 import {
-  getTrackRadio,
+  getMixItems,
   getTrackLyrics,
   getTrackCredits,
   getArtistBio,
@@ -102,7 +102,6 @@ const QueueTab = memo(function QueueTab({
     navigateToMix,
     navigateToArtistTracks,
     navigateToFavorites,
-    navigateToTrackRadio,
   } = useNavigation();
   const { setDrawerOpen } = useDrawer();
   const { showToast } = useToast();
@@ -141,7 +140,10 @@ const QueueTab = memo(function QueueTab({
         navigateToFavorites();
         break;
       case "radio":
-        navigateToTrackRadio(source.id as number);
+        navigateToMix(source.id.toString(), {
+          title: source.name,
+          mixType: "TRACK_MIX",
+        });
         break;
     }
   }, [
@@ -153,7 +155,6 @@ const QueueTab = memo(function QueueTab({
     navigateToArtist,
     navigateToArtistTracks,
     navigateToFavorites,
-    navigateToTrackRadio,
   ]);
 
   // Use refs so drag/drop handlers always read the current values
@@ -714,16 +715,22 @@ const SuggestedTab = memo(function SuggestedTab() {
     setLoading(true);
     setError(null);
 
-    getTrackRadio(currentTrack.id, 20)
-      .then((result) => {
-        if (active) setTracks(result);
-      })
-      .catch((err) => {
-        if (active) setError(String(err));
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+    const trackMixId = currentTrack.mixes?.TRACK_MIX;
+    if (trackMixId) {
+      getMixItems(trackMixId)
+        .then(({ tracks }) => {
+          if (active) setTracks(tracks);
+        })
+        .catch((err) => {
+          if (active) setError(String(err));
+        })
+        .finally(() => {
+          if (active) setLoading(false);
+        });
+    } else {
+      setTracks([]);
+      setLoading(false);
+    }
 
     return () => {
       active = false;

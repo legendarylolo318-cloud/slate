@@ -685,7 +685,6 @@ pub fn run() {
             commands::metadata::get_stream_url,
             commands::metadata::get_track_lyrics,
             commands::metadata::get_track_credits,
-            commands::metadata::get_track_radio,
             // playback
             commands::playback::play_tidal_track,
             commands::playback::pause_track,

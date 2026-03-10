@@ -26,7 +26,7 @@ import {
   shuffleAtom,
   repeatAtom,
 } from "../atoms/playback";
-import { getTrackRadio, checkNetworkError } from "../api/tidal";
+import { getMixItems, checkNetworkError } from "../api/tidal";
 import { useToast } from "../contexts/ToastContext";
 import { stampQid, stampQids, ensureQid } from "../lib/qid";
 import { notifySeek, getInterpolatedPosition } from "../lib/playbackPosition";
@@ -483,7 +483,9 @@ export function usePlaybackActions() {
           try {
             const historyIds = new Set(store.get(historyAtom).map((t) => t.id));
             historyIds.add(current.id);
-            const radio = await getTrackRadio(current.id, 30);
+            const trackMixId = current.mixes?.TRACK_MIX;
+            if (!trackMixId) return;
+            const { tracks: radio } = await getMixItems(trackMixId);
             const fresh = radio.filter((t) => !historyIds.has(t.id));
             if (fresh.length > 0) {
               const [next, ...rest] = fresh;

@@ -21,6 +21,10 @@ import { CreatePlaylistModal } from "./AddToPlaylistMenu";
 import { useState, useCallback, useMemo } from "react";
 import { useAtomValue } from "jotai";
 import { userPlaylistsAtom, favoritePlaylistsAtom } from "../atoms/playlists";
+import {
+  optimisticFavoriteMixesAtom,
+  favoriteMixIdsAtom,
+} from "../atoms/favorites";
 
 export default function Sidebar() {
   const {
@@ -111,6 +115,9 @@ export default function Sidebar() {
   });
 
   // Mixes
+  const optimisticMixes = useAtomValue(optimisticFavoriteMixesAtom);
+  const favoriteMixIds = useAtomValue(favoriteMixIdsAtom);
+
   const mixFetch = useCallback(async (offset: number, limit: number) => {
     return getFavoriteMixes(offset, limit);
   }, []);
@@ -126,6 +133,25 @@ export default function Sidebar() {
     pageSize: 20,
     enabled: activeFilter === "mixes" && !!authTokens?.user_id,
   });
+
+  // Merge optimistic mixes with paginated list, filter by current favorites
+  const allMixes = useMemo(() => {
+    const seen = new Set<string>();
+    const merged: typeof favoriteMixesList = [];
+    for (const m of optimisticMixes) {
+      if (!seen.has(m.id) && favoriteMixIds.has(m.id)) {
+        seen.add(m.id);
+        merged.push(m);
+      }
+    }
+    for (const m of favoriteMixesList) {
+      if (!seen.has(m.id) && favoriteMixIds.has(m.id)) {
+        seen.add(m.id);
+        merged.push(m);
+      }
+    }
+    return merged;
+  }, [optimisticMixes, favoriteMixesList, favoriteMixIds]);
 
   // Artists
   const artistFetch = useCallback(
@@ -557,7 +583,7 @@ export default function Sidebar() {
           ) : /* Mixes view */
           mixesLoading ? (
             <SidebarSkeleton count={5} />
-          ) : favoriteMixesList.length === 0 ? (
+          ) : allMixes.length === 0 ? (
             <div
               className={`px-3 py-8 text-center ${isCollapsed ? "hidden" : ""}`}
             >
@@ -567,7 +593,7 @@ export default function Sidebar() {
             </div>
           ) : (
             <div className="space-y-px">
-              {favoriteMixesList.map((mix) => (
+              {allMixes.map((mix) => (
                 <button
                   key={mix.id}
                   onClick={() =>
@@ -575,6 +601,7 @@ export default function Sidebar() {
                       title: mix.title,
                       image: mix.images?.MEDIUM?.url,
                       subtitle: mix.subTitle,
+                      mixType: mix.mixType,
                     })
                   }
                   onContextMenu={(e) => {
