@@ -514,13 +514,11 @@ export function usePlaybackActions() {
     if (playNextLockRef.current) return;
     playNextLockRef.current = true;
     try {
-    {
       const pos = getInterpolatedPosition();
       if (pos > 3) {
         await seekTo(0);
         return;
       }
-    }
 
     // Stop old pipeline to prevent stale track-finished events
     await invoke("stop_track").catch(() => {});
