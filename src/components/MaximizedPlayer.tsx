@@ -412,7 +412,7 @@ const MaximizedLyrics = memo(function MaximizedLyrics({ tier }: { tier: Tier }) 
       if (container && idx >= 0 && idx < els.length) {
         const el = els[idx];
         const scrollTarget = el.offsetTop - container.clientHeight / 2 + el.offsetHeight / 2;
-        container.scrollTo({ top: scrollTarget });
+        container.scrollTo({ top: scrollTarget, behavior: "smooth" });
       }
 
       activeLineRef.current = idx;

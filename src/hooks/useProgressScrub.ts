@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useAtomValue } from "jotai";
 import { currentTrackAtom, isPlayingAtom } from "../atoms/playback";
 import { usePlaybackActions } from "./usePlaybackActions";
-import { getInterpolatedPosition } from "../lib/playbackPosition";
+import { getInterpolatedPosition, notifySeek } from "../lib/playbackPosition";
 
 interface UseProgressScrubOptions {
   /** Ref to signal parent that a drag is in progress (for auto-hide) */
@@ -94,6 +94,7 @@ export function useProgressScrub(options?: UseProgressScrubOptions) {
         setIsDragging(false);
         if (isDraggingRef) isDraggingRef.current = false;
         onDragEnd?.();
+        notifySeek(finalTime);
         await seekTo(finalTime);
       };
 
