@@ -24,7 +24,7 @@
       <li>Volume normalization (ReplayGain) with automatic album/track switching</li>
       <li>Scrobble to Last.fm, Libre.fm, and ListenBrainz with ISRC and MusicBrainz metadata</li>
       <li>Synced lyrics display</li>
-      <li>Full-screen player with crossfade album art and auto-hiding controls</li>
+      <li>Full-screen player with album art, lyrics option and auto-hiding controls</li>
       <li>Custom themes with full color picker</li>
       <li>Queue persistence across restarts</li>
       <li>MPRIS media controls and system tray</li>
@@ -78,7 +78,7 @@
     <release version="0.9.0" date="2026-03-10">
       <description>
         <ul>
-          <li>Full-screen maximized player with crossfade album art, blurred background, and auto-hiding controls</li>
+          <li>Full-screen maximized player with album art, lyrics option, blurred background, and auto-hiding controls</li>
           <li>Karaoke-style synced lyrics in a two-column layout with responsive font sizing</li>
           <li>Instant track transitions with progressive album art loading</li>
           <li>Smoother interactions — GPU compositing and optimized state management eliminate lag in the maximized view</li>
