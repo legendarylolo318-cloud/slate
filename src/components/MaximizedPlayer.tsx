@@ -32,6 +32,7 @@ import TrackContextMenu from "./TrackContextMenu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { formatTime } from "../lib/format";
+import { getInterpolatedPosition } from "../lib/playbackPosition";
 import QualityBadge from "./QualityBadge";
 import VolumeSlider from "./VolumeSlider";
 import {
@@ -319,7 +320,6 @@ function useLyricsTier() {
 const MaximizedLyrics = memo(function MaximizedLyrics({ tier }: { tier: Tier }) {
   const currentTrack = useAtomValue(currentTrackAtom);
   const isPlaying = useAtomValue(isPlayingAtom);
-  const { getPlaybackPosition } = usePlaybackActions();
 
   const [lrcLines, setLrcLines] = useState<LrcLine[]>([]);
   const [loading, setLoading] = useState(true);
@@ -360,9 +360,7 @@ const MaximizedLyrics = memo(function MaximizedLyrics({ tier }: { tier: Tier }) 
     setLrcLines([]);
     activeLineRef.current = -1;
     if (containerRef.current) {
-      containerRef.current.style.scrollBehavior = "auto";
       containerRef.current.scrollTop = 0;
-      containerRef.current.style.scrollBehavior = "smooth";
     }
     setHasLyrics(false);
     setProvider(null);
@@ -389,7 +387,7 @@ const MaximizedLyrics = memo(function MaximizedLyrics({ tier }: { tier: Tier }) 
     return () => { active = false; };
   }, [currentTrack?.id]);
 
-  // Sync active line — 300ms polling, pure DOM updates
+  // Sync active line — rAF loop with interpolated position, pure DOM updates
   useEffect(() => {
     if (lrcLines.length === 0 || !isPlaying) return;
 
@@ -420,8 +418,9 @@ const MaximizedLyrics = memo(function MaximizedLyrics({ tier }: { tier: Tier }) 
       activeLineRef.current = idx;
     };
 
-    const sync = async () => {
-      const pos = await getPlaybackPosition();
+    let rafId: number;
+    const tick = () => {
+      const pos = getInterpolatedPosition();
       let idx = -1;
       for (let i = lrcLines.length - 1; i >= 0; i--) {
         if (pos >= lrcLines[i].time) {
@@ -430,12 +429,12 @@ const MaximizedLyrics = memo(function MaximizedLyrics({ tier }: { tier: Tier }) 
         }
       }
       applyLine(idx);
+      rafId = requestAnimationFrame(tick);
     };
 
-    sync();
-    const interval = setInterval(sync, 300);
-    return () => clearInterval(interval);
-  }, [lrcLines, isPlaying, getPlaybackPosition, lh, baseCls]);
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [lrcLines, isPlaying, lh, baseCls]);
 
   if (loading) {
     return (
@@ -466,7 +465,6 @@ const MaximizedLyrics = memo(function MaximizedLyrics({ tier }: { tier: Tier }) 
       className="relative h-full overflow-y-auto pointer-events-none no-scrollbar"
       dir={isRtl ? "rtl" : "ltr"}
       style={{
-        scrollBehavior: "smooth",
         maskImage: "linear-gradient(to bottom, transparent 0%, black 50%, black 80%, transparent 100%)",
         WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, black 50%, black 80%, transparent 100%)",
       }}
