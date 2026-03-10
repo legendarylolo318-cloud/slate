@@ -10,11 +10,12 @@ import {
   Mic2,
   Infinity as InfinityIcon,
   Maximize2,
+  MoreHorizontal,
 } from "lucide-react";
 import { getTidalImageUrl } from "../types";
 import { formatTime } from "../lib/format";
 import TidalImage from "./TidalImage";
-import { useCallback, memo } from "react";
+import { useCallback, useRef, useState, memo } from "react";
 import { useAtomValue, useAtom, useSetAtom } from "jotai";
 import {
   currentTrackAtom,
@@ -33,6 +34,7 @@ import { useNavigation } from "../hooks/useNavigation";
 import { TrackArtists } from "./TrackArtists";
 import QualityBadge from "./QualityBadge";
 import VolumeSlider from "./VolumeSlider";
+import TrackContextMenu from "./TrackContextMenu";
 
 // ─── TrackInfoSection ──────────────────────────────────────────────────────
 
@@ -117,6 +119,37 @@ const FavoriteButton = memo(function FavoriteButton() {
         strokeWidth={isLiked ? 0 : 2}
       />
     </button>
+  );
+});
+
+// ─── ContextMenuButton ────────────────────────────────────────────────────
+
+const ContextMenuButton = memo(function ContextMenuButton() {
+  const currentTrack = useAtomValue(currentTrackAtom);
+  const [showMenu, setShowMenu] = useState(false);
+  const anchorRef = useRef<HTMLButtonElement>(null);
+
+  if (!currentTrack) return null;
+
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        onClick={() => setShowMenu(true)}
+        className="ml-0.5 flex-shrink-0 text-th-text-faint hover:text-white transition-colors duration-200 active:scale-90"
+        title="More options"
+      >
+        <MoreHorizontal size={16} />
+      </button>
+      {showMenu && (
+        <TrackContextMenu
+          track={currentTrack}
+          index={0}
+          anchorRef={anchorRef}
+          onClose={() => setShowMenu(false)}
+        />
+      )}
+    </>
   );
 });
 
@@ -335,6 +368,7 @@ export default function PlayerBar() {
       <div className="flex items-center gap-3 w-[30%] min-w-[180px]">
         <TrackInfoSection />
         <FavoriteButton />
+        <ContextMenuButton />
       </div>
 
       {/* Center: Controls + Scrubber */}
