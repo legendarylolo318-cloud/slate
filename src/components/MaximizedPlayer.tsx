@@ -359,6 +359,11 @@ const MaximizedLyrics = memo(function MaximizedLyrics({ tier }: { tier: Tier }) 
     setLoading(true);
     setLrcLines([]);
     activeLineRef.current = -1;
+    if (containerRef.current) {
+      containerRef.current.style.scrollBehavior = "auto";
+      containerRef.current.scrollTop = 0;
+      containerRef.current.style.scrollBehavior = "smooth";
+    }
     setHasLyrics(false);
     setProvider(null);
     setIsRtl(false);
