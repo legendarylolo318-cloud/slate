@@ -75,6 +75,7 @@ import type {
   PlaybackSnapshot,
 } from "../types";
 import { getTidalImageUrl } from "../types";
+import { getTrackArtistDisplay } from "../utils/itemHelpers";
 import { ensureQid, advanceCounterPast } from "../lib/qid";
 import {
   initPositionInterpolator,
@@ -610,7 +611,7 @@ export function AppInitializer() {
     const updateTooltip = () => {
       const track = store.get(currentTrackAtom);
       const text = track
-        ? `${track.title} — ${track.artist?.name || "Unknown"}`
+        ? `${track.title} — ${getTrackArtistDisplay(track)}`
         : "Sone";
       invoke("update_tray_tooltip", { text })
         .then((r) => console.log("[tray tooltip]", text, "→", r))
@@ -634,7 +635,7 @@ export function AppInitializer() {
       invoke("update_mpris_metadata", {
         metadata: {
           title: track.title,
-          artist: track.artist?.name || "Unknown",
+          artist: getTrackArtistDisplay(track),
           album: track.album?.title || "",
           artUrl: getTidalImageUrl(track.album?.cover, 320),
           durationSecs: track.duration,

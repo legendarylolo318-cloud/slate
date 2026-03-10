@@ -33,6 +33,7 @@ import { notifySeek, getInterpolatedPosition } from "../lib/playbackPosition";
 import type { Track, StreamInfo } from "../types";
 import { getTidalImageUrl } from "../types";
 import { preloadImage } from "../components/TidalImage";
+import { getTrackArtistDisplay } from "../utils/itemHelpers";
 
 /** Normalize a raw track-like object into a proper Track.
  *  Handles the artist/artists mismatch from different API endpoints. */
@@ -157,7 +158,7 @@ export function usePlaybackActions() {
         // Notify backend for scrobbling
         invoke("notify_track_started", {
           payload: {
-            artist: stamped.artist?.name || "Unknown",
+            artist: getTrackArtistDisplay(stamped),
             title: stamped.title,
             album: stamped.album?.title || null,
             albumArtist: null,
@@ -220,7 +221,7 @@ export function usePlaybackActions() {
         // Notify backend so the replay is scrobbled
         invoke("notify_track_started", {
           payload: {
-            artist: track.artist?.name || "Unknown",
+            artist: getTrackArtistDisplay(track),
             title: track.title,
             album: track.album?.title || null,
             albumArtist: null,
@@ -386,7 +387,7 @@ export function usePlaybackActions() {
             store.set(isPlayingAtom, true);
             invoke("notify_track_started", {
               payload: {
-                artist: current.artist?.name || "Unknown",
+                artist: getTrackArtistDisplay(current),
                 title: current.title,
                 album: current.album?.title || null,
                 albumArtist: null,
@@ -583,7 +584,7 @@ export function usePlaybackActions() {
         // Notify backend for scrobbling
         invoke("notify_track_started", {
           payload: {
-            artist: prevTrack.artist?.name || "Unknown",
+            artist: getTrackArtistDisplay(prevTrack),
             title: prevTrack.title,
             album: prevTrack.album?.title || null,
             albumArtist: null,
@@ -667,7 +668,7 @@ export function usePlaybackActions() {
             // Notify backend for scrobbling
             invoke("notify_track_started", {
               payload: {
-                artist: prevTrack.artist?.name || "Unknown",
+                artist: getTrackArtistDisplay(prevTrack),
                 title: prevTrack.title,
                 album: prevTrack.album?.title || null,
                 albumArtist: null,

@@ -18,6 +18,7 @@ import {
 import MediaContextMenu from "./MediaContextMenu";
 import TrackContextMenu from "./TrackContextMenu";
 import MediaCard from "./MediaCard";
+import { TrackArtists } from "./TrackArtists";
 import {
   getItemImage,
   getItemTitle,
@@ -345,7 +346,7 @@ function TrackListSection({
   items: any[];
 }) {
   const { playFromSource } = usePlaybackActions();
-  const { navigateToAlbum, navigateToArtist, navigateToViewAll } =
+  const { navigateToAlbum, navigateToViewAll } =
     useNavigation();
   const [trackContextMenu, setTrackContextMenu] = useState<{
     track: any;
@@ -438,20 +439,12 @@ function TrackListSection({
               </p>
               <p className="text-[12px] text-th-text-muted truncate">
                 {(item.artist || item.artists?.[0]) && (
-                  <span
+                  <TrackArtists
+                    artists={item.artists}
+                    artist={item.artist}
                     className="hover:underline cursor-pointer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const artistId = item.artist?.id || item.artists?.[0]?.id;
-                      const artistName =
-                        item.artist?.name || item.artists?.[0]?.name;
-                      if (artistId) {
-                        navigateToArtist(artistId, { name: artistName });
-                      }
-                    }}
-                  >
-                    {item.artist?.name || item.artists?.[0]?.name || ""}
-                  </span>
+                    fallback=""
+                  />
                 )}
                 {item.followInfo && (
                   <span className="ml-1 text-th-accent">+</span>
@@ -493,7 +486,7 @@ function CompactGridSection({
   items: any[];
   onItemClick: (item: any) => void;
 }) {
-  const { navigateToViewAll, navigateToAlbum, navigateToArtist } =
+  const { navigateToViewAll, navigateToAlbum } =
     useNavigation();
   const displayItems = items.slice(0, 16);
 
@@ -650,21 +643,12 @@ function CompactGridSection({
                   {myTracks ? (
                     "Collection"
                   ) : isTrack && (item.artist || item.artists?.[0]) ? (
-                    <span
+                    <TrackArtists
+                      artists={item.artists}
+                      artist={item.artist}
                       className="hover:underline cursor-pointer"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const artistId =
-                          item.artist?.id || item.artists?.[0]?.id;
-                        const artistName =
-                          item.artist?.name || item.artists?.[0]?.name;
-                        if (artistId) {
-                          navigateToArtist(artistId, { name: artistName });
-                        }
-                      }}
-                    >
-                      {item.artist?.name || item.artists?.[0]?.name || ""}
-                    </span>
+                      fallback=""
+                    />
                   ) : (
                     getItemSubtitle(item)
                   )}

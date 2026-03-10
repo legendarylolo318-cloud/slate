@@ -72,9 +72,9 @@ export function getItemSubtitle(item: any, userId?: number): string {
   if (item.subtitleTextInfo?.text) return item.subtitleTextInfo.text;
   if (item.subTitleTextInfo?.text) return item.subTitleTextInfo.text;
   if (item.shortSubtitleTextInfo?.text) return item.shortSubtitleTextInfo.text;
-  if (item.artist?.name) return item.artist.name;
   if (item.artists && item.artists.length > 0)
     return item.artists.map((a: any) => a.name).join(", ");
+  if (item.artist?.name) return item.artist.name;
   if (item.creator) {
     const creatorLabel =
       userId != null && item.creator.id === userId
@@ -195,4 +195,12 @@ export function buildMediaItem(
     };
   }
   return null;
+}
+
+/** Return comma-separated artist names for a track (plain text, no links). */
+export function getTrackArtistDisplay(track: { artist?: { name?: string }; artists?: { name: string }[] }): string {
+  if (track.artists && track.artists.length > 0) {
+    return track.artists.map((a) => a.name).join(", ");
+  }
+  return track.artist?.name || "Unknown Artist";
 }

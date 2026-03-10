@@ -38,6 +38,13 @@ export interface Track {
     artistType?: string;
     handle?: string;
   };
+  artists?: {
+    id: number;
+    name: string;
+    picture?: string;
+    artistType?: string;
+    handle?: string;
+  }[];
   album?: {
     id: number;
     title: string;
@@ -86,6 +93,13 @@ export interface AlbumDetail {
     artistType?: string;
     handle?: string;
   };
+  artists?: {
+    id: number;
+    name: string;
+    picture?: string;
+    artistType?: string;
+    handle?: string;
+  }[];
   numberOfTracks?: number;
   numberOfVideos?: number;
   numberOfVolumes?: number;

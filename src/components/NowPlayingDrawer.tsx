@@ -54,6 +54,8 @@ import {
 } from "../types";
 import TidalImage from "./TidalImage";
 import TrackContextMenu from "./TrackContextMenu";
+import { TrackArtists, type ArtistInfo } from "./TrackArtists";
+import { getTrackArtistDisplay } from "../utils/itemHelpers";
 
 type TabId = "queue" | "suggested" | "lyrics" | "credits";
 
@@ -238,12 +240,12 @@ const QueueTab = memo(function QueueTab({
   );
 
   const handleArtistClick = useCallback(
-    (track: Track) => {
-      if (track.artist?.id) {
+    (artist: ArtistInfo) => {
+      if (artist.id) {
         setDrawerOpen(false);
-        navigateToArtist(track.artist.id, {
-          name: track.artist.name,
-          picture: track.artist.picture,
+        navigateToArtist(artist.id, {
+          name: artist.name,
+          picture: artist.picture,
         });
       }
     },
@@ -269,8 +271,8 @@ const QueueTab = memo(function QueueTab({
     (track: Track) => ({
       isFav: favoriteTrackIds.has(track.id),
       onToggleFavorite: () => handleToggleFavorite(track.id, track),
-      onArtistClick: track.artist?.id
-        ? () => handleArtistClick(track)
+      onArtistClick: (track.artist?.id || track.artists?.[0]?.id)
+        ? handleArtistClick
         : undefined,
       onAlbumClick: track.album?.id ? () => handleAlbumClick(track) : undefined,
     }),
@@ -514,7 +516,7 @@ function SuggestedTrackRow({
   onPlay: (track: Track) => void;
   onAddToQueue: (track: Track) => void;
   onToggleFavorite: (trackId: number, isFav: boolean, track?: Track) => void;
-  onArtistClick?: (track: Track) => void;
+  onArtistClick?: (artist: ArtistInfo) => void;
   onAlbumClick?: (track: Track) => void;
 }) {
   // Context menu state — lightweight, no heavy hooks
@@ -603,19 +605,12 @@ function SuggestedTrackRow({
             {track.title}
           </p>
           <p className="text-[11px] text-th-text-muted truncate">
-            {track.artist?.name ? (
-              <span
-                className="hover:text-white hover:underline cursor-pointer"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onArtistClick?.(track);
-                }}
-              >
-                {track.artist.name}
-              </span>
-            ) : (
-              "Unknown Artist"
-            )}
+            <TrackArtists
+              artists={track.artists}
+              artist={track.artist}
+              className="hover:text-white hover:underline cursor-pointer"
+              onArtistClick={onArtistClick}
+            />
             {track.album?.title && (
               <>
                 <span className="mx-1">&middot;</span>
@@ -764,12 +759,12 @@ const SuggestedTab = memo(function SuggestedTab() {
   );
 
   const handleArtistClick = useCallback(
-    (track: Track) => {
-      if (track.artist?.id) {
+    (artist: ArtistInfo) => {
+      if (artist.id) {
         setDrawerOpen(false);
-        navigateToArtist(track.artist.id, {
-          name: track.artist.name,
-          picture: track.artist.picture,
+        navigateToArtist(artist.id, {
+          name: artist.name,
+          picture: artist.picture,
         });
       }
     },
@@ -1190,7 +1185,7 @@ const CreditsTab = memo(function CreditsTab() {
           <CreditRow label="Title" value={currentTrack.title} first />
           <CreditRow
             label="Artists"
-            value={currentTrack.artist?.name || "Unknown"}
+            value={getTrackArtistDisplay(currentTrack)}
           />
           {currentTrack.album?.title && (
             <CreditRow label="Album" value={currentTrack.album.title} />
@@ -1288,7 +1283,7 @@ function TrackRow({
   onRemove?: () => void;
   isFav?: boolean;
   onToggleFavorite?: () => void;
-  onArtistClick?: () => void;
+  onArtistClick?: (artist: ArtistInfo) => void;
   onAlbumClick?: () => void;
 }) {
   const [contextMenu, setContextMenu] = useState<{
@@ -1342,27 +1337,16 @@ function TrackRow({
             {track.title}
           </p>
           <p className="text-[11px] text-th-text-muted truncate">
-            {track.artist?.name ? (
-              <span
-                className={
-                  onArtistClick
-                    ? "hover:text-white hover:underline cursor-pointer"
-                    : ""
-                }
-                onClick={
-                  onArtistClick
-                    ? (e) => {
-                        e.stopPropagation();
-                        onArtistClick();
-                      }
-                    : undefined
-                }
-              >
-                {track.artist.name}
-              </span>
-            ) : (
-              "Unknown Artist"
-            )}
+            <TrackArtists
+              artists={track.artists}
+              artist={track.artist}
+              className={
+                onArtistClick
+                  ? "hover:text-white hover:underline cursor-pointer"
+                  : ""
+              }
+              onArtistClick={onArtistClick}
+            />
             {track.album?.title && (
               <>
                 <span className="mx-1">&middot;</span>
@@ -1551,7 +1535,7 @@ export default function NowPlayingDrawer() {
               {currentTrack.title}
             </h2>
             <p className="text-[15px] text-th-text-muted truncate mt-1">
-              {currentTrack.artist?.name || "Unknown Artist"}
+              {getTrackArtistDisplay(currentTrack)}
             </p>
           </div>
         </div>

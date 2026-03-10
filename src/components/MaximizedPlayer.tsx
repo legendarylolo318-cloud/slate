@@ -34,6 +34,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { formatTime } from "../lib/format";
 import { getInterpolatedPosition } from "../lib/playbackPosition";
 import QualityBadge from "./QualityBadge";
+import { getTrackArtistDisplay } from "../utils/itemHelpers";
 import VolumeSlider from "./VolumeSlider";
 import {
   addTrackToFavoritesCache,
@@ -134,7 +135,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
   resetHideTimer,
   setMaximized,
 }: {
-  currentTrack: { title: string; artist?: { name?: string }; album?: { cover?: string; title?: string } };
+  currentTrack: { title: string; artist?: { name?: string }; artists?: { name: string }[]; album?: { cover?: string; title?: string } };
   controlsVisible: boolean;
   isDraggingRef: React.MutableRefObject<boolean>;
   resetHideTimer: () => void;
@@ -164,7 +165,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
               {currentTrack.title}
             </span>
             <span className="text-th-text-secondary text-[11px] truncate">
-              {currentTrack.artist?.name || "Unknown Artist"}
+              {getTrackArtistDisplay(currentTrack)}
             </span>
           </div>
         </div>
@@ -695,7 +696,7 @@ export default function MaximizedPlayer() {
               {currentTrack.title}
             </span>
             <span className="text-th-text-muted truncate max-w-full" style={{ fontSize: TIER_CONFIG[lyricsTier].artistSize }}>
-              {currentTrack.artist?.name || "Unknown Artist"}
+              {getTrackArtistDisplay(currentTrack)}
             </span>
           </div>
 

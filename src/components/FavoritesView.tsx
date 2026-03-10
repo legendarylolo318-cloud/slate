@@ -174,7 +174,8 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
     tracks.forEach((t, i) => {
       if (
         t.title.toLowerCase().includes(q) ||
-        t.artist?.name?.toLowerCase().includes(q) ||
+        (t.artist?.name?.toLowerCase().includes(q) ||
+          t.artists?.some((a) => a.name?.toLowerCase().includes(q))) ||
         t.album?.title?.toLowerCase().includes(q)
       ) {
         filtered.push(t);

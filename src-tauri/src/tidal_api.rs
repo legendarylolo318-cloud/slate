@@ -68,8 +68,8 @@ pub struct TidalTrack {
     #[serde(default)]
     pub artist: Option<TidalArtist>,
     /// Some endpoints return `artists` (plural array) instead of / in addition to `artist`.
-    #[serde(default, skip_serializing)]
-    artists: Option<Vec<TidalArtist>>,
+    #[serde(default)]
+    pub artists: Option<Vec<TidalArtist>>,
     #[serde(default)]
     pub album: Option<TidalAlbum>,
     #[serde(default)]

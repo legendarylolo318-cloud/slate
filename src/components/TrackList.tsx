@@ -9,6 +9,7 @@ import { currentTrackAtom, isPlayingAtom } from "../atoms/playback";
 import { favoriteTrackIdsAtom } from "../atoms/favorites";
 import { useNavigation } from "../hooks/useNavigation";
 import { useFavorites } from "../hooks/useFavorites";
+import { TrackArtists } from "./TrackArtists";
 
 interface TrackListProps {
   tracks: Track[];
@@ -91,7 +92,7 @@ const TrackRow = memo(function TrackRow({
   onTrackRemoved,
 }: TrackRowProps) {
   const favoriteTrackIds = useAtomValue(favoriteTrackIdsAtom);
-  const { navigateToAlbum, navigateToArtist } = useNavigation();
+  const { navigateToAlbum } = useNavigation();
   const { addFavoriteTrack, removeFavoriteTrack } = useFavorites();
 
   const [playlistMenuOpen, setPlaylistMenuOpen] = useState(false);
@@ -205,19 +206,12 @@ const TrackRow = memo(function TrackRow({
             {track.title}
           </span>
           {!showArtist && (
-            <span
-              className="text-[13px] text-th-text-muted truncate leading-snug hover:text-white hover:underline transition-colors cursor-pointer"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (track.artist?.id) {
-                  navigateToArtist(track.artist.id, {
-                    name: track.artist.name,
-                    picture: track.artist.picture,
-                  });
-                }
-              }}
-            >
-              {track.artist?.name || "Unknown Artist"}
+            <span className="text-[13px] text-th-text-muted truncate leading-snug">
+              <TrackArtists
+                artists={track.artists}
+                artist={track.artist}
+                className="hover:text-white hover:underline transition-colors cursor-pointer"
+              />
             </span>
           )}
         </div>
@@ -226,19 +220,12 @@ const TrackRow = memo(function TrackRow({
       {/* Artist (Column) */}
       {showArtist && (
         <div className="flex items-center min-w-0">
-          <span
-            className="text-[14px] text-th-text-muted truncate hover:text-white hover:underline transition-colors cursor-pointer"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (track.artist?.id) {
-                navigateToArtist(track.artist.id, {
-                  name: track.artist.name,
-                  picture: track.artist.picture,
-                });
-              }
-            }}
-          >
-            {track.artist?.name || "Unknown Artist"}
+          <span className="text-[14px] text-th-text-muted truncate">
+            <TrackArtists
+              artists={track.artists}
+              artist={track.artist}
+              className="hover:text-white hover:underline transition-colors cursor-pointer"
+            />
           </span>
         </div>
       )}
