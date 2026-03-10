@@ -24,6 +24,7 @@
       <li>Volume normalization (ReplayGain) with automatic album/track switching</li>
       <li>Scrobble to Last.fm, Libre.fm, and ListenBrainz with ISRC and MusicBrainz metadata</li>
       <li>Synced lyrics display</li>
+      <li>Full-screen player with crossfade album art and auto-hiding controls</li>
       <li>Custom themes with full color picker</li>
       <li>Queue persistence across restarts</li>
       <li>MPRIS media controls and system tray</li>
@@ -47,7 +48,7 @@
   <screenshots>
     <screenshot type="default">
       <image>https://raw.githubusercontent.com/lullabyX/sone/master/data/sone_drawer_metainfo.png</image>
-      <caption>Now playing drawer with synced lyrics</caption>
+      <caption>Now playing drawer with play queue</caption>
     </screenshot>
     <screenshot>
       <image>https://raw.githubusercontent.com/lullabyX/sone/master/data/sone_fullscreen_metainfo.png</image>
