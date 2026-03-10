@@ -29,6 +29,7 @@ import {
 import { getTrackRadio, checkNetworkError } from "../api/tidal";
 import { useToast } from "../contexts/ToastContext";
 import { stampQid, stampQids, ensureQid } from "../lib/qid";
+import { notifySeek } from "../lib/playbackPosition";
 import type { Track, StreamInfo } from "../types";
 import { getTidalImageUrl } from "../types";
 import { preloadImage } from "../components/TidalImage";
@@ -273,6 +274,7 @@ export function usePlaybackActions() {
   const seekTo = useCallback(async (positionSecs: number) => {
     try {
       await invoke("seek_track", { positionSecs });
+      notifySeek(positionSecs);
     } catch (error) {
       console.error("Failed to seek:", error);
     }
