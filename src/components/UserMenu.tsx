@@ -167,7 +167,7 @@ export default function UserMenu() {
                 <User size={16} className="text-th-text-muted" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-[13px] font-medium text-white truncate">
+                <p className="text-[13px] font-medium text-th-text-primary truncate">
                   {userName}
                 </p>
               </div>
@@ -179,7 +179,7 @@ export default function UserMenu() {
           {/* Autoplay */}
           <button
             onClick={() => setAutoplay(!autoplay)}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-colors"
           >
             <InfinityIcon size={16} />
             <span className="flex-1 text-left">Autoplay</span>
@@ -189,7 +189,7 @@ export default function UserMenu() {
               }`}
             >
               <div
-                className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
+                className={`w-3.5 h-3.5 rounded-full bg-th-text-primary mt-[2px] transition-transform ${
                   autoplay ? "translate-x-[16px]" : "translate-x-[2px]"
                 }`}
               />
@@ -209,7 +209,7 @@ export default function UserMenu() {
             className={`w-full flex items-center gap-3 px-4 py-2.5 text-[13px] transition-colors ${
               bitPerfect
                 ? "text-th-text-muted cursor-not-allowed opacity-50"
-                : "text-th-text-secondary hover:text-white hover:bg-th-border-subtle"
+                : "text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle"
             }`}
           >
             <Volume2 size={16} />
@@ -220,7 +220,7 @@ export default function UserMenu() {
               }`}
             >
               <div
-                className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
+                className={`w-3.5 h-3.5 rounded-full bg-th-text-primary mt-[2px] transition-transform ${
                   volumeNormalization
                     ? "translate-x-[16px]"
                     : "translate-x-[2px]"
@@ -244,7 +244,7 @@ export default function UserMenu() {
                   : "Exclusive output off — takes effect next track",
               );
             }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-colors"
           >
             <Headphones size={16} />
             <span className="flex-1 text-left">Exclusive output</span>
@@ -254,7 +254,7 @@ export default function UserMenu() {
               }`}
             >
               <div
-                className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
+                className={`w-3.5 h-3.5 rounded-full bg-th-text-primary mt-[2px] transition-transform ${
                   exclusiveMode ? "translate-x-[16px]" : "translate-x-[2px]"
                 }`}
               />
@@ -318,7 +318,7 @@ export default function UserMenu() {
                     : "Bit-perfect off — takes effect next track",
                 );
               }}
-              className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-colors"
             >
               <Shield size={16} />
               <span className="flex-1 text-left">Bit-perfect</span>
@@ -328,7 +328,7 @@ export default function UserMenu() {
                 }`}
               >
                 <div
-                  className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
+                  className={`w-3.5 h-3.5 rounded-full bg-th-text-primary mt-[2px] transition-transform ${
                     bitPerfect ? "translate-x-[16px]" : "translate-x-[2px]"
                   }`}
                 />
@@ -342,7 +342,7 @@ export default function UserMenu() {
               setOpen(false);
               setScrobbleOpen(true);
             }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-colors"
           >
             <Radio size={16} />
             Scrobbling
@@ -357,7 +357,7 @@ export default function UserMenu() {
               setOpen(false);
               setThemeOpen(true);
             }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-colors"
           >
             <Palette size={16} />
             Theme
@@ -373,7 +373,7 @@ export default function UserMenu() {
                 showToast("Failed to update window decorations");
               });
             }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-colors"
           >
             <AppWindow size={16} />
             <span className="flex-1 text-left">Window decorations</span>
@@ -383,7 +383,7 @@ export default function UserMenu() {
               }`}
             >
               <div
-                className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
+                className={`w-3.5 h-3.5 rounded-full bg-th-text-primary mt-[2px] transition-transform ${
                   decorations ? "translate-x-[16px]" : "translate-x-[2px]"
                 }`}
               />
@@ -397,7 +397,7 @@ export default function UserMenu() {
               setMinimizeToTray(next);
               invoke("set_minimize_to_tray", { enabled: next }).catch(() => {});
             }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-colors"
           >
             <MonitorDown size={16} />
             <span className="flex-1 text-left">Close to tray</span>
@@ -407,7 +407,7 @@ export default function UserMenu() {
               }`}
             >
               <div
-                className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
+                className={`w-3.5 h-3.5 rounded-full bg-th-text-primary mt-[2px] transition-transform ${
                   minimizeToTray ? "translate-x-[16px]" : "translate-x-[2px]"
                 }`}
               />
@@ -420,7 +420,7 @@ export default function UserMenu() {
           {/* Proxy toggle */}
           <button
             onClick={() => updateProxy({ enabled: !proxySettings.enabled })}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-colors"
           >
             <Globe size={16} />
             <span className="flex-1 text-left">Proxy</span>
@@ -430,7 +430,7 @@ export default function UserMenu() {
               }`}
             >
               <div
-                className={`w-3.5 h-3.5 rounded-full bg-white mt-[2px] transition-transform ${
+                className={`w-3.5 h-3.5 rounded-full bg-th-text-primary mt-[2px] transition-transform ${
                   proxySettings.enabled
                     ? "translate-x-[16px]"
                     : "translate-x-[2px]"
@@ -467,7 +467,7 @@ export default function UserMenu() {
                     placeholder="Host"
                     value={proxySettings.host}
                     onChange={(e) => updateProxy({ host: e.target.value })}
-                    className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md bg-th-inset border border-th-border-subtle text-[12px] text-white placeholder:text-th-text-muted focus:border-th-accent/50 focus:outline-none"
+                    className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md bg-th-inset border border-th-border-subtle text-[12px] text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent/50 focus:outline-none"
                   />
                   <input
                     type="number"
@@ -476,7 +476,7 @@ export default function UserMenu() {
                     onChange={(e) =>
                       updateProxy({ port: parseInt(e.target.value) || 0 })
                     }
-                    className="w-20 px-2.5 py-1.5 rounded-md bg-th-inset border border-th-border-subtle text-[12px] text-white placeholder:text-th-text-muted focus:border-th-accent/50 focus:outline-none"
+                    className="w-20 px-2.5 py-1.5 rounded-md bg-th-inset border border-th-border-subtle text-[12px] text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent/50 focus:outline-none"
                   />
                 </div>
 
@@ -490,7 +490,7 @@ export default function UserMenu() {
                       username: e.target.value || null,
                     })
                   }
-                  className="w-full px-2.5 py-1.5 rounded-md bg-th-inset border border-th-border-subtle text-[12px] text-white placeholder:text-th-text-muted focus:border-th-accent/50 focus:outline-none"
+                  className="w-full px-2.5 py-1.5 rounded-md bg-th-inset border border-th-border-subtle text-[12px] text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent/50 focus:outline-none"
                 />
                 <input
                   type="password"
@@ -501,7 +501,7 @@ export default function UserMenu() {
                       password: e.target.value || null,
                     })
                   }
-                  className="w-full px-2.5 py-1.5 rounded-md bg-th-inset border border-th-border-subtle text-[12px] text-white placeholder:text-th-text-muted focus:border-th-accent/50 focus:outline-none"
+                  className="w-full px-2.5 py-1.5 rounded-md bg-th-inset border border-th-border-subtle text-[12px] text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent/50 focus:outline-none"
                 />
 
                 {/* Test button */}
@@ -512,7 +512,7 @@ export default function UserMenu() {
                     !proxySettings.host ||
                     !proxySettings.port
                   }
-                  className="w-full py-1.5 rounded-md text-[12px] font-medium border border-th-border-subtle text-th-text-secondary hover:text-white hover:border-th-accent/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full py-1.5 rounded-md text-[12px] font-medium border border-th-border-subtle text-th-text-secondary hover:text-th-text-primary hover:border-th-accent/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {proxyTestStatus === "testing"
                     ? "Testing..."
@@ -543,7 +543,7 @@ export default function UserMenu() {
               setOpen(false);
               setShortcutsOpen(true);
             }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-colors"
           >
             <Keyboard size={16} />
             Shortcuts
@@ -556,7 +556,7 @@ export default function UserMenu() {
               setOpen(false);
               window.location.reload();
             }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-colors"
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-colors"
           >
             <RefreshCw size={16} />
             Refresh App
@@ -596,12 +596,12 @@ export default function UserMenu() {
           >
             {/* Header */}
             <div className="flex items-center justify-between px-5 pt-5 pb-3">
-              <h2 className="text-[16px] font-bold text-white">
+              <h2 className="text-[16px] font-bold text-th-text-primary">
                 Keyboard Shortcuts
               </h2>
               <button
                 onClick={() => setShortcutsOpen(false)}
-                className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-th-inset transition-colors text-th-text-muted hover:text-white"
+                className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-th-inset transition-colors text-th-text-muted hover:text-th-text-primary"
               >
                 <X size={18} />
               </button>

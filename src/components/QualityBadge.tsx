@@ -40,7 +40,7 @@ const QualityBadge = memo(function QualityBadge() {
             ? "bg-th-accent text-black"
             : isHiFi
               ? "bg-th-accent/70 text-black"
-              : "bg-th-button-hover text-white"
+              : "bg-th-button-hover text-th-text-primary"
         }`}
       >
         {label}

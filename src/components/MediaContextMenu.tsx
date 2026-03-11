@@ -257,7 +257,7 @@ export default function MediaContextMenu({
   ]);
 
   const menuItemClass =
-    "w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.04] transition-colors text-left text-[14px] text-th-text-secondary hover:text-white";
+    "w-full flex items-center gap-3 px-4 py-2.5 hover:bg-th-hl-faint transition-colors text-left text-[14px] text-th-text-secondary hover:text-th-text-primary";
 
   const isLoading = (action: string) => loadingAction === action;
 
@@ -425,7 +425,7 @@ export default function MediaContextMenu({
           <>
             <div className="my-1 border-t border-th-inset" />
             <button
-              className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.04] transition-colors text-left text-[14px] text-th-error hover:text-th-error"
+              className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-th-hl-faint transition-colors text-left text-[14px] text-th-error hover:text-th-error"
               onClick={() => setShowDeleteConfirm(true)}
               disabled={!!loadingAction}
             >
@@ -446,7 +446,7 @@ export default function MediaContextMenu({
             className="bg-th-elevated rounded-xl shadow-2xl max-w-[400px] w-[90%] p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold text-white mb-2">
+            <h3 className="text-lg font-semibold text-th-text-primary mb-2">
               Delete playlist?
             </h3>
             <p className="text-sm text-th-text-secondary mb-6">
@@ -455,7 +455,7 @@ export default function MediaContextMenu({
             </p>
             <div className="flex justify-end gap-3">
               <button
-                className="px-4 py-2 rounded-lg text-sm font-medium text-th-text-secondary hover:text-white hover:bg-white/[0.06] transition-colors"
+                className="px-4 py-2 rounded-lg text-sm font-medium text-th-text-secondary hover:text-th-text-primary hover:bg-th-hl-med transition-colors"
                 onClick={() => setShowDeleteConfirm(false)}
               >
                 Cancel
