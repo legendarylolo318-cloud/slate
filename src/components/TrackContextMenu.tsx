@@ -136,7 +136,7 @@ export default function TrackContextMenu({
   ]);
 
   const menuItemClass =
-    "w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.04] transition-colors text-left text-[14px] text-th-text-secondary hover:text-white";
+    "w-full flex items-center gap-3 px-4 py-2.5 hover:bg-th-hl-faint transition-colors text-left text-[14px] text-th-text-secondary hover:text-th-text-primary";
 
   return (
     <MenuPortal>
@@ -199,7 +199,7 @@ export default function TrackContextMenu({
           <>
             <div className="my-1 border-t border-th-inset" />
             <button
-              className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.04] transition-colors text-left text-[14px] text-th-error hover:text-th-error"
+              className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-th-hl-faint transition-colors text-left text-[14px] text-th-error hover:text-th-error"
               onClick={handleRemoveFromPlaylist}
             >
               <Trash2 size={18} className="shrink-0" />

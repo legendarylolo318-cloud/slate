@@ -146,7 +146,7 @@ const TrackRow = memo(function TrackRow({
       onClick={() => onPlay(track, index)}
       onContextMenu={handleRowContextMenu}
       className={`grid gap-4 px-4 py-2.5 rounded-md cursor-pointer group transition-colors items-center ${
-        isActive ? "bg-[#ffffff0a]" : "hover:bg-[#ffffff08]"
+        isActive ? "bg-th-hl-faint" : "hover:bg-th-hl-faint"
       }`}
       style={{ gridTemplateColumns: gridCols }}
     >
@@ -179,8 +179,8 @@ const TrackRow = memo(function TrackRow({
             </span>
             <Play
               size={14}
-              fill="white"
-              className="text-white hidden group-hover:block"
+              fill="currentColor"
+              className="text-th-text-primary hidden group-hover:block"
             />
           </>
         )}
@@ -200,7 +200,7 @@ const TrackRow = memo(function TrackRow({
         <div className="flex flex-col justify-center min-w-0">
           <span
             className={`text-[15px] font-medium truncate leading-snug ${
-              isActive ? "text-th-accent" : "text-white"
+              isActive ? "text-th-accent" : "text-th-text-primary"
             }`}
           >
             {getTrackDisplayTitle(track)}
@@ -210,7 +210,7 @@ const TrackRow = memo(function TrackRow({
               <TrackArtists
                 artists={track.artists}
                 artist={track.artist}
-                className="hover:text-white hover:underline transition-colors cursor-pointer"
+                className="hover:text-th-text-primary hover:underline transition-colors cursor-pointer"
               />
             </span>
           )}
@@ -224,7 +224,7 @@ const TrackRow = memo(function TrackRow({
             <TrackArtists
               artists={track.artists}
               artist={track.artist}
-              className="hover:text-white hover:underline transition-colors cursor-pointer"
+              className="hover:text-th-text-primary hover:underline transition-colors cursor-pointer"
             />
           </span>
         </div>
@@ -234,7 +234,7 @@ const TrackRow = memo(function TrackRow({
       {showAlbum && (
         <div className="flex items-center min-w-0">
           <span
-            className="text-[14px] text-th-text-muted truncate hover:text-white hover:underline transition-colors cursor-pointer"
+            className="text-[14px] text-th-text-muted truncate hover:text-th-text-primary hover:underline transition-colors cursor-pointer"
             onClick={(e) => {
               e.stopPropagation();
               if (track.album?.id) {
@@ -271,8 +271,8 @@ const TrackRow = memo(function TrackRow({
           ref={dotsButtonRef}
           className={`p-1.5 rounded-full transition-colors ${
             contextMenuOpen
-              ? "text-white opacity-100"
-              : "text-th-text-muted hover:text-white opacity-0 group-hover:opacity-100"
+              ? "text-th-text-primary opacity-100"
+              : "text-th-text-muted hover:text-th-text-primary opacity-0 group-hover:opacity-100"
           }`}
           title="More options"
           onClick={handleDotsClick}
@@ -296,7 +296,7 @@ const TrackRow = memo(function TrackRow({
           className={`p-1.5 rounded-full transition-colors ${
             playlistMenuOpen
               ? "text-th-accent"
-              : "text-th-text-muted hover:text-white"
+              : "text-th-text-muted hover:text-th-text-primary"
           }`}
           title="Add to playlist"
           onClick={handlePlusClick}
@@ -311,7 +311,7 @@ const TrackRow = memo(function TrackRow({
           />
         )}
         <button
-          className={`p-1.5 rounded-full transition-colors ${isFav ? "text-th-accent" : "text-th-text-muted hover:text-white"}`}
+          className={`p-1.5 rounded-full transition-colors ${isFav ? "text-th-accent" : "text-th-text-muted hover:text-th-text-primary"}`}
           title={isFav ? "Remove from favorites" : "Add to favorites"}
           onClick={toggleFavorite}
         >
