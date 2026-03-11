@@ -75,6 +75,11 @@ export interface Track {
   _qid?: string;
 }
 
+export function getTrackDisplayTitle(track: { title: string; version?: string }): string {
+  if (track.version) return `${track.title} (${track.version})`;
+  return track.title;
+}
+
 export interface QueuedTrack extends Track {
   _qid: string;
 }

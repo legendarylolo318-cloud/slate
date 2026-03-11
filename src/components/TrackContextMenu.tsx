@@ -13,7 +13,7 @@ import { useFavorites } from "../hooks/useFavorites";
 import { useNavigation } from "../hooks/useNavigation";
 import { usePlaylists } from "../hooks/usePlaylists";
 import { useContextMenu } from "../hooks/useContextMenu";
-import { getTidalImageUrl, type Track } from "../types";
+import { getTidalImageUrl, getTrackDisplayTitle, type Track } from "../types";
 import AddToPlaylistMenu from "./AddToPlaylistMenu";
 import MenuPortal from "./MenuPortal";
 
@@ -62,7 +62,7 @@ export default function TrackContextMenu({
     onClose,
   });
 
-  const trackTitle = track.title || (track as any).name || "";
+  const trackTitle = getTrackDisplayTitle(track) || (track as any).name || "";
   const trackLabel =
     trackTitle.length > 30 ? trackTitle.slice(0, 28) + "…" : trackTitle;
 

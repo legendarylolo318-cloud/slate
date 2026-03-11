@@ -12,7 +12,7 @@ import {
   Maximize2,
   MoreHorizontal,
 } from "lucide-react";
-import { getTidalImageUrl } from "../types";
+import { getTidalImageUrl, getTrackDisplayTitle } from "../types";
 import { formatTime } from "../lib/format";
 import TidalImage from "./TidalImage";
 import { useCallback, useRef, useState, memo } from "react";
@@ -66,7 +66,7 @@ const TrackInfoSection = memo(function TrackInfoSection() {
           }
           className="text-white text-[13px] font-semibold truncate hover:underline cursor-pointer leading-tight"
         >
-          {currentTrack.title}
+          {getTrackDisplayTitle(currentTrack)}
         </span>
         <span className="text-th-text-secondary text-[11px] truncate">
           <TrackArtists

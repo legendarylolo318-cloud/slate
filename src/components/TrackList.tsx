@@ -1,5 +1,5 @@
 import { Play, Heart, MoreHorizontal, Plus } from "lucide-react";
-import { type Track, getTidalImageUrl } from "../types";
+import { type Track, getTidalImageUrl, getTrackDisplayTitle } from "../types";
 import TidalImage from "./TidalImage";
 import AddToPlaylistMenu from "./AddToPlaylistMenu";
 import TrackContextMenu from "./TrackContextMenu";
@@ -203,7 +203,7 @@ const TrackRow = memo(function TrackRow({
               isActive ? "text-th-accent" : "text-white"
             }`}
           >
-            {track.title}
+            {getTrackDisplayTitle(track)}
           </span>
           {!showArtist && (
             <span className="text-[13px] text-th-text-muted truncate leading-snug">

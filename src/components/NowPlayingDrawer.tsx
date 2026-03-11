@@ -48,6 +48,7 @@ import {
 import BioText from "./BioText";
 import {
   getTidalImageUrl,
+  getTrackDisplayTitle,
   type Track,
   type Lyrics,
   type Credit,
@@ -603,7 +604,7 @@ function SuggestedTrackRow({
               isActive ? "text-th-accent" : "text-white"
             }`}
           >
-            {track.title}
+            {getTrackDisplayTitle(track)}
           </p>
           <p className="text-[11px] text-th-text-muted truncate">
             <TrackArtists
@@ -741,8 +742,8 @@ const SuggestedTab = memo(function SuggestedTab() {
   const handleAddToQueue = useCallback(
     (track: Track) => {
       addToQueue(track);
-      const label =
-        track.title.length > 30 ? track.title.slice(0, 28) + "…" : track.title;
+      const displayTitle = getTrackDisplayTitle(track);
+      const label = displayTitle.length > 30 ? displayTitle.slice(0, 28) + "…" : displayTitle;
       showToast(`Added "${label}" to queue`, "success");
     },
     [addToQueue, showToast],
@@ -1189,7 +1190,7 @@ const CreditsTab = memo(function CreditsTab() {
       {/* Track metadata + credits — unified row list */}
       {currentTrack && (
         <>
-          <CreditRow label="Title" value={currentTrack.title} first />
+          <CreditRow label="Title" value={getTrackDisplayTitle(currentTrack)} first />
           <CreditRow
             label="Artists"
             value={getTrackArtistDisplay(currentTrack)}
@@ -1341,7 +1342,7 @@ function TrackRow({
               isActive ? "text-th-accent" : "text-white"
             }`}
           >
-            {track.title}
+            {getTrackDisplayTitle(track)}
           </p>
           <p className="text-[11px] text-th-text-muted truncate">
             <TrackArtists
@@ -1539,7 +1540,7 @@ export default function NowPlayingDrawer() {
           </div>
           <div className="text-center w-full max-w-[520px]">
             <h2 className="text-[22px] font-bold text-white truncate">
-              {currentTrack.title}
+              {getTrackDisplayTitle(currentTrack)}
             </h2>
             <p className="text-[15px] text-th-text-muted truncate mt-1">
               {getTrackArtistDisplay(currentTrack)}

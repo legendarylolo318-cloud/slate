@@ -25,7 +25,7 @@ import { maximizedPlayerAtom, maximizedLyricsAtom } from "../atoms/ui";
 import { authTokensAtom } from "../atoms/auth";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { useProgressScrub } from "../hooks/useProgressScrub";
-import { getTidalImageUrl } from "../types";
+import { getTidalImageUrl, getTrackDisplayTitle } from "../types";
 import TidalImage, { fetchCachedImageUrl } from "./TidalImage";
 
 import TrackContextMenu from "./TrackContextMenu";
@@ -162,7 +162,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
           </div>
           <div className="flex flex-col justify-center min-w-0 gap-0.5">
             <span className="text-white text-[13px] font-semibold truncate leading-tight">
-              {currentTrack.title}
+              {getTrackDisplayTitle(currentTrack)}
             </span>
             <span className="text-th-text-secondary text-[11px] truncate">
               {getTrackArtistDisplay(currentTrack)}
@@ -693,7 +693,7 @@ export default function MaximizedPlayer() {
             }}
           >
             <span className="text-white font-bold truncate max-w-full" style={{ fontSize: TIER_CONFIG[lyricsTier].titleSize }}>
-              {currentTrack.title}
+              {getTrackDisplayTitle(currentTrack)}
             </span>
             <span className="text-th-text-muted truncate max-w-full" style={{ fontSize: TIER_CONFIG[lyricsTier].artistSize }}>
               {getTrackArtistDisplay(currentTrack)}
