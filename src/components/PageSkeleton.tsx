@@ -58,14 +58,16 @@ export function ArtistPageSkeleton() {
       {/* Discography */}
       <div className="px-8 pb-8">
         <Pulse className="w-36 h-6 rounded-lg mb-4" />
-        <div className="flex gap-4">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="w-[180px] shrink-0 p-3">
+        <div className="card-scroll">
+        <div className="card-scroll-track">
+          {Array.from({ length: 10 }).map((_, i) => (
+            <div key={i} className="card-scroll-item p-3">
               <Pulse className="w-full aspect-square rounded-md mb-3" />
               <Pulse className="w-[75%] h-3.5 rounded mb-2" />
               <Pulse className="w-[50%] h-3 rounded" />
             </div>
           ))}
+        </div>
         </div>
       </div>
       </PageContainer>

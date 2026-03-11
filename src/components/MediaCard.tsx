@@ -15,7 +15,7 @@ interface MediaCardProps {
   onFavoriteToggle?: (e: React.MouseEvent) => void;
   isArtist?: boolean;
   showPlayButton?: boolean;
-  /** Card width class — defaults to full-width (grid-controlled). Use "w-[180px] flex-shrink-0" for horizontal scroll rows. */
+  /** Card width class — defaults to full-width (grid-controlled). Use "card-scroll-item" for horizontal scroll rows. */
   widthClass?: string;
   /** Pass current user ID to show "By You" for own playlists */
   userId?: number;

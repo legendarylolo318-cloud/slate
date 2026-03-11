@@ -98,7 +98,7 @@ export default function HomeSection({ section }: HomeSectionProps) {
   const scroll = (direction: "left" | "right") => {
     const el = scrollRef.current;
     if (!el) return;
-    const scrollAmount = el.clientWidth * 0.8;
+    const scrollAmount = el.clientWidth + 16; // one full page + gap for exact card alignment
     el.scrollBy({
       left: direction === "left" ? -scrollAmount : scrollAmount,
       behavior: "smooth",
@@ -224,10 +224,11 @@ export default function HomeSection({ section }: HomeSectionProps) {
       </div>
 
       {/* Horizontal scroll row */}
+      <div className="card-scroll">
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex gap-4 overflow-x-auto no-scrollbar scroll-smooth pb-2"
+        className="card-scroll-track pb-2"
       >
         {items.map((item: any) => {
           const isArtist = isArtistItem(item, section.sectionType);
@@ -318,7 +319,7 @@ export default function HomeSection({ section }: HomeSectionProps) {
               isArtist={isArtist}
               isFavorited={isFavorited}
               onFavoriteToggle={onFavoriteToggle}
-              widthClass="w-[180px] flex-shrink-0"
+              widthClass="card-scroll-item"
               {...(myTracks && {
                 titleOverride: "Loved Tracks",
                 imageOverride: (
@@ -331,6 +332,7 @@ export default function HomeSection({ section }: HomeSectionProps) {
             />
           );
         })}
+      </div>
       </div>
 
       {/* Media context menu */}
