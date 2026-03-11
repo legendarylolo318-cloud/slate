@@ -42,6 +42,16 @@ import {
   getTrackLyrics,
 } from "../api/tidal";
 import { parseLrc, type LrcLine } from "../lib/lrc";
+import { themeAtom } from "../atoms/theme";
+
+function useIsDark() {
+  const theme = useAtomValue(themeAtom);
+  const hex = theme.bgBase.replace("#", "");
+  const r = parseInt(hex.substring(0, 2), 16) / 255;
+  const g = parseInt(hex.substring(2, 4), 16) / 255;
+  const b = parseInt(hex.substring(4, 6), 16) / 255;
+  return (Math.max(r, g, b) + Math.min(r, g, b)) / 2 < 0.5;
+}
 
 const BlurredBackground = memo(function BlurredBackground({
   coverUrl,
@@ -96,12 +106,12 @@ const MaxProgressScrubber = memo(function MaxProgressScrubber({
         className="scrubber flex-1 relative cursor-pointer h-[17px] flex items-center"
       >
         <div className="relative w-full h-[6px] rounded-full">
-          <div className="absolute inset-0 bg-white/[0.12] rounded-full" />
+          <div className="absolute inset-0 bg-th-slider-track rounded-full" />
           <div
             className={`absolute left-0 rounded-full transition-[height,top,background-color] duration-100 ${
               isHoveringProgress || isDragging
                 ? "h-full top-0 bg-th-accent"
-                : "h-[3px] top-[1.5px] bg-white/60"
+                : "h-[3px] top-[1.5px] bg-th-slider-fill"
             }`}
             style={{ width: `${clampedProgress}%` }}
           />
@@ -113,7 +123,7 @@ const MaxProgressScrubber = memo(function MaxProgressScrubber({
           )}
         </div>
         <div
-          className={`absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-white rounded-full shadow-md shadow-black/50 pointer-events-none transition-opacity duration-100 ${
+          className={`absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-th-text-primary rounded-full shadow-md shadow-black/50 pointer-events-none transition-opacity duration-100 ${
             isHoveringProgress || isDragging ? "opacity-100" : "opacity-0"
           }`}
           style={{ left: `calc(${clampedProgress}% - 7px)` }}
@@ -134,12 +144,14 @@ const MaxTransportBar = memo(function MaxTransportBar({
   isDraggingRef,
   resetHideTimer,
   setMaximized,
+  isDark,
 }: {
   currentTrack: { title: string; artist?: { name?: string }; artists?: { name: string }[]; album?: { cover?: string; title?: string } };
   controlsVisible: boolean;
   isDraggingRef: React.MutableRefObject<boolean>;
   resetHideTimer: () => void;
   setMaximized: (v: boolean) => void;
+  isDark: boolean;
 }) {
   const isPlaying = useAtomValue(isPlayingAtom);
   const [repeatMode, setRepeatMode] = useAtom(repeatAtom);
@@ -149,7 +161,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
   const { pauseTrack, resumeTrack, playNext, playPrevious, toggleShuffle } = usePlaybackActions();
 
   return (
-    <div className={`absolute bottom-0 left-0 right-0 z-20 px-6 pb-4 pt-8 bg-gradient-to-t from-black/60 to-transparent transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+    <div className={`absolute bottom-0 left-0 right-0 z-20 px-6 pb-4 pt-8 bg-gradient-to-t ${isDark ? "from-black/60" : "from-white/70"} to-transparent transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
       <div className="flex items-center justify-between">
         {/* Left: Track info */}
         <div className="flex items-center gap-3 w-[30%] min-w-[180px]">
@@ -161,7 +173,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
             />
           </div>
           <div className="flex flex-col justify-center min-w-0 gap-0.5">
-            <span className="text-white text-[13px] font-semibold truncate leading-tight">
+            <span className="text-th-text-primary text-[13px] font-semibold truncate leading-tight">
               {getTrackDisplayTitle(currentTrack)}
             </span>
             <span className="text-th-text-secondary text-[11px] truncate">
@@ -179,7 +191,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
               className={`w-8 h-8 flex items-center justify-center rounded-full transition-[color,background-color,transform] duration-200 active:scale-90 relative ${
                 isShuffle
                   ? "text-th-accent"
-                  : "text-th-text-secondary hover:text-white hover:bg-th-border-subtle"
+                  : "text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle"
               }`}
             >
               <Shuffle size={15} strokeWidth={2} />
@@ -189,23 +201,23 @@ const MaxTransportBar = memo(function MaxTransportBar({
             </button>
             <button
               onClick={playPrevious}
-              className="w-8 h-8 flex items-center justify-center rounded-full text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-[color,background-color,transform] duration-150 active:scale-90"
+              className="w-8 h-8 flex items-center justify-center rounded-full text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-[color,background-color,transform] duration-150 active:scale-90"
             >
               <SkipBack size={20} fill="currentColor" />
             </button>
             <button
               onClick={() => (isPlaying ? pauseTrack() : resumeTrack())}
-              className="w-10 h-10 bg-white rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-transform duration-150"
+              className="w-10 h-10 bg-th-text-primary rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-transform duration-150"
             >
               {isPlaying ? (
-                <Pause size={19} fill="black" className="text-black" />
+                <Pause size={19} fill="currentColor" className="text-th-base" />
               ) : (
-                <Play size={19} fill="black" className="text-black ml-0.5" />
+                <Play size={19} fill="currentColor" className="text-th-base ml-0.5" />
               )}
             </button>
             <button
               onClick={() => playNext({ explicit: true })}
-              className="w-8 h-8 flex items-center justify-center rounded-full text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-[color,background-color,transform] duration-150 active:scale-90"
+              className="w-8 h-8 flex items-center justify-center rounded-full text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-[color,background-color,transform] duration-150 active:scale-90"
             >
               <SkipForward size={20} fill="currentColor" />
             </button>
@@ -214,12 +226,12 @@ const MaxTransportBar = memo(function MaxTransportBar({
               className={`w-8 h-8 flex items-center justify-center rounded-full transition-[color,background-color,transform] duration-200 active:scale-90 relative ${
                 repeatMode > 0
                   ? "text-th-accent"
-                  : "text-th-text-secondary hover:text-white hover:bg-th-border-subtle"
+                  : "text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle"
               }`}
             >
               <Repeat size={15} strokeWidth={2} />
               {repeatMode === 2 && (
-                <span className="absolute -top-0.5 -right-0.5 text-[7px] font-bold bg-th-accent text-black rounded-full w-3 h-3 flex items-center justify-center leading-none">
+                <span className="absolute -top-0.5 -right-0.5 text-[7px] font-bold bg-th-accent text-th-base rounded-full w-3 h-3 flex items-center justify-center leading-none">
                   1
                 </span>
               )}
@@ -232,7 +244,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
               className={`w-8 h-8 flex items-center justify-center rounded-full transition-[color,background-color,transform] duration-200 active:scale-90 relative ${
                 autoplay
                   ? "text-th-accent"
-                  : "text-th-text-secondary hover:text-white hover:bg-th-border-subtle"
+                  : "text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle"
               }`}
               title="Autoplay"
             >
@@ -251,7 +263,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
           <button
             onClick={() => setShowLyrics((v) => !v)}
             className={`relative transition-[color,transform] duration-150 active:scale-90 ${
-              showLyrics ? "text-th-accent" : "text-th-text-faint hover:text-white"
+              showLyrics ? "text-th-accent" : "text-th-text-faint hover:text-th-text-primary"
             }`}
             title="Lyrics"
           >
@@ -263,7 +275,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
           <VolumeSlider widthClass="w-[130px]" isDraggingRef={isDraggingRef} onDragEnd={resetHideTimer} />
           <button
             onClick={() => setMaximized(false)}
-            className="text-th-text-faint hover:text-white transition-colors duration-150"
+            className="text-th-text-faint hover:text-th-text-primary transition-colors duration-150"
             title="Exit fullscreen"
           >
             <Minimize2 size={18} strokeWidth={2} />
@@ -294,9 +306,9 @@ const TIER_CONFIG = {
   lg: { lineHeight: 112, fontCls: "text-8xl", padding: 288, gap: 224, artSize: "75vmin", artSizeSolo: "85vmin", artMax: 1200, titleSize: 38, artistSize: 24, iconSize: 34 },
 } as const;
 
-const ACTIVE_CLS = "text-white font-black";
-const PAST_CLS = "text-white/30";
-const FUTURE_CLS = "text-white/40";
+const ACTIVE_CLS = "text-th-text-primary font-black";
+const PAST_CLS = "text-th-text-primary opacity-30";
+const FUTURE_CLS = "text-th-text-primary opacity-40";
 
 function getLineBaseCls(tier: Tier) {
   return `${TIER_CONFIG[tier].fontCls} font-semibold transition-[color,opacity,transform] duration-500 ease-out origin-left`;
@@ -457,7 +469,7 @@ const MaximizedLyrics = memo(function MaximizedLyrics({ tier }: { tier: Tier }) 
                 height: "0.75em",
                 lineHeight: `${lh}px`,
                 marginBottom: `${lh * 0.25}px`,
-                background: "rgba(255,255,255,0.06)",
+                background: "var(--th-hl-med)",
                 animationDelay: `${i * 80}ms`,
               }}
             />
@@ -500,7 +512,7 @@ const MaximizedLyrics = memo(function MaximizedLyrics({ tier }: { tier: Tier }) 
         ))}
         {provider && (
           <p
-            className="text-[11px] text-white/20 mt-4"
+            className="text-[11px] text-th-text-primary opacity-20 mt-4"
             style={{ lineHeight: `${lh}px` }}
           >
             Lyrics provided by {provider}
@@ -520,6 +532,7 @@ export default function MaximizedPlayer() {
   const favoriteTrackIds = useAtomValue(favoriteTrackIdsAtom);
   const setFavoriteTrackIds = useSetAtom(favoriteTrackIdsAtom);
   const store = useStore();
+  const isDark = useIsDark();
 
   // Context menu state
   const [contextMenuTrack, setContextMenuTrack] = useState<typeof currentTrack | null>(null);
@@ -644,12 +657,12 @@ export default function MaximizedPlayer() {
       role="dialog"
       aria-modal="true"
       onMouseMove={resetHideTimer}
-      className={`fixed inset-0 z-[60] flex flex-col items-center justify-center select-none bg-black ${controlsVisible ? "cursor-default" : "cursor-none"}`}
+      className={`fixed inset-0 z-[60] flex flex-col items-center justify-center select-none ${isDark ? "bg-black" : "bg-white"} ${controlsVisible ? "cursor-default" : "cursor-none"}`}
     >
       {/* Blurred album art background — pre-rendered to canvas once, zero per-frame cost */}
       <div className="absolute inset-0 overflow-hidden">
         <BlurredBackground coverUrl={currentTrack.album?.cover} />
-        <div className="absolute inset-0 bg-black/60" />
+        <div className={`absolute inset-0 ${isDark ? "bg-black/60" : "bg-white/70"}`} />
       </div>
 
       {/* Center content — single column (art centered) or two-column (art + lyrics) */}
@@ -692,7 +705,7 @@ export default function MaximizedPlayer() {
               maxWidth: TIER_CONFIG[lyricsTier].artMax,
             }}
           >
-            <span className="text-white font-bold truncate max-w-full" style={{ fontSize: TIER_CONFIG[lyricsTier].titleSize }}>
+            <span className="text-th-text-primary font-bold truncate max-w-full" style={{ fontSize: TIER_CONFIG[lyricsTier].titleSize }}>
               {getTrackDisplayTitle(currentTrack)}
             </span>
             <span className="text-th-text-muted truncate max-w-full" style={{ fontSize: TIER_CONFIG[lyricsTier].artistSize }}>
@@ -705,7 +718,7 @@ export default function MaximizedPlayer() {
             <button
               onClick={toggleLike}
               className={`transition-[color,transform] duration-200 active:scale-90 ${
-                isLiked ? "text-th-accent" : "text-th-text-faint hover:text-white"
+                isLiked ? "text-th-accent" : "text-th-text-faint hover:text-th-text-primary"
               }`}
             >
               <Heart
@@ -717,7 +730,7 @@ export default function MaximizedPlayer() {
             <button
               ref={contextMenuAnchorRef}
               onClick={() => setContextMenuTrack(currentTrack)}
-              className="text-th-text-faint hover:text-white transition-colors duration-150"
+              className="text-th-text-faint hover:text-th-text-primary transition-colors duration-150"
             >
               <MoreHorizontal size={TIER_CONFIG[lyricsTier].iconSize} />
             </button>
@@ -749,6 +762,7 @@ export default function MaximizedPlayer() {
         isDraggingRef={isDraggingRef}
         resetHideTimer={resetHideTimer}
         setMaximized={setMaximized}
+        isDark={isDark}
       />
     </div>
   );
