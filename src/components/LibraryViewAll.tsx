@@ -521,7 +521,7 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
     <div className="flex-1 bg-linear-to-b from-th-surface to-th-base overflow-y-auto scrollbar-thin scrollbar-thumb-th-button scrollbar-track-transparent">
       {/* Header */}
       <div className="px-8 pt-10 pb-6">
-        <h1 className="text-[32px] font-extrabold text-white leading-tight tracking-tight">
+        <h1 className="text-[32px] font-extrabold text-th-text-primary leading-tight tracking-tight">
           {config.title}
         </h1>
         <div className="flex items-center gap-3 mt-1">

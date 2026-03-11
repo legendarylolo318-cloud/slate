@@ -212,7 +212,7 @@ export default function ViewAllPage({
       <div className="px-6 py-8">
         {/* Header */}
         <div className="flex items-center gap-4 mb-8">
-          <h1 className="text-[32px] font-bold text-white tracking-tight">
+          <h1 className="text-[32px] font-bold text-th-text-primary tracking-tight">
             {title}
           </h1>
         </div>

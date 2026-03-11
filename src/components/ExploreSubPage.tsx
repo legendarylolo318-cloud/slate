@@ -77,7 +77,7 @@ export default function ExploreSubPage({
       <div className="px-6 py-8">
         {/* Header */}
         <div className="flex items-center gap-4 mb-8">
-          <h1 className="text-[32px] font-bold text-white tracking-tight">
+          <h1 className="text-[32px] font-bold text-th-text-primary tracking-tight">
             {title}
           </h1>
         </div>
@@ -97,7 +97,7 @@ export default function ExploreSubPage({
               <button
                 key={getItemId(item)}
                 onClick={() => handleNavItemClick(item)}
-                className="text-left text-[15px] font-medium text-th-text-secondary hover:text-white transition-colors duration-150"
+                className="text-left text-[15px] font-medium text-th-text-secondary hover:text-th-text-primary transition-colors duration-150"
               >
                 {getItemTitle(item)}
               </button>

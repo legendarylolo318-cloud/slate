@@ -40,8 +40,8 @@ export default function SortDropdown({ libraryType, currentSort, onSortChange, c
       <button
         onClick={() => setOpen(!open)}
         className={compact
-          ? "text-th-text-muted hover:text-white transition-colors p-1"
-          : "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-th-text-muted hover:text-white hover:bg-th-border-subtle transition-colors"
+          ? "text-th-text-muted hover:text-th-text-primary transition-colors p-1"
+          : "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-th-text-muted hover:text-th-text-primary hover:bg-th-border-subtle transition-colors"
         }
         title={`Sort by: ${currentLabel}`}
       >
