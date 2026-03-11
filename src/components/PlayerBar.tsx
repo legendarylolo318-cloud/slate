@@ -64,7 +64,7 @@ const TrackInfoSection = memo(function TrackInfoSection() {
           onClick={() =>
             currentTrack.album?.id && navigateToAlbum(currentTrack.album.id)
           }
-          className="text-white text-[13px] font-semibold truncate hover:underline cursor-pointer leading-tight"
+          className="text-th-text-primary text-[13px] font-semibold truncate hover:underline cursor-pointer leading-tight"
         >
           {getTrackDisplayTitle(currentTrack)}
         </span>
@@ -72,7 +72,7 @@ const TrackInfoSection = memo(function TrackInfoSection() {
           <TrackArtists
             artists={currentTrack.artists}
             artist={currentTrack.artist}
-            className="hover:text-white hover:underline cursor-pointer transition-colors duration-200"
+            className="hover:text-th-text-primary hover:underline cursor-pointer transition-colors duration-200"
           />
         </span>
       </div>
@@ -110,7 +110,7 @@ const FavoriteButton = memo(function FavoriteButton() {
     <button
       onClick={toggleLike}
       className={`ml-1 flex-shrink-0 transition-[color,transform] duration-200 active:scale-90 ${
-        isLiked ? "text-th-accent" : "text-th-text-faint hover:text-white"
+        isLiked ? "text-th-accent" : "text-th-text-faint hover:text-th-text-primary"
       }`}
     >
       <Heart
@@ -136,7 +136,7 @@ const ContextMenuButton = memo(function ContextMenuButton() {
       <button
         ref={anchorRef}
         onClick={() => setShowMenu(true)}
-        className="ml-0.5 flex-shrink-0 text-th-text-faint hover:text-white transition-colors duration-200 active:scale-90"
+        className="ml-0.5 flex-shrink-0 text-th-text-faint hover:text-th-text-primary transition-colors duration-200 active:scale-90"
         title="More options"
       >
         <MoreHorizontal size={16} />
@@ -183,12 +183,12 @@ const ProgressScrubber = memo(function ProgressScrubber() {
         className="scrubber flex-1 relative cursor-pointer h-[17px] flex items-center"
       >
         <div className="relative w-full h-[5px] rounded-full">
-          <div className="absolute inset-0 bg-white/[0.12] rounded-full" />
+          <div className="absolute inset-0 bg-th-slider-track rounded-full" />
           <div
             className={`absolute left-0 rounded-full transition-[height,top,background-color] duration-100 ${
               isHoveringProgress || isDragging
                 ? "h-full top-0 bg-th-accent"
-                : "h-[3px] top-[1px] bg-white/60"
+                : "h-[3px] top-[1px] bg-th-slider-fill"
             }`}
             style={{ width: `${clampedProgress}%` }}
           />
@@ -200,7 +200,7 @@ const ProgressScrubber = memo(function ProgressScrubber() {
           )}
         </div>
         <div
-          className={`absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-md shadow-black/50 pointer-events-none transition-opacity duration-100 ${
+          className={`absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-th-text-primary rounded-full shadow-md shadow-black/50 pointer-events-none transition-opacity duration-100 ${
             isHoveringProgress || isDragging ? "opacity-100" : "opacity-0"
           }`}
           style={{
@@ -226,7 +226,7 @@ const AutoplayButton = memo(function AutoplayButton() {
       className={`w-8 h-8 flex items-center justify-center rounded-full transition-[color,background-color,transform] duration-200 active:scale-90 relative ${
         autoplay
           ? "text-th-accent"
-          : "text-th-text-secondary hover:text-white hover:bg-th-border-subtle"
+          : "text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle"
       }`}
       title="Autoplay"
     >
@@ -255,7 +255,7 @@ const TransportControls = memo(function TransportControls() {
           className={`w-8 h-8 flex items-center justify-center rounded-full transition-[color,background-color,transform] duration-200 active:scale-90 relative ${
             isShuffle
               ? "text-th-accent"
-              : "text-th-text-secondary hover:text-white hover:bg-th-border-subtle"
+              : "text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle"
           }`}
         >
           <Shuffle size={15} strokeWidth={2} />
@@ -265,23 +265,23 @@ const TransportControls = memo(function TransportControls() {
         </button>
         <button
           onClick={playPrevious}
-          className="w-8 h-8 flex items-center justify-center rounded-full text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-[color,background-color,transform] duration-150 active:scale-90"
+          className="w-8 h-8 flex items-center justify-center rounded-full text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-[color,background-color,transform] duration-150 active:scale-90"
         >
           <SkipBack size={18} fill="currentColor" />
         </button>
         <button
           onClick={() => (isPlaying ? pauseTrack() : resumeTrack())}
-          className="w-9 h-9 bg-white rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-transform duration-150"
+          className="w-9 h-9 bg-th-text-primary rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-transform duration-150"
         >
           {isPlaying ? (
-            <Pause size={17} fill="black" className="text-black" />
+            <Pause size={17} fill="currentColor" className="text-th-base" />
           ) : (
-            <Play size={17} fill="black" className="text-black ml-0.5" />
+            <Play size={17} fill="currentColor" className="text-th-base ml-0.5" />
           )}
         </button>
         <button
           onClick={() => playNext({ explicit: true })}
-          className="w-8 h-8 flex items-center justify-center rounded-full text-th-text-secondary hover:text-white hover:bg-th-border-subtle transition-[color,background-color,transform] duration-150 active:scale-90"
+          className="w-8 h-8 flex items-center justify-center rounded-full text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-[color,background-color,transform] duration-150 active:scale-90"
         >
           <SkipForward size={18} fill="currentColor" />
         </button>
@@ -290,7 +290,7 @@ const TransportControls = memo(function TransportControls() {
           className={`w-8 h-8 flex items-center justify-center rounded-full transition-[color,background-color,transform] duration-200 active:scale-90 relative ${
             repeatMode > 0
               ? "text-th-accent"
-              : "text-th-text-secondary hover:text-white hover:bg-th-border-subtle"
+              : "text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle"
           }`}
         >
           <Repeat size={15} strokeWidth={2} />
@@ -321,7 +321,7 @@ const DrawerButtons = memo(function DrawerButtons() {
     <>
       <button
         onClick={() => openDrawerToTab("lyrics")}
-        className="text-th-text-faint hover:text-white transition-colors duration-150"
+        className="text-th-text-faint hover:text-th-text-primary transition-colors duration-150"
         title="Lyrics"
       >
         <Mic2 size={16} strokeWidth={2} />
@@ -329,7 +329,7 @@ const DrawerButtons = memo(function DrawerButtons() {
       <VolumeSlider />
       <button
         onClick={() => openDrawerToTab("queue")}
-        className="text-th-text-faint hover:text-white transition-colors duration-150"
+        className="text-th-text-faint hover:text-th-text-primary transition-colors duration-150"
         title="Play queue"
       >
         <ListMusic size={16} strokeWidth={2} />
@@ -349,7 +349,7 @@ const MaximizeButton = memo(function MaximizeButton() {
   return (
     <button
       onClick={() => setMaximized(true)}
-      className="text-th-text-faint hover:text-white transition-colors duration-150"
+      className="text-th-text-faint hover:text-th-text-primary transition-colors duration-150"
       title="Fullscreen player"
     >
       <Maximize2 size={16} strokeWidth={2} />

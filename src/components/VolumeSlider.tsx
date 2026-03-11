@@ -44,7 +44,7 @@ const VolumeSlider = memo(function VolumeSlider({
         className={`flex-shrink-0 transition-colors duration-150 ${
           bitPerfect
             ? "text-th-text-faint cursor-not-allowed"
-            : "text-th-text-secondary hover:text-white"
+            : "text-th-text-secondary hover:text-th-text-primary"
         }`}
         disabled={bitPerfect}
       >
@@ -77,13 +77,13 @@ const VolumeSlider = memo(function VolumeSlider({
           className={`absolute inset-0 w-full h-full opacity-0 z-10 ${bitPerfect ? "cursor-not-allowed" : "cursor-pointer"}`}
         />
         <div className="relative h-[3px] group-hover/vol:h-[4px] transition-[height] duration-100 rounded-full">
-          <div className="absolute inset-0 bg-white/[0.12] rounded-full" />
+          <div className="absolute inset-0 bg-th-slider-track rounded-full" />
           <div
-            className="absolute h-full bg-white/70 group-hover/vol:bg-th-accent rounded-full transition-colors duration-100"
+            className="absolute h-full bg-th-slider-fill group-hover/vol:bg-th-accent rounded-full transition-colors duration-100"
             style={{ width: `${displayVolume * 100}%` }}
           />
           <div
-            className="absolute top-1/2 -translate-y-1/2 w-[10px] h-[10px] bg-white rounded-full shadow-sm opacity-0 group-hover/vol:opacity-100 transition-opacity duration-100"
+            className="absolute top-1/2 -translate-y-1/2 w-[10px] h-[10px] bg-th-text-primary rounded-full shadow-sm opacity-0 group-hover/vol:opacity-100 transition-opacity duration-100"
             style={{ left: `calc(${displayVolume * 100}% - 5px)` }}
           />
         </div>
