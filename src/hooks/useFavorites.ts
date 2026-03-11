@@ -7,6 +7,8 @@ import {
   favoritePlaylistUuidsAtom,
   followedArtistIdsAtom,
   favoriteMixIdsAtom,
+  optimisticFavoriteAlbumsAtom,
+  optimisticFollowedArtistsAtom,
   optimisticFavoriteMixesAtom,
 } from "../atoms/favorites";
 import { favoritePlaylistsAtom } from "../atoms/playlists";
@@ -96,7 +98,13 @@ export function useFavorites() {
     async (albumId: number, album?: AlbumDetail): Promise<void> => {
       if (!authTokens?.user_id) throw new Error("Not authenticated");
       setFavoriteAlbumIds((prev: Set<number>) => new Set([...prev, albumId]));
-      if (album) addAlbumToFavoritesCache(authTokens.user_id, album);
+      if (album) {
+        addAlbumToFavoritesCache(authTokens.user_id, album);
+        store.set(optimisticFavoriteAlbumsAtom, (prev) => [
+          album,
+          ...prev.filter((a) => a.id !== albumId),
+        ]);
+      }
       try {
         await invoke("add_favorite_album", {
           userId: authTokens.user_id,
@@ -108,12 +116,17 @@ export function useFavorites() {
           next.delete(albumId);
           return next;
         });
-        if (album) removeAlbumFromFavoritesCache(authTokens.user_id, albumId);
+        if (album) {
+          removeAlbumFromFavoritesCache(authTokens.user_id, albumId);
+          store.set(optimisticFavoriteAlbumsAtom, (prev) =>
+            prev.filter((a) => a.id !== albumId),
+          );
+        }
         console.error("Failed to favorite album:", error);
         throw error;
       }
     },
-    [authTokens?.user_id, setFavoriteAlbumIds],
+    [authTokens?.user_id, setFavoriteAlbumIds, store],
   );
 
   const removeFavoriteAlbum = useCallback(
@@ -125,6 +138,9 @@ export function useFavorites() {
         return next;
       });
       removeAlbumFromFavoritesCache(authTokens.user_id, albumId);
+      store.set(optimisticFavoriteAlbumsAtom, (prev) =>
+        prev.filter((a) => a.id !== albumId),
+      );
       try {
         await invoke("remove_favorite_album", {
           userId: authTokens.user_id,
@@ -136,7 +152,7 @@ export function useFavorites() {
         throw error;
       }
     },
-    [authTokens?.user_id, setFavoriteAlbumIds],
+    [authTokens?.user_id, setFavoriteAlbumIds, store],
   );
 
   // ==================== Playlists ====================
@@ -209,7 +225,13 @@ export function useFavorites() {
     async (artistId: number, artist?: ArtistDetail): Promise<void> => {
       if (!authTokens?.user_id) throw new Error("Not authenticated");
       setFollowedArtistIds((prev: Set<number>) => new Set([...prev, artistId]));
-      if (artist) addArtistToFollowedCache(authTokens.user_id, artist);
+      if (artist) {
+        addArtistToFollowedCache(authTokens.user_id, artist);
+        store.set(optimisticFollowedArtistsAtom, (prev) => [
+          artist,
+          ...prev.filter((a) => a.id !== artistId),
+        ]);
+      }
       try {
         await invoke("add_favorite_artist", {
           userId: authTokens.user_id,
@@ -221,12 +243,17 @@ export function useFavorites() {
           next.delete(artistId);
           return next;
         });
-        if (artist) removeArtistFromFollowedCache(authTokens.user_id, artistId);
+        if (artist) {
+          removeArtistFromFollowedCache(authTokens.user_id, artistId);
+          store.set(optimisticFollowedArtistsAtom, (prev) =>
+            prev.filter((a) => a.id !== artistId),
+          );
+        }
         console.error("Failed to follow artist:", error);
         throw error;
       }
     },
-    [authTokens?.user_id, setFollowedArtistIds],
+    [authTokens?.user_id, setFollowedArtistIds, store],
   );
 
   const unfollowArtist = useCallback(
@@ -238,6 +265,9 @@ export function useFavorites() {
         return next;
       });
       removeArtistFromFollowedCache(authTokens.user_id, artistId);
+      store.set(optimisticFollowedArtistsAtom, (prev) =>
+        prev.filter((a) => a.id !== artistId),
+      );
       try {
         await invoke("remove_favorite_artist", {
           userId: authTokens.user_id,
@@ -251,7 +281,7 @@ export function useFavorites() {
         throw error;
       }
     },
-    [authTokens?.user_id, setFollowedArtistIds],
+    [authTokens?.user_id, setFollowedArtistIds, store],
   );
 
   // ==================== Mixes ====================

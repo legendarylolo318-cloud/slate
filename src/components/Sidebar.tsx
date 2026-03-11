@@ -18,10 +18,15 @@ import {
 import TidalImage from "./TidalImage";
 import MediaContextMenu from "./MediaContextMenu";
 import { CreatePlaylistModal } from "./AddToPlaylistMenu";
+import { getTrackArtistDisplay } from "../utils/itemHelpers";
 import { useState, useCallback, useMemo } from "react";
 import { useAtomValue } from "jotai";
 import { userPlaylistsAtom, favoritePlaylistsAtom } from "../atoms/playlists";
 import {
+  favoriteAlbumIdsAtom,
+  followedArtistIdsAtom,
+  optimisticFavoriteAlbumsAtom,
+  optimisticFollowedArtistsAtom,
   optimisticFavoriteMixesAtom,
   favoriteMixIdsAtom,
 } from "../atoms/favorites";
@@ -94,6 +99,9 @@ export default function Sidebar() {
   }, [userPlaylists, userPlaylistItems, favoritePlaylists]);
 
   // Albums
+  const optimisticAlbums = useAtomValue(optimisticFavoriteAlbumsAtom);
+  const favoriteAlbumIds = useAtomValue(favoriteAlbumIdsAtom);
+
   const albumFetch = useCallback(
     async (offset: number, limit: number) => {
       if (!authTokens?.user_id) return { items: [], totalNumberOfItems: 0 };
@@ -113,6 +121,25 @@ export default function Sidebar() {
     pageSize: 20,
     enabled: activeFilter === "albums" && !!authTokens?.user_id,
   });
+
+  // Merge optimistic albums with paginated list, filter by current favorites
+  const allAlbums = useMemo(() => {
+    const seen = new Set<number>();
+    const merged: typeof favoriteAlbumsList = [];
+    for (const a of optimisticAlbums) {
+      if (!seen.has(a.id) && favoriteAlbumIds.has(a.id)) {
+        seen.add(a.id);
+        merged.push(a);
+      }
+    }
+    for (const a of favoriteAlbumsList) {
+      if (!seen.has(a.id) && favoriteAlbumIds.has(a.id)) {
+        seen.add(a.id);
+        merged.push(a);
+      }
+    }
+    return merged;
+  }, [optimisticAlbums, favoriteAlbumsList, favoriteAlbumIds]);
 
   // Mixes
   const optimisticMixes = useAtomValue(optimisticFavoriteMixesAtom);
@@ -154,6 +181,9 @@ export default function Sidebar() {
   }, [optimisticMixes, favoriteMixesList, favoriteMixIds]);
 
   // Artists
+  const optimisticArtists = useAtomValue(optimisticFollowedArtistsAtom);
+  const followedArtistIds = useAtomValue(followedArtistIdsAtom);
+
   const artistFetch = useCallback(
     async (offset: number, limit: number) => {
       if (!authTokens?.user_id)
@@ -174,6 +204,25 @@ export default function Sidebar() {
     pageSize: 20,
     enabled: activeFilter === "artists" && !!authTokens?.user_id,
   });
+
+  // Merge optimistic artists with paginated list, filter by current follows
+  const allArtists = useMemo(() => {
+    const seen = new Set<number>();
+    const merged: typeof favoriteArtistsList = [];
+    for (const a of optimisticArtists) {
+      if (!seen.has(a.id) && followedArtistIds.has(a.id)) {
+        seen.add(a.id);
+        merged.push(a);
+      }
+    }
+    for (const a of favoriteArtistsList) {
+      if (!seen.has(a.id) && followedArtistIds.has(a.id)) {
+        seen.add(a.id);
+        merged.push(a);
+      }
+    }
+    return merged;
+  }, [optimisticArtists, favoriteArtistsList, followedArtistIds]);
 
   // Create playlist modal state
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -440,7 +489,7 @@ export default function Sidebar() {
             /* Albums view */
             albumsLoading ? (
               <SidebarSkeleton count={5} />
-            ) : favoriteAlbumsList.length === 0 ? (
+            ) : allAlbums.length === 0 ? (
               <div
                 className={`px-3 py-8 text-center ${isCollapsed ? "hidden" : ""}`}
               >
@@ -450,7 +499,7 @@ export default function Sidebar() {
               </div>
             ) : (
               <div className="space-y-px">
-                {favoriteAlbumsList.map((album) => (
+                {allAlbums.map((album) => (
                   <button
                     key={album.id}
                     onClick={() =>
@@ -492,7 +541,7 @@ export default function Sidebar() {
                           {album.title}
                         </div>
                         <div className="text-[12px] text-th-text-faint truncate leading-snug mt-0.5">
-                          {album.artist?.name || "Unknown Artist"}
+                          {getTrackArtistDisplay(album)}
                         </div>
                       </div>
                     )}
@@ -506,7 +555,7 @@ export default function Sidebar() {
             /* Artists view */
             artistsLoading ? (
               <SidebarSkeleton count={5} />
-            ) : favoriteArtistsList.length === 0 ? (
+            ) : allArtists.length === 0 ? (
               <div
                 className={`px-3 py-8 text-center ${isCollapsed ? "hidden" : ""}`}
               >
@@ -516,7 +565,7 @@ export default function Sidebar() {
               </div>
             ) : (
               <div className="space-y-px">
-                {favoriteArtistsList.map((artist) => (
+                {allArtists.map((artist) => (
                   <button
                     key={artist.id}
                     onClick={() =>
