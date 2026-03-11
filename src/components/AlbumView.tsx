@@ -475,7 +475,7 @@ export default function AlbumView({
                 title: displayTitle,
                 type: "album",
                 cover: displayCover,
-                artistName: displayArtist,
+                artistName: album?.artist?.name || album?.artists?.[0]?.name || albumInfo?.artistName,
               }}
               onClose={() => setContextMenu(null)}
             />
