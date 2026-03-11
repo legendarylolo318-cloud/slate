@@ -19,7 +19,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["image-png", "tray-icon"] }
+tauri = { version = "2", features = ["image-png"] }
+tauri-plugin-single-instance = "2"
 image = "0.25"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
@@ -52,3 +53,4 @@ webkit2gtk = "=2.0.1"
 mpris-server = "0.9"
 alsa = "0.10"
 libc = "0.2"
+ksni = "0.3"

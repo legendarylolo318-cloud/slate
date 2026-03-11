@@ -9,6 +9,8 @@ mod error;
 #[cfg(target_os = "linux")]
 mod mpris;
 mod scrobble;
+#[cfg(target_os = "linux")]
+mod tray;
 mod tidal_api;
 
 pub use error::SoneError;
@@ -22,8 +24,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::{Emitter, Listener, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
 use tidal_api::{AuthTokens, TidalClient};
@@ -321,6 +321,17 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // Single-instance: focus existing window if launched again
+            app.handle().plugin(
+                tauri_plugin_single_instance::init(|app, _args, _cwd| {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                    }
+                }),
+            )?;
+
             app.manage(AppState::new(app.handle().clone()));
 
             // Apply saved audio mode to audio thread
@@ -481,109 +492,9 @@ pub fn run() {
                 let _ = window.show();
             }
 
-            // Wayland fix: after hide()+show(), GTK client-side decoration (CSD)
-            // hit-test regions go stale — title bar buttons render but don't receive
-            // pointer events. Toggling decorations forces GTK to recalculate.
-            //
-            // If this causes visible flicker, try these alternatives instead:
-            //   Alt 1: resize nudge (less reliable but no flicker)
-            //     if let Ok(size) = window.outer_size() {
-            //         let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-            //             width: size.width + 1, height: size.height }));
-            //         let _ = window.set_size(tauri::Size::Physical(size));
-            //     }
-            //   Alt 2: minimize instead of hide in the CloseRequested handler
-            //     (keeps Wayland surface alive, but window stays in taskbar)
-            fn restore_window_from_tray(window: &tauri::WebviewWindow) {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-                #[cfg(target_os = "linux")]
-                if std::env::var("WAYLAND_DISPLAY").is_ok() {
-                    let _ = window.set_decorations(false);
-                    let _ = window.set_decorations(true);
-                }
-            }
-
-            // System tray icon (non-fatal — app should start even if tray fails)
-            match (|| -> Result<(), Box<dyn std::error::Error>> {
-                let show_item = MenuItemBuilder::with_id("show", "Show").build(app)?;
-                let play_pause =
-                    MenuItemBuilder::with_id("play-pause", "Play / Pause").build(app)?;
-                let next_track =
-                    MenuItemBuilder::with_id("next-track", "Next Track").build(app)?;
-                let prev_track =
-                    MenuItemBuilder::with_id("prev-track", "Previous Track").build(app)?;
-                let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
-                let menu = MenuBuilder::new(app)
-                    .item(&show_item)
-                    .separator()
-                    .item(&play_pause)
-                    .item(&next_track)
-                    .item(&prev_track)
-                    .separator()
-                    .item(&quit_item)
-                    .build()?;
-
-                let icon_bytes = include_bytes!("../icons/icon.png");
-                let tray_icon = if let Ok(image) = image::load_from_memory(icon_bytes) {
-                    let rgba = image.to_rgba8();
-                    let (width, height) = rgba.dimensions();
-                    let icon = tauri::image::Image::new(rgba.as_raw(), width, height);
-                    TrayIconBuilder::with_id("main-tray")
-                        .icon(icon)
-                        .menu(&menu)
-                        .tooltip("Sone")
-                        .on_tray_icon_event(|tray, event| {
-                            if let TrayIconEvent::Click {
-                                button: MouseButton::Left,
-                                button_state: MouseButtonState::Up,
-                                ..
-                            } = event
-                            {
-                                let app = tray.app_handle();
-                                if let Some(window) = app.get_webview_window("main") {
-                                    restore_window_from_tray(&window);
-                                }
-                            }
-                        })
-                        .on_menu_event(|app, event| match event.id().as_ref() {
-                            "show" => {
-                                if let Some(window) = app.get_webview_window("main") {
-                                    restore_window_from_tray(&window);
-                                }
-                            }
-                            "play-pause" => {
-                                app.emit("tray:toggle-play", ()).ok();
-                            }
-                            "next-track" => {
-                                app.emit("tray:next-track", ()).ok();
-                            }
-                            "prev-track" => {
-                                app.emit("tray:prev-track", ()).ok();
-                            }
-                            "quit" => {
-                                app.exit(0);
-                            }
-                            _ => {}
-                        })
-                        .build(app)?
-                } else {
-                    TrayIconBuilder::with_id("main-tray")
-                        .menu(&menu)
-                        .tooltip("Sone")
-                        .build(app)?
-                };
-                app.manage(tray_icon);
-                Ok(())
-            })() {
-                Ok(()) => {}
-                Err(e) => {
-                    log::warn!("Failed to create system tray icon: {e}");
-                    let state = app.state::<AppState>();
-                    state.minimize_to_tray.store(false, Ordering::Relaxed);
-                }
-            }
+            // System tray icon (ksni — native D-Bus StatusNotifierItem)
+            #[cfg(target_os = "linux")]
+            tray::setup(app);
 
             // Global media key shortcuts (non-fatal)
             if let Err(e) = app.handle().plugin(
