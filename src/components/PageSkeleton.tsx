@@ -4,7 +4,7 @@
  */
 
 function Pulse({ className }: { className: string }) {
-  return <div className={`animate-pulse bg-white/6 rounded ${className}`} />;
+  return <div className={`animate-pulse bg-th-hl-med rounded ${className}`} />;
 }
 
 /** Skeleton for artist pages — round avatar, name, bio snippet, tracks, discography */

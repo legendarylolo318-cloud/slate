@@ -304,8 +304,8 @@ export default function Sidebar() {
           onClick={navigateHome}
           className={`w-full flex items-center gap-3 px-2.5 py-2.5 rounded-md transition-colors duration-150 group ${
             currentView.type === "home"
-              ? "text-white bg-white/[0.08]"
-              : "text-th-text-secondary hover:text-white hover:bg-th-border-subtle"
+              ? "text-th-text-primary bg-th-hl-med"
+              : "text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle"
           } ${isCollapsed ? "justify-center px-0" : ""}`}
           title="Home"
         >
@@ -316,8 +316,8 @@ export default function Sidebar() {
           onClick={navigateToExplore}
           className={`w-full flex items-center gap-3 px-2.5 py-2.5 rounded-md transition-colors duration-150 group ${
             currentView.type === "explore" || currentView.type === "explorePage"
-              ? "text-white bg-white/[0.08]"
-              : "text-th-text-secondary hover:text-white hover:bg-th-border-subtle"
+              ? "text-th-text-primary bg-th-hl-med"
+              : "text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle"
           } ${isCollapsed ? "justify-center px-0" : ""}`}
           title="Explore"
         >
@@ -337,7 +337,7 @@ export default function Sidebar() {
         >
           <button
             onClick={() => setIsCollapsed(!isCollapsed)}
-            className={`flex items-center gap-3 px-2.5 py-2 text-th-text-secondary hover:text-white transition-colors duration-150 group ${
+            className={`flex items-center gap-3 px-2.5 py-2 text-th-text-secondary hover:text-th-text-primary transition-colors duration-150 group ${
               isCollapsed ? "justify-center w-full px-0" : ""
             }`}
           >
@@ -358,7 +358,7 @@ export default function Sidebar() {
               )}
               <button
                 onClick={() => navigateToLibraryViewAll(activeFilter)}
-                className="text-xs text-th-text-muted hover:text-white transition-colors px-2.5"
+                className="text-xs text-th-text-muted hover:text-th-text-primary transition-colors px-2.5"
               >
                 Show all
               </button>
@@ -377,7 +377,7 @@ export default function Sidebar() {
                   className={`px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-colors duration-150 ${
                     activeFilter === tab
                       ? "bg-th-accent/15 text-th-accent"
-                      : "bg-white/[0.07] hover:bg-th-inset text-th-text-secondary"
+                      : "bg-th-hl-med hover:bg-th-inset text-th-text-secondary"
                   }`}
                 >
                   {tab === "playlists"
@@ -408,7 +408,7 @@ export default function Sidebar() {
                 </p>
                 <button
                   onClick={() => setShowCreateModal(true)}
-                  className="mt-4 px-4 py-2 bg-white text-black rounded-full text-sm font-bold hover:scale-105 transition-transform"
+                  className="mt-4 px-4 py-2 bg-th-text-primary text-th-base rounded-full text-sm font-bold hover:scale-105 transition-transform"
                 >
                   Create playlist
                 </button>
@@ -420,7 +420,7 @@ export default function Sidebar() {
                   onClick={navigateToFavorites}
                   className={`w-full flex items-center gap-2.5 px-1.5 py-2 rounded-md transition-colors duration-150 group ${
                     currentView.type === "favorites"
-                      ? "bg-white/[0.08]"
+                      ? "bg-th-hl-med"
                       : "hover:bg-th-border-subtle"
                   } ${isCollapsed ? "justify-center" : ""}`}
                   title="Loved Tracks"
@@ -435,7 +435,7 @@ export default function Sidebar() {
 
                   {!isCollapsed && (
                     <div className="flex-1 min-w-0 text-left">
-                      <div className="text-[13px] font-medium text-white truncate leading-tight">
+                      <div className="text-[13px] font-medium text-th-text-primary truncate leading-tight">
                         Loved Tracks
                       </div>
                       <div className="text-[11px] text-th-text-faint truncate leading-tight mt-0.5">
@@ -473,7 +473,7 @@ export default function Sidebar() {
                       className={`w-full flex items-center gap-2.5 px-1.5 py-2 rounded-md transition-colors duration-150 group ${
                         currentView.type === "playlist" &&
                         currentView.playlistId === playlist.uuid
-                          ? "bg-white/[0.08]"
+                          ? "bg-th-hl-med"
                           : "hover:bg-th-border-subtle"
                       } ${isCollapsed ? "justify-center" : ""}`}
                       title={playlist.title}
@@ -492,7 +492,7 @@ export default function Sidebar() {
 
                       {!isCollapsed && (
                         <div className="flex-1 min-w-0 text-left">
-                          <div className="text-[14px] font-medium text-white truncate leading-snug">
+                          <div className="text-[14px] font-medium text-th-text-primary truncate leading-snug">
                             {playlist.title}
                           </div>
                           <div className="text-[12px] text-th-text-faint truncate leading-snug mt-0.5">
@@ -534,7 +534,7 @@ export default function Sidebar() {
                     className={`w-full flex items-center gap-2.5 px-1.5 py-2 rounded-md transition-colors duration-150 group ${
                       currentView.type === "album" &&
                       currentView.albumId === album.id
-                        ? "bg-white/[0.08]"
+                        ? "bg-th-hl-med"
                         : "hover:bg-th-border-subtle"
                     } ${isCollapsed ? "justify-center" : ""}`}
                     title={album.title}
@@ -552,14 +552,14 @@ export default function Sidebar() {
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center">
-                          <Music size={16} className="text-gray-600" />
+                          <Music size={16} className="text-th-text-faint" />
                         </div>
                       )}
                     </div>
 
                     {!isCollapsed && (
                       <div className="flex-1 min-w-0 text-left">
-                        <div className="text-[14px] font-medium text-white truncate leading-snug">
+                        <div className="text-[14px] font-medium text-th-text-primary truncate leading-snug">
                           {album.title}
                         </div>
                         <div className="text-[12px] text-th-text-faint truncate leading-snug mt-0.5">
@@ -612,7 +612,7 @@ export default function Sidebar() {
                     className={`w-full flex items-center gap-2.5 px-1.5 py-2 rounded-md transition-colors duration-150 group ${
                       currentView.type === "artist" &&
                       currentView.artistId === artist.id
-                        ? "bg-white/[0.08]"
+                        ? "bg-th-hl-med"
                         : "hover:bg-th-border-subtle"
                     } ${isCollapsed ? "justify-center" : ""}`}
                     title={artist.name}
@@ -630,14 +630,14 @@ export default function Sidebar() {
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center">
-                          <User size={16} className="text-gray-600" />
+                          <User size={16} className="text-th-text-faint" />
                         </div>
                       )}
                     </div>
 
                     {!isCollapsed && (
                       <div className="flex-1 min-w-0 text-left">
-                        <div className="text-[14px] font-medium text-white truncate leading-snug">
+                        <div className="text-[14px] font-medium text-th-text-primary truncate leading-snug">
                           {artist.name}
                         </div>
                         <div className="text-[12px] text-th-text-faint truncate leading-snug mt-0.5">
@@ -691,7 +691,7 @@ export default function Sidebar() {
                   }}
                   className={`w-full flex items-center gap-2.5 px-1.5 py-2 rounded-md transition-colors duration-150 group ${
                     currentView.type === "mix" && currentView.mixId === mix.id
-                      ? "bg-white/[0.08]"
+                      ? "bg-th-hl-med"
                       : "hover:bg-th-border-subtle"
                   } ${isCollapsed ? "justify-center" : ""}`}
                   title={mix.title}
@@ -709,14 +709,14 @@ export default function Sidebar() {
                       />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center">
-                        <Music size={16} className="text-gray-600" />
+                        <Music size={16} className="text-th-text-faint" />
                       </div>
                     )}
                   </div>
 
                   {!isCollapsed && (
                     <div className="flex-1 min-w-0 text-left">
-                      <div className="text-[14px] font-medium text-white truncate leading-snug">
+                      <div className="text-[14px] font-medium text-th-text-primary truncate leading-snug">
                         {mix.title}
                       </div>
                       <div className="text-[12px] text-th-text-faint truncate leading-snug mt-0.5">
