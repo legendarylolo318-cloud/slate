@@ -796,15 +796,19 @@ export async function getFavoriteArtists(
   userId: number,
   offset: number = 0,
   limit: number = 20,
+  order: string = "DATE",
+  orderDirection: string = "DESC",
 ): Promise<Paginated<ArtistDetail>> {
   return cached(
-    `fav-artists:${userId}:${offset}:${limit}`,
+    `fav-artists:${userId}:${offset}:${limit}:${order}:${orderDirection}`,
     ["fav-artists"],
     () =>
       invoke<Paginated<ArtistDetail>>("get_favorite_artists", {
         userId,
         offset,
         limit,
+        order,
+        orderDirection,
       }),
     TTL.MEDIUM,
   );
@@ -814,15 +818,19 @@ export async function getFavoriteAlbums(
   userId: number,
   offset: number = 0,
   limit: number = 50,
+  order: string = "DATE",
+  orderDirection: string = "DESC",
 ): Promise<Paginated<AlbumDetail>> {
   return cached(
-    `fav-albums:${userId}:${offset}:${limit}`,
+    `fav-albums:${userId}:${offset}:${limit}:${order}:${orderDirection}`,
     ["fav-albums"],
     () =>
       invoke<Paginated<AlbumDetail>>("get_favorite_albums", {
         userId,
         offset,
         limit,
+        order,
+        orderDirection,
       }),
     TTL.MEDIUM,
   );
@@ -831,12 +839,19 @@ export async function getFavoriteAlbums(
 export async function getFavoriteMixes(
   offset: number = 0,
   limit: number = 20,
+  order: string = "DATE",
+  orderDirection: string = "DESC",
 ): Promise<Paginated<FavoriteMix>> {
   return cached(
-    `fav-mixes:${offset}:${limit}`,
+    `fav-mixes:${offset}:${limit}:${order}:${orderDirection}`,
     ["fav-mixes"],
     () =>
-      invoke<Paginated<FavoriteMix>>("get_favorite_mixes", { offset, limit }),
+      invoke<Paginated<FavoriteMix>>("get_favorite_mixes", {
+        offset,
+        limit,
+        order,
+        orderDirection,
+      }),
     TTL.MEDIUM,
   );
 }
