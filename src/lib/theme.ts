@@ -46,6 +46,7 @@ export interface DerivedTheme {
   // Slider / progress
   sliderTrack: string;
   sliderFill: string;
+  sliderBorder: string;
 
   // Semantic (fixed)
   success: string;
@@ -213,6 +214,7 @@ export function deriveTheme(accent: string, bgBase: string): DerivedTheme {
   // Slider / progress
   const sliderTrack = isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)";
   const sliderFill = isDark ? "rgba(255,255,255,0.65)" : "rgba(0,0,0,0.45)";
+  const sliderBorder = isDark ? bgElevated : "rgba(255,255,255,0.35)";
 
   return {
     bgBase,
@@ -240,6 +242,7 @@ export function deriveTheme(accent: string, bgBase: string): DerivedTheme {
     hlStrong,
     sliderTrack,
     sliderFill,
+    sliderBorder,
     success: "#1ed760",
     error: "#ff6666",
     warning: "#ffa726",
@@ -277,6 +280,7 @@ export function themeToCssVars(dt: DerivedTheme): Record<string, string> {
     "--th-hl-strong": dt.hlStrong,
     "--th-slider-track": dt.sliderTrack,
     "--th-slider-fill": dt.sliderFill,
+    "--th-slider-border": dt.sliderBorder,
     "--th-success": dt.success,
     "--th-error": dt.error,
     "--th-warning": dt.warning,

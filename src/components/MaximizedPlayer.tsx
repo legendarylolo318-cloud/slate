@@ -118,8 +118,8 @@ const MaxProgressScrubber = memo(function MaxProgressScrubber({
           />
           {!(isHoveringProgress || isDragging) && (
             <div className="absolute inset-0 rounded-full">
-              <div className="absolute left-0 right-0 top-0 h-[1px] bg-th-elevated" />
-              <div className="absolute left-0 right-0 bottom-0 h-[1px] bg-th-elevated" />
+              <div className="absolute left-0 right-0 top-0 h-[1px] bg-th-slider-border" />
+              <div className="absolute left-0 right-0 bottom-0 h-[1px] bg-th-slider-border" />
             </div>
           )}
         </div>

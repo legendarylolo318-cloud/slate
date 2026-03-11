@@ -31,6 +31,7 @@ export default {
           "hl-strong": "var(--th-hl-strong)",
           "slider-track": "var(--th-slider-track)",
           "slider-fill": "var(--th-slider-fill)",
+          "slider-border": "var(--th-slider-border)",
         },
       },
     },
