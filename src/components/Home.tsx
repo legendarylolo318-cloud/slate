@@ -324,7 +324,7 @@ export default function Home() {
       <div className="px-6 py-8">
         {/* Quick Access Grid (Hero) — SHORTCUT_LIST from v2 feed */}
         <section className="mb-10">
-          <h1 className="text-[32px] font-bold text-white mb-6 tracking-tight">
+          <h1 className="text-[32px] font-bold text-th-text-primary mb-6 tracking-tight">
             {greeting}
           </h1>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -340,7 +340,7 @@ export default function Home() {
                 </div>
               </div>
               <div className="flex-1 flex items-center px-3 min-w-0">
-                <span className="font-bold text-[13px] text-white truncate">
+                <span className="font-bold text-[13px] text-th-text-primary truncate">
                   Loved Tracks
                 </span>
               </div>
@@ -372,7 +372,7 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="flex-1 flex items-center px-3 min-w-0">
-                  <span className="font-bold text-[13px] text-white truncate">
+                  <span className="font-bold text-[13px] text-th-text-primary truncate">
                     {getItemTitle(item)}
                   </span>
                 </div>

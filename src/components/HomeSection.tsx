@@ -185,7 +185,7 @@ export default function HomeSection({ section }: HomeSectionProps) {
     <section className="mb-8">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-[22px] font-bold text-white tracking-tight hover:underline cursor-pointer">
+        <h2 className="text-[22px] font-bold text-th-text-primary tracking-tight hover:underline cursor-pointer">
           {section.title}
         </h2>
         <div className="flex items-center gap-2">
@@ -194,7 +194,7 @@ export default function HomeSection({ section }: HomeSectionProps) {
             onClick={() => scroll("left")}
             className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
               canScrollLeft
-                ? "bg-th-inset hover:bg-th-inset-hover text-white"
+                ? "bg-th-inset hover:bg-th-inset-hover text-th-text-primary"
                 : "text-th-text-disabled cursor-default"
             }`}
             disabled={!canScrollLeft}
@@ -205,7 +205,7 @@ export default function HomeSection({ section }: HomeSectionProps) {
             onClick={() => scroll("right")}
             className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
               canScrollRight
-                ? "bg-th-inset hover:bg-th-inset-hover text-white"
+                ? "bg-th-inset hover:bg-th-inset-hover text-th-text-primary"
                 : "text-th-text-disabled cursor-default"
             }`}
             disabled={!canScrollRight}
@@ -215,7 +215,7 @@ export default function HomeSection({ section }: HomeSectionProps) {
           {section.hasMore && section.apiPath && (
             <button
               onClick={() => navigateToViewAll(section.title, section.apiPath!)}
-              className="text-[13px] font-bold text-th-text-muted hover:text-white uppercase tracking-wider transition-colors ml-2"
+              className="text-[13px] font-bold text-th-text-muted hover:text-th-text-primary uppercase tracking-wider transition-colors ml-2"
             >
               View all
             </button>
@@ -389,13 +389,13 @@ function TrackListSection({
   return (
     <section className="mb-8">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-[22px] font-bold text-white tracking-tight hover:underline cursor-pointer">
+        <h2 className="text-[22px] font-bold text-th-text-primary tracking-tight hover:underline cursor-pointer">
           {section.title}
         </h2>
         {section.hasMore && section.apiPath && (
           <button
             onClick={() => navigateToViewAll(section.title, section.apiPath!)}
-            className="text-[13px] font-bold text-th-text-muted hover:text-white uppercase tracking-wider transition-colors"
+            className="text-[13px] font-bold text-th-text-muted hover:text-th-text-primary uppercase tracking-wider transition-colors"
           >
             View all
           </button>
@@ -419,7 +419,7 @@ function TrackListSection({
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
-                  <Music size={16} className="text-gray-600" />
+                  <Music size={16} className="text-th-text-faint" />
                 </div>
               )}
               <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
@@ -427,7 +427,7 @@ function TrackListSection({
               </div>
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[14px] text-white truncate font-medium">
+              <p className="text-[14px] text-th-text-primary truncate font-medium">
                 {item.album ? (
                   <span
                     className="hover:underline"
@@ -462,7 +462,7 @@ function TrackListSection({
             {/* Three-dots on hover */}
             <button
               onClick={(e) => openTrackMenu(e, item, idx)}
-              className="w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center text-th-text-muted hover:text-white hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-[opacity,colors]"
+              className="w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center text-th-text-muted hover:text-th-text-primary hover:bg-th-hl-strong opacity-0 group-hover:opacity-100 transition-[opacity,colors]"
             >
               <MoreHorizontal size={16} />
             </button>
@@ -574,13 +574,13 @@ function CompactGridSection({
   return (
     <section className="mb-8">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-[22px] font-bold text-white tracking-tight hover:underline cursor-pointer">
+        <h2 className="text-[22px] font-bold text-th-text-primary tracking-tight hover:underline cursor-pointer">
           {section.title}
         </h2>
         {section.hasMore && section.apiPath && (
           <button
             onClick={() => navigateToViewAll(section.title, section.apiPath!)}
-            className="text-[13px] font-bold text-th-text-muted hover:text-white uppercase tracking-wider transition-colors"
+            className="text-[13px] font-bold text-th-text-muted hover:text-th-text-primary uppercase tracking-wider transition-colors"
           >
             View all
           </button>
@@ -613,7 +613,7 @@ function CompactGridSection({
                   />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
-                    <Music size={16} className="text-gray-600" />
+                    <Music size={16} className="text-th-text-faint" />
                   </div>
                 )}
                 {!myTracks && (
@@ -627,7 +627,7 @@ function CompactGridSection({
                 )}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-[14px] text-white truncate font-medium">
+                <p className="text-[14px] text-th-text-primary truncate font-medium">
                   {myTracks ? (
                     "Loved Tracks"
                   ) : isTrack && item.album ? (
@@ -666,7 +666,7 @@ function CompactGridSection({
               {!myTracks && (
                 <button
                   onClick={(e) => openMenu(e, item, idx)}
-                  className="w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center text-th-text-muted hover:text-white hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-[opacity,colors]"
+                  className="w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center text-th-text-muted hover:text-th-text-primary hover:bg-th-hl-strong opacity-0 group-hover:opacity-100 transition-[opacity,colors]"
                 >
                   <MoreHorizontal size={16} />
                 </button>
