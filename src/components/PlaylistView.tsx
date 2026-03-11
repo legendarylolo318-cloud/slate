@@ -29,6 +29,7 @@ import TidalImage from "./TidalImage";
 import TrackList from "./TrackList";
 import MediaContextMenu from "./MediaContextMenu";
 import DebouncedFilterInput from "./DebouncedFilterInput";
+import PageContainer from "./PageContainer";
 import { DetailPageSkeleton } from "./PageSkeleton";
 
 interface PlaylistViewProps {
@@ -368,6 +369,7 @@ export default function PlaylistView({
 
   return (
     <div className="flex-1 bg-linear-to-b from-th-surface to-th-base overflow-y-auto scrollbar-thin scrollbar-thumb-th-button scrollbar-track-transparent">
+      <PageContainer>
       <div className="px-8 pb-8 pt-8 flex items-end gap-7">
         <div className="w-[232px] h-[232px] shrink-0 rounded-lg overflow-hidden shadow-2xl bg-th-surface-hover flex items-center justify-center">
           {playlistInfo?.image ? (
@@ -535,6 +537,8 @@ export default function PlaylistView({
           </div>
         )}
       </div>
+
+      </PageContainer>
 
       {/* Description Modal */}
       {showDescriptionModal && displayDescription && (

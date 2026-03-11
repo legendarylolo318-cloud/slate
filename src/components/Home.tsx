@@ -16,6 +16,7 @@ import {
   isMixItem,
   isMyTracksItem,
 } from "../utils/itemHelpers";
+import PageContainer from "./PageContainer";
 
 // Simple in-memory cache to prevent skeleton flash on navigation
 let cachedHomeData: {
@@ -287,7 +288,7 @@ export default function Home() {
   if (loading) {
     return (
       <div className="flex-1 bg-gradient-to-b from-th-surface to-th-base min-h-full">
-        <div className="px-6 py-8">
+        <PageContainer className="px-6 py-8">
           {/* Skeleton greeting */}
           <div className="h-10 w-64 bg-th-surface-hover rounded-lg animate-pulse mb-6" />
           {/* Skeleton quick access */}
@@ -314,14 +315,14 @@ export default function Home() {
               </div>
             </div>
           ))}
-        </div>
+        </PageContainer>
       </div>
     );
   }
 
   return (
     <div className="flex-1 bg-gradient-to-b from-th-surface to-th-base min-h-full">
-      <div className="px-6 py-8">
+      <PageContainer className="px-6 py-8">
         {/* Quick Access Grid (Hero) — SHORTCUT_LIST from v2 feed */}
         <section className="mb-10">
           <h1 className="text-[32px] font-bold text-th-text-primary mb-6 tracking-tight">
@@ -408,7 +409,7 @@ export default function Home() {
 
         {/* Infinite scroll sentinel */}
         <div ref={sentinelRef} className="h-1" />
-      </div>
+      </PageContainer>
 
       {/* Media context menu for quick-access cards */}
       {contextMenu && (

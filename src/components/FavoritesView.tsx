@@ -16,6 +16,7 @@ import { shuffleAtom } from "../atoms/playback";
 import { type Track } from "../types";
 import TrackList from "./TrackList";
 import DebouncedFilterInput from "./DebouncedFilterInput";
+import PageContainer from "./PageContainer";
 import { DetailPageSkeleton } from "./PageSkeleton";
 
 interface FavoritesViewProps {
@@ -252,6 +253,7 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
 
   return (
     <div className="flex-1 bg-linear-to-b from-th-surface to-th-base overflow-y-auto scrollbar-thin scrollbar-thumb-th-button scrollbar-track-transparent">
+      <PageContainer>
       {/* Favorites Header */}
       <div className="px-8 py-8 flex items-end gap-7">
         <div className="w-[232px] h-[232px] shrink-0 rounded-lg overflow-hidden shadow-2xl bg-linear-to-br from-[#450af5] via-[#8e2de2] to-[#00d2ff] flex items-center justify-center">
@@ -317,6 +319,7 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
           </div>
         )}
       </div>
+      </PageContainer>
     </div>
   );
 }

@@ -3,6 +3,8 @@
  * Used while data is being fetched to prevent layout shift and provide visual feedback.
  */
 
+import PageContainer from "./PageContainer";
+
 function Pulse({ className }: { className: string }) {
   return <div className={`animate-pulse bg-th-hl-med rounded ${className}`} />;
 }
@@ -11,6 +13,7 @@ function Pulse({ className }: { className: string }) {
 export function ArtistPageSkeleton() {
   return (
     <div className="flex-1 bg-linear-to-b from-th-surface to-th-base overflow-hidden">
+      <PageContainer>
       {/* Header: round avatar + name + bio */}
       <div className="px-8 pb-8 pt-8 flex items-end gap-7">
         <Pulse className="w-[232px] h-[232px] shrink-0 rounded-full!" />
@@ -65,6 +68,7 @@ export function ArtistPageSkeleton() {
           ))}
         </div>
       </div>
+      </PageContainer>
     </div>
   );
 }
@@ -73,7 +77,7 @@ export function ArtistPageSkeleton() {
 export function SearchPageSkeleton() {
   return (
     <div className="flex-1 bg-linear-to-b from-th-surface to-th-base min-h-full">
-      <div className="px-6 py-6">
+      <PageContainer className="px-6 py-6">
         {/* Tab pills */}
         <div className="pb-6 flex items-center gap-2">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -128,7 +132,7 @@ export function SearchPageSkeleton() {
             ))}
           </div>
         </div>
-      </div>
+      </PageContainer>
     </div>
   );
 }
@@ -144,6 +148,7 @@ export function DetailPageSkeleton({
 
   return (
     <div className="flex-1 bg-linear-to-b from-th-surface to-th-base overflow-hidden">
+      <PageContainer>
       {/* Header area */}
       <div className="px-8 pb-8 pt-8 flex items-end gap-7">
         {/* Cover art skeleton */}
@@ -206,6 +211,7 @@ export function DetailPageSkeleton({
           </div>
         ))}
       </div>
+      </PageContainer>
     </div>
   );
 }

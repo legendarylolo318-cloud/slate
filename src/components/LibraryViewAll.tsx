@@ -33,6 +33,7 @@ import MediaCard from "./MediaCard";
 import MediaContextMenu from "./MediaContextMenu";
 import DebouncedFilterInput from "./DebouncedFilterInput";
 import SortDropdown from "./SortDropdown";
+import PageContainer from "./PageContainer";
 import { buildMediaItem } from "../utils/itemHelpers";
 import type { MediaItemType, Playlist } from "../types";
 
@@ -503,6 +504,7 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
   if (loading) {
     return (
       <div className="flex-1 bg-linear-to-b from-th-surface to-th-base overflow-y-auto scrollbar-thin scrollbar-thumb-th-button scrollbar-track-transparent">
+        <PageContainer>
         <div className="px-8 pt-10 pb-6">
           <div className="h-8 w-64 bg-th-surface-hover rounded animate-pulse mb-2" />
           <div className="h-4 w-32 bg-th-surface-hover rounded animate-pulse" />
@@ -513,12 +515,14 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
         <div className="px-8 pb-8">
           <MediaGridSkeleton count={18} />
         </div>
+        </PageContainer>
       </div>
     );
   }
 
   return (
     <div className="flex-1 bg-linear-to-b from-th-surface to-th-base overflow-y-auto scrollbar-thin scrollbar-thumb-th-button scrollbar-track-transparent">
+      <PageContainer>
       {/* Header */}
       <div className="px-8 pt-10 pb-6">
         <h1 className="text-[32px] font-extrabold text-th-text-primary leading-tight tracking-tight">
@@ -602,6 +606,8 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
           </div>
         )}
       </div>
+
+      </PageContainer>
 
       {/* Context menu */}
       {contextMenu && (

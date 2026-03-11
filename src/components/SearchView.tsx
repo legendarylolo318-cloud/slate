@@ -19,6 +19,7 @@ import MediaContextMenu from "./MediaContextMenu";
 import TrackContextMenu from "./TrackContextMenu";
 import MediaCard from "./MediaCard";
 import ReusableTrackList from "./TrackList";
+import PageContainer from "./PageContainer";
 import { SearchPageSkeleton } from "./PageSkeleton";
 
 type SearchTab =
@@ -192,7 +193,7 @@ export default function SearchView({ query, onBack }: SearchViewProps) {
 
   return (
     <div className="flex-1 bg-linear-to-b from-th-surface to-th-base min-h-full">
-      <div className="px-6 py-6">
+      <PageContainer className="px-6 py-6">
         {/* Tab bar */}
         <div className="pb-6 flex items-center gap-2">
           {TABS.map((tab) => (
@@ -573,7 +574,7 @@ export default function SearchView({ query, onBack }: SearchViewProps) {
             onClose={() => setContextMenu(null)}
           />
         )}
-      </div>
+      </PageContainer>
     </div>
   );
 }

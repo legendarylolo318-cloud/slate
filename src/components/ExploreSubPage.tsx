@@ -5,6 +5,7 @@ import { getItemTitle, getItemId } from "../utils/itemHelpers";
 import type { HomeSection as HomeSectionType } from "../types";
 import HomeSection from "./HomeSection";
 import { MediaGridSkeleton, MediaGridError, MediaGridEmpty } from "./MediaGrid";
+import PageContainer from "./PageContainer";
 
 interface ExploreSubPageProps {
   apiPath: string;
@@ -74,7 +75,7 @@ export default function ExploreSubPage({
 
   return (
     <div className="flex-1 bg-gradient-to-b from-th-surface to-th-base min-h-full">
-      <div className="px-6 py-8">
+      <PageContainer className="px-6 py-8">
         {/* Header */}
         <div className="flex items-center gap-4 mb-8">
           <h1 className="text-[32px] font-bold text-th-text-primary tracking-tight">
@@ -113,7 +114,7 @@ export default function ExploreSubPage({
             ))}
           </div>
         )}
-      </div>
+      </PageContainer>
     </div>
   );
 }

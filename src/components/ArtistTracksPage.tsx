@@ -6,6 +6,7 @@ import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { getArtistTopTracksAll } from "../api/tidal";
 import type { Track } from "../types";
 import TrackList from "./TrackList";
+import PageContainer from "./PageContainer";
 
 const PAGE_SIZE = 50;
 
@@ -159,6 +160,7 @@ export default function ArtistTracksPage({
   if (loading) {
     return (
       <div className="flex-1 bg-linear-to-b from-th-surface to-th-base overflow-y-auto">
+        <PageContainer>
         <div className="px-8 pt-6 pb-4">
           <div className="h-8 w-48 bg-th-surface-hover rounded animate-pulse mb-6" />
         </div>
@@ -170,6 +172,7 @@ export default function ArtistTracksPage({
             />
           ))}
         </div>
+        </PageContainer>
       </div>
     );
   }
@@ -189,6 +192,7 @@ export default function ArtistTracksPage({
 
   return (
     <div className="flex-1 bg-linear-to-b from-th-surface to-th-base overflow-y-auto scrollbar-thin scrollbar-thumb-th-button scrollbar-track-transparent">
+      <PageContainer>
       <div className="px-8 pt-6 pb-4">
         <h1 className="text-[32px] font-extrabold text-th-text-primary leading-tight mb-1">
           Popular tracks
@@ -241,6 +245,7 @@ export default function ArtistTracksPage({
           />
         )}
       </div>
+      </PageContainer>
     </div>
   );
 }
