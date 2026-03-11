@@ -364,7 +364,7 @@ const QueueTab = memo(function QueueTab({
                   {sourceIsNavigable ? (
                     <button
                       onClick={navigateToSource}
-                      className="uppercase hover:text-white transition-colors hover:underline"
+                      className="uppercase hover:text-th-text-primary transition-colors hover:underline"
                     >
                       {source.name}
                     </button>
@@ -378,7 +378,7 @@ const QueueTab = memo(function QueueTab({
             </h3>
             <button
               onClick={() => clearQueue()}
-              className="text-[11px] text-th-text-muted hover:text-white transition-colors"
+              className="text-[11px] text-th-text-muted hover:text-th-text-primary transition-colors"
             >
               Clear
             </button>
@@ -411,7 +411,7 @@ const QueueTab = memo(function QueueTab({
                           {sourceIsNavigable ? (
                             <button
                               onClick={navigateToSource}
-                              className="uppercase hover:text-white transition-colors hover:underline"
+                              className="uppercase hover:text-th-text-primary transition-colors hover:underline"
                             >
                               {source.name}
                             </button>
@@ -578,7 +578,7 @@ function SuggestedTrackRow({
         onClick={handleRowClick}
         onContextMenu={handleRightClick}
         className={`flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer group transition-[background-color] duration-150 ${
-          isActive ? "bg-white/[0.08]" : "hover:bg-white/[0.05]"
+          isActive ? "bg-th-hl-med" : "hover:bg-th-hl-faint"
         }`}
       >
         {/* Album art with play overlay — scoped hover via group/image */}
@@ -601,7 +601,7 @@ function SuggestedTrackRow({
         <div className="flex-1 min-w-0">
           <p
             className={`text-[13px] font-medium truncate ${
-              isActive ? "text-th-accent" : "text-white"
+              isActive ? "text-th-accent" : "text-th-text-primary"
             }`}
           >
             {getTrackDisplayTitle(track)}
@@ -610,14 +610,14 @@ function SuggestedTrackRow({
             <TrackArtists
               artists={track.artists}
               artist={track.artist}
-              className="hover:text-white hover:underline cursor-pointer"
+              className="hover:text-th-text-primary hover:underline cursor-pointer"
               onArtistClick={onArtistClick}
             />
             {track.album?.title && (
               <>
                 <span className="mx-1">&middot;</span>
                 <span
-                  className="hover:text-white hover:underline cursor-pointer"
+                  className="hover:text-th-text-primary hover:underline cursor-pointer"
                   onClick={(e) => {
                     e.stopPropagation();
                     onAlbumClick?.(track);
@@ -636,7 +636,7 @@ function SuggestedTrackRow({
           <button
             ref={dotsBtnRef}
             onClick={handleDotsClick}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-th-text-disabled hover:text-white hover:bg-th-border-subtle transition-colors duration-150"
+            className="w-7 h-7 rounded-full flex items-center justify-center text-th-text-disabled hover:text-th-text-primary hover:bg-th-border-subtle transition-colors duration-150"
             title="More options"
           >
             <MoreHorizontal size={15} />
@@ -653,7 +653,7 @@ function SuggestedTrackRow({
               className={
                 isFav
                   ? "text-th-accent"
-                  : "text-th-text-disabled hover:text-white"
+                  : "text-th-text-disabled hover:text-th-text-primary"
               }
               fill={isFav ? "currentColor" : "none"}
             />
@@ -662,7 +662,7 @@ function SuggestedTrackRow({
           {/* Add to queue */}
           <button
             onClick={handleAddToQueue}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-th-text-disabled hover:text-white hover:bg-th-border-subtle transition-colors duration-150"
+            className="w-7 h-7 rounded-full flex items-center justify-center text-th-text-disabled hover:text-th-text-primary hover:bg-th-border-subtle transition-colors duration-150"
             title="Add to queue"
           >
             <ListPlus size={15} />
@@ -802,14 +802,14 @@ const SuggestedTab = memo(function SuggestedTab() {
             className="flex items-center gap-3 px-3 py-2"
             style={{ animationDelay: `${i * 60}ms` }}
           >
-            <div className="w-10 h-10 rounded bg-white/[0.06] animate-pulse shrink-0" />
+            <div className="w-10 h-10 rounded bg-th-hl-med animate-pulse shrink-0" />
             <div className="flex-1 min-w-0 flex flex-col gap-1.5">
               <div
-                className="h-[13px] rounded bg-white/[0.06] animate-pulse"
+                className="h-[13px] rounded bg-th-hl-med animate-pulse"
                 style={{ width: `${[65, 45, 72, 55, 80, 50, 60, 40][i]}%` }}
               />
               <div
-                className="h-[11px] rounded bg-white/[0.04] animate-pulse"
+                className="h-[11px] rounded bg-th-hl-faint animate-pulse"
                 style={{ width: `${[50, 70, 40, 60, 35, 55, 45, 65][i]}%` }}
               />
             </div>
@@ -867,7 +867,7 @@ const LyricsLine = memo(function LyricsLine({
       ref={lineRef}
       className={`text-xl font-medium cursor-default leading-snug origin-left transition-[transform,color,opacity] duration-500 ease-out ${
         isActive
-          ? "scale-[1.22] font-bold text-white"
+          ? "scale-[1.22] font-bold text-th-text-primary"
           : isPast
             ? "text-th-text-disabled"
             : "text-th-text-faint"
@@ -1008,7 +1008,7 @@ const LyricsTab = memo(function LyricsTab() {
         {[72, 55, 85, 40, 68, 90, 50, 75, 60, 45, 80, 35].map((w, i) => (
           <div
             key={i}
-            className="h-[22px] rounded bg-white/[0.06] animate-pulse"
+            className="h-[22px] rounded bg-th-hl-med animate-pulse"
             style={{ width: `${w}%`, animationDelay: `${i * 80}ms` }}
           />
         ))}
@@ -1084,14 +1084,14 @@ const LyricsTab = memo(function LyricsTab() {
 
 function SkeletonBar({ className = "" }: { className?: string }) {
   return (
-    <div className={`animate-pulse rounded bg-white/[0.06] ${className}`} />
+    <div className={`animate-pulse rounded bg-th-hl-med ${className}`} />
   );
 }
 
 function SkeletonRow({ first = false }: { first?: boolean }) {
   return (
     <div
-      className={`flex flex-col gap-1.5 py-4 ${first ? "" : "border-t border-white/[0.06]"}`}
+      className={`flex flex-col gap-1.5 py-4 ${first ? "" : "border-t border-th-border-subtle"}`}
     >
       <SkeletonBar className="h-3 w-20" />
       <SkeletonBar className="h-[18px] w-48" />
@@ -1234,11 +1234,11 @@ const CreditsTab = memo(function CreditsTab() {
       )}
       {!bioLoading && bio && (
         <div className="flex flex-col pt-6 mt-2">
-          <h3 className="text-[16px] font-bold text-white mb-3">Bio</h3>
+          <h3 className="text-[16px] font-bold text-th-text-primary mb-3">Bio</h3>
           <BioText
             bio={bio}
             onArtistClick={handleArtistLink}
-            className="text-white/80"
+            className="text-th-text-secondary"
           />
         </div>
       )}
@@ -1257,12 +1257,12 @@ function CreditRow({
 }) {
   return (
     <div
-      className={`flex flex-col gap-1 py-4 ${first ? "" : "border-t border-white/[0.06]"}`}
+      className={`flex flex-col gap-1 py-4 ${first ? "" : "border-t border-th-border-subtle"}`}
     >
-      <span className="text-[11px] font-bold text-white/40 uppercase tracking-widest">
+      <span className="text-[11px] font-bold text-th-text-faint uppercase tracking-widest">
         {label}
       </span>
-      <span className="text-[15px] text-white font-medium leading-relaxed">
+      <span className="text-[15px] text-th-text-primary font-medium leading-relaxed">
         {value}
       </span>
     </div>
@@ -1311,7 +1311,7 @@ function TrackRow({
           setContextMenu({ x: e.clientX, y: e.clientY });
         }}
         className={`flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer group transition-[background-color] duration-150 ${
-          isActive ? "bg-white/[0.08]" : "hover:bg-white/[0.05]"
+          isActive ? "bg-th-hl-med" : "hover:bg-th-hl-faint"
         } ${dimmed ? "opacity-50" : ""}`}
       >
         <div className="w-10 h-10 rounded bg-th-surface-hover overflow-hidden shrink-0 relative">
@@ -1339,7 +1339,7 @@ function TrackRow({
         <div className="flex-1 min-w-0">
           <p
             className={`text-[13px] font-medium truncate ${
-              isActive ? "text-th-accent" : "text-white"
+              isActive ? "text-th-accent" : "text-th-text-primary"
             }`}
           >
             {getTrackDisplayTitle(track)}
@@ -1350,7 +1350,7 @@ function TrackRow({
               artist={track.artist}
               className={
                 onArtistClick
-                  ? "hover:text-white hover:underline cursor-pointer"
+                  ? "hover:text-th-text-primary hover:underline cursor-pointer"
                   : ""
               }
               onArtistClick={onArtistClick}
@@ -1361,7 +1361,7 @@ function TrackRow({
                 <span
                   className={
                     onAlbumClick
-                      ? "hover:text-white hover:underline cursor-pointer"
+                      ? "hover:text-th-text-primary hover:underline cursor-pointer"
                       : ""
                   }
                   onClick={
@@ -1387,7 +1387,7 @@ function TrackRow({
               e.stopPropagation();
               setDotsMenuOpen(true);
             }}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-th-text-disabled hover:text-white hover:bg-th-border-subtle transition-colors duration-150"
+            className="w-7 h-7 rounded-full flex items-center justify-center text-th-text-disabled hover:text-th-text-primary hover:bg-th-border-subtle transition-colors duration-150"
             title="More options"
           >
             <MoreHorizontal size={15} />
@@ -1408,7 +1408,7 @@ function TrackRow({
                 className={
                   isFav
                     ? "text-th-accent"
-                    : "text-th-text-disabled hover:text-white"
+                    : "text-th-text-disabled hover:text-th-text-primary"
                 }
                 fill={isFav ? "currentColor" : "none"}
               />
@@ -1421,7 +1421,7 @@ function TrackRow({
                 e.stopPropagation();
                 onRemove();
               }}
-              className="w-7 h-7 rounded-full flex items-center justify-center text-th-text-disabled hover:text-white hover:bg-th-border-subtle transition-colors duration-150"
+              className="w-7 h-7 rounded-full flex items-center justify-center text-th-text-disabled hover:text-th-text-primary hover:bg-th-border-subtle transition-colors duration-150"
               title="Remove"
             >
               <X size={14} />
@@ -1539,7 +1539,7 @@ export default function NowPlayingDrawer() {
             />
           </div>
           <div className="text-center w-full max-w-[520px]">
-            <h2 className="text-[22px] font-bold text-white truncate">
+            <h2 className="text-[22px] font-bold text-th-text-primary truncate">
               {getTrackDisplayTitle(currentTrack)}
             </h2>
             <p className="text-[15px] text-th-text-muted truncate mt-1">
@@ -1559,8 +1559,8 @@ export default function NowPlayingDrawer() {
                   onClick={() => setActiveTab(tab.id)}
                   className={`flex items-center gap-2 px-4 py-2 rounded-full text-[13px] font-medium transition-colors duration-150 ${
                     activeTab === tab.id
-                      ? "bg-white/12 text-white"
-                      : "text-th-text-muted hover:text-white hover:bg-white/5"
+                      ? "bg-th-hl-strong text-th-text-primary"
+                      : "text-th-text-muted hover:text-th-text-primary hover:bg-th-hl-faint"
                   }`}
                 >
                   <tab.icon size={14} />
@@ -1571,14 +1571,14 @@ export default function NowPlayingDrawer() {
             <div className="flex items-center gap-1 shrink-0 ml-2">
               <button
                 onClick={() => setMaximized(true)}
-                className="w-8 h-8 rounded-full flex items-center justify-center text-th-text-muted hover:text-white hover:bg-white/8 transition-colors duration-150"
+                className="w-8 h-8 rounded-full flex items-center justify-center text-th-text-muted hover:text-th-text-primary hover:bg-th-hl-med transition-colors duration-150"
                 title="Fullscreen player"
               >
                 <Maximize2 size={18} />
               </button>
               <button
                 onClick={() => setDrawerOpen(false)}
-                className="w-8 h-8 rounded-full flex items-center justify-center text-th-text-muted hover:text-white hover:bg-white/8 transition-colors duration-150"
+                className="w-8 h-8 rounded-full flex items-center justify-center text-th-text-muted hover:text-th-text-primary hover:bg-th-hl-med transition-colors duration-150"
               >
                 <X size={18} />
               </button>
