@@ -481,6 +481,30 @@ pub fn run() {
                 let _ = window.show();
             }
 
+            // Wayland fix: after hide()+show(), GTK client-side decoration (CSD)
+            // hit-test regions go stale — title bar buttons render but don't receive
+            // pointer events. Toggling decorations forces GTK to recalculate.
+            //
+            // If this causes visible flicker, try these alternatives instead:
+            //   Alt 1: resize nudge (less reliable but no flicker)
+            //     if let Ok(size) = window.outer_size() {
+            //         let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+            //             width: size.width + 1, height: size.height }));
+            //         let _ = window.set_size(tauri::Size::Physical(size));
+            //     }
+            //   Alt 2: minimize instead of hide in the CloseRequested handler
+            //     (keeps Wayland surface alive, but window stays in taskbar)
+            fn restore_window_from_tray(window: &tauri::WebviewWindow) {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+                #[cfg(target_os = "linux")]
+                if std::env::var("WAYLAND_DISPLAY").is_ok() {
+                    let _ = window.set_decorations(false);
+                    let _ = window.set_decorations(true);
+                }
+            }
+
             // System tray icon (non-fatal — app should start even if tray fails)
             match (|| -> Result<(), Box<dyn std::error::Error>> {
                 let show_item = MenuItemBuilder::with_id("show", "Show").build(app)?;
@@ -519,18 +543,14 @@ pub fn run() {
                             {
                                 let app = tray.app_handle();
                                 if let Some(window) = app.get_webview_window("main") {
-                                    let _ = window.show();
-                                    let _ = window.unminimize();
-                                    let _ = window.set_focus();
+                                    restore_window_from_tray(&window);
                                 }
                             }
                         })
                         .on_menu_event(|app, event| match event.id().as_ref() {
                             "show" => {
                                 if let Some(window) = app.get_webview_window("main") {
-                                    let _ = window.show();
-                                    let _ = window.unminimize();
-                                    let _ = window.set_focus();
+                                    restore_window_from_tray(&window);
                                 }
                             }
                             "play-pause" => {
