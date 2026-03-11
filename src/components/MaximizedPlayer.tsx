@@ -44,13 +44,14 @@ import {
 import { parseLrc, type LrcLine } from "../lib/lrc";
 import { themeAtom } from "../atoms/theme";
 
-function useIsDark() {
+function useThemeContext() {
   const theme = useAtomValue(themeAtom);
   const hex = theme.bgBase.replace("#", "");
-  const r = parseInt(hex.substring(0, 2), 16) / 255;
-  const g = parseInt(hex.substring(2, 4), 16) / 255;
-  const b = parseInt(hex.substring(4, 6), 16) / 255;
-  return (Math.max(r, g, b) + Math.min(r, g, b)) / 2 < 0.5;
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+  const isDark = (Math.max(r, g, b) + Math.min(r, g, b)) / 2 / 255 < 0.5;
+  return { isDark, bgBaseRgb: `${r},${g},${b}` };
 }
 
 const BlurredBackground = memo(function BlurredBackground({
@@ -145,6 +146,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
   resetHideTimer,
   setMaximized,
   isDark,
+  bgBaseRgb,
 }: {
   currentTrack: { title: string; artist?: { name?: string }; artists?: { name: string }[]; album?: { cover?: string; title?: string } };
   controlsVisible: boolean;
@@ -152,6 +154,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
   resetHideTimer: () => void;
   setMaximized: (v: boolean) => void;
   isDark: boolean;
+  bgBaseRgb: string;
 }) {
   const isPlaying = useAtomValue(isPlayingAtom);
   const [repeatMode, setRepeatMode] = useAtom(repeatAtom);
@@ -161,7 +164,10 @@ const MaxTransportBar = memo(function MaxTransportBar({
   const { pauseTrack, resumeTrack, playNext, playPrevious, toggleShuffle } = usePlaybackActions();
 
   return (
-    <div className={`absolute bottom-0 left-0 right-0 z-20 px-6 pb-4 pt-8 bg-gradient-to-t ${isDark ? "from-black/60" : "from-white/70"} to-transparent transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+    <div
+      className={`absolute bottom-0 left-0 right-0 z-20 px-6 pb-4 pt-8 transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+      style={{ background: `linear-gradient(to top, rgba(${isDark ? "0,0,0,0.6" : `${bgBaseRgb},0.7`}), transparent)` }}
+    >
       <div className="flex items-center justify-between">
         {/* Left: Track info */}
         <div className="flex items-center gap-3 w-[30%] min-w-[180px]">
@@ -532,7 +538,7 @@ export default function MaximizedPlayer() {
   const favoriteTrackIds = useAtomValue(favoriteTrackIdsAtom);
   const setFavoriteTrackIds = useSetAtom(favoriteTrackIdsAtom);
   const store = useStore();
-  const isDark = useIsDark();
+  const { isDark, bgBaseRgb } = useThemeContext();
 
   // Context menu state
   const [contextMenuTrack, setContextMenuTrack] = useState<typeof currentTrack | null>(null);
@@ -657,12 +663,13 @@ export default function MaximizedPlayer() {
       role="dialog"
       aria-modal="true"
       onMouseMove={resetHideTimer}
-      className={`fixed inset-0 z-[60] flex flex-col items-center justify-center select-none ${isDark ? "bg-black" : "bg-white"} ${controlsVisible ? "cursor-default" : "cursor-none"}`}
+      className={`fixed inset-0 z-[60] flex flex-col items-center justify-center select-none ${controlsVisible ? "cursor-default" : "cursor-none"}`}
+      style={{ backgroundColor: isDark ? "#000" : `rgb(${bgBaseRgb})` }}
     >
       {/* Blurred album art background — pre-rendered to canvas once, zero per-frame cost */}
       <div className="absolute inset-0 overflow-hidden">
         <BlurredBackground coverUrl={currentTrack.album?.cover} />
-        <div className={`absolute inset-0 ${isDark ? "bg-black/60" : "bg-white/70"}`} />
+        <div className={`absolute inset-0 ${!isDark ? "backdrop-brightness-[1.6] backdrop-saturate-50" : ""}`} style={{ backgroundColor: isDark ? "rgba(0,0,0,0.6)" : `rgba(${bgBaseRgb},0.45)` }} />
       </div>
 
       {/* Center content — single column (art centered) or two-column (art + lyrics) */}
@@ -708,7 +715,7 @@ export default function MaximizedPlayer() {
             <span className="text-th-text-primary font-bold truncate max-w-full" style={{ fontSize: TIER_CONFIG[lyricsTier].titleSize }}>
               {getTrackDisplayTitle(currentTrack)}
             </span>
-            <span className="text-th-text-muted truncate max-w-full" style={{ fontSize: TIER_CONFIG[lyricsTier].artistSize }}>
+            <span className={`${isDark ? "text-th-text-muted" : "text-th-text-secondary"} truncate max-w-full`} style={{ fontSize: TIER_CONFIG[lyricsTier].artistSize }}>
               {getTrackArtistDisplay(currentTrack)}
             </span>
           </div>
@@ -718,7 +725,7 @@ export default function MaximizedPlayer() {
             <button
               onClick={toggleLike}
               className={`transition-[color,transform] duration-200 active:scale-90 ${
-                isLiked ? "text-th-accent" : "text-th-text-faint hover:text-th-text-primary"
+                isLiked ? "text-th-accent" : `${isDark ? "text-th-text-faint" : "text-th-text-secondary"} hover:text-th-text-primary`
               }`}
             >
               <Heart
@@ -730,7 +737,7 @@ export default function MaximizedPlayer() {
             <button
               ref={contextMenuAnchorRef}
               onClick={() => setContextMenuTrack(currentTrack)}
-              className="text-th-text-faint hover:text-th-text-primary transition-colors duration-150"
+              className={`${isDark ? "text-th-text-faint" : "text-th-text-secondary"} hover:text-th-text-primary transition-colors duration-150`}
             >
               <MoreHorizontal size={TIER_CONFIG[lyricsTier].iconSize} />
             </button>
@@ -763,6 +770,7 @@ export default function MaximizedPlayer() {
         resetHideTimer={resetHideTimer}
         setMaximized={setMaximized}
         isDark={isDark}
+        bgBaseRgb={bgBaseRgb}
       />
     </div>
   );
