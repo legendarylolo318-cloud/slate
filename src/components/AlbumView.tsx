@@ -22,6 +22,7 @@ import {
 } from "../types";
 import TidalImage from "./TidalImage";
 import TrackList from "./TrackList";
+import { TrackArtists } from "./TrackArtists";
 import MediaContextMenu from "./MediaContextMenu";
 import { DetailPageSkeleton } from "./PageSkeleton";
 import CardScrollSection from "./CardScrollSection";
@@ -242,9 +243,6 @@ export default function AlbumView({
 
   const displayTitle = album?.title || albumInfo?.title || "Album";
   const displayCover = album?.cover || albumInfo?.cover;
-  const displayArtist =
-    album?.artist?.name || albumInfo?.artistName || "Unknown Artist";
-
   const [sectionContextMenu, setSectionContextMenu] = useState<{
     item: MediaItemType;
     position: { x: number; y: number };
@@ -382,19 +380,12 @@ export default function AlbumView({
             {displayTitle}
           </h1>
           <div className="flex items-center gap-1.5 text-[14px] text-th-text-muted mt-2">
-            <span
+            <TrackArtists
+              artists={album?.artists}
+              artist={album?.artist}
               className="text-white font-semibold hover:underline cursor-pointer"
-              onClick={() => {
-                if (album?.artist?.id) {
-                  navigateToArtist(album.artist.id, {
-                    name: album.artist.name,
-                    picture: album.artist.picture,
-                  });
-                }
-              }}
-            >
-              {displayArtist}
-            </span>
+              fallback={albumInfo?.artistName || "Unknown Artist"}
+            />
             {album?.releaseDate && (
               <>
                 <span className="mx-1">&bull;</span>
