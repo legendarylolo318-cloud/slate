@@ -139,6 +139,7 @@ textarea {
 /* Adaptive card scroll — cards fill container exactly, scroll-snap for paging */
 .card-scroll {
   container-type: inline-size;
+  font-size: calc(100px / var(--zoom, 1));
 }
 
 .card-scroll-track {
@@ -149,6 +150,7 @@ textarea {
   scroll-behavior: smooth;
   -ms-overflow-style: none;
   scrollbar-width: none;
+  font-size: 1rem;
 }
 .card-scroll-track::-webkit-scrollbar {
   display: none;
@@ -161,13 +163,13 @@ textarea {
   --cols: 2;
 }
 
-@container (min-width: 588px)  { .card-scroll-item { --cols: 2; } }
-@container (min-width: 802px)  { .card-scroll-item { --cols: 3; } }
-@container (min-width: 1016px) { .card-scroll-item { --cols: 4; } }
-@container (min-width: 1230px) { .card-scroll-item { --cols: 5; } }
-@container (min-width: 1444px) { .card-scroll-item { --cols: 6; } }
-@container (min-width: 1658px) { .card-scroll-item { --cols: 7; } }
-@container (min-width: 1824px) { .card-scroll-item { --cols: 8; } }
+@container (min-width: 5.88em)  { .card-scroll-item { --cols: 2; } }
+@container (min-width: 8.02em)  { .card-scroll-item { --cols: 3; } }
+@container (min-width: 10.16em) { .card-scroll-item { --cols: 4; } }
+@container (min-width: 12.30em) { .card-scroll-item { --cols: 5; } }
+@container (min-width: 14.44em) { .card-scroll-item { --cols: 6; } }
+@container (min-width: 16.58em) { .card-scroll-item { --cols: 7; } }
+@container (min-width: 18.24em) { .card-scroll-item { --cols: 8; } }
 
 /* Toast slide-in */
 @keyframes toastIn {
