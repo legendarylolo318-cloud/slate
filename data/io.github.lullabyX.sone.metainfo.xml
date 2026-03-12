@@ -75,6 +75,25 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.11.0" date="2026-03-12">
+      <description>
+        <p>Light Theme</p>
+        <ul>
+          <li>Full light theme support — every page, component, menu, and overlay adapts to your chosen theme</li>
+          <li>Frosted glass effect for the maximized player in light mode</li>
+        </ul>
+        <p>Layout</p>
+        <ul>
+          <li>Wider page container and responsive grid that adapts from 1 to 6 columns</li>
+          <li>Adaptive and zoom-aware card scroll sections with scroll-snap and container queries</li>
+        </ul>
+        <p>System</p>
+        <ul>
+          <li>Replaced libappindicator tray with ksni for broader desktop compatibility</li>
+          <li>Single-instance support — launching SONE again focuses the existing window</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.1" date="2026-03-11">
       <description>
         <p>Library</p>
