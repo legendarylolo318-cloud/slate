@@ -262,7 +262,7 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [loadMore]);
+  }, [loadMore, loading]);
 
   const displayItems = useMemo(() => {
     if (libraryType !== "playlists") return items;
