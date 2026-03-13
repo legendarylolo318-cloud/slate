@@ -186,6 +186,8 @@ export type AppView =
   | {
       type: "libraryViewAll";
       libraryType: "playlists" | "albums" | "artists" | "mixes";
+      folderId?: string;
+      folderName?: string;
     };
 
 export interface SearchResults {
@@ -235,6 +237,9 @@ export interface Playlist {
   playlistType?: string;
   duration?: number;
   lastUpdated?: string;
+  squareImage?: string;
+  sharingLevel?: string;
+  addedAt?: string;
 }
 
 export interface PkceAuthParams {
@@ -518,3 +523,75 @@ export interface AlbumPageCached {
   page: AlbumPageResponse;
   isStale: boolean;
 }
+
+// ==================== Playlist Folders (v2/my-collection/playlists/folders) ====================
+
+export interface PlaylistFoldersResponse {
+  lastModifiedAt: string;
+  items: PlaylistFolderItem[];
+  totalNumberOfItems: number;
+  cursor: string | null;
+}
+
+export type CollectionItemType = "PLAYLIST" | "FOLDER";
+
+export interface PlaylistFolderItem {
+  trn: string;
+  itemType: CollectionItemType;
+  addedAt: string;
+  lastModifiedAt: string;
+  name: string;
+  parent: string | null;
+  data: PlaylistFolderData;
+}
+
+export interface PlaylistFolderCreator {
+  id: number;
+  name: string | null;
+  picture: string | null;
+  type: "TIDAL" | "USER";
+}
+
+export interface PlaylistFolderPromotedArtist {
+  id: number;
+  name: string;
+  type: string;
+}
+
+export interface PlaylistFolderData {
+  uuid: string;
+  type: "EDITORIAL" | "USER";
+  creator: PlaylistFolderCreator;
+  curators: unknown[];
+  contentBehavior: string;
+  sharingLevel: string;
+  status: string;
+  source: string;
+  title: string;
+  description: string;
+  image: string;
+  squareImage: string;
+  customImageUrl: string | null;
+  url: string;
+  created: string;
+  lastUpdated: string;
+  lastItemAddedAt: string;
+  duration: number;
+  numberOfTracks: number;
+  numberOfVideos: number;
+  promotedArtists: PlaylistFolderPromotedArtist[];
+  trn: string;
+  itemType: CollectionItemType;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+  parent: string | null;
+  addedAt: string;
+  lastModifiedAt: string;
+}
+
+export type PlaylistOrFolder =
+  | { kind: "playlist"; data: Playlist }
+  | { kind: "folder"; data: Folder };

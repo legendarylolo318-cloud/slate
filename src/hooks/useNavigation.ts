@@ -109,6 +109,18 @@ export function useNavigation() {
     [setCurrentView],
   );
 
+  const navigateToPlaylistFolder = useCallback(
+    (folderId: string, folderName: string) => {
+      navigate(setCurrentView, {
+        type: "libraryViewAll",
+        libraryType: "playlists",
+        folderId,
+        folderName,
+      });
+    },
+    [setCurrentView],
+  );
+
   return {
     currentView,
     navigateToAlbum,
@@ -123,5 +135,6 @@ export function useNavigation() {
     navigateToExplore,
     navigateToExplorePage,
     navigateToLibraryViewAll,
+    navigateToPlaylistFolder,
   };
 }

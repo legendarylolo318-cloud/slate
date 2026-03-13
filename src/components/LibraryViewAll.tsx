@@ -526,13 +526,11 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
                     ? "playlist"
                     : "playlists"}
           </p>
-          {currentSort && setCurrentSort && (
-            <SortDropdown
-              libraryType={libraryType}
-              currentSort={currentSort}
-              onSortChange={setCurrentSort}
-            />
-          )}
+          <SortDropdown
+            libraryType={libraryType}
+            currentSort={currentSort}
+            onSortChange={setCurrentSort}
+          />
         </div>
       </div>
 
@@ -592,11 +590,11 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
                   isArtist={isArtist}
                   userId={libraryType === "playlists" ? userId : undefined}
                   onClick={() => handleItemClick(item)}
-                  onContextMenu={(e) => handleContextMenu(e, item)}
-                  onPlay={(e) => handlePlay(e, item)}
+                  onContextMenu={(e) => handleContextMenu(e, actualItem)}
+                  onPlay={(e) => handlePlay(e, actualItem)}
                   isFavorited={isFavorited(item)}
                   onFavoriteToggle={(e) => handleFavoriteToggle(e, item)}
-                  onMoreClick={(e) => handleContextMenu(e, item)}
+                  onMoreClick={(e) => handleContextMenu(e, actualItem)}
                 />
               );
             })}
@@ -605,7 +603,7 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
 
         {/* Infinite scroll sentinel */}
         {hasMore && <div ref={sentinelRef} className="h-1" />}
-        {(loadingMore || (hasMore && !isFiltering)) && loadingMore && (
+        {loadingMore && (
           <div className="mt-4">
             <MediaGridSkeleton count={6} />
           </div>

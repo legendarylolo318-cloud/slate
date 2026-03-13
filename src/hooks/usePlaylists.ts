@@ -3,17 +3,14 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import {
   userPlaylistsAtom,
-  favoritePlaylistsAtom,
   deletedPlaylistIdsAtom,
 } from "../atoms/playlists";
 import { authTokensAtom } from "../atoms/auth";
-import { invalidateCache, getUserPlaylists } from "../api/tidal";
-import type { Playlist } from "../types";
+import { invalidateCache, getPlaylistFolders, normalizePlaylistFolders } from "../api/tidal";
+import type { Playlist, PlaylistOrFolder } from "../types";
 
 export function usePlaylists() {
   const [userPlaylists, setUserPlaylists] = useAtom(userPlaylistsAtom);
-  const favoritePlaylists = useAtomValue(favoritePlaylistsAtom);
-  const setFavoritePlaylists = useSetAtom(favoritePlaylistsAtom);
   const setDeletedPlaylistIds = useSetAtom(deletedPlaylistIdsAtom);
   const authTokens = useAtomValue(authTokensAtom);
 
@@ -39,14 +36,16 @@ export function usePlaylists() {
 
   // Background re-fetch user playlists to pick up server-side changes (image, exact count)
   const refreshUserPlaylists = useCallback(() => {
-    if (!authTokens?.user_id) return;
-    const userId = authTokens.user_id;
-    getUserPlaylists(userId, 0, 50)
+    getPlaylistFolders("root", 0, 50)
       .then((res) => {
-        if (res.items?.length) setUserPlaylists(res.items);
+        const normalized = normalizePlaylistFolders(res);
+        const playlists = normalized.items
+          .filter((i): i is Extract<PlaylistOrFolder, { kind: "playlist" }> => i.kind === "playlist")
+          .map((i) => i.data);
+        if (playlists.length) setUserPlaylists(playlists);
       })
       .catch(() => {});
-  }, [authTokens?.user_id, setUserPlaylists]);
+  }, [setUserPlaylists]);
 
   const updatePlaylistTrackCount = useCallback(
     (playlistId: string, delta: number) => {
@@ -112,16 +111,12 @@ export function usePlaylists() {
           playlistId,
         });
         setUserPlaylists((prev) => prev.filter((p) => p.uuid !== playlistId));
-        setFavoritePlaylists((prev) =>
-          prev.filter((p) => p.uuid !== playlistId),
-        );
         setDeletedPlaylistIds((prev: Set<string>) =>
           new Set(prev).add(playlistId),
         );
         invalidateCache(`playlist:${playlistId}`);
         invalidateCache(`playlist-page:${playlistId}`);
         invalidateCache("user-playlists");
-        invalidateCache("fav-playlists");
       } catch (error: any) {
         console.error("Failed to delete playlist:", error);
         throw error;
@@ -130,7 +125,6 @@ export function usePlaylists() {
     [
       authTokens?.user_id,
       setUserPlaylists,
-      setFavoritePlaylists,
       setDeletedPlaylistIds,
     ],
   );
@@ -156,7 +150,6 @@ export function usePlaylists() {
 
   return {
     userPlaylists,
-    favoritePlaylists,
     createPlaylist,
     deletePlaylist,
     addTrackToPlaylist,

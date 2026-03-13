@@ -4,7 +4,7 @@ import { SORT_OPTIONS } from "../constants/sortOptions";
 import type { SortOrder } from "../atoms/favorites";
 
 interface SortDropdownProps {
-  libraryType: "albums" | "artists" | "mixes";
+  libraryType: "playlists" | "albums" | "artists" | "mixes";
   currentSort: SortOrder;
   onSortChange: (sort: SortOrder) => void;
   compact?: boolean;

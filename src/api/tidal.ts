@@ -13,6 +13,9 @@ import type {
   Paginated,
   PaginatedTracks,
   Playlist,
+  PlaylistFolderItem,
+  PlaylistFoldersResponse,
+  PlaylistOrFolder,
   SearchResults,
   SuggestionsResponse,
   Track,
@@ -856,42 +859,70 @@ export async function getFavoriteMixes(
   );
 }
 
-// ==================== Playlists (paginated) ====================
+// ==================== Playlist Folders ====================
 
-export async function getUserPlaylists(
-  userId: number,
+export async function getPlaylistFolders(
+  folderId: string = "root",
   offset: number = 0,
-  limit: number = 20,
-): Promise<Paginated<Playlist>> {
-  return cached(
-    `user-playlists:${userId}:${offset}:${limit}`,
-    ["user-playlists"],
-    () =>
-      invoke<Paginated<Playlist>>("get_user_playlists", {
-        userId,
-        offset,
-        limit,
-      }),
-    TTL.MEDIUM,
-  );
+  limit: number = 50,
+  order: string = "DATE_UPDATED",
+  orderDirection: string = "DESC",
+  includeOnly?: string,
+): Promise<PlaylistFoldersResponse> {
+  return invoke<PlaylistFoldersResponse>("get_playlist_folders", {
+    folderId,
+    includeOnly: includeOnly ?? "",
+    offset,
+    limit,
+    order,
+    orderDirection,
+  });
 }
 
-export async function getFavoritePlaylists(
-  userId: number,
-  offset: number = 0,
-  limit: number = 20,
-): Promise<Paginated<Playlist>> {
-  return cached(
-    `fav-playlists:${userId}:${offset}:${limit}`,
-    ["fav-playlists"],
-    () =>
-      invoke<Paginated<Playlist>>("get_favorite_playlists", {
-        userId,
-        offset,
-        limit,
-      }),
-    TTL.MEDIUM,
-  );
+function normalizeFolderItem(item: PlaylistFolderItem): PlaylistOrFolder {
+  if (item.itemType === "FOLDER") {
+    return {
+      kind: "folder",
+      data: {
+        id: item.trn.replace("trn:folder:", ""),
+        name: item.name,
+        parent: item.parent,
+        addedAt: item.addedAt,
+        lastModifiedAt: item.lastModifiedAt,
+      },
+    };
+  }
+  const d = item.data;
+  return {
+    kind: "playlist",
+    data: {
+      uuid: d.uuid,
+      title: d.title,
+      description: d.description,
+      image: d.squareImage || d.image,
+      squareImage: d.squareImage,
+      numberOfTracks: d.numberOfTracks,
+      creator: { id: d.creator.id, name: d.creator.name ?? undefined },
+      playlistType: d.type,
+      duration: d.duration,
+      lastUpdated: d.lastUpdated,
+      sharingLevel: d.sharingLevel,
+      addedAt: item.addedAt,
+    },
+  };
+}
+
+export function normalizePlaylistFolders(
+  response: PlaylistFoldersResponse,
+): { items: PlaylistOrFolder[]; totalNumberOfItems: number } {
+  return {
+    items: response.items.map(normalizeFolderItem),
+    totalNumberOfItems: response.totalNumberOfItems,
+  };
+}
+
+export function getItemKey(item: PlaylistOrFolder): string {
+  return item.kind === "playlist" ? item.data.uuid : item.data.id;
 }
 
 // ==================== Unified favorite IDs (one-shot init) ====================

@@ -174,8 +174,10 @@ function AppContent() {
       case "libraryViewAll":
         return (
           <LibraryViewAll
-            key={currentView.libraryType}
+            key={`${currentView.libraryType}:${currentView.folderId ?? "root"}`}
             libraryType={currentView.libraryType}
+            folderId={currentView.folderId}
+            folderName={currentView.folderName}
           />
         );
       case "home":

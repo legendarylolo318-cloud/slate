@@ -2434,6 +2434,48 @@ impl TidalClient {
         })
     }
 
+    /// Fetch playlist folders from v2/my-collection/playlists/folders.
+    /// Returns raw JSON so we can capture the full response shape.
+    pub async fn get_playlist_folders(
+        &mut self,
+        folder_id: &str,
+        include_only: &str,
+        offset: u32,
+        limit: u32,
+        order: &str,
+        order_direction: &str,
+    ) -> Result<serde_json::Value, SoneError> {
+        let url = format!("{}/my-collection/playlists/folders", TIDAL_API_V2_URL);
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let body = self
+            .api_get_body(
+                &url,
+                &[
+                    ("folderId", folder_id),
+                    ("includeOnly", include_only),
+                    ("offset", &offset_str),
+                    ("limit", &limit_str),
+                    ("order", order),
+                    ("orderDirection", order_direction),
+                    ("countryCode", &cc),
+                    ("locale", "en_US"),
+                    ("deviceType", "BROWSER"),
+                ],
+            )
+            .await?;
+
+        log::debug!(
+            "[get_playlist_folders]: body_preview={}",
+            &body[..body.len().min(1000)]
+        );
+
+        serde_json::from_str(&body).map_err(|e| {
+            SoneError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+        })
+    }
+
     pub async fn add_tracks_to_playlist(
         &self,
         playlist_id: &str,

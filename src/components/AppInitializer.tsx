@@ -22,7 +22,6 @@ import {
 } from "../atoms/auth";
 import {
   userPlaylistsAtom,
-  favoritePlaylistsAtom,
   deletedPlaylistIdsAtom,
 } from "../atoms/playlists";
 import {
@@ -64,8 +63,8 @@ import {
   getFavoriteTracks,
   getFavoriteArtists,
   getFavoriteAlbums,
-  getUserPlaylists,
-  getFavoritePlaylists,
+  getPlaylistFolders,
+  normalizePlaylistFolders,
 } from "../api/tidal";
 
 import type {
@@ -73,6 +72,7 @@ import type {
   Track,
   QueuedTrack,
   PlaybackSnapshot,
+  PlaylistOrFolder,
 } from "../types";
 import { getTidalImageUrl, getTrackDisplayTitle } from "../types";
 import { getTrackArtistDisplay } from "../utils/itemHelpers";
@@ -99,7 +99,6 @@ export function AppInitializer() {
   const setAuthTokens = useSetAtom(authTokensAtom);
   const setUserName = useSetAtom(userNameAtom);
   const setUserPlaylists = useSetAtom(userPlaylistsAtom);
-  const setFavoritePlaylists = useSetAtom(favoritePlaylistsAtom);
   const setFavoriteTrackIds = useSetAtom(favoriteTrackIdsAtom);
   const setFavoriteAlbumIds = useSetAtom(favoriteAlbumIdsAtom);
   const setFavoritePlaylistUuids = useSetAtom(favoritePlaylistUuidsAtom);
@@ -155,7 +154,7 @@ export function AppInitializer() {
           }
         }
 
-        let activeTokens = { ...tokens, user_id: userId };
+        let activeTokens: AuthTokens = { ...tokens, user_id: userId };
         setAuthTokens(activeTokens);
         setIsAuthenticated(true);
         setIsAuthChecking(false); // show home immediately, playlists load in background
@@ -183,52 +182,45 @@ export function AppInitializer() {
           .then((v) => store.set(proxySettingsAtom, v))
           .catch(() => {});
 
-        // Playlists
+        // Playlists (via folders endpoint)
         try {
-          const result = await getUserPlaylists(userId, 0, 50);
-          setUserPlaylists(result.items || []);
-
-          getFavoritePlaylists(userId, 0, 50)
-            .then((r) => setFavoritePlaylists(r.items || []))
-            .catch(() => setFavoritePlaylists([]));
+          const result = await getPlaylistFolders("root", 0, 50);
+          const normalized = normalizePlaylistFolders(result);
+          const playlists = normalized.items
+            .filter((i): i is Extract<PlaylistOrFolder, { kind: "playlist" }> => i.kind === "playlist")
+            .map((i) => i.data);
+          setUserPlaylists(playlists);
         } catch (playlistErr: any) {
           console.error("Failed to load playlists:", playlistErr);
           checkNetworkError(playlistErr);
 
           const isAuthError = (err: unknown): boolean => {
-            try {
-              const parsed = typeof err === "string" ? JSON.parse(err) : err;
-              if (parsed?.kind === "NotAuthenticated") return true;
-              if (parsed?.kind === "Api" && parsed?.message?.status === 401)
+            if (typeof err === "object" && err !== null) {
+              const e = err as Record<string, unknown>;
+              if (e.status === 401 || e.status === "401") return true;
+              if (typeof e.body === "string" && e.body.includes("401"))
                 return true;
-            } catch {}
-            return (
-              String(err).includes("401") || String(err).includes("expired")
-            );
+            }
+            return false;
           };
 
-          if (isAuthError(playlistErr)) {
+          if (isAuthError(playlistErr) && activeTokens) {
             try {
-              console.log("Token expired, attempting refresh...");
               const refreshed = await invoke<AuthTokens>("refresh_tidal_auth");
-              activeTokens = {
-                ...refreshed,
-                user_id: userId ?? refreshed.user_id,
-              };
+              activeTokens = refreshed;
               setAuthTokens(activeTokens);
 
-              const retryResult = await getUserPlaylists(userId, 0, 50);
-              setUserPlaylists(retryResult.items || []);
-
-              getFavoritePlaylists(userId, 0, 50)
-                .then((r) => setFavoritePlaylists(r.items || []))
-                .catch(() => setFavoritePlaylists([]));
+              const retryResult = await getPlaylistFolders("root", 0, 50);
+              const retryNormalized = normalizePlaylistFolders(retryResult);
+              const retryPlaylists = retryNormalized.items
+                .filter((i): i is Extract<PlaylistOrFolder, { kind: "playlist" }> => i.kind === "playlist")
+                .map((i) => i.data);
+              setUserPlaylists(retryPlaylists);
             } catch (refreshErr) {
               console.error("Token refresh failed:", refreshErr);
               setIsAuthenticated(false);
               setAuthTokens(null);
               setUserPlaylists([]);
-              setFavoritePlaylists([]);
             }
           } else {
             setUserPlaylists([]);

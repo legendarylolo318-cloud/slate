@@ -11,7 +11,6 @@ import {
   optimisticFollowedArtistsAtom,
   optimisticFavoriteMixesAtom,
 } from "../atoms/favorites";
-import { favoritePlaylistsAtom } from "../atoms/playlists";
 import { authTokensAtom } from "../atoms/auth";
 import {
   addTrackToFavoritesCache,
@@ -32,7 +31,6 @@ export function useFavorites() {
   const [favoritePlaylistUuids, setFavoritePlaylistUuids] = useAtom(
     favoritePlaylistUuidsAtom,
   );
-  const [, setFavoritePlaylists] = useAtom(favoritePlaylistsAtom);
   const [followedArtistIds, setFollowedArtistIds] = useAtom(
     followedArtistIdsAtom,
   );
@@ -163,10 +161,6 @@ export function useFavorites() {
       setFavoritePlaylistUuids((prev) => new Set([...prev, playlistUuid]));
       if (playlist) {
         addPlaylistToFavoritesCache(authTokens.user_id, playlist);
-        setFavoritePlaylists((prev) => [
-          playlist,
-          ...prev.filter((p) => p.uuid !== playlistUuid),
-        ]);
       }
       try {
         await invoke("add_favorite_playlist", {
@@ -181,15 +175,12 @@ export function useFavorites() {
         });
         if (playlist) {
           removePlaylistFromFavoritesCache(authTokens.user_id, playlistUuid);
-          setFavoritePlaylists((prev) =>
-            prev.filter((p) => p.uuid !== playlistUuid),
-          );
         }
         console.error("Failed to favorite playlist:", error);
         throw error;
       }
     },
-    [authTokens?.user_id, setFavoritePlaylistUuids, setFavoritePlaylists],
+    [authTokens?.user_id, setFavoritePlaylistUuids],
   );
 
   const removeFavoritePlaylist = useCallback(
@@ -201,9 +192,6 @@ export function useFavorites() {
         return next;
       });
       removePlaylistFromFavoritesCache(authTokens.user_id, playlistUuid);
-      setFavoritePlaylists((prev) =>
-        prev.filter((p) => p.uuid !== playlistUuid),
-      );
       try {
         await invoke("remove_favorite_playlist", {
           userId: authTokens.user_id,
@@ -216,7 +204,7 @@ export function useFavorites() {
         throw error;
       }
     },
-    [authTokens?.user_id, setFavoritePlaylistUuids, setFavoritePlaylists],
+    [authTokens?.user_id, setFavoritePlaylistUuids],
   );
 
   // ==================== Artists (Follow/Unfollow) ====================

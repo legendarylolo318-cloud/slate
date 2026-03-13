@@ -1062,3 +1062,33 @@ pub async fn get_favorite_artists(
     }
     Ok(data)
 }
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_playlist_folders(
+    state: State<'_, AppState>,
+    folder_id: String,
+    include_only: Option<String>,
+    offset: u32,
+    limit: u32,
+    order: String,
+    order_direction: String,
+) -> Result<serde_json::Value, SoneError> {
+    log::debug!(
+        "[get_playlist_folders]: folder_id={}, offset={}, limit={}",
+        folder_id,
+        offset,
+        limit
+    );
+
+    let mut client = state.tidal_client.lock().await;
+    client
+        .get_playlist_folders(
+            &folder_id,
+            include_only.as_deref().unwrap_or(""),
+            offset,
+            limit,
+            &order,
+            &order_direction,
+        )
+        .await
+}

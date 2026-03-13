@@ -1,9 +1,10 @@
-import { Home, Compass, Library, Heart, Music, User } from "lucide-react";
+import { Home, Compass, Library, Heart, Music, User, FolderOpen } from "lucide-react";
 import SortDropdown from "./SortDropdown";
 import { useInfiniteScroll } from "../hooks/useInfiniteScroll";
 import SidebarSkeleton from "./SidebarSkeleton";
 import {
-  getUserPlaylists,
+  getPlaylistFolders,
+  normalizePlaylistFolders,
   getFavoriteAlbums,
   getFavoriteMixes,
   getFavoriteArtists,
@@ -15,6 +16,7 @@ import {
   type MediaItemType,
   type Playlist,
   type ArtistDetail,
+  type PlaylistOrFolder,
 } from "../types";
 import TidalImage from "./TidalImage";
 import MediaContextMenu from "./MediaContextMenu";
@@ -22,7 +24,6 @@ import { CreatePlaylistModal } from "./AddToPlaylistMenu";
 import { getTrackArtistDisplay } from "../utils/itemHelpers";
 import { useState, useCallback, useMemo } from "react";
 import { useAtomValue, useAtom } from "jotai";
-import { userPlaylistsAtom, favoritePlaylistsAtom } from "../atoms/playlists";
 import {
   favoriteAlbumIdsAtom,
   followedArtistIdsAtom,
@@ -33,6 +34,7 @@ import {
   albumSortAtom,
   artistSortAtom,
   mixSortAtom,
+  playlistSortAtom,
 } from "../atoms/favorites";
 import { sidebarCollapsedAtom } from "../atoms/ui";
 
@@ -46,6 +48,7 @@ export default function Sidebar() {
     navigateHome,
     navigateToExplore,
     navigateToLibraryViewAll,
+    navigateToPlaylistFolder,
     currentView,
   } = useNavigation();
   const { authTokens } = useAuth();
@@ -54,20 +57,21 @@ export default function Sidebar() {
     "playlists" | "albums" | "artists" | "mixes"
   >("playlists");
 
-  // Playlists: paginate user playlists, merge in favorites from atom (loaded at boot)
-  const userPlaylists = useAtomValue(userPlaylistsAtom);
-  const favoritePlaylists = useAtomValue(favoritePlaylistsAtom);
+  // Playlist sort
+  const [playlistSort, setPlaylistSort] = useAtom(playlistSortAtom);
 
+  // Playlists + folders: paginate from folders endpoint
   const playlistFetch = useCallback(
     async (offset: number, limit: number) => {
-      if (!authTokens?.user_id) return { items: [], totalNumberOfItems: 0 };
-      return getUserPlaylists(authTokens.user_id, offset, limit);
+      const response = await getPlaylistFolders("root", offset, limit, playlistSort.order, playlistSort.direction);
+      const normalized = normalizePlaylistFolders(response);
+      return { items: normalized.items, totalNumberOfItems: normalized.totalNumberOfItems };
     },
-    [authTokens?.user_id],
+    [playlistSort.order, playlistSort.direction],
   );
 
   const {
-    items: userPlaylistItems,
+    items: playlistFolderItems,
     isInitialLoading: playlistsLoading,
     isLoadingMore: playlistsLoadingMore,
     hasMore: playlistsHasMore,
@@ -76,32 +80,10 @@ export default function Sidebar() {
     fetchPage: playlistFetch,
     pageSize: 20,
     enabled: activeFilter === "playlists" && !!authTokens?.user_id,
+    resetKey: `${playlistSort.order}:${playlistSort.direction}`,
   });
 
-  // Merge: atom playlists (optimistic) → paginated → favorites, deduped
-  const allPlaylists = useMemo(() => {
-    const seen = new Set<string>();
-    const merged: Playlist[] = [];
-    for (const p of userPlaylists) {
-      if (!seen.has(p.uuid)) {
-        seen.add(p.uuid);
-        merged.push(p);
-      }
-    }
-    for (const p of userPlaylistItems) {
-      if (!seen.has(p.uuid)) {
-        seen.add(p.uuid);
-        merged.push(p);
-      }
-    }
-    for (const p of favoritePlaylists) {
-      if (!seen.has(p.uuid)) {
-        seen.add(p.uuid);
-        merged.push(p);
-      }
-    }
-    return merged;
-  }, [userPlaylists, userPlaylistItems, favoritePlaylists]);
+  const allPlaylistItems: PlaylistOrFolder[] = playlistFolderItems as PlaylistOrFolder[];
 
   // Sort atoms
   const [albumSort, setAlbumSort] = useAtom(albumSortAtom);
@@ -349,14 +331,22 @@ export default function Sidebar() {
           </button>
           {!isCollapsed && (
             <div className="flex items-center gap-1">
-              {activeFilter !== "playlists" && (
-                <SortDropdown
-                  libraryType={activeFilter as "albums" | "artists" | "mixes"}
-                  currentSort={activeFilter === "albums" ? albumSort : activeFilter === "artists" ? artistSort : mixSort}
-                  onSortChange={activeFilter === "albums" ? setAlbumSort : activeFilter === "artists" ? setArtistSort : setMixSort}
-                  compact
-                />
-              )}
+              <SortDropdown
+                libraryType={activeFilter}
+                currentSort={
+                  activeFilter === "playlists" ? playlistSort
+                  : activeFilter === "albums" ? albumSort
+                  : activeFilter === "artists" ? artistSort
+                  : mixSort
+                }
+                onSortChange={
+                  activeFilter === "playlists" ? setPlaylistSort
+                  : activeFilter === "albums" ? setAlbumSort
+                  : activeFilter === "artists" ? setArtistSort
+                  : setMixSort
+                }
+                compact
+              />
               <button
                 onClick={() => navigateToLibraryViewAll(activeFilter)}
                 className="text-xs text-th-text-muted hover:text-th-text-primary transition-colors px-2.5"
@@ -400,7 +390,7 @@ export default function Sidebar() {
             /* Playlists view */
             playlistsLoading ? (
               <SidebarSkeleton count={5} />
-            ) : allPlaylists.length === 0 ? (
+            ) : allPlaylistItems.length === 0 ? (
               <div
                 className={`px-3 py-8 text-center ${isCollapsed ? "hidden" : ""}`}
               >
@@ -446,11 +436,35 @@ export default function Sidebar() {
                   )}
                 </button>
 
-                {allPlaylists.map((playlist) => {
+                {allPlaylistItems.map((entry) => {
+                  if (entry.kind === "folder") {
+                    return (
+                      <button
+                        key={entry.data.id}
+                        onClick={() => navigateToPlaylistFolder(entry.data.id, entry.data.name)}
+                        className={`w-full flex items-center gap-2.5 px-1.5 py-2 rounded-md transition-colors duration-150 group hover:bg-th-border-subtle ${isCollapsed ? "justify-center" : ""}`}
+                        title={entry.data.name}
+                      >
+                        <div className={`bg-th-surface-hover shrink-0 overflow-hidden rounded flex items-center justify-center ${isCollapsed ? "w-10 h-10" : "w-10 h-10"}`}>
+                          <FolderOpen size={18} className="text-th-text-faint" />
+                        </div>
+                        {!isCollapsed && (
+                          <div className="flex-1 min-w-0 text-left">
+                            <div className="text-[14px] font-medium text-th-text-primary truncate leading-snug">
+                              {entry.data.name}
+                            </div>
+                            <div className="text-[12px] text-th-text-faint truncate leading-snug mt-0.5">
+                              Folder
+                            </div>
+                          </div>
+                        )}
+                      </button>
+                    );
+                  }
+
+                  const playlist = entry.data;
                   const own = isOwnPlaylist(playlist);
                   const trackCount = playlist.numberOfTracks;
-
-                  // Build subtitle: "You · N tracks" for own, "Creator name · N tracks" for others
                   const creatorLabel = own ? "You" : getCreatorName(playlist);
                   let subtitle = "";
                   if (creatorLabel) {
@@ -468,29 +482,17 @@ export default function Sidebar() {
                     <button
                       key={playlist.uuid}
                       onClick={() => handlePlaylistClick(playlist)}
-                      onContextMenu={(e) =>
-                        handlePlaylistContextMenu(e, playlist)
-                      }
+                      onContextMenu={(e) => handlePlaylistContextMenu(e, playlist)}
                       className={`w-full flex items-center gap-2.5 px-1.5 py-2 rounded-md transition-colors duration-150 group ${
-                        currentView.type === "playlist" &&
-                        currentView.playlistId === playlist.uuid
+                        currentView.type === "playlist" && currentView.playlistId === playlist.uuid
                           ? "bg-th-hl-med"
                           : "hover:bg-th-border-subtle"
                       } ${isCollapsed ? "justify-center" : ""}`}
                       title={playlist.title}
                     >
-                      <div
-                        className={`bg-th-surface-hover shrink-0 overflow-hidden rounded ${
-                          isCollapsed ? "w-10 h-10" : "w-10 h-10"
-                        }`}
-                      >
-                        <TidalImage
-                          src={getTidalImageUrl(playlist.image, 80)}
-                          alt={playlist.title}
-                          type="playlist"
-                        />
+                      <div className={`bg-th-surface-hover shrink-0 overflow-hidden rounded ${isCollapsed ? "w-10 h-10" : "w-10 h-10"}`}>
+                        <TidalImage src={getTidalImageUrl(playlist.image, 80)} alt={playlist.title} type="playlist" />
                       </div>
-
                       {!isCollapsed && (
                         <div className="flex-1 min-w-0 text-left">
                           <div className="text-[14px] font-medium text-th-text-primary truncate leading-snug">

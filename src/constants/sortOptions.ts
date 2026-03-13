@@ -1,4 +1,9 @@
-export const SORT_OPTIONS: Record<"albums" | "artists" | "mixes", { value: string; label: string }[]> = {
+export const SORT_OPTIONS: Record<"playlists" | "albums" | "artists" | "mixes", { value: string; label: string }[]> = {
+  playlists: [
+    { value: "DATE", label: "Date added" },
+    { value: "DATE_UPDATED", label: "Last updated" },
+    { value: "NAME", label: "Name" },
+  ],
   albums: [
     { value: "DATE", label: "Date added" },
     { value: "NAME", label: "Name" },

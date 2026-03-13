@@ -592,6 +592,7 @@ pub fn run() {
             commands::library::get_favorite_mix_ids,
             commands::library::get_favorite_mixes,
             commands::library::get_favorite_artists,
+            commands::library::get_playlist_folders,
             // pages
             commands::pages::get_album_detail,
             commands::pages::get_album_page,
