@@ -13,6 +13,7 @@ import { useFavorites } from "../hooks/useFavorites";
 import { useAtomValue, useStore } from "jotai";
 import {
   deletedPlaylistIdsAtom,
+  deletedFolderIdsAtom,
 } from "../atoms/playlists";
 import {
   albumSortAtom,
@@ -32,11 +33,12 @@ import {
 import MediaGrid, { MediaGridSkeleton, MediaGridEmpty } from "./MediaGrid";
 import MediaCard from "./MediaCard";
 import MediaContextMenu from "./MediaContextMenu";
+import FolderContextMenu from "./FolderContextMenu";
 import DebouncedFilterInput from "./DebouncedFilterInput";
 import SortDropdown from "./SortDropdown";
 import PageContainer from "./PageContainer";
 import { buildMediaItem } from "../utils/itemHelpers";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, MoreHorizontal } from "lucide-react";
 import type { MediaItemType, PlaylistOrFolder } from "../types";
 
 type LibraryType = "playlists" | "albums" | "artists" | "mixes";
@@ -94,6 +96,13 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
   } = useFavorites();
 
   const deletedPlaylistIds = useAtomValue(deletedPlaylistIdsAtom);
+  const deletedFolderIds = useAtomValue(deletedFolderIdsAtom);
+
+  const [folderContextMenu, setFolderContextMenu] = useState<{
+    folderId: string;
+    folderName: string;
+    position: { x: number; y: number };
+  } | null>(null);
 
   const store = useStore();
   const [currentSort, setCurrentSort] = useState<SortOrder>(() => {
@@ -264,10 +273,10 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
   const displayItems = useMemo(() => {
     if (libraryType !== "playlists") return items;
     return (items as PlaylistOrFolder[]).filter((entry) => {
-      if (entry.kind === "folder") return true;
+      if (entry.kind === "folder") return !deletedFolderIds.has(entry.data.id);
       return !deletedPlaylistIds.has(entry.data.uuid);
     });
-  }, [items, deletedPlaylistIds, libraryType]);
+  }, [items, deletedPlaylistIds, deletedFolderIds, libraryType]);
 
   // ==================== Search / Filter ====================
 
@@ -514,9 +523,25 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
       <PageContainer>
       {/* Header */}
       <div className="px-8 pt-10 pb-6">
-        <h1 className="text-[32px] font-extrabold text-th-text-primary leading-tight tracking-tight">
-          {folderName ?? config.title}
-        </h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-[32px] font-extrabold text-th-text-primary leading-tight tracking-tight">
+            {folderName ?? config.title}
+          </h1>
+          {folderId && folderId !== "root" && (
+            <button
+              className="p-1.5 rounded-full hover:bg-th-hl-faint transition-colors text-th-text-muted hover:text-th-text-primary"
+              onClick={(e) =>
+                setFolderContextMenu({
+                  folderId: folderId ?? "",
+                  folderName: folderName ?? "",
+                  position: { x: e.clientX, y: e.clientY },
+                })
+              }
+            >
+              <MoreHorizontal size={20} />
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-3 mt-1">
           <p className="text-[14px] text-th-text-muted">
             {itemCount}{" "}
@@ -574,6 +599,15 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
                     key={folder.id}
                     item={{ title: folder.name }}
                     onClick={() => navigateToPlaylistFolder(folder.id, folder.name)}
+                    onContextMenu={(e: React.MouseEvent) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setFolderContextMenu({
+                        folderId: folder.id,
+                        folderName: folder.name,
+                        position: { x: e.clientX, y: e.clientY },
+                      });
+                    }}
                     titleOverride={folder.name}
                     imageOverride={
                       <div className="w-full h-full flex items-center justify-center bg-th-surface-hover">
@@ -619,6 +653,15 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
           </div>
         )}
       </div>
+
+      {folderContextMenu && (
+        <FolderContextMenu
+          folderId={folderContextMenu.folderId}
+          folderName={folderContextMenu.folderName}
+          cursorPosition={folderContextMenu.position}
+          onClose={() => setFolderContextMenu(null)}
+        />
+      )}
 
       </PageContainer>
 

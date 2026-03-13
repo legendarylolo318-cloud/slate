@@ -8,6 +8,7 @@ import {
   UserPlus,
   UserCheck,
   Trash2,
+  FolderInput,
 } from "lucide-react";
 import {
   useState,
@@ -27,6 +28,7 @@ import { useContextMenu } from "../hooks/useContextMenu";
 import { userPlaylistsAtom } from "../atoms/playlists";
 import { currentViewAtom } from "../atoms/navigation";
 import AddToPlaylistMenu from "./AddToPlaylistMenu";
+import MoveToFolderMenu from "./MoveToFolderMenu";
 import MenuPortal from "./MenuPortal";
 
 interface MediaContextMenuProps {
@@ -75,6 +77,10 @@ export default function MediaContextMenu({
   // Delete playlist confirmation state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
+  // "Move to folder" sub-menu state
+  const [showMoveToFolder, setShowMoveToFolder] = useState(false);
+  const moveFolderBtnRef = useRef<HTMLButtonElement | null>(null);
+
   // Library favorite state
   const [isFav, setIsFav] = useState<boolean | null>(null);
   const [checkingFav, setCheckingFav] = useState(false);
@@ -82,6 +88,12 @@ export default function MediaContextMenu({
   // Ownership check: is this a user-created playlist?
   const isUserPlaylist =
     item.type === "playlist" && userPlaylists.some((p) => p.uuid === item.uuid);
+
+  // Any playlist in the user's collection (user-created OR favorited)
+  const isCollectionPlaylist =
+    item.type === "playlist" &&
+    (userPlaylists.some((p) => p.uuid === item.uuid) ||
+      favoritePlaylistUuids.has(item.uuid));
 
   // Derive favorite status from atoms (no API call needed)
   useEffect(() => {
@@ -107,7 +119,7 @@ export default function MediaContextMenu({
 
   const { menuRef, style } = useContextMenu({
     cursorPosition,
-    suppressClose: showPlaylistSubmenu || showDeleteConfirm,
+    suppressClose: showPlaylistSubmenu || showDeleteConfirm || showMoveToFolder,
     onClose,
   });
 
@@ -380,6 +392,18 @@ export default function MediaContextMenu({
           <span>Add to playlist</span>
         </button>
 
+        {/* Move to folder (any playlist in user's collection) */}
+        {isCollectionPlaylist && (
+          <button
+            ref={moveFolderBtnRef}
+            className={menuItemClass}
+            onClick={() => setShowMoveToFolder(true)}
+          >
+            <FolderInput size={18} className="shrink-0 text-th-text-muted" />
+            <span>Move to folder</span>
+          </button>
+        )}
+
         {/* Add to / Remove from library / Follow artist */}
         {canFavorite && (
           <>
@@ -479,6 +503,19 @@ export default function MediaContextMenu({
           anchorRef={playlistBtnRef}
           onClose={() => {
             setShowPlaylistSubmenu(false);
+            onClose();
+          }}
+        />
+      )}
+
+      {/* Move to folder submenu */}
+      {showMoveToFolder && item.type === "playlist" && (
+        <MoveToFolderMenu
+          playlistUuid={item.uuid}
+          playlistTitle={item.title}
+          anchorRef={moveFolderBtnRef}
+          onClose={() => {
+            setShowMoveToFolder(false);
             onClose();
           }}
         />

@@ -17,9 +17,11 @@ import {
   type Playlist,
   type ArtistDetail,
   type PlaylistOrFolder,
+  type Folder,
 } from "../types";
 import TidalImage from "./TidalImage";
 import MediaContextMenu from "./MediaContextMenu";
+import FolderContextMenu from "./FolderContextMenu";
 import { CreatePlaylistModal } from "./AddToPlaylistMenu";
 import { getTrackArtistDisplay } from "../utils/itemHelpers";
 import { useState, useCallback, useMemo, useRef } from "react";
@@ -36,6 +38,7 @@ import {
   mixSortAtom,
   playlistSortAtom,
 } from "../atoms/favorites";
+import { deletedFolderIdsAtom, deletedPlaylistIdsAtom } from "../atoms/playlists";
 import { sidebarCollapsedAtom } from "../atoms/ui";
 
 export default function Sidebar() {
@@ -92,6 +95,18 @@ export default function Sidebar() {
   });
 
   const allPlaylistItems: PlaylistOrFolder[] = playlistFolderItems;
+
+  const deletedFolderIds = useAtomValue(deletedFolderIdsAtom);
+  const deletedPlaylistIds = useAtomValue(deletedPlaylistIdsAtom);
+
+  const visiblePlaylistItems = useMemo(
+    () =>
+      allPlaylistItems.filter((entry) => {
+        if (entry.kind === "folder") return !deletedFolderIds.has(entry.data.id);
+        return !deletedPlaylistIds.has(entry.data.uuid);
+      }),
+    [allPlaylistItems, deletedFolderIds, deletedPlaylistIds],
+  );
 
   // Sort atoms
   const [albumSort, setAlbumSort] = useAtom(albumSortAtom);
@@ -236,6 +251,12 @@ export default function Sidebar() {
     position: { x: number; y: number };
   } | null>(null);
 
+  const [folderContextMenu, setFolderContextMenu] = useState<{
+    folderId: string;
+    folderName: string;
+    position: { x: number; y: number };
+  } | null>(null);
+
   const handlePlaylistContextMenu = useCallback(
     (e: React.MouseEvent, playlist: Playlist) => {
       e.preventDefault();
@@ -250,6 +271,19 @@ export default function Sidebar() {
             playlist.creator?.name ||
             (playlist.creator?.id === 0 ? "TIDAL" : undefined),
         },
+        position: { x: e.clientX, y: e.clientY },
+      });
+    },
+    [],
+  );
+
+  const handleFolderContextMenu = useCallback(
+    (e: React.MouseEvent, folder: Folder) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setFolderContextMenu({
+        folderId: folder.id,
+        folderName: folder.name,
         position: { x: e.clientX, y: e.clientY },
       });
     },
@@ -398,7 +432,7 @@ export default function Sidebar() {
             /* Playlists view */
             playlistsLoading ? (
               <SidebarSkeleton count={5} />
-            ) : allPlaylistItems.length === 0 ? (
+            ) : visiblePlaylistItems.length === 0 ? (
               <div
                 className={`px-3 py-8 text-center ${isCollapsed ? "hidden" : ""}`}
               >
@@ -444,12 +478,13 @@ export default function Sidebar() {
                   )}
                 </button>
 
-                {allPlaylistItems.map((entry) => {
+                {visiblePlaylistItems.map((entry) => {
                   if (entry.kind === "folder") {
                     return (
                       <button
                         key={entry.data.id}
                         onClick={() => navigateToPlaylistFolder(entry.data.id, entry.data.name)}
+                        onContextMenu={(e) => handleFolderContextMenu(e, entry.data)}
                         className={`w-full flex items-center gap-2.5 px-1.5 py-2 rounded-md transition-colors duration-150 group hover:bg-th-border-subtle ${isCollapsed ? "justify-center" : ""}`}
                         title={entry.data.name}
                       >
@@ -750,6 +785,16 @@ export default function Sidebar() {
           item={contextMenu.item}
           cursorPosition={contextMenu.position}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Folder context menu */}
+      {folderContextMenu && (
+        <FolderContextMenu
+          folderId={folderContextMenu.folderId}
+          folderName={folderContextMenu.folderName}
+          cursorPosition={folderContextMenu.position}
+          onClose={() => setFolderContextMenu(null)}
         />
       )}
 
