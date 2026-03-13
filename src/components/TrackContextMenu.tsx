@@ -5,6 +5,7 @@ import {
   Radio,
   Trash2,
   ListMusic,
+  Link,
 } from "lucide-react";
 import { useState, useRef, useCallback } from "react";
 import { useToast } from "../contexts/ToastContext";
@@ -14,6 +15,7 @@ import { useNavigation } from "../hooks/useNavigation";
 import { usePlaylists } from "../hooks/usePlaylists";
 import { useContextMenu } from "../hooks/useContextMenu";
 import { getTidalImageUrl, getTrackDisplayTitle, type Track } from "../types";
+import { getTrackShareUrl } from "../utils/itemHelpers";
 import AddToPlaylistMenu from "./AddToPlaylistMenu";
 import MenuPortal from "./MenuPortal";
 
@@ -135,6 +137,16 @@ export default function TrackContextMenu({
     onClose,
   ]);
 
+  const handleShare = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(getTrackShareUrl(track.id));
+      showToast("Copied share link to clipboard");
+    } catch {
+      showToast("Failed to copy link", "error");
+    }
+    onClose();
+  }, [track.id, showToast, onClose]);
+
   const menuItemClass =
     "w-full flex items-center gap-3 px-4 py-2.5 hover:bg-th-hl-faint transition-colors text-left text-[14px] text-th-text-secondary hover:text-th-text-primary";
 
@@ -193,6 +205,13 @@ export default function TrackContextMenu({
             </button>
           </>
         )}
+
+        {/* Share */}
+        <div className="my-1 border-t border-th-inset" />
+        <button className={menuItemClass} onClick={handleShare}>
+          <Link size={18} className="shrink-0 text-th-text-muted" />
+          <span>Share</span>
+        </button>
 
         {/* Remove from playlist (only for user's own playlist) */}
         {canRemoveFromPlaylist && (

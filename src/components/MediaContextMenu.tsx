@@ -9,6 +9,7 @@ import {
   UserCheck,
   Trash2,
   FolderInput,
+  Link,
 } from "lucide-react";
 import {
   useState,
@@ -27,6 +28,7 @@ import { usePlaylists } from "../hooks/usePlaylists";
 import { useContextMenu } from "../hooks/useContextMenu";
 import { userPlaylistsAtom } from "../atoms/playlists";
 import { currentViewAtom } from "../atoms/navigation";
+import { getShareUrl } from "../utils/itemHelpers";
 import AddToPlaylistMenu from "./AddToPlaylistMenu";
 import MoveToFolderMenu from "./MoveToFolderMenu";
 import MenuPortal from "./MenuPortal";
@@ -34,12 +36,14 @@ import MenuPortal from "./MenuPortal";
 interface MediaContextMenuProps {
   item: MediaItemType;
   cursorPosition: { x: number; y: number };
+  sourceFolderId?: string;
   onClose: () => void;
 }
 
 export default function MediaContextMenu({
   item,
   cursorPosition,
+  sourceFolderId,
   onClose,
 }: MediaContextMenuProps) {
   const { playTrack, setQueueTracks, addToQueue, playNextInQueue } =
@@ -88,12 +92,6 @@ export default function MediaContextMenu({
   // Ownership check: is this a user-created playlist?
   const isUserPlaylist =
     item.type === "playlist" && userPlaylists.some((p) => p.uuid === item.uuid);
-
-  // Any playlist in the user's collection (user-created OR favorited)
-  const isCollectionPlaylist =
-    item.type === "playlist" &&
-    (userPlaylists.some((p) => p.uuid === item.uuid) ||
-      favoritePlaylistUuids.has(item.uuid));
 
   // Derive favorite status from atoms (no API call needed)
   useEffect(() => {
@@ -304,6 +302,16 @@ export default function MediaContextMenu({
     showToast,
   ]);
 
+  const handleShare = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(getShareUrl(item));
+      showToast("Copied share link to clipboard");
+    } catch {
+      showToast("Failed to copy link", "error");
+    }
+    onClose();
+  }, [item, showToast, onClose]);
+
   // Whether "Add to library" / "Follow" is supported for this item type
   const canFavorite =
     item.type === "album" ||
@@ -392,8 +400,8 @@ export default function MediaContextMenu({
           <span>Add to playlist</span>
         </button>
 
-        {/* Move to folder (any playlist in user's collection) */}
-        {isCollectionPlaylist && (
+        {/* Move to folder */}
+        {item.type === "playlist" && (
           <button
             ref={moveFolderBtnRef}
             className={menuItemClass}
@@ -443,6 +451,13 @@ export default function MediaContextMenu({
             </button>
           </>
         )}
+
+        {/* Share */}
+        <div className="my-1 border-t border-th-inset" />
+        <button className={menuItemClass} onClick={handleShare}>
+          <Link size={18} className="shrink-0 text-th-text-muted" />
+          <span>Share</span>
+        </button>
 
         {/* Delete playlist (only for user-created playlists) */}
         {isUserPlaylist && (
@@ -514,6 +529,7 @@ export default function MediaContextMenu({
           playlistUuid={item.uuid}
           playlistTitle={item.title}
           anchorRef={moveFolderBtnRef}
+          sourceFolderId={sourceFolderId}
           onClose={() => {
             setShowMoveToFolder(false);
             onClose();

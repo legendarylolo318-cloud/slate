@@ -204,3 +204,29 @@ export function getTrackArtistDisplay(track: { artist?: { name?: string }; artis
   }
   return track.artist?.name || "Unknown Artist";
 }
+
+const TIDAL_SHARE_BASE = "https://tidal.com";
+
+/** Build a Tidal share URL for a track. */
+export function getTrackShareUrl(trackId: number): string {
+  return `${TIDAL_SHARE_BASE}/track/${trackId}`;
+}
+
+/** Build a Tidal share URL for a media item (album/playlist/mix/artist). */
+export function getShareUrl(item: MediaItemType): string {
+  switch (item.type) {
+    case "album":
+      return `${TIDAL_SHARE_BASE}/album/${item.id}`;
+    case "playlist":
+      return `${TIDAL_SHARE_BASE}/playlist/${item.uuid}`;
+    case "mix":
+      return `${TIDAL_SHARE_BASE}/mix/${item.mixId}`;
+    case "artist":
+      return `${TIDAL_SHARE_BASE}/artist/${item.id}`;
+  }
+}
+
+export function folderSubtitle(count: number | undefined | null): string {
+  if (count == null) return "Folder";
+  return `${count} playlist${count !== 1 ? "s" : ""}`;
+}
