@@ -2478,6 +2478,200 @@ impl TidalClient {
         })
     }
 
+    pub async fn create_playlist_folder(
+        &self,
+        folder_id: &str,
+        name: &str,
+        trns: &str,
+    ) -> Result<(), SoneError> {
+        let tokens = self.tokens.as_ref().ok_or(SoneError::NotAuthenticated)?;
+
+        log::debug!(
+            "[create_playlist_folder]: folder_id={}, name={}, trns={}",
+            folder_id,
+            name,
+            trns
+        );
+
+        let mut params: Vec<(&str, &str)> = vec![
+            ("folderId", folder_id),
+            ("name", name),
+            ("countryCode", self.country_code.as_str()),
+            ("locale", "en_US"),
+            ("deviceType", "BROWSER"),
+        ];
+        if !trns.is_empty() {
+            params.push(("trns", trns));
+        }
+
+        let response = self
+            .client
+            .put(format!(
+                "{}/my-collection/playlists/folders/create-folder",
+                TIDAL_API_V2_URL
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&params)
+            .send()
+            .await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[create_playlist_folder]: status={}, body={}",
+            status,
+            &body[..body.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SoneError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn rename_playlist_folder(
+        &self,
+        folder_trn: &str,
+        name: &str,
+    ) -> Result<(), SoneError> {
+        let tokens = self.tokens.as_ref().ok_or(SoneError::NotAuthenticated)?;
+
+        log::debug!(
+            "[rename_playlist_folder]: folder_trn={}, name={}",
+            folder_trn,
+            name
+        );
+
+        let response = self
+            .client
+            .put(format!(
+                "{}/my-collection/playlists/folders/rename",
+                TIDAL_API_V2_URL
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("trn", folder_trn),
+                ("name", name),
+                ("countryCode", self.country_code.as_str()),
+                ("locale", "en_US"),
+                ("deviceType", "BROWSER"),
+            ])
+            .send()
+            .await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[rename_playlist_folder]: status={}, body={}",
+            status,
+            &body[..body.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SoneError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn delete_playlist_folder(&self, folder_trn: &str) -> Result<(), SoneError> {
+        let tokens = self.tokens.as_ref().ok_or(SoneError::NotAuthenticated)?;
+
+        log::debug!("[delete_playlist_folder]: folder_trn={}", folder_trn);
+
+        let response = self
+            .client
+            .put(format!(
+                "{}/my-collection/playlists/folders/remove",
+                TIDAL_API_V2_URL
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("trns", folder_trn),
+                ("countryCode", self.country_code.as_str()),
+                ("locale", "en_US"),
+                ("deviceType", "BROWSER"),
+            ])
+            .send()
+            .await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[delete_playlist_folder]: status={}, body={}",
+            status,
+            &body[..body.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SoneError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn move_playlist_to_folder(
+        &self,
+        folder_id: &str,
+        playlist_trn: &str,
+    ) -> Result<(), SoneError> {
+        let tokens = self.tokens.as_ref().ok_or(SoneError::NotAuthenticated)?;
+
+        log::debug!(
+            "[move_playlist_to_folder]: folder_id={}, playlist_trn={}",
+            folder_id,
+            playlist_trn
+        );
+
+        let response = self
+            .client
+            .put(format!(
+                "{}/my-collection/playlists/folders/move",
+                TIDAL_API_V2_URL
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("folderId", folder_id),
+                ("trns", playlist_trn),
+                ("countryCode", self.country_code.as_str()),
+                ("locale", "en_US"),
+                ("deviceType", "BROWSER"),
+            ])
+            .send()
+            .await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[move_playlist_to_folder]: status={}, body={}",
+            status,
+            &body[..body.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SoneError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
     pub async fn add_tracks_to_playlist(
         &self,
         playlist_id: &str,

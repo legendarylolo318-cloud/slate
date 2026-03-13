@@ -593,6 +593,10 @@ pub fn run() {
             commands::library::get_favorite_mixes,
             commands::library::get_favorite_artists,
             commands::library::get_playlist_folders,
+            commands::library::create_playlist_folder,
+            commands::library::rename_playlist_folder,
+            commands::library::delete_playlist_folder,
+            commands::library::move_playlist_to_folder,
             // pages
             commands::pages::get_album_detail,
             commands::pages::get_album_page,

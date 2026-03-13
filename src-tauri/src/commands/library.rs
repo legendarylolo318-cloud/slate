@@ -1095,3 +1095,64 @@ pub async fn get_playlist_folders(
         )
         .await
 }
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn create_playlist_folder(
+    state: State<'_, AppState>,
+    folder_id: String,
+    name: String,
+    trns: String,
+) -> Result<(), SoneError> {
+    log::debug!(
+        "[create_playlist_folder]: folder_id={}, name={}, trns={}",
+        folder_id,
+        name,
+        trns
+    );
+    let client = state.tidal_client.lock().await;
+    client
+        .create_playlist_folder(&folder_id, &name, &trns)
+        .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn rename_playlist_folder(
+    state: State<'_, AppState>,
+    folder_trn: String,
+    name: String,
+) -> Result<(), SoneError> {
+    log::debug!(
+        "[rename_playlist_folder]: folder_trn={}, name={}",
+        folder_trn,
+        name
+    );
+    let client = state.tidal_client.lock().await;
+    client.rename_playlist_folder(&folder_trn, &name).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn delete_playlist_folder(
+    state: State<'_, AppState>,
+    folder_trn: String,
+) -> Result<(), SoneError> {
+    log::debug!("[delete_playlist_folder]: folder_trn={}", folder_trn);
+    let client = state.tidal_client.lock().await;
+    client.delete_playlist_folder(&folder_trn).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn move_playlist_to_folder(
+    state: State<'_, AppState>,
+    folder_id: String,
+    playlist_trn: String,
+) -> Result<(), SoneError> {
+    log::debug!(
+        "[move_playlist_to_folder]: folder_id={}, playlist_trn={}",
+        folder_id,
+        playlist_trn
+    );
+    let client = state.tidal_client.lock().await;
+    client
+        .move_playlist_to_folder(&folder_id, &playlist_trn)
+        .await
+}
