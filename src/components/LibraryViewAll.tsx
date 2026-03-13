@@ -12,21 +12,21 @@ import { useMediaPlay } from "../hooks/useMediaPlay";
 import { useFavorites } from "../hooks/useFavorites";
 import { useAtomValue, useAtom } from "jotai";
 import {
-  userPlaylistsAtom,
-  favoritePlaylistsAtom,
   deletedPlaylistIdsAtom,
 } from "../atoms/playlists";
 import {
   albumSortAtom,
   artistSortAtom,
   mixSortAtom,
+  playlistSortAtom,
 } from "../atoms/favorites";
 import {
-  getUserPlaylists,
+  getPlaylistFolders,
+  normalizePlaylistFolders,
+  getItemKey,
   getFavoriteAlbums,
   getFavoriteArtists,
   getFavoriteMixes,
-  getFavoritePlaylists,
 } from "../api/tidal";
 import MediaGrid, { MediaGridSkeleton, MediaGridEmpty } from "./MediaGrid";
 import MediaCard from "./MediaCard";
@@ -35,12 +35,15 @@ import DebouncedFilterInput from "./DebouncedFilterInput";
 import SortDropdown from "./SortDropdown";
 import PageContainer from "./PageContainer";
 import { buildMediaItem } from "../utils/itemHelpers";
-import type { MediaItemType, Playlist } from "../types";
+import { FolderOpen } from "lucide-react";
+import type { MediaItemType, PlaylistOrFolder } from "../types";
 
 type LibraryType = "playlists" | "albums" | "artists" | "mixes";
 
 interface LibraryViewAllProps {
   libraryType: LibraryType;
+  folderId?: string;
+  folderName?: string;
 }
 
 const CONFIG = {
@@ -64,13 +67,14 @@ const CONFIG = {
 
 const PAGE_SIZE = 50;
 
-export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
+export default function LibraryViewAll({ libraryType, folderId, folderName }: LibraryViewAllProps) {
   const { authTokens } = useAuth();
   const {
     navigateToPlaylist,
     navigateToAlbum,
     navigateToArtist,
     navigateToMix,
+    navigateToPlaylistFolder,
   } = useNavigation();
   const playMedia = useMediaPlay();
   const {
@@ -88,23 +92,22 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
     removeFavoriteMix,
   } = useFavorites();
 
-  const userPlaylists = useAtomValue(userPlaylistsAtom);
-  const favoritePlaylists = useAtomValue(favoritePlaylistsAtom);
   const deletedPlaylistIds = useAtomValue(deletedPlaylistIdsAtom);
 
+  const [playlistSort, setPlaylistSort] = useAtom(playlistSortAtom);
   const [albumSort, setAlbumSort] = useAtom(albumSortAtom);
   const [artistSort, setArtistSort] = useAtom(artistSortAtom);
   const [mixSort, setMixSort] = useAtom(mixSortAtom);
 
-  const currentSort = libraryType === "albums" ? albumSort
+  const currentSort = libraryType === "playlists" ? playlistSort
+    : libraryType === "albums" ? albumSort
     : libraryType === "artists" ? artistSort
-    : libraryType === "mixes" ? mixSort
-    : null;
+    : mixSort;
 
-  const setCurrentSort = libraryType === "albums" ? setAlbumSort
+  const setCurrentSort = libraryType === "playlists" ? setPlaylistSort
+    : libraryType === "albums" ? setAlbumSort
     : libraryType === "artists" ? setArtistSort
-    : libraryType === "mixes" ? setMixSort
-    : null;
+    : setMixSort;
 
   const [items, setItems] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -130,40 +133,11 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
     ): Promise<{ items: any[]; totalNumberOfItems: number }> => {
       switch (libraryType) {
         case "playlists": {
-          if (!userId) return { items: [], totalNumberOfItems: 0 };
-          const [userPl, favPl] = await Promise.all([
-            getUserPlaylists(userId, offset, limit),
-            offset === 0
-              ? getFavoritePlaylists(userId, 0, limit)
-              : Promise.resolve({
-                  items: [] as Playlist[],
-                  totalNumberOfItems: 0,
-                }),
-          ]);
-          // Merge: user playlists first, append non-duplicate favorites (first page only)
-          const seen = new Set<string>();
-          const merged: Playlist[] = [];
-          for (const p of userPl.items) {
-            if (!seen.has(p.uuid)) {
-              seen.add(p.uuid);
-              merged.push(p);
-            }
-          }
-          if (offset === 0) {
-            for (const p of favPl.items) {
-              if (!seen.has(p.uuid)) {
-                seen.add(p.uuid);
-                merged.push(p);
-              }
-            }
-          }
-          return {
-            items: merged,
-            totalNumberOfItems: Math.max(
-              userPl.totalNumberOfItems,
-              merged.length,
-            ),
-          };
+          const response = await getPlaylistFolders(
+            folderId ?? "root", offset, limit,
+            currentSort?.order ?? "DATE_UPDATED", currentSort?.direction ?? "DESC",
+          );
+          return normalizePlaylistFolders(response);
         }
         case "albums": {
           if (!userId) return { items: [], totalNumberOfItems: 0 };
@@ -178,7 +152,7 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
         }
       }
     },
-    [libraryType, userId, currentSort?.order, currentSort?.direction],
+    [libraryType, userId, currentSort?.order, currentSort?.direction, folderId],
   );
 
   // Load first page
@@ -221,12 +195,13 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
         if (cancelledRef.current) return;
         startTransition(() => {
           setItems((prev) => {
-            const idKey = libraryType === "playlists" ? "uuid" : "id";
-            const seen = new Set(prev.map((item) => item[idKey]));
-            return [
-              ...prev,
-              ...page.items.filter((item) => !seen.has(item[idKey])),
-            ];
+            if (libraryType === "playlists") {
+              const seen = new Set((prev as PlaylistOrFolder[]).map(getItemKey));
+              return [...prev, ...(page.items as PlaylistOrFolder[]).filter((item) => !seen.has(getItemKey(item)))];
+            } else {
+              const seen = new Set(prev.map((item: any) => item.id));
+              return [...prev, ...page.items.filter((item: any) => !seen.has(item.id))];
+            }
           });
           setTotalCount(page.totalNumberOfItems);
         });
@@ -248,12 +223,13 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
       const page = await fetchPage(offsetRef.current, PAGE_SIZE);
       if (cancelledRef.current) return;
       setItems((prev) => {
-        const idKey = libraryType === "playlists" ? "uuid" : "id";
-        const seen = new Set(prev.map((item) => item[idKey]));
-        return [
-          ...prev,
-          ...page.items.filter((item) => !seen.has(item[idKey])),
-        ];
+        if (libraryType === "playlists") {
+          const seen = new Set((prev as PlaylistOrFolder[]).map(getItemKey));
+          return [...prev, ...(page.items as PlaylistOrFolder[]).filter((item) => !seen.has(getItemKey(item)))];
+        } else {
+          const seen = new Set(prev.map((item: any) => item.id));
+          return [...prev, ...page.items.filter((item: any) => !seen.has(item.id))];
+        }
       });
       setTotalCount(page.totalNumberOfItems);
       offsetRef.current += page.items.length;
@@ -279,28 +255,13 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
     return () => observer.disconnect();
   }, [loadMore]);
 
-  // For playlists, merge: atom (optimistic) → paginated → favorites, deduped, skip deleted
   const displayItems = useMemo(() => {
     if (libraryType !== "playlists") return items;
-    const seen = new Set<string>();
-    const merged: any[] = [];
-    const addIfValid = (p: any) => {
-      if (!seen.has(p.uuid) && !deletedPlaylistIds.has(p.uuid)) {
-        seen.add(p.uuid);
-        merged.push(p);
-      }
-    };
-    for (const p of userPlaylists) addIfValid(p);
-    for (const p of items) addIfValid(p);
-    for (const p of favoritePlaylists) addIfValid(p);
-    return merged;
-  }, [
-    userPlaylists,
-    items,
-    favoritePlaylists,
-    deletedPlaylistIds,
-    libraryType,
-  ]);
+    return (items as PlaylistOrFolder[]).filter((entry) => {
+      if (entry.kind === "folder") return true;
+      return !deletedPlaylistIds.has(entry.data.uuid);
+    });
+  }, [items, deletedPlaylistIds, libraryType]);
 
   // ==================== Search / Filter ====================
 
@@ -310,14 +271,19 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
   const filteredItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return displayItems;
+    if (libraryType === "playlists") {
+      const entries = displayItems as PlaylistOrFolder[];
+      return entries.filter((entry) => {
+        if (entry.kind === "folder") return entry.data.name.toLowerCase().includes(q);
+        return (
+          entry.data.title?.toLowerCase().includes(q) ||
+          entry.data.description?.toLowerCase().includes(q) ||
+          entry.data.creator?.name?.toLowerCase().includes(q)
+        );
+      }) as any;
+    }
     return displayItems.filter((item) => {
       switch (libraryType) {
-        case "playlists":
-          return (
-            item.title?.toLowerCase().includes(q) ||
-            item.description?.toLowerCase().includes(q) ||
-            item.creator?.name?.toLowerCase().includes(q)
-          );
         case "albums":
           return (
             item.title?.toLowerCase().includes(q) ||
@@ -373,18 +339,24 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
   const handleItemClick = useCallback(
     (item: any) => {
       switch (libraryType) {
-        case "playlists":
-          navigateToPlaylist(item.uuid, {
-            title: item.title,
-            image: item.image,
-            description: item.description,
-            creatorName:
-              item.creator?.name ||
-              (item.creator?.id === 0 ? "TIDAL" : undefined),
-            numberOfTracks: item.numberOfTracks,
-            isUserPlaylist: userId != null && item.creator?.id === userId,
-          });
+        case "playlists": {
+          const entry = item as PlaylistOrFolder;
+          if (entry.kind === "folder") {
+            navigateToPlaylistFolder(entry.data.id, entry.data.name);
+          } else {
+            navigateToPlaylist(entry.data.uuid, {
+              title: entry.data.title,
+              image: entry.data.image,
+              description: entry.data.description,
+              creatorName:
+                entry.data.creator?.name ||
+                (entry.data.creator?.id === 0 ? "TIDAL" : undefined),
+              numberOfTracks: entry.data.numberOfTracks,
+              isUserPlaylist: userId != null && entry.data.creator?.id === userId,
+            });
+          }
           break;
+        }
         case "albums":
           navigateToAlbum(item.id, {
             title: item.title,
@@ -407,6 +379,7 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
     [
       libraryType,
       navigateToPlaylist,
+      navigateToPlaylistFolder,
       navigateToAlbum,
       navigateToArtist,
       navigateToMix,
@@ -436,8 +409,11 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
   const isFavorited = useCallback(
     (item: any): boolean => {
       switch (libraryType) {
-        case "playlists":
-          return favoritePlaylistUuids.has(item.uuid);
+        case "playlists": {
+          const entry = item as PlaylistOrFolder;
+          if (entry.kind === "folder") return false;
+          return favoritePlaylistUuids.has(entry.data.uuid);
+        }
         case "albums":
           return favoriteAlbumIds.has(item.id);
         case "artists":
@@ -459,11 +435,14 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
     (e: React.MouseEvent, item: any) => {
       e.stopPropagation();
       switch (libraryType) {
-        case "playlists":
-          if (favoritePlaylistUuids.has(item.uuid))
-            removeFavoritePlaylist(item.uuid);
-          else addFavoritePlaylist(item.uuid, item);
+        case "playlists": {
+          const entry = item as PlaylistOrFolder;
+          if (entry.kind === "folder") return;
+          if (favoritePlaylistUuids.has(entry.data.uuid))
+            removeFavoritePlaylist(entry.data.uuid);
+          else addFavoritePlaylist(entry.data.uuid, entry.data);
           break;
+        }
         case "albums":
           if (favoriteAlbumIds.has(item.id)) removeFavoriteAlbum(item.id);
           else addFavoriteAlbum(item.id, item);
@@ -526,7 +505,7 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
       {/* Header */}
       <div className="px-8 pt-10 pb-6">
         <h1 className="text-[32px] font-extrabold text-th-text-primary leading-tight tracking-tight">
-          {config.title}
+          {folderName ?? config.title}
         </h1>
         <div className="flex items-center gap-3 mt-1">
           <p className="text-[14px] text-th-text-muted">
@@ -547,9 +526,9 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
                     ? "playlist"
                     : "playlists"}
           </p>
-          {libraryType !== "playlists" && currentSort && setCurrentSort && (
+          {currentSort && setCurrentSort && (
             <SortDropdown
-              libraryType={libraryType as "albums" | "artists" | "mixes"}
+              libraryType={libraryType}
               currentSort={currentSort}
               onSortChange={setCurrentSort}
             />
@@ -578,12 +557,38 @@ export default function LibraryViewAll({ libraryType }: LibraryViewAllProps) {
           />
         ) : (
           <MediaGrid>
-            {filteredItems.map((item) => {
-              const key = item.uuid || item.id?.toString() || item.mixId;
+            {(filteredItems as any[]).map((item: any) => {
+              // Folder rendering
+              if (libraryType === "playlists" && (item as PlaylistOrFolder).kind === "folder") {
+                const folder = (item as Extract<PlaylistOrFolder, { kind: "folder" }>).data;
+                return (
+                  <MediaCard
+                    key={folder.id}
+                    item={{ title: folder.name }}
+                    onClick={() => navigateToPlaylistFolder(folder.id, folder.name)}
+                    titleOverride={folder.name}
+                    imageOverride={
+                      <div className="w-full h-full flex items-center justify-center bg-th-surface-hover">
+                        <FolderOpen size={32} className="text-th-text-faint" />
+                      </div>
+                    }
+                    showPlayButton={false}
+                  />
+                );
+              }
+
+              const key = libraryType === "playlists"
+                ? ((item as Extract<PlaylistOrFolder, { kind: "playlist" }>).data.uuid)
+                : (item.uuid || item.id?.toString() || item.mixId);
+
+              const actualItem = libraryType === "playlists"
+                ? (item as Extract<PlaylistOrFolder, { kind: "playlist" }>).data
+                : item;
+
               return (
                 <MediaCard
                   key={key}
-                  item={item}
+                  item={actualItem}
                   isArtist={isArtist}
                   userId={libraryType === "playlists" ? userId : undefined}
                   onClick={() => handleItemClick(item)}
