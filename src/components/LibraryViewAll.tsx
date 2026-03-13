@@ -10,7 +10,7 @@ import { useAuth } from "../hooks/useAuth";
 import { useNavigation } from "../hooks/useNavigation";
 import { useMediaPlay } from "../hooks/useMediaPlay";
 import { useFavorites } from "../hooks/useFavorites";
-import { useAtomValue, useAtom } from "jotai";
+import { useAtomValue, useStore } from "jotai";
 import {
   deletedPlaylistIdsAtom,
 } from "../atoms/playlists";
@@ -19,6 +19,7 @@ import {
   artistSortAtom,
   mixSortAtom,
   playlistSortAtom,
+  type SortOrder,
 } from "../atoms/favorites";
 import {
   getPlaylistFolders,
@@ -94,20 +95,14 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
 
   const deletedPlaylistIds = useAtomValue(deletedPlaylistIdsAtom);
 
-  const [playlistSort, setPlaylistSort] = useAtom(playlistSortAtom);
-  const [albumSort, setAlbumSort] = useAtom(albumSortAtom);
-  const [artistSort, setArtistSort] = useAtom(artistSortAtom);
-  const [mixSort, setMixSort] = useAtom(mixSortAtom);
-
-  const currentSort = libraryType === "playlists" ? playlistSort
-    : libraryType === "albums" ? albumSort
-    : libraryType === "artists" ? artistSort
-    : mixSort;
-
-  const setCurrentSort = libraryType === "playlists" ? setPlaylistSort
-    : libraryType === "albums" ? setAlbumSort
-    : libraryType === "artists" ? setArtistSort
-    : setMixSort;
+  const store = useStore();
+  const [currentSort, setCurrentSort] = useState<SortOrder>(() => {
+    const atom = libraryType === "playlists" ? playlistSortAtom
+      : libraryType === "albums" ? albumSortAtom
+      : libraryType === "artists" ? artistSortAtom
+      : mixSortAtom;
+    return store.get(atom);
+  });
 
   const [items, setItems] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
