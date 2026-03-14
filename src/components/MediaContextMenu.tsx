@@ -154,12 +154,48 @@ export default function MediaContextMenu({
       "play",
       (tracks) => {
         const [first, ...rest] = tracks;
-        setQueueTracks(rest);
+        let source:
+          | {
+              type: string;
+              id: string | number;
+              name: string;
+              image?: string;
+              subtitle?: string;
+              allTracks: Track[];
+            }
+          | undefined;
+        if (item.type === "album") {
+          source = {
+            type: "album",
+            id: item.id,
+            name: item.title,
+            image: item.cover,
+            allTracks: tracks,
+          };
+        } else if (item.type === "playlist") {
+          source = {
+            type: "playlist",
+            id: item.uuid,
+            name: item.title,
+            image: item.image,
+            allTracks: tracks,
+          };
+        } else if (item.type === "mix") {
+          source = {
+            type: "mix",
+            id: item.mixId,
+            name: item.title,
+            image: item.image,
+            subtitle: item.subtitle,
+            allTracks: tracks,
+          };
+        }
+        setQueueTracks(rest, source ? { source } : undefined);
         playTrack(first);
       },
       `Now playing "${itemLabel}"`,
     );
-  }, [withTracks, playTrack, setQueueTracks, itemLabel]);
+  }, [withTracks, playTrack, setQueueTracks, itemLabel, item]);
 
   const handlePlayNext = useCallback(() => {
     withTracks(
