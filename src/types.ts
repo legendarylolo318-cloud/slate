@@ -590,6 +590,8 @@ export interface Folder {
   parent: string | null;
   addedAt: string;
   lastModifiedAt: string;
+  /** Count of items in the folder, from API */
+  totalNumberOfItems?: number;
 }
 
 export type PlaylistOrFolder =

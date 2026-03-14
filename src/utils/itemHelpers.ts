@@ -228,5 +228,5 @@ export function getShareUrl(item: MediaItemType): string {
 
 export function folderSubtitle(count: number | undefined | null): string {
   if (count == null) return "Folder";
-  return `${count} playlist${count !== 1 ? "s" : ""}`;
+  return `${count} playlist${count > 1 ? "s" : ""}`;
 }
