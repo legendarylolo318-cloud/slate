@@ -17,6 +17,7 @@ import { useFavorites } from "./useFavorites";
 import { useDrawer } from "./useDrawer";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 export interface MiniplayerState {
   track: {
@@ -213,4 +214,27 @@ export function useMiniplayerEmitter() {
     toggleShuffle, seekTo, setVolume,
     addFavoriteTrack, removeFavoriteTrack, openDrawerToTab,
   ]);
+
+  // Close miniplayer when queue empties (if main window is visible)
+  useEffect(() => {
+    if (!miniplayerOpen) return;
+
+    const unsub = store.sub(currentTrackAtom, () => {
+      const track = store.get(currentTrackAtom);
+      if (!track) {
+        // Check if main window is visible
+        getCurrentWindow().isVisible().then((visible) => {
+          if (visible) {
+            // Main window is visible — close miniplayer
+            WebviewWindow.getByLabel("miniplayer").then((win) => {
+              if (win) win.close();
+            });
+          }
+          // If main window is hidden (tray), keep miniplayer open showing last track
+        });
+      }
+    });
+
+    return unsub;
+  }, [miniplayerOpen, store]);
 }
