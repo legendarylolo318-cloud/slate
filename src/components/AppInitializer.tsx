@@ -589,10 +589,27 @@ export function AppInitializer() {
     const unlistenPrev = listen("tray:prev-track", () => {
       playPrevious();
     });
+    const unlistenMprisPlay = listen("mpris:play", () => {
+      if (!store.get(isPlayingAtom)) {
+        resumeTrack();
+      }
+    });
+    const unlistenMprisPause = listen("mpris:pause", () => {
+      if (store.get(isPlayingAtom)) {
+        pauseTrack();
+      }
+    });
+    const unlistenMprisStop = listen("mpris:stop", () => {
+      invoke("stop_track").catch(() => {});
+      store.set(isPlayingAtom, false);
+    });
     return () => {
       unlistenToggle.then((fn) => fn());
       unlistenNext.then((fn) => fn());
       unlistenPrev.then((fn) => fn());
+      unlistenMprisPlay.then((fn) => fn());
+      unlistenMprisPause.then((fn) => fn());
+      unlistenMprisStop.then((fn) => fn());
     };
   }, [store, playNext, playPrevious, pauseTrack, resumeTrack]);
 
@@ -626,6 +643,7 @@ export function AppInitializer() {
       if (!track) return;
       invoke("update_mpris_metadata", {
         metadata: {
+          trackId: track.id,
           title: getTrackDisplayTitle(track),
           artist: getTrackArtistDisplay(track),
           album: track.album?.title || "",

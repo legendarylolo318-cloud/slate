@@ -228,6 +228,7 @@ pub fn load_playback_queue(state: State<'_, AppState>) -> Result<Option<String>,
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MprisMetadata {
+    pub track_id: u64,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -243,6 +244,7 @@ pub fn update_mpris_metadata(
 ) -> Result<(), SoneError> {
     #[cfg(target_os = "linux")]
     state.mpris.send(crate::mpris::MprisCommand::SetMetadata {
+        track_id: metadata.track_id,
         title: metadata.title,
         artist: metadata.artist,
         album: metadata.album,
