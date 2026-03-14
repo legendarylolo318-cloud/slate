@@ -23,9 +23,9 @@ import TidalImage from "./TidalImage";
 import MediaContextMenu from "./MediaContextMenu";
 import FolderContextMenu from "./FolderContextMenu";
 import { CreatePlaylistModal } from "./AddToPlaylistMenu";
-import { getTrackArtistDisplay } from "../utils/itemHelpers";
+import { getTrackArtistDisplay, folderSubtitle } from "../utils/itemHelpers";
 import { useState, useCallback, useMemo, useRef } from "react";
-import { useAtomValue, useAtom } from "jotai";
+import { useAtomValue, useAtom, useSetAtom } from "jotai";
 import {
   favoriteAlbumIdsAtom,
   followedArtistIdsAtom,
@@ -38,7 +38,7 @@ import {
   mixSortAtom,
   playlistSortAtom,
 } from "../atoms/favorites";
-import { deletedFolderIdsAtom, deletedPlaylistIdsAtom } from "../atoms/playlists";
+import { deletedFolderIdsAtom, deletedPlaylistIdsAtom, movedPlaylistsAtom, folderCountAdjustmentsAtom, addedToFolderAtom, renamedFoldersAtom } from "../atoms/playlists";
 import { sidebarCollapsedAtom } from "../atoms/ui";
 
 export default function Sidebar() {
@@ -69,11 +69,12 @@ export default function Sidebar() {
   const playlistFetch = useCallback(
     async (offset: number, limit: number) => {
       const cursor = offset === 0 ? undefined : (playlistCursorRef.current ?? undefined);
+      if (offset === 0) playlistCursorRef.current = null;
       const response = await getPlaylistFolders("root", offset, limit, playlistSort.order, playlistSort.direction, undefined, cursor);
       const normalized = normalizePlaylistFolders(response);
       playlistCursorRef.current = normalized.cursor;
       // Derive hasMore from cursor presence — API's totalNumberOfItems is unreliable
-      const total = normalized.cursor
+      const total = (normalized.cursor && normalized.items.length > 0)
         ? offset + normalized.items.length + 1
         : offset + normalized.items.length;
       return { items: normalized.items, totalNumberOfItems: total };
@@ -98,15 +99,42 @@ export default function Sidebar() {
 
   const deletedFolderIds = useAtomValue(deletedFolderIdsAtom);
   const deletedPlaylistIds = useAtomValue(deletedPlaylistIdsAtom);
+  const movedPlaylists = useAtomValue(movedPlaylistsAtom);
+  const countAdjustments = useAtomValue(folderCountAdjustmentsAtom);
+  const addedToFolder = useAtomValue(addedToFolderAtom);
+  const setAddedToFolder = useSetAtom(addedToFolderAtom);
+  const renamedFolders = useAtomValue(renamedFoldersAtom);
 
-  const visiblePlaylistItems = useMemo(
-    () =>
-      allPlaylistItems.filter((entry) => {
-        if (entry.kind === "folder") return !deletedFolderIds.has(entry.data.id);
-        return !deletedPlaylistIds.has(entry.data.uuid);
-      }),
-    [allPlaylistItems, deletedFolderIds, deletedPlaylistIds],
-  );
+  const visiblePlaylistItems = useMemo(() => {
+    const filtered = allPlaylistItems.filter((entry) => {
+      if (entry.kind === "folder") return !deletedFolderIds.has(entry.data.id);
+      if (deletedPlaylistIds.has(entry.data.uuid)) return false;
+      if (movedPlaylists.get(entry.data.uuid) === "root") return false;
+      return true;
+    });
+    const added = addedToFolder.get("root") ?? [];
+    if (added.length === 0) return filtered;
+    // Dedup against existing items
+    const existingFolderIds = new Set(filtered.filter((e) => e.kind === "folder").map((e) => e.data.id));
+    const existingPlaylistUuids = new Set(filtered.filter((e) => e.kind === "playlist").map((e) => e.data.uuid));
+    const newFolders = added.filter((e) => e.kind === "folder" && !existingFolderIds.has(e.data.id));
+    const newPlaylists = added.filter((e) =>
+      e.kind === "playlist" && !existingPlaylistUuids.has(e.data.uuid) && movedPlaylists.get(e.data.uuid) !== "root"
+    );
+    if (newFolders.length === 0 && newPlaylists.length === 0) return filtered;
+    // Insert new folders with existing folders, new playlists after all folders
+    let lastFolderIdx = -1;
+    for (let i = filtered.length - 1; i >= 0; i--) {
+      if (filtered[i].kind === "folder") { lastFolderIdx = i; break; }
+    }
+    const insertAt = lastFolderIdx + 1;
+    return [
+      ...filtered.slice(0, insertAt),
+      ...newFolders,
+      ...newPlaylists,
+      ...filtered.slice(insertAt),
+    ];
+  }, [allPlaylistItems, deletedFolderIds, deletedPlaylistIds, movedPlaylists, addedToFolder]);
 
   // Sort atoms
   const [albumSort, setAlbumSort] = useAtom(albumSortAtom);
@@ -480,13 +508,14 @@ export default function Sidebar() {
 
                 {visiblePlaylistItems.map((entry) => {
                   if (entry.kind === "folder") {
+                    const folderName = renamedFolders.get(entry.data.id) ?? entry.data.name;
                     return (
                       <button
                         key={entry.data.id}
-                        onClick={() => navigateToPlaylistFolder(entry.data.id, entry.data.name)}
-                        onContextMenu={(e) => handleFolderContextMenu(e, entry.data)}
+                        onClick={() => navigateToPlaylistFolder(entry.data.id, folderName)}
+                        onContextMenu={(e) => handleFolderContextMenu(e, { ...entry.data, name: folderName })}
                         className={`w-full flex items-center gap-2.5 px-1.5 py-2 rounded-md transition-colors duration-150 group hover:bg-th-border-subtle ${isCollapsed ? "justify-center" : ""}`}
-                        title={entry.data.name}
+                        title={folderName}
                       >
                         <div className={`bg-th-surface-hover shrink-0 overflow-hidden rounded flex items-center justify-center ${isCollapsed ? "w-10 h-10" : "w-10 h-10"}`}>
                           <FolderOpen size={18} className="text-th-text-faint" />
@@ -494,10 +523,10 @@ export default function Sidebar() {
                         {!isCollapsed && (
                           <div className="flex-1 min-w-0 text-left">
                             <div className="text-[14px] font-medium text-th-text-primary truncate leading-snug">
-                              {entry.data.name}
+                              {folderName}
                             </div>
                             <div className="text-[12px] text-th-text-faint truncate leading-snug mt-0.5">
-                              Folder
+                              {folderSubtitle((entry.data.totalNumberOfItems ?? 0) + (countAdjustments.get(entry.data.id) ?? 0))}
                             </div>
                           </div>
                         )}
@@ -784,6 +813,7 @@ export default function Sidebar() {
         <MediaContextMenu
           item={contextMenu.item}
           cursorPosition={contextMenu.position}
+          sourceFolderId="root"
           onClose={() => setContextMenu(null)}
         />
       )}
@@ -803,7 +833,15 @@ export default function Sidebar() {
         <CreatePlaylistModal
           trackIds={[]}
           onClose={() => setShowCreateModal(false)}
-          onCreated={() => setShowCreateModal(false)}
+          onCreated={(playlist) => {
+            setAddedToFolder((prev) => {
+              const next = new Map(prev);
+              const list = next.get("root") ?? [];
+              next.set("root", [...list, { kind: "playlist" as const, data: playlist }]);
+              return next;
+            });
+            setShowCreateModal(false);
+          }}
         />
       )}
     </div>

@@ -528,6 +528,8 @@ export default function MediaContextMenu({
         <MoveToFolderMenu
           playlistUuid={item.uuid}
           playlistTitle={item.title}
+          playlistImage={item.image}
+          playlistCreatorName={item.creatorName}
           anchorRef={moveFolderBtnRef}
           sourceFolderId={sourceFolderId}
           onClose={() => {

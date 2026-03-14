@@ -14,6 +14,10 @@ import { useAtomValue, useStore } from "jotai";
 import {
   deletedPlaylistIdsAtom,
   deletedFolderIdsAtom,
+  movedPlaylistsAtom,
+  folderCountAdjustmentsAtom,
+  addedToFolderAtom,
+  renamedFoldersAtom,
 } from "../atoms/playlists";
 import {
   albumSortAtom,
@@ -37,7 +41,7 @@ import FolderContextMenu from "./FolderContextMenu";
 import DebouncedFilterInput from "./DebouncedFilterInput";
 import SortDropdown from "./SortDropdown";
 import PageContainer from "./PageContainer";
-import { buildMediaItem } from "../utils/itemHelpers";
+import { buildMediaItem, folderSubtitle } from "../utils/itemHelpers";
 import { FolderOpen, MoreHorizontal } from "lucide-react";
 import type { MediaItemType, PlaylistOrFolder } from "../types";
 
@@ -97,6 +101,10 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
 
   const deletedPlaylistIds = useAtomValue(deletedPlaylistIdsAtom);
   const deletedFolderIds = useAtomValue(deletedFolderIdsAtom);
+  const movedPlaylists = useAtomValue(movedPlaylistsAtom);
+  const countAdjustments = useAtomValue(folderCountAdjustmentsAtom);
+  const addedToFolder = useAtomValue(addedToFolderAtom);
+  const renamedFolders = useAtomValue(renamedFoldersAtom);
 
   const [folderContextMenu, setFolderContextMenu] = useState<{
     folderId: string;
@@ -140,6 +148,7 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
       switch (libraryType) {
         case "playlists": {
           const cursor = offset === 0 ? undefined : (playlistCursorRef.current ?? undefined);
+          if (offset === 0) playlistCursorRef.current = null;
           const response = await getPlaylistFolders(
             folderId ?? "root", offset, limit,
             currentSort?.order ?? "DATE_UPDATED", currentSort?.direction ?? "DESC",
@@ -148,7 +157,7 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
           const normalized = normalizePlaylistFolders(response);
           playlistCursorRef.current = normalized.cursor;
           playlistApiTotalRef.current = normalized.totalNumberOfItems;
-          const total = normalized.cursor
+          const total = (normalized.cursor && normalized.items.length > 0)
             ? offset + normalized.items.length + 1
             : offset + normalized.items.length;
           return { items: normalized.items, totalNumberOfItems: total };
@@ -272,11 +281,20 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
 
   const displayItems = useMemo(() => {
     if (libraryType !== "playlists") return items;
-    return (items as PlaylistOrFolder[]).filter((entry) => {
+    const currentFolder = folderId ?? "root";
+    const filtered = (items as PlaylistOrFolder[]).filter((entry) => {
       if (entry.kind === "folder") return !deletedFolderIds.has(entry.data.id);
-      return !deletedPlaylistIds.has(entry.data.uuid);
+      if (deletedPlaylistIds.has(entry.data.uuid)) return false;
+      if (movedPlaylists.get(entry.data.uuid) === currentFolder) return false;
+      return true;
     });
-  }, [items, deletedPlaylistIds, deletedFolderIds, libraryType]);
+    // Prepend optimistically added playlists to this folder
+    const added = addedToFolder.get(currentFolder) ?? [];
+    if (added.length === 0) return filtered;
+    const existingUuids = new Set(filtered.filter((e) => e.kind === "playlist").map((e) => e.data.uuid));
+    const newItems = added.filter((e) => e.kind === "playlist" && !existingUuids.has(e.data.uuid));
+    return [...newItems, ...filtered];
+  }, [items, deletedPlaylistIds, deletedFolderIds, movedPlaylists, addedToFolder, libraryType, folderId]);
 
   // ==================== Search / Filter ====================
 
@@ -525,7 +543,7 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
       <div className="px-8 pt-10 pb-6">
         <div className="flex items-center gap-3">
           <h1 className="text-[32px] font-extrabold text-th-text-primary leading-tight tracking-tight">
-            {folderName ?? config.title}
+            {(folderId ? renamedFolders.get(folderId) : undefined) ?? folderName ?? config.title}
           </h1>
           {folderId && folderId !== "root" && (
             <button
@@ -594,21 +612,22 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
               // Folder rendering
               if (libraryType === "playlists" && (item as PlaylistOrFolder).kind === "folder") {
                 const folder = (item as Extract<PlaylistOrFolder, { kind: "folder" }>).data;
+                const displayName = renamedFolders.get(folder.id) ?? folder.name;
                 return (
                   <MediaCard
                     key={folder.id}
-                    item={{ title: folder.name }}
-                    onClick={() => navigateToPlaylistFolder(folder.id, folder.name)}
+                    item={{ title: displayName, subTitle: folderSubtitle((folder.totalNumberOfItems ?? 0) + (countAdjustments.get(folder.id) ?? 0)) }}
+                    onClick={() => navigateToPlaylistFolder(folder.id, displayName)}
                     onContextMenu={(e: React.MouseEvent) => {
                       e.preventDefault();
                       e.stopPropagation();
                       setFolderContextMenu({
                         folderId: folder.id,
-                        folderName: folder.name,
+                        folderName: displayName,
                         position: { x: e.clientX, y: e.clientY },
                       });
                     }}
-                    titleOverride={folder.name}
+                    titleOverride={displayName}
                     imageOverride={
                       <div className="w-full h-full flex items-center justify-center bg-th-surface-hover">
                         <FolderOpen size={32} className="text-th-text-faint" />
@@ -670,6 +689,7 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
         <MediaContextMenu
           item={contextMenu.item}
           cursorPosition={contextMenu.position}
+          sourceFolderId={folderId ?? "root"}
           onClose={() => setContextMenu(null)}
         />
       )}
