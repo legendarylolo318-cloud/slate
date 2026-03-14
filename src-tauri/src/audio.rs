@@ -288,6 +288,35 @@ fn configure_alsa_hwparams(
         .map_err(|e| format!("set_period_time: {e}"))?;
     pcm.hw_params(&hwp).map_err(|e| format!("hw_params: {e}"))?;
 
+    // Configure sw_params: pre-fill buffer before DMA starts.
+    // snd_pcm_hw_params() resets start_threshold to 1 (immediate start on first
+    // writei), which causes underruns when the writer can't keep up from frame one.
+    // Match GStreamer alsasink: start_threshold = buffer_size (full pre-fill).
+    {
+        let swp = pcm.sw_params_current()
+            .map_err(|e| format!("sw_params_current: {e}"))?;
+        let hwp_active = pcm.hw_params_current()
+            .map_err(|e| format!("hw_params_current for sw: {e}"))?;
+        let buffer_frames = hwp_active.get_buffer_size()
+            .map_err(|e| format!("get_buffer_size: {e}"))?;
+        let period_frames = hwp_active.get_period_size()
+            .map_err(|e| format!("get_period_size: {e}"))?;
+        // start_threshold: largest period-aligned value ≤ buffer_size.
+        // With our time-near requests this equals buffer_size, but the
+        // rounding guards against odd driver negotiations.
+        let start = (buffer_frames / period_frames) * period_frames;
+        swp.set_start_threshold(start as alsa::pcm::Frames)
+            .map_err(|e| format!("set_start_threshold: {e}"))?;
+        swp.set_avail_min(period_frames as alsa::pcm::Frames)
+            .map_err(|e| format!("set_avail_min: {e}"))?;
+        pcm.sw_params(&swp)
+            .map_err(|e| format!("sw_params: {e}"))?;
+        log::debug!(
+            "[audio] sw_params committed: start_threshold={}, avail_min={}",
+            start, period_frames
+        );
+    }
+
     // Log final negotiated hw_params
     if let Ok(active) = pcm.hw_params_current() {
         let rate = active.get_rate().unwrap_or(0);
