@@ -1,12 +1,12 @@
 import { Plus, Search, X, Loader2, FolderOpen, FolderInput } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useSetAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import { useToast } from "../contexts/ToastContext";
 import { useFolders, getRecentFolderIds } from "../hooks/useFolders";
 import { useContextMenu } from "../hooks/useContextMenu";
 import { getPlaylistFolders, normalizePlaylistFolders } from "../api/tidal";
 import { folderSubtitle } from "../utils/itemHelpers";
-import { folderCountAdjustmentsAtom, addedToFolderAtom, movedPlaylistsAtom } from "../atoms/playlists";
+import { allFoldersAtom, allFoldersFetchedAtom, folderCountAdjustmentsAtom, addedToFolderAtom, movedPlaylistsAtom } from "../atoms/playlists";
 import type { Folder } from "../types";
 import MenuPortal from "./MenuPortal";
 
@@ -169,8 +169,9 @@ export default function MoveToFolderMenu({
   const [error, setError] = useState<string | null>(null);
 
   // Folder data
-  const [allFolders, setAllFolders] = useState<Folder[]>([]);
-  const [foldersLoading, setFoldersLoading] = useState(true);
+  const [allFolders, setAllFolders] = useAtom(allFoldersAtom);
+  const [foldersFetched, setFoldersFetched] = useAtom(allFoldersFetchedAtom);
+  const [foldersLoading, setFoldersLoading] = useState(!foldersFetched);
 
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -186,6 +187,10 @@ export default function MoveToFolderMenu({
 
   // Fetch all folders on mount — paginate through all items
   useEffect(() => {
+    if (foldersFetched) {
+      setFoldersLoading(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
       const folders: Folder[] = [];
@@ -204,12 +209,14 @@ export default function MoveToFolderMenu({
         console.error("[MoveToFolderMenu] failed to fetch folders:", err);
       }
       if (!cancelled) {
-        setAllFolders(folders.sort((a, b) => a.name.localeCompare(b.name)));
+        const sorted = folders.sort((a, b) => a.name.localeCompare(b.name));
+        setAllFolders(sorted);
+        setFoldersFetched(true);
         setFoldersLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [foldersFetched, setAllFolders, setFoldersFetched]);
 
   // Focus search when showing all
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { atom } from "jotai";
-import type { Playlist, PlaylistOrFolder } from "../types";
+import type { Folder, Playlist, PlaylistOrFolder } from "../types";
 
 export const userPlaylistsAtom = atom<Playlist[]>([]);
 export const deletedPlaylistIdsAtom = atom<Set<string>>(new Set<string>());
@@ -12,5 +12,7 @@ export const folderCountAdjustmentsAtom = atom<Map<string, number>>(new Map());
 export const addedToFolderAtom = atom<Map<string, PlaylistOrFolder[]>>(new Map());
 /** Optimistic folder renames: folderId -> newName */
 export const renamedFoldersAtom = atom<Map<string, string>>(new Map());
+/** Shared cache of all folders for MoveToFolderMenu */
+export const allFoldersAtom = atom<Folder[]>([]);
 /** Set to false to signal that the full folder list should be refetched */
 export const allFoldersFetchedAtom = atom<boolean>(false);
