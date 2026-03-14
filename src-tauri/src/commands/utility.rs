@@ -227,6 +227,31 @@ pub fn list_audio_devices(state: State<'_, AppState>) -> Result<Vec<AudioDevice>
 }
 
 #[tauri::command]
+pub fn get_discord_rpc(state: State<'_, AppState>) -> bool {
+    state
+        .load_settings()
+        .map(|s| s.discord_rpc)
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn set_discord_rpc(state: State<'_, AppState>, enabled: bool) -> Result<(), SoneError> {
+    if enabled {
+        state
+            .discord
+            .send(crate::discord::DiscordCommand::Connect);
+    } else {
+        state
+            .discord
+            .send(crate::discord::DiscordCommand::Disconnect);
+    }
+    let mut settings = state.load_settings().unwrap_or_default();
+    settings.discord_rpc = enabled;
+    state.save_settings(&settings)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_proxy_settings(state: State<'_, AppState>) -> crate::ProxySettings {
     state
         .load_settings()

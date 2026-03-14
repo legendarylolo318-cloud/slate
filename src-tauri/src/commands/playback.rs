@@ -159,6 +159,7 @@ pub async fn stop_track(state: State<'_, AppState>) -> Result<(), SoneError> {
     let result = state.audio_player.stop().map_err(SoneError::Audio);
     #[cfg(target_os = "linux")]
     state.mpris.send(crate::mpris::MprisCommand::Stop);
+    state.discord.send(crate::discord::DiscordCommand::Stop);
     state.scrobble_manager.on_track_stopped().await;
     result
 }
@@ -245,12 +246,21 @@ pub fn update_mpris_metadata(
     #[cfg(target_os = "linux")]
     state.mpris.send(crate::mpris::MprisCommand::SetMetadata {
         track_id: metadata.track_id,
-        title: metadata.title,
-        artist: metadata.artist,
-        album: metadata.album,
-        art_url: metadata.art_url,
+        title: metadata.title.clone(),
+        artist: metadata.artist.clone(),
+        album: metadata.album.clone(),
+        art_url: metadata.art_url.clone(),
         duration_secs: metadata.duration_secs,
     });
+    state
+        .discord
+        .send(crate::discord::DiscordCommand::SetMetadata {
+            title: metadata.title,
+            artist: metadata.artist,
+            album: metadata.album,
+            art_url: metadata.art_url,
+            duration_secs: metadata.duration_secs,
+        });
     Ok(())
 }
 
@@ -264,5 +274,8 @@ pub fn update_mpris_playback_status(
     state
         .mpris
         .send(crate::mpris::MprisCommand::SetPlaybackStatus { is_playing });
+    state
+        .discord
+        .send(crate::discord::DiscordCommand::SetPlaying { is_playing });
     Ok(())
 }

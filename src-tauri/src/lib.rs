@@ -2,6 +2,7 @@ mod audio;
 pub mod cache;
 mod commands;
 mod crypto;
+mod discord;
 mod embedded_config;
 mod embedded_lastfm;
 mod embedded_librefm;
@@ -108,6 +109,8 @@ pub struct Settings {
     pub scrobble: ScrobbleSettings,
     #[serde(default)]
     pub proxy: ProxySettings,
+    #[serde(default)]
+    pub discord_rpc: bool,
 }
 
 impl Default for Settings {
@@ -126,6 +129,7 @@ impl Default for Settings {
             bit_perfect: false,
             scrobble: Default::default(),
             proxy: Default::default(),
+            discord_rpc: false,
         }
     }
 }
@@ -153,6 +157,7 @@ pub struct AppState {
     #[cfg(target_os = "linux")]
     pub mpris: mpris::MprisHandle,
     pub scrobble_manager: scrobble::ScrobbleManager,
+    pub discord: discord::DiscordHandle,
 }
 
 pub fn now_secs() -> u64 {
@@ -235,6 +240,12 @@ impl AppState {
             scrobble_http_client,
         );
 
+        let discord_rpc_enabled = saved.as_ref().map(|s| s.discord_rpc).unwrap_or(false);
+        let discord_handle = discord::DiscordHandle::new();
+        if discord_rpc_enabled {
+            discord_handle.send(discord::DiscordCommand::Connect);
+        }
+
         Self {
             audio_player: AudioPlayer::new(app_handle.clone()),
             tidal_client: Mutex::new(TidalClient::new(&proxy_settings)),
@@ -254,6 +265,7 @@ impl AppState {
             #[cfg(target_os = "linux")]
             mpris: mpris::MprisHandle::new(app_handle),
             scrobble_manager,
+            discord: discord_handle,
         }
     }
 
@@ -666,6 +678,8 @@ pub fn run() {
             commands::utility::get_exclusive_device,
             commands::utility::set_exclusive_device,
             commands::utility::list_audio_devices,
+            commands::utility::get_discord_rpc,
+            commands::utility::set_discord_rpc,
             commands::utility::get_proxy_settings,
             commands::utility::set_proxy_settings,
             commands::utility::test_proxy_connection,
@@ -675,6 +689,7 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 let state = app.state::<AppState>();
+                state.discord.send(crate::discord::DiscordCommand::Disconnect);
                 tauri::async_runtime::block_on(async {
                     state.scrobble_manager.flush().await;
                 });

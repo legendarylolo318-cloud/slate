@@ -14,6 +14,7 @@ import {
   ChevronDown,
   Radio,
   Globe,
+  MessageSquare,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -57,6 +58,7 @@ export default function UserMenu() {
   const [minimizeToTray, setMinimizeToTray] = useState(false);
   const [decorations, setDecorations] = useState(true);
   const [volumeNormalization, setVolumeNormalization] = useState(false);
+  const [discordRpc, setDiscordRpc] = useState(false);
   const [exclusiveMode, setExclusiveMode] = useAtom(exclusiveModeAtom);
   const [bitPerfect, setBitPerfect] = useAtom(bitPerfectAtom);
   const [exclusiveDevice, setExclusiveDevice] = useAtom(exclusiveDeviceAtom);
@@ -108,6 +110,9 @@ export default function UserMenu() {
       .catch(() => {});
     invoke<boolean>("get_decorations")
       .then(setDecorations)
+      .catch(() => {});
+    invoke<boolean>("get_discord_rpc")
+      .then(setDiscordRpc)
       .catch(() => {});
   }, []);
 
@@ -346,6 +351,32 @@ export default function UserMenu() {
           >
             <Radio size={16} />
             Scrobbling
+          </button>
+
+          {/* Discord Rich Presence */}
+          <button
+            onClick={() => {
+              const next = !discordRpc;
+              setDiscordRpc(next);
+              invoke("set_discord_rpc", { enabled: next }).catch(() => {
+                setDiscordRpc(!next);
+              });
+            }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle transition-colors"
+          >
+            <MessageSquare size={16} />
+            <span className="flex-1 text-left">Discord Rich Presence</span>
+            <div
+              className={`w-8 h-[18px] rounded-full transition-colors ${
+                discordRpc ? "bg-th-accent" : "bg-th-border-subtle"
+              }`}
+            >
+              <div
+                className={`w-3.5 h-3.5 rounded-full bg-th-text-primary mt-[2px] transition-transform ${
+                  discordRpc ? "translate-x-[16px]" : "translate-x-[2px]"
+                }`}
+              />
+            </div>
           </button>
 
           {/* ── App settings ── */}
