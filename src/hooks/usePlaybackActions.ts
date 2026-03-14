@@ -299,6 +299,9 @@ export function usePlaybackActions() {
           type: string;
           id: string | number;
           name: string;
+          image?: string;
+          subtitle?: string;
+          mixType?: string;
           allTracks: Track[];
         };
       },
@@ -321,6 +324,9 @@ export function usePlaybackActions() {
               type: options.source.type,
               id: options.source.id,
               name: options.source.name,
+              image: options.source.image,
+              subtitle: options.source.subtitle,
+              mixType: options.source.mixType,
               tracks: stampQids(options.source.allTracks.map(normalizeTrack)),
             }
           : null,
@@ -742,6 +748,9 @@ export function usePlaybackActions() {
           type: string;
           id: string | number;
           name: string;
+          image?: string;
+          subtitle?: string;
+          mixType?: string;
           allTracks: Track[];
         };
         albumMode?: boolean;
@@ -760,6 +769,9 @@ export function usePlaybackActions() {
               type: options.source.type,
               id: options.source.id,
               name: options.source.name,
+              image: options.source.image,
+              subtitle: options.source.subtitle,
+              mixType: options.source.mixType,
               tracks: stampQids(options.source.allTracks.map(normalizeTrack)),
             }
           : null,
@@ -813,6 +825,9 @@ export function usePlaybackActions() {
           type: string;
           id: string | number;
           name: string;
+          image?: string;
+          subtitle?: string;
+          mixType?: string;
           allTracks: Track[];
         };
         albumMode?: boolean;
@@ -841,6 +856,9 @@ export function usePlaybackActions() {
           type: string;
           id: string | number;
           name: string;
+          image?: string;
+          subtitle?: string;
+          mixType?: string;
           allTracks: Track[];
         };
         albumMode?: boolean;

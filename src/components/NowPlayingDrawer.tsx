@@ -126,10 +126,18 @@ const QueueTab = memo(function QueueTab({
         navigateToAlbum(source.id as number);
         break;
       case "playlist":
-        navigateToPlaylist(source.id as string);
+        navigateToPlaylist(source.id as string, {
+          title: source.name,
+          image: source.image,
+        });
         break;
       case "mix":
-        navigateToMix(source.id as string);
+        navigateToMix(source.id as string, {
+          title: source.name,
+          image: source.image,
+          subtitle: source.subtitle,
+          mixType: source.mixType,
+        });
         break;
       case "artist":
         navigateToArtist(source.id as number);
@@ -143,6 +151,7 @@ const QueueTab = memo(function QueueTab({
       case "radio":
         navigateToMix(source.id.toString(), {
           title: source.name,
+          image: source.image,
           mixType: "TRACK_MIX",
         });
         break;

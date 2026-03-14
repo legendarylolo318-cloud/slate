@@ -296,6 +296,7 @@ export default function PlaylistView({
     type: "playlist" as const,
     id: playlistId,
     name: playlistInfo?.title || "Playlist",
+    image: playlistInfo?.image,
     allTracks,
   });
 

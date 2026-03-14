@@ -464,6 +464,9 @@ export interface PlaybackSource {
   type: string;
   id: string | number;
   name: string;
+  image?: string;
+  subtitle?: string;
+  mixType?: string;
   tracks: QueuedTrack[];
 }
 
@@ -477,6 +480,9 @@ export interface PlaybackSnapshot {
     type: string;
     id: string | number;
     name: string;
+    image?: string;
+    subtitle?: string;
+    mixType?: string;
     tracks: Track[];
   } | null;
 }

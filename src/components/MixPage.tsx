@@ -91,6 +91,9 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
     type: isTrackRadio ? ("radio" as const) : ("mix" as const),
     id: mixId,
     name: mixInfo?.title || (isTrackRadio ? "Track Radio" : "Mix"),
+    image: mixInfo?.image,
+    subtitle: mixInfo?.subtitle,
+    mixType: mixInfo?.mixType,
     allTracks: tracks,
   };
 
