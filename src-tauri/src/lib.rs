@@ -328,8 +328,8 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(
-                    tauri_plugin_window_state::StateFlags::all()
-                        & !tauri_plugin_window_state::StateFlags::DECORATIONS,
+                    tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::SIZE,
                 )
                 .build(),
         )
@@ -552,13 +552,25 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let app = window.app_handle();
-                let state = app.state::<AppState>();
-                if state.minimize_to_tray.load(Ordering::Relaxed) {
-                    api.prevent_close();
-                    let _ = window.hide();
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if window.label() == "main" {
+                        let app = window.app_handle();
+                        let state = app.state::<AppState>();
+                        if state.minimize_to_tray.load(Ordering::Relaxed) {
+                            api.prevent_close();
+                            let _ = window.hide();
+                        }
+                    } else if window.label() == "miniplayer" {
+                        let _ = window.app_handle().emit_to("main", "miniplayer-closed", ());
+                    }
                 }
+                tauri::WindowEvent::Destroyed => {
+                    if window.label() == "miniplayer" {
+                        let _ = window.app_handle().emit_to("main", "miniplayer-closed", ());
+                    }
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![

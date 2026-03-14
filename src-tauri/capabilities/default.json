@@ -2,6 +2,16 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-set-fullscreen", "opener:default", "global-shortcut:allow-register", "deep-link:default"]
+  "windows": ["main", "miniplayer"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-create",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-close",
+    "core:window:allow-set-size",
+    "opener:default",
+    "global-shortcut:allow-register",
+    "deep-link:default"
+  ]
 }
