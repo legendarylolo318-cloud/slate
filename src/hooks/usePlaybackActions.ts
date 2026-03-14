@@ -320,6 +320,7 @@ export function usePlaybackActions() {
       store.set(useTrackGainAtom, !options?.albumMode);
       store.set(originalQueueAtom, null);
       store.set(manualQueueAtom, []);
+      store.set(contextSourceAtom, null);
       store.set(
         playbackSourceAtom,
         options?.source
@@ -786,6 +787,7 @@ export function usePlaybackActions() {
     ) => {
       const stamped = stampQids(tracks.map(normalizeTrack));
       store.set(manualQueueAtom, []);
+      store.set(contextSourceAtom, null);
       store.set(originalQueueAtom, stamped);
       store.set(queueAtom, fisherYatesShuffle(stamped));
       store.set(useTrackGainAtom, !options?.albumMode);
@@ -913,6 +915,7 @@ export function usePlaybackActions() {
     store.set(manualQueueAtom, []);
     store.set(originalQueueAtom, null);
     store.set(playbackSourceAtom, null);
+    store.set(contextSourceAtom, null);
   }, [store]);
 
   return {
