@@ -23,6 +23,7 @@ import {
   manualQueueAtom,
   originalQueueAtom,
   playbackSourceAtom,
+  contextSourceAtom,
   shuffleAtom,
   repeatAtom,
 } from "../atoms/playback";
@@ -30,7 +31,7 @@ import { getMixItems, checkNetworkError } from "../api/tidal";
 import { useToast } from "../contexts/ToastContext";
 import { stampQid, stampQids, ensureQid } from "../lib/qid";
 import { notifySeek, getInterpolatedPosition } from "../lib/playbackPosition";
-import type { Track, StreamInfo } from "../types";
+import type { Track, StreamInfo, ManualTrackSource, QueuedTrack } from "../types";
 import { getTidalImageUrl } from "../types";
 import { preloadImage } from "../components/TidalImage";
 import { getTrackArtistDisplay } from "../utils/itemHelpers";
@@ -273,16 +274,18 @@ export function usePlaybackActions() {
   }, []);
 
   const addToQueue = useCallback(
-    (track: Track) => {
+    (track: Track, source?: ManualTrackSource) => {
       const stamped = stampQid(normalizeTrack(track));
+      if (source) (stamped as QueuedTrack)._source = source;
       store.set(manualQueueAtom, [...store.get(manualQueueAtom), stamped]);
     },
     [store],
   );
 
   const playNextInQueue = useCallback(
-    (track: Track) => {
+    (track: Track, source?: ManualTrackSource) => {
       const stamped = stampQid(normalizeTrack(track));
+      if (source) (stamped as QueuedTrack)._source = source;
       store.set(manualQueueAtom, [stamped, ...store.get(manualQueueAtom)]);
     },
     [store],
