@@ -291,9 +291,23 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
     // Prepend optimistically added playlists to this folder
     const added = addedToFolder.get(currentFolder) ?? [];
     if (added.length === 0) return filtered;
-    const existingUuids = new Set(filtered.filter((e) => e.kind === "playlist").map((e) => e.data.uuid));
-    const newItems = added.filter((e) => e.kind === "playlist" && !existingUuids.has(e.data.uuid));
-    return [...newItems, ...filtered];
+    const existingFolderIds = new Set(
+      filtered.filter((e) => e.kind === "folder").map((e) => e.data.id),
+    );
+    const existingPlaylistUuids = new Set(
+      filtered.filter((e) => e.kind === "playlist").map((e) => e.data.uuid),
+    );
+    const newFolders = added.filter(
+      (e) => e.kind === "folder" && !existingFolderIds.has(e.data.id),
+    );
+    const newPlaylists = added.filter(
+      (e) =>
+        e.kind === "playlist" &&
+        !existingPlaylistUuids.has(e.data.uuid) &&
+        movedPlaylists.get(e.data.uuid) !== currentFolder,
+    );
+    if (newFolders.length === 0 && newPlaylists.length === 0) return filtered;
+    return [...newFolders, ...newPlaylists, ...filtered];
   }, [items, deletedPlaylistIds, deletedFolderIds, movedPlaylists, addedToFolder, libraryType, folderId]);
 
   // ==================== Search / Filter ====================
@@ -307,7 +321,10 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
     if (libraryType === "playlists") {
       const entries = displayItems as PlaylistOrFolder[];
       return entries.filter((entry) => {
-        if (entry.kind === "folder") return entry.data.name.toLowerCase().includes(q);
+        if (entry.kind === "folder") {
+          const name = renamedFolders.get(entry.data.id) ?? entry.data.name;
+          return name.toLowerCase().includes(q);
+        }
         return (
           entry.data.title?.toLowerCase().includes(q) ||
           entry.data.description?.toLowerCase().includes(q) ||
@@ -331,7 +348,7 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
           );
       }
     });
-  }, [displayItems, searchQuery, libraryType]);
+  }, [displayItems, searchQuery, libraryType, renamedFolders]);
 
   const handleSearchFocus = useCallback(() => {
     if (hasMoreRef.current && !bgFetchingRef.current) {
