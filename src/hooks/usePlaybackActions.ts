@@ -482,8 +482,8 @@ export function usePlaybackActions() {
         }
       } else if (repeatMode === 1) {
         // Repeat-all: rebuild from source (Bug 2) or history+current fallback
-        const source = store.get(playbackSourceAtom);
-        const sourceTracks = source?.tracks;
+        const repeatSource = store.get(contextSourceAtom) ?? store.get(playbackSourceAtom);
+        const sourceTracks = repeatSource?.tracks;
         const all =
           sourceTracks && sourceTracks.length > 0
             ? stampQids(sourceTracks)
