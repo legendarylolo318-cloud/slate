@@ -126,6 +126,17 @@ export default function MediaContextMenu({
   const itemLabel =
     rawLabel.length > 30 ? rawLabel.slice(0, 28) + "…" : rawLabel;
 
+  // Lightweight source tag for manual queue items
+  const manualSource = (() => {
+    if (item.type === "album")
+      return { type: "album" as const, id: item.id, name: item.title, image: item.cover };
+    if (item.type === "playlist")
+      return { type: "playlist" as const, id: item.uuid, name: item.title, image: item.image };
+    if (item.type === "mix")
+      return { type: "mix" as const, id: item.mixId, name: item.title, image: item.image, subtitle: item.subtitle };
+    return undefined;
+  })();
+
   // Helper: fetch tracks and perform an action
   const withTracks = useCallback(
     async (
@@ -204,22 +215,22 @@ export default function MediaContextMenu({
         // Insert tracks at the front of the queue in reverse order
         // so the first track of the album/playlist appears first
         for (let i = tracks.length - 1; i >= 0; i--) {
-          playNextInQueue(tracks[i]);
+          playNextInQueue(tracks[i], manualSource);
         }
       },
       `"${itemLabel}" will play next`,
     );
-  }, [withTracks, playNextInQueue, itemLabel]);
+  }, [withTracks, playNextInQueue, itemLabel, manualSource]);
 
   const handleAddToQueue = useCallback(() => {
     withTracks(
       "add to queue",
       (tracks) => {
-        tracks.forEach((t) => addToQueue(t));
+        tracks.forEach((t) => addToQueue(t, manualSource));
       },
       `Added "${itemLabel}" to queue`,
     );
-  }, [withTracks, addToQueue, itemLabel]);
+  }, [withTracks, addToQueue, itemLabel, manualSource]);
 
   const handleAddToPlaylist = useCallback(async () => {
     if (playlistTrackIds) {
