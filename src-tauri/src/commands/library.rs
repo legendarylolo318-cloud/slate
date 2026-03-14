@@ -449,11 +449,12 @@ pub async fn create_playlist(
         .create_playlist(user_id, &title, &description)
         .await?;
     drop(client);
-    // Invalidate user playlists cache
+    // Invalidate user playlists cache + folder listings (playlist appears in folder view)
     state
         .disk_cache
         .invalidate_tag(&format!("user:{}", user_id))
         .await;
+    state.disk_cache.invalidate_tag("folders").await;
     Ok(playlist)
 }
 
@@ -475,6 +476,7 @@ pub async fn add_track_to_playlist(
         .disk_cache
         .invalidate_tag(&format!("playlist:{}", playlist_id))
         .await;
+    state.disk_cache.invalidate_tag("folders").await;
     Ok(())
 }
 
@@ -523,6 +525,7 @@ pub async fn delete_playlist(
         .disk_cache
         .invalidate_tag(&format!("playlist:{}", playlist_id))
         .await;
+    state.disk_cache.invalidate_tag("folders").await;
     Ok(())
 }
 
@@ -968,6 +971,7 @@ pub async fn add_tracks_to_playlist(
         .disk_cache
         .invalidate_tag(&format!("playlist:{}", playlist_id))
         .await;
+    state.disk_cache.invalidate_tag("folders").await;
     Ok(())
 }
 

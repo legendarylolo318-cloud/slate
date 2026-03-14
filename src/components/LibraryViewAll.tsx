@@ -189,10 +189,6 @@ export default function LibraryViewAll({ libraryType, folderId, folderName }: Li
     offsetRef.current = 0;
     hasMoreRef.current = true;
 
-    if (libraryType === "playlists") {
-      store.set(folderCountAdjustmentsAtom, new Map());
-    }
-
     (async () => {
       try {
         const page = await fetchPage(0, PAGE_SIZE);
