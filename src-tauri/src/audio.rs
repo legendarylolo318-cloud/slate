@@ -1745,30 +1745,40 @@ fn build_appsink_pipeline(
                             s.get::<i32>("channels"),
                             s.get::<&str>("format"),
                         ) {
-                            let locked = if format.starts_with("S24") {
-                                // Filter to S24/S32 formats the DAC actually supports
-                                let s24_candidates: Vec<&str> = supported_fmts_for_closure
-                                    .iter()
-                                    .map(|s| s.as_str())
-                                    .filter(|f| *f == "S24LE" || *f == "S24_32LE" || *f == "S32LE")
-                                    .collect();
-                                let fmts = if s24_candidates.is_empty() {
-                                    vec!["S32LE"] // safe fallback
-                                } else {
-                                    s24_candidates
-                                };
-                                gst::Caps::builder("audio/x-raw")
-                                    .field("format", gst::List::new(fmts.iter().copied()))
-                                    .field("rate", rate)
-                                    .field("channels", channels)
-                                    .build()
-                            } else {
-                                gst::Caps::builder("audio/x-raw")
-                                    .field("format", format)
-                                    .field("rate", rate)
-                                    .field("channels", channels)
-                                    .build()
+                            // Lossless-compatible formats: source format + wider
+                            // integer containers that can represent it via zero-padding.
+                            // audioconvert (dithering=none) handles this as a pure bit op.
+                            let compatible: &[&str] = match format {
+                                "S16LE" => &["S16LE", "S24LE", "S24_32LE", "S32LE"],
+                                "S24LE" | "S24_32LE" => &["S24LE", "S24_32LE", "S32LE"],
+                                "S32LE" => &["S32LE"],
+                                "F32LE" => &["F32LE"],
+                                _ => &["S32LE"],
                             };
+                            let candidates: Vec<&str> = supported_fmts_for_closure
+                                .iter()
+                                .map(|s| s.as_str())
+                                .filter(|f| compatible.contains(f))
+                                .collect();
+                            let fmts = if candidates.is_empty() {
+                                vec!["S32LE"] // safe fallback
+                            } else {
+                                // Notify if source format needs promotion
+                                if !candidates.contains(&format) {
+                                    let _ = resample_tx.try_send(
+                                        WriterCommand::BitDepthChanged {
+                                            from: format.to_string(),
+                                            to: candidates[0].to_string(),
+                                        },
+                                    );
+                                }
+                                candidates
+                            };
+                            let locked = gst::Caps::builder("audio/x-raw")
+                                .field("format", gst::List::new(fmts.iter().copied()))
+                                .field("rate", rate)
+                                .field("channels", channels)
+                                .build();
                             log::info!("[audio] bit-perfect: locking capsfilter to {locked}");
                             cf.set_property("caps", &locked);
                         }
