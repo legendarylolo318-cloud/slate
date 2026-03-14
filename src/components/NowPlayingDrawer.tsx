@@ -31,6 +31,7 @@ import {
   historyAtom,
   manualQueueAtom,
   playbackSourceAtom,
+  contextSourceAtom,
 } from "../atoms/playback";
 import { maximizedPlayerAtom } from "../atoms/ui";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
@@ -82,7 +83,9 @@ const QueueTab = memo(function QueueTab({
   const history = useAtomValue(historyAtom);
   const isPlaying = useAtomValue(isPlayingAtom);
   const source = useAtomValue(playbackSourceAtom);
+  const contextSource = useAtomValue(contextSourceAtom);
   const manualQueue = useAtomValue(manualQueueAtom);
+  const contextQueueSource = contextSource ?? source;
   const combinedQueue = useMemo(
     () => [...manualQueue, ...contextQueue],
     [manualQueue, contextQueue],
@@ -166,6 +169,35 @@ const QueueTab = memo(function QueueTab({
     navigateToArtistTracks,
     navigateToFavorites,
   ]);
+
+  const navigateToContextQueueSource = useCallback(() => {
+    const s = contextQueueSource;
+    if (!s) return;
+    setDrawerOpen(false);
+    switch (s.type) {
+      case "album":
+        navigateToAlbum(s.id as number);
+        break;
+      case "playlist":
+        navigateToPlaylist(s.id as string, { title: s.name, image: s.image });
+        break;
+      case "mix":
+        navigateToMix(s.id as string, { title: s.name, image: s.image, subtitle: s.subtitle, mixType: s.mixType });
+        break;
+      case "artist":
+        navigateToArtist(s.id as number);
+        break;
+      case "artist-tracks":
+        navigateToArtistTracks(s.id as number, s.name);
+        break;
+      case "favorites":
+        navigateToFavorites();
+        break;
+      case "radio":
+        navigateToMix(s.id.toString(), { title: s.name, image: s.image, mixType: "TRACK_MIX" });
+        break;
+    }
+  }, [contextQueueSource, setDrawerOpen, navigateToAlbum, navigateToPlaylist, navigateToMix, navigateToArtist, navigateToArtistTracks, navigateToFavorites]);
 
   // Use refs so drag/drop handlers always read the current values
   const dragIdxRef = useRef<number | null>(null);
@@ -414,18 +446,18 @@ const QueueTab = memo(function QueueTab({
                     }}
                   >
                     <span className="text-[13px] font-bold text-th-text-muted uppercase tracking-wider pb-3">
-                      {source ? (
+                      {contextQueueSource ? (
                         <>
                           Next up from{" "}
-                          {sourceIsNavigable ? (
+                          {navigableSourceTypes.has(contextQueueSource.type) ? (
                             <button
-                              onClick={navigateToSource}
+                              onClick={navigateToContextQueueSource}
                               className="uppercase underline hover:text-th-text-primary transition-colors"
                             >
-                              {source.name}
+                              {contextQueueSource.name}
                             </button>
                           ) : (
-                            <span className="uppercase underline">{source.name}</span>
+                            <span className="uppercase underline">{contextQueueSource.name}</span>
                           )}
                         </>
                       ) : (
