@@ -108,7 +108,6 @@ export default function Sidebar() {
   const movedPlaylists = useAtomValue(movedPlaylistsAtom);
   const countAdjustments = useAtomValue(folderCountAdjustmentsAtom);
   const addedToFolder = useAtomValue(addedToFolderAtom);
-  const setAddedToFolder = useSetAtom(addedToFolderAtom);
   const renamedFolders = useAtomValue(renamedFoldersAtom);
 
   const visiblePlaylistItems = useMemo(() => {
@@ -839,13 +838,7 @@ export default function Sidebar() {
         <CreatePlaylistModal
           trackIds={[]}
           onClose={() => setShowCreateModal(false)}
-          onCreated={(playlist) => {
-            setAddedToFolder((prev) => {
-              const next = new Map(prev);
-              const list = next.get("root") ?? [];
-              next.set("root", [...list, { kind: "playlist" as const, data: playlist }]);
-              return next;
-            });
+          onCreated={() => {
             setShowCreateModal(false);
           }}
         />
