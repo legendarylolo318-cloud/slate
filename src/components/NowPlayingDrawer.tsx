@@ -360,16 +360,16 @@ const QueueTab = memo(function QueueTab({
                 "Next in queue"
               ) : source ? (
                 <>
-                  Next from{" "}
+                  Next up from{" "}
                   {sourceIsNavigable ? (
                     <button
                       onClick={navigateToSource}
-                      className="uppercase hover:text-th-text-primary transition-colors hover:underline"
+                      className="uppercase underline hover:text-th-text-primary transition-colors"
                     >
                       {source.name}
                     </button>
                   ) : (
-                    <span className="uppercase">{source.name}</span>
+                    <span className="uppercase underline">{source.name}</span>
                   )}
                 </>
               ) : (
@@ -407,16 +407,16 @@ const QueueTab = memo(function QueueTab({
                     <span className="text-[13px] font-bold text-th-text-muted uppercase tracking-wider pb-3">
                       {source ? (
                         <>
-                          Next from{" "}
+                          Next up from{" "}
                           {sourceIsNavigable ? (
                             <button
                               onClick={navigateToSource}
-                              className="uppercase hover:text-th-text-primary transition-colors hover:underline"
+                              className="uppercase underline hover:text-th-text-primary transition-colors"
                             >
                               {source.name}
                             </button>
                           ) : (
-                            <span className="uppercase">{source.name}</span>
+                            <span className="uppercase underline">{source.name}</span>
                           )}
                         </>
                       ) : (
