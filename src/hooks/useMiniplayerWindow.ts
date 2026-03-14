@@ -51,7 +51,7 @@ export function useMiniplayerWindow() {
         await miniplayer.setFullscreen(false);
         await miniplayer.unmaximize();
 
-        // Off-screen clamping
+        // Off-screen clamping + default position for first launch
         try {
           const { availableMonitors } = await import("@tauri-apps/api/window");
           const monitors = await availableMonitors();
@@ -76,11 +76,12 @@ export function useMiniplayerWindow() {
             }
           }
 
-          if (!onScreen && monitors.length > 0) {
-            // Place bottom-right of primary monitor with 40px margin
+          // If off-screen OR at OS default position (0,0), place bottom-right of primary monitor
+          const isDefaultPosition = pos.x === 0 && pos.y === 0;
+          if ((!onScreen || isDefaultPosition) && monitors.length > 0) {
             const primary = monitors[0];
             const newX = primary.position.x + primary.size.width - size.width - 40;
-            const newY = primary.position.y + primary.size.height - size.height - 40;
+            const newY = primary.position.y + primary.size.height - size.height - 100;
             const { PhysicalPosition } = await import("@tauri-apps/api/dpi");
             await miniplayer.setPosition(new PhysicalPosition(newX, newY));
           }
@@ -89,7 +90,8 @@ export function useMiniplayerWindow() {
         }
       });
 
-      miniplayer.once("tauri://error", () => {
+      miniplayer.once("tauri://error", (e) => {
+        console.error("Miniplayer window creation failed:", e);
         setMiniplayerOpen(false);
       });
 

@@ -36,6 +36,7 @@ export interface MiniplayerState {
   repeat: number;
   volume: number;
   playbackSourceLabel: { type: string; name: string } | null;
+  accentColor: string;
   error?: string;
 }
 
@@ -54,6 +55,16 @@ export function useMiniplayerEmitter() {
     const volume = store.get(volumeAtom);
     const favoriteIds = store.get(favoriteTrackIdsAtom);
     const source = store.get(contextSourceAtom) || store.get(playbackSourceAtom);
+
+    // Read accent from theme in localStorage
+    let accentColor = "#A855F7"; // fallback
+    try {
+      const stored = localStorage.getItem("sone.theme.v1");
+      if (stored) {
+        const theme = JSON.parse(stored);
+        if (theme.accent) accentColor = theme.accent;
+      }
+    } catch {}
 
     return {
       track: track
@@ -82,6 +93,7 @@ export function useMiniplayerEmitter() {
       playbackSourceLabel: source
         ? { type: source.type, name: source.name }
         : null,
+      accentColor,
       error: lastErrorRef.current,
     };
   }, [store]);
