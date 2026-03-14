@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   userPlaylistsAtom,
   deletedPlaylistIdsAtom,
+  addedToFolderAtom,
 } from "../atoms/playlists";
 import { authTokensAtom } from "../atoms/auth";
 import { invalidateCache, getPlaylistFolders, normalizePlaylistFolders } from "../api/tidal";
@@ -12,6 +13,7 @@ import type { Playlist, PlaylistOrFolder } from "../types";
 export function usePlaylists() {
   const [userPlaylists, setUserPlaylists] = useAtom(userPlaylistsAtom);
   const setDeletedPlaylistIds = useSetAtom(deletedPlaylistIdsAtom);
+  const setAddedToFolder = useSetAtom(addedToFolderAtom);
   const authTokens = useAtomValue(authTokensAtom);
 
   const createPlaylist = useCallback(
@@ -49,9 +51,29 @@ export function usePlaylists() {
           const retained = prev.filter((p) => !freshUuids.has(p.uuid));
           return [...freshPlaylists, ...retained];
         });
+        // Also update optimistic sidebar entries with fresh data (image, count)
+        const freshMap = new Map(freshPlaylists.map((p) => [p.uuid, p]));
+        setAddedToFolder((prev) => {
+          const rootList = prev.get("root");
+          if (!rootList?.length) return prev;
+          let changed = false;
+          const updated = rootList.map((entry) => {
+            if (entry.kind !== "playlist") return entry;
+            const fresh = freshMap.get(entry.data.uuid);
+            if (fresh && (fresh.image !== entry.data.image || fresh.numberOfTracks !== entry.data.numberOfTracks)) {
+              changed = true;
+              return { ...entry, data: { ...entry.data, ...fresh } };
+            }
+            return entry;
+          });
+          if (!changed) return prev;
+          const next = new Map(prev);
+          next.set("root", updated);
+          return next;
+        });
       })
       .catch(() => {});
-  }, [setUserPlaylists]);
+  }, [setUserPlaylists, setAddedToFolder]);
 
   const updatePlaylistTrackCount = useCallback(
     (playlistId: string, delta: number) => {
@@ -141,7 +163,13 @@ export function usePlaylists() {
         await invoke("add_tracks_to_playlist", { playlistId, trackIds });
         invalidateCache(`playlist:${playlistId}`);
         invalidateCache(`playlist-page:${playlistId}`);
+        invalidateCache("user-playlists");
         refreshUserPlaylists();
+        // Delayed refresh to pick up cover art generated server-side
+        setTimeout(() => {
+          invalidateCache("user-playlists");
+          refreshUserPlaylists();
+        }, 3000);
       } catch (error: any) {
         updatePlaylistTrackCount(playlistId, -trackIds.length);
         console.error("Failed to add tracks to playlist:", error);
