@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   userPlaylistsAtom,
   deletedPlaylistIdsAtom,
-  addedToFolderAtom,
 } from "../atoms/playlists";
 import { authTokensAtom } from "../atoms/auth";
 import { invalidateCache, getPlaylistFolders, normalizePlaylistFolders } from "../api/tidal";
@@ -13,7 +12,6 @@ import type { Playlist, PlaylistOrFolder } from "../types";
 export function usePlaylists() {
   const [userPlaylists, setUserPlaylists] = useAtom(userPlaylistsAtom);
   const setDeletedPlaylistIds = useSetAtom(deletedPlaylistIdsAtom);
-  const setAddedToFolder = useSetAtom(addedToFolderAtom);
   const authTokens = useAtomValue(authTokensAtom);
 
   const createPlaylist = useCallback(
@@ -26,13 +24,6 @@ export function usePlaylists() {
           description,
         });
         setUserPlaylists((prev) => [playlist, ...prev]);
-        // Add to sidebar optimistically so it appears immediately
-        setAddedToFolder((prev) => {
-          const next = new Map(prev);
-          const list = next.get("root") ?? [];
-          next.set("root", [...list, { kind: "playlist" as const, data: playlist }]);
-          return next;
-        });
         invalidateCache("user-playlists");
         return playlist;
       } catch (error: any) {
@@ -40,7 +31,7 @@ export function usePlaylists() {
         throw error;
       }
     },
-    [authTokens?.user_id, setUserPlaylists, setAddedToFolder],
+    [authTokens?.user_id, setUserPlaylists],
   );
 
   // Background re-fetch user playlists to pick up server-side changes (image, exact count)

@@ -1,7 +1,9 @@
 import { Plus, Search, X, Loader2 } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useSetAtom } from "jotai";
 import { useToast } from "../contexts/ToastContext";
 import { usePlaylists } from "../hooks/usePlaylists";
+import { addedToFolderAtom } from "../atoms/playlists";
 import { useContextMenu } from "../hooks/useContextMenu";
 import { type Playlist, getTidalImageUrl } from "../types";
 import TidalImage from "./TidalImage";
@@ -193,6 +195,7 @@ export default function AddToPlaylistMenu({
 }: AddToPlaylistMenuProps) {
   const { userPlaylists, addTracksToPlaylist } = usePlaylists();
   const { showToast } = useToast();
+  const setAddedToFolder = useSetAtom(addedToFolderAtom);
 
   const [showAll, setShowAll] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -501,7 +504,16 @@ export default function AddToPlaylistMenu({
         <CreatePlaylistModal
           trackIds={trackIds}
           onClose={() => setShowCreateModal(false)}
-          onCreated={() => {
+          onCreated={(playlist) => {
+            setAddedToFolder((prev) => {
+              const next = new Map(prev);
+              const list = next.get("root") ?? [];
+              next.set("root", [...list, {
+                kind: "playlist" as const,
+                data: { ...playlist, numberOfTracks: trackIds.length },
+              }]);
+              return next;
+            });
             setShowCreateModal(false);
             onClose();
           }}
