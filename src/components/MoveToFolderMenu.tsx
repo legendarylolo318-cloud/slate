@@ -235,23 +235,11 @@ export default function MoveToFolderMenu({
       setError(null);
       setMovingTo(folder.id);
       try {
-        await movePlaylistTo(playlistUuid, folder.id, sourceFolderId);
-        // Optimistic count adjustments
-        setCountAdjustments((prev) => {
-          const next = new Map(prev);
-          next.set(folder.id, (next.get(folder.id) ?? 0) + 1);
-          if (sourceFolderId) next.set(sourceFolderId, (next.get(sourceFolderId) ?? 0) - 1);
-          return next;
-        });
-        // Optimistic add to target folder
-        setAddedToFolder((prev) => {
-          const next = new Map(prev);
-          const list = next.get(folder.id) ?? [];
-          next.set(folder.id, [...list, {
-            kind: "playlist" as const,
-            data: { uuid: playlistUuid, title: playlistTitle, image: playlistImage, creator: { id: 0, name: playlistCreatorName } } as any,
-          }]);
-          return next;
+        await movePlaylistTo({
+          playlistUuid,
+          targetFolderId: folder.id,
+          sourceFolderId,
+          playlistSnapshot: { title: playlistTitle, image: playlistImage, creatorName: playlistCreatorName },
         });
         setMovedTo((prev) => new Set([...prev, folder.id]));
         const playlistLabel =
@@ -270,31 +258,18 @@ export default function MoveToFolderMenu({
         setMovingTo(null);
       }
     },
-    [movePlaylistTo, playlistUuid, playlistTitle, playlistImage, playlistCreatorName, sourceFolderId, onClose, showToast, setCountAdjustments, setAddedToFolder],
+    [movePlaylistTo, playlistUuid, playlistTitle, playlistImage, playlistCreatorName, sourceFolderId, onClose, showToast],
   );
 
   const handleMoveToRoot = useCallback(async () => {
     setError(null);
     setMovingTo("root");
     try {
-      await movePlaylistTo(playlistUuid, "root", sourceFolderId);
-      // Optimistic count adjustment on source
-      if (sourceFolderId) {
-        setCountAdjustments((prev) => {
-          const next = new Map(prev);
-          next.set(sourceFolderId, (next.get(sourceFolderId) ?? 0) - 1);
-          return next;
-        });
-      }
-      // Optimistic add to root (sidebar)
-      setAddedToFolder((prev) => {
-        const next = new Map(prev);
-        const list = next.get("root") ?? [];
-        next.set("root", [...list, {
-          kind: "playlist" as const,
-          data: { uuid: playlistUuid, title: playlistTitle, image: playlistImage, creator: { id: 0, name: playlistCreatorName } } as any,
-        }]);
-        return next;
+      await movePlaylistTo({
+        playlistUuid,
+        targetFolderId: "root",
+        sourceFolderId,
+        playlistSnapshot: { title: playlistTitle, image: playlistImage, creatorName: playlistCreatorName },
       });
       setMovedTo((prev) => new Set([...prev, "root"]));
       const playlistLabel =
@@ -308,7 +283,7 @@ export default function MoveToFolderMenu({
     } finally {
       setMovingTo(null);
     }
-  }, [movePlaylistTo, playlistUuid, playlistTitle, playlistImage, playlistCreatorName, sourceFolderId, onClose, showToast, setCountAdjustments, setAddedToFolder]);
+  }, [movePlaylistTo, playlistUuid, playlistTitle, playlistImage, playlistCreatorName, sourceFolderId, onClose, showToast]);
 
   // ── Row components ──
 

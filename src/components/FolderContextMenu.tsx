@@ -256,7 +256,7 @@ export default function FolderContextMenu({
           onCreated={async (playlist) => {
             setShowCreatePlaylist(false);
             try {
-              await movePlaylistTo(playlist.uuid, folderId);
+              await movePlaylistTo({ playlistUuid: playlist.uuid, targetFolderId: folderId });
             } catch {
               showToast(
                 "Playlist created but could not be moved to folder",
