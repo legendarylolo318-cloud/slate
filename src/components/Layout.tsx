@@ -7,6 +7,7 @@ import { useAtomValue } from "jotai";
 import { currentViewAtom } from "../atoms/navigation";
 import { maximizedPlayerAtom } from "../atoms/ui";
 import MaximizedPlayer from "./MaximizedPlayer";
+import { useMiniplayerEmitter } from "../hooks/useMiniplayerEmitter";
 
 interface LayoutProps {
   children: ReactNode;
@@ -16,6 +17,8 @@ export default function Layout({ children }: LayoutProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const currentView = useAtomValue(currentViewAtom);
   const maximized = useAtomValue(maximizedPlayerAtom);
+
+  useMiniplayerEmitter();
 
   useEffect(() => {
     scrollRef.current?.scrollTo(0, 0);
