@@ -24,7 +24,7 @@ import MediaContextMenu from "./MediaContextMenu";
 import FolderContextMenu from "./FolderContextMenu";
 import { CreatePlaylistModal } from "./AddToPlaylistMenu";
 import { getTrackArtistDisplay, folderSubtitle } from "../utils/itemHelpers";
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { useAtomValue, useAtom, useSetAtom } from "jotai";
 import {
   favoriteAlbumIdsAtom,
@@ -96,6 +96,12 @@ export default function Sidebar() {
   });
 
   const allPlaylistItems: PlaylistOrFolder[] = playlistFolderItems;
+
+  const setCountAdjustments = useSetAtom(folderCountAdjustmentsAtom);
+
+  useEffect(() => {
+    setCountAdjustments(new Map());
+  }, [playlistSort.order, playlistSort.direction, setCountAdjustments]);
 
   const deletedFolderIds = useAtomValue(deletedFolderIdsAtom);
   const deletedPlaylistIds = useAtomValue(deletedPlaylistIdsAtom);
