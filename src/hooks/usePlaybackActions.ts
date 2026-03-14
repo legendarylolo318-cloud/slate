@@ -426,11 +426,36 @@ export function usePlaybackActions() {
       if (manual.length > 0) {
         const [nextTrack, ...rest] = manual;
         store.set(manualQueueAtom, rest);
+
+        // Update playbackSourceAtom if this manual track has a source tag
+        const manualSource = (nextTrack as QueuedTrack)._source;
+        if (manualSource) {
+          if (!store.get(contextSourceAtom)) {
+            store.set(contextSourceAtom, store.get(playbackSourceAtom));
+          }
+          store.set(playbackSourceAtom, {
+            type: manualSource.type,
+            id: manualSource.id,
+            name: manualSource.name,
+            image: manualSource.image,
+            subtitle: manualSource.subtitle,
+            mixType: manualSource.mixType,
+            tracks: [],
+          });
+        }
+
         const ok = await playTrack(nextTrack, { chosenByUser: !!options?.explicit });
         if (!ok) {
           store.set(manualQueueAtom, [nextTrack, ...store.get(manualQueueAtom)]);
         }
         return;
+      }
+
+      // Restore context source when manual queue is exhausted
+      const stashedSource = store.get(contextSourceAtom);
+      if (stashedSource) {
+        store.set(playbackSourceAtom, stashedSource);
+        store.set(contextSourceAtom, null);
       }
 
       const queue = store.get(queueAtom);
