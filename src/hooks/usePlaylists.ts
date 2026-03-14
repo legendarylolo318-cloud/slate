@@ -66,16 +66,14 @@ export function usePlaylists() {
 
   const addTrackToPlaylist = useCallback(
     async (playlistId: string, trackId: number): Promise<void> => {
+      updatePlaylistTrackCount(playlistId, 1);
       try {
-        await invoke("add_track_to_playlist", {
-          playlistId,
-          trackId: trackId,
-        });
-        updatePlaylistTrackCount(playlistId, 1);
+        await invoke("add_track_to_playlist", { playlistId, trackId });
         invalidateCache(`playlist:${playlistId}`);
         invalidateCache(`playlist-page:${playlistId}`);
         refreshUserPlaylists();
       } catch (error: any) {
+        updatePlaylistTrackCount(playlistId, -1);
         console.error("Failed to add track to playlist:", error);
         throw error;
       }
@@ -85,16 +83,14 @@ export function usePlaylists() {
 
   const removeTrackFromPlaylist = useCallback(
     async (playlistId: string, index: number): Promise<void> => {
+      updatePlaylistTrackCount(playlistId, -1);
       try {
-        await invoke("remove_track_from_playlist", {
-          playlistId,
-          index,
-        });
-        updatePlaylistTrackCount(playlistId, -1);
+        await invoke("remove_track_from_playlist", { playlistId, index });
         invalidateCache(`playlist:${playlistId}`);
         invalidateCache(`playlist-page:${playlistId}`);
         refreshUserPlaylists();
       } catch (error: any) {
+        updatePlaylistTrackCount(playlistId, 1);
         console.error("Failed to remove track from playlist:", error);
         throw error;
       }
@@ -105,42 +101,43 @@ export function usePlaylists() {
   const deletePlaylist = useCallback(
     async (playlistId: string): Promise<void> => {
       if (!authTokens?.user_id) throw new Error("Not authenticated");
+      let removed: Playlist | undefined;
+      setUserPlaylists((prev) => {
+        removed = prev.find((p) => p.uuid === playlistId);
+        return prev.filter((p) => p.uuid !== playlistId);
+      });
+      setDeletedPlaylistIds((prev: Set<string>) => new Set(prev).add(playlistId));
       try {
-        await invoke("delete_playlist", {
-          userId: authTokens.user_id,
-          playlistId,
-        });
-        setUserPlaylists((prev) => prev.filter((p) => p.uuid !== playlistId));
-        setDeletedPlaylistIds((prev: Set<string>) =>
-          new Set(prev).add(playlistId),
-        );
+        await invoke("delete_playlist", { userId: authTokens.user_id, playlistId });
         invalidateCache(`playlist:${playlistId}`);
         invalidateCache(`playlist-page:${playlistId}`);
         invalidateCache("user-playlists");
       } catch (error: any) {
+        if (removed) {
+          setUserPlaylists((prev) => [removed!, ...prev]);
+        }
+        setDeletedPlaylistIds((prev: Set<string>) => {
+          const next = new Set(prev);
+          next.delete(playlistId);
+          return next;
+        });
         console.error("Failed to delete playlist:", error);
         throw error;
       }
     },
-    [
-      authTokens?.user_id,
-      setUserPlaylists,
-      setDeletedPlaylistIds,
-    ],
+    [authTokens?.user_id, setUserPlaylists, setDeletedPlaylistIds],
   );
 
   const addTracksToPlaylist = useCallback(
     async (playlistId: string, trackIds: number[]): Promise<void> => {
+      updatePlaylistTrackCount(playlistId, trackIds.length);
       try {
-        await invoke("add_tracks_to_playlist", {
-          playlistId,
-          trackIds,
-        });
-        updatePlaylistTrackCount(playlistId, trackIds.length);
+        await invoke("add_tracks_to_playlist", { playlistId, trackIds });
         invalidateCache(`playlist:${playlistId}`);
         invalidateCache(`playlist-page:${playlistId}`);
         refreshUserPlaylists();
       } catch (error: any) {
+        updatePlaylistTrackCount(playlistId, -trackIds.length);
         console.error("Failed to add tracks to playlist:", error);
         throw error;
       }
