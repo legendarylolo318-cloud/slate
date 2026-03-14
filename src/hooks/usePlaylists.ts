@@ -39,10 +39,16 @@ export function usePlaylists() {
     getPlaylistFolders("root", 0, 50)
       .then((res) => {
         const normalized = normalizePlaylistFolders(res);
-        const playlists = normalized.items
+        const freshPlaylists = normalized.items
           .filter((i): i is Extract<PlaylistOrFolder, { kind: "playlist" }> => i.kind === "playlist")
           .map((i) => i.data);
-        if (playlists.length) setUserPlaylists(playlists);
+        if (!freshPlaylists.length) return;
+        setUserPlaylists((prev) => {
+          if (prev.length === 0) return freshPlaylists;
+          const freshUuids = new Set(freshPlaylists.map((p) => p.uuid));
+          const retained = prev.filter((p) => !freshUuids.has(p.uuid));
+          return [...freshPlaylists, ...retained];
+        });
       })
       .catch(() => {});
   }, [setUserPlaylists]);
