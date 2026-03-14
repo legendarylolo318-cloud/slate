@@ -23,6 +23,7 @@ import {
   autoplayAtom,
   repeatAtom,
   shuffleAtom,
+  playbackSourceAtom,
 } from "../atoms/playback";
 import { favoriteTrackIdsAtom } from "../atoms/favorites";
 import { maximizedPlayerAtom } from "../atoms/ui";
@@ -59,7 +60,7 @@ const TrackInfoSection = memo(function TrackInfoSection() {
           className="w-full h-full object-cover transform group-hover:scale-110 transition-transform duration-500"
         />
       </div>
-      <div className="flex flex-col justify-center min-w-0 gap-0.5">
+      <div className="flex flex-col justify-center min-w-0">
         <span
           onClick={() =>
             currentTrack.album?.id && navigateToAlbum(currentTrack.album.id)
@@ -68,13 +69,14 @@ const TrackInfoSection = memo(function TrackInfoSection() {
         >
           {getTrackDisplayTitle(currentTrack)}
         </span>
-        <span className="text-th-text-secondary text-[11px] truncate">
+        <span className="text-th-text-secondary text-[11px] truncate mt-0.5">
           <TrackArtists
             artists={currentTrack.artists}
             artist={currentTrack.artist}
             className="hover:text-th-text-primary hover:underline cursor-pointer transition-colors duration-200"
           />
         </span>
+        <PlayingFromLabel />
       </div>
     </>
   );
@@ -150,6 +152,88 @@ const ContextMenuButton = memo(function ContextMenuButton() {
         />
       )}
     </>
+  );
+});
+
+// ─── PlayingFromLabel ─────────────────────────────────────────────────────
+
+const navigableSourceTypes = new Set([
+  "album",
+  "playlist",
+  "mix",
+  "artist",
+  "artist-tracks",
+  "favorites",
+  "radio",
+]);
+
+const PlayingFromLabel = memo(function PlayingFromLabel() {
+  const source = useAtomValue(playbackSourceAtom);
+  const {
+    navigateToAlbum,
+    navigateToPlaylist,
+    navigateToMix,
+    navigateToArtist,
+    navigateToArtistTracks,
+    navigateToFavorites,
+  } = useNavigation();
+
+  const navigateToSource = useCallback(() => {
+    if (!source) return;
+    switch (source.type) {
+      case "album":
+        navigateToAlbum(source.id as number);
+        break;
+      case "playlist":
+        navigateToPlaylist(source.id as string);
+        break;
+      case "mix":
+        navigateToMix(source.id as string);
+        break;
+      case "artist":
+        navigateToArtist(source.id as number);
+        break;
+      case "artist-tracks":
+        navigateToArtistTracks(source.id as number, source.name);
+        break;
+      case "favorites":
+        navigateToFavorites();
+        break;
+      case "radio":
+        navigateToMix(source.id.toString(), {
+          title: source.name,
+          mixType: "TRACK_MIX",
+        });
+        break;
+    }
+  }, [
+    source,
+    navigateToAlbum,
+    navigateToPlaylist,
+    navigateToMix,
+    navigateToArtist,
+    navigateToArtistTracks,
+    navigateToFavorites,
+  ]);
+
+  if (!source) return null;
+
+  const isNavigable = navigableSourceTypes.has(source.type);
+
+  return (
+    <span className="text-th-text-faint text-[10px] truncate mt-1.5">
+      Playing from{" "}
+      {isNavigable ? (
+        <button
+          onClick={navigateToSource}
+          className="hover:text-th-text-primary transition-colors hover:underline"
+        >
+          {source.name}
+        </button>
+      ) : (
+        <span>{source.name}</span>
+      )}
+    </span>
   );
 });
 
