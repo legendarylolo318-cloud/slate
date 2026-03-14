@@ -1066,6 +1066,7 @@ pub async fn get_favorite_artists(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_playlist_folders(
     state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     folder_id: String,
     include_only: Option<String>,
     offset: u32,
@@ -1082,18 +1083,115 @@ pub async fn get_playlist_folders(
         cursor
     );
 
-    let mut client = state.tidal_client.lock().await;
-    client
-        .get_playlist_folders(
-            &folder_id,
-            include_only.as_deref().unwrap_or(""),
-            offset,
-            limit,
-            &order,
-            &order_direction,
-            cursor.as_deref().unwrap_or(""),
-        )
+    let cache_key = format!(
+        "playlist-folders:{}:{}:{}:{}:{}:{:?}",
+        folder_id, offset, limit, order, order_direction, cursor
+    );
+
+    match state
+        .disk_cache
+        .get(&cache_key, CacheTier::UserContent)
         .await
+    {
+        CacheResult::Fresh(bytes) => {
+            if let Ok(val) = serde_json::from_slice(&bytes) {
+                return Ok(val);
+            }
+        }
+        CacheResult::Stale(bytes) => {
+            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if state.disk_cache.mark_in_flight(&cache_key).await {
+                    if state
+                        .disk_cache
+                        .should_retry_refresh(&cache_key, 300)
+                        .await
+                    {
+                        state.disk_cache.mark_refresh_attempt(&cache_key).await;
+                        let handle = app_handle.clone();
+                        let key = cache_key.clone();
+                        let fi = folder_id.clone();
+                        let io = include_only.clone();
+                        let o = order.clone();
+                        let od = order_direction.clone();
+                        let c = cursor.clone();
+                        tokio::spawn(async move {
+                            let st = handle.state::<AppState>();
+                            let result = {
+                                let mut client = st.tidal_client.lock().await;
+                                client
+                                    .get_playlist_folders(
+                                        &fi,
+                                        io.as_deref().unwrap_or(""),
+                                        offset,
+                                        limit,
+                                        &o,
+                                        &od,
+                                        c.as_deref().unwrap_or(""),
+                                    )
+                                    .await
+                            };
+                            match result {
+                                Ok(fresh) => {
+                                    if let Ok(bytes) = serde_json::to_vec(&fresh) {
+                                        st.disk_cache
+                                            .put(
+                                                &key,
+                                                &bytes,
+                                                CacheTier::UserContent,
+                                                &["folders", &format!("folder:{}", fi)],
+                                            )
+                                            .await
+                                            .ok();
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "[get_playlist_folders] bg refresh failed: {}",
+                                        e
+                                    );
+                                }
+                            }
+                            st.disk_cache.clear_in_flight(&key).await;
+                        });
+                    } else {
+                        state.disk_cache.clear_in_flight(&cache_key).await;
+                    }
+                }
+                return Ok(val);
+            }
+        }
+        CacheResult::Miss => {}
+    }
+
+    let data = {
+        let mut client = state.tidal_client.lock().await;
+        client
+            .get_playlist_folders(
+                &folder_id,
+                include_only.as_deref().unwrap_or(""),
+                offset,
+                limit,
+                &order,
+                &order_direction,
+                cursor.as_deref().unwrap_or(""),
+            )
+            .await?
+    };
+
+    if let Ok(bytes) = serde_json::to_vec(&data) {
+        state
+            .disk_cache
+            .put(
+                &cache_key,
+                &bytes,
+                CacheTier::UserContent,
+                &["folders", &format!("folder:{}", folder_id)],
+            )
+            .await
+            .ok();
+    }
+
+    Ok(data)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1109,10 +1207,14 @@ pub async fn create_playlist_folder(
         name,
         trns
     );
-    let client = state.tidal_client.lock().await;
-    client
-        .create_playlist_folder(&folder_id, &name, &trns)
-        .await
+    let result = {
+        let client = state.tidal_client.lock().await;
+        client
+            .create_playlist_folder(&folder_id, &name, &trns)
+            .await
+    };
+    state.disk_cache.invalidate_tag("folders").await;
+    result
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1126,8 +1228,12 @@ pub async fn rename_playlist_folder(
         folder_trn,
         name
     );
-    let client = state.tidal_client.lock().await;
-    client.rename_playlist_folder(&folder_trn, &name).await
+    let result = {
+        let client = state.tidal_client.lock().await;
+        client.rename_playlist_folder(&folder_trn, &name).await
+    };
+    state.disk_cache.invalidate_tag("folders").await;
+    result
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1136,8 +1242,12 @@ pub async fn delete_playlist_folder(
     folder_trn: String,
 ) -> Result<(), SoneError> {
     log::debug!("[delete_playlist_folder]: folder_trn={}", folder_trn);
-    let client = state.tidal_client.lock().await;
-    client.delete_playlist_folder(&folder_trn).await
+    let result = {
+        let client = state.tidal_client.lock().await;
+        client.delete_playlist_folder(&folder_trn).await
+    };
+    state.disk_cache.invalidate_tag("folders").await;
+    result
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1151,10 +1261,14 @@ pub async fn move_playlist_to_folder(
         folder_id,
         playlist_trn
     );
-    let client = state.tidal_client.lock().await;
-    client
-        .move_playlist_to_folder(&folder_id, &playlist_trn)
-        .await
+    let result = {
+        let client = state.tidal_client.lock().await;
+        client
+            .move_playlist_to_folder(&folder_id, &playlist_trn)
+            .await
+    };
+    state.disk_cache.invalidate_tag("folders").await;
+    result
 }
 
 #[tauri::command(rename_all = "camelCase")]
