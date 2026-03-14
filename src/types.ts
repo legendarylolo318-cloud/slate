@@ -80,8 +80,18 @@ export function getTrackDisplayTitle(track: { title: string; version?: string })
   return track.title;
 }
 
+export interface ManualTrackSource {
+  type: string;
+  id: string | number;
+  name: string;
+  image?: string;
+  subtitle?: string;
+  mixType?: string;
+}
+
 export interface QueuedTrack extends Track {
   _qid: string;
+  _source?: ManualTrackSource;
 }
 
 export interface AlbumDetail {
@@ -477,6 +487,15 @@ export interface PlaybackSnapshot {
   originalQueue?: Track[] | null;
   manualQueue?: Track[];
   playbackSource?: {
+    type: string;
+    id: string | number;
+    name: string;
+    image?: string;
+    subtitle?: string;
+    mixType?: string;
+    tracks: Track[];
+  } | null;
+  contextSource?: {
     type: string;
     id: string | number;
     name: string;
