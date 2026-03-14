@@ -48,9 +48,24 @@ fn restore_window(app: &tauri::AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+
+        // Wayland GTK CSD workaround: after hide()+show(), GTK client-side
+        // decoration hit-test regions go stale — buttons render but ignore
+        // pointer events.  Toggling decorations forces GTK to recalculate.
+        //
+        // Skip on KDE (KWin uses server-side decorations — the rapid toggle
+        // corrupts KWin's own button regions instead of helping).
         if std::env::var("WAYLAND_DISPLAY").is_ok() {
-            let _ = window.set_decorations(false);
-            let _ = window.set_decorations(true);
+            let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+            let is_kde = desktop.to_ascii_uppercase().contains("KDE");
+            if !is_kde {
+                let state = app.state::<crate::AppState>();
+                let wants = state
+                    .decorations
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let _ = window.set_decorations(!wants);
+                let _ = window.set_decorations(wants);
+            }
         }
     }
 }
