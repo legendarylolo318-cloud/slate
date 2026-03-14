@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { listen, emitTo } from "@tauri-apps/api/event";
+import { emitTo } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { MiniplayerState } from "./useMiniplayerEmitter";
 
 export function useMiniplayerBridge() {
@@ -21,7 +22,7 @@ export function useMiniplayerBridge() {
 
   // Listen for state updates from main window
   useEffect(() => {
-    const unlisten = listen<MiniplayerState>("miniplayer-state-update", (event) => {
+    const unlisten = getCurrentWindow().listen<MiniplayerState>("miniplayer-state-update", (event) => {
       const s = event.payload;
       setState(s);
       posAnchor.current = {
@@ -67,11 +68,16 @@ export function useMiniplayerBridge() {
     setOptimisticPlaying(null);
   }, [state.isPlaying]);
 
+  const isPlayingRef = useRef(state.isPlaying);
+  isPlayingRef.current = state.isPlaying;
+  const optimisticRef = useRef(optimisticPlaying);
+  optimisticRef.current = optimisticPlaying;
+
   const sendCommand = useCallback(
     (action: string, value?: number) => {
       // Optimistic UI for toggle-play
       if (action === "toggle-play") {
-        const newState = !(optimisticPlaying ?? state.isPlaying);
+        const newState = !(optimisticRef.current ?? isPlayingRef.current);
         setOptimisticPlaying(newState);
         optimisticPlayRef.current = setTimeout(() => {
           setOptimisticPlaying(null);
@@ -79,7 +85,7 @@ export function useMiniplayerBridge() {
       }
       emitTo("main", "miniplayer-command", { action, value }).catch(() => {});
     },
-    [state.isPlaying, optimisticPlaying],
+    [],
   );
 
   // Debounced volume command

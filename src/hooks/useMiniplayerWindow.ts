@@ -81,8 +81,8 @@ export function useMiniplayerWindow() {
             const primary = monitors[0];
             const newX = primary.position.x + primary.size.width - size.width - 40;
             const newY = primary.position.y + primary.size.height - size.height - 40;
-            const { LogicalPosition } = await import("@tauri-apps/api/dpi");
-            await miniplayer.setPosition(new LogicalPosition(newX, newY));
+            const { PhysicalPosition } = await import("@tauri-apps/api/dpi");
+            await miniplayer.setPosition(new PhysicalPosition(newX, newY));
           }
         } catch {
           // Monitor detection failed — leave at OS default position
