@@ -2452,7 +2452,6 @@ impl TidalClient {
         let offset_str = offset.to_string();
         let mut params: Vec<(&str, &str)> = vec![
             ("folderId", folder_id),
-            ("includeOnly", include_only),
             ("offset", &offset_str),
             ("limit", &limit_str),
             ("order", order),
@@ -2461,6 +2460,9 @@ impl TidalClient {
             ("locale", "en_US"),
             ("deviceType", "BROWSER"),
         ];
+        if !include_only.is_empty() {
+            params.push(("includeOnly", include_only));
+        }
         if !cursor.is_empty() {
             params.push(("cursor", cursor));
         }

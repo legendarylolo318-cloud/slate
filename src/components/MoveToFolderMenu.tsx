@@ -1,10 +1,13 @@
 import { Plus, Search, X, Loader2, FolderOpen, FolderInput } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useSetAtom } from "jotai";
 import { useToast } from "../contexts/ToastContext";
-import { useFolders, getRecentFolderIds, pushRecentFolderId } from "../hooks/useFolders";
+import { useFolders, getRecentFolderIds } from "../hooks/useFolders";
 import { useContextMenu } from "../hooks/useContextMenu";
 import { getPlaylistFolders, normalizePlaylistFolders } from "../api/tidal";
-import type { Folder, PlaylistOrFolder } from "../types";
+import { folderSubtitle } from "../utils/itemHelpers";
+import { folderCountAdjustmentsAtom, addedToFolderAtom, movedPlaylistsAtom } from "../atoms/playlists";
+import type { Folder } from "../types";
 import MenuPortal from "./MenuPortal";
 
 // ─── Public API ────────────────────────────────────────────────
@@ -12,7 +15,10 @@ import MenuPortal from "./MenuPortal";
 interface MoveToFolderMenuProps {
   playlistUuid: string;
   playlistTitle: string;
+  playlistImage?: string;
+  playlistCreatorName?: string;
   anchorRef: React.RefObject<HTMLButtonElement | null>;
+  sourceFolderId?: string;
   onClose: () => void;
 }
 
@@ -143,11 +149,17 @@ function CreateFolderModal({
 export default function MoveToFolderMenu({
   playlistUuid,
   playlistTitle,
+  playlistImage,
+  playlistCreatorName,
   anchorRef,
+  sourceFolderId,
   onClose,
 }: MoveToFolderMenuProps) {
   const { movePlaylistTo } = useFolders();
   const { showToast } = useToast();
+  const setCountAdjustments = useSetAtom(folderCountAdjustmentsAtom);
+  const setAddedToFolder = useSetAtom(addedToFolderAtom);
+  const setMovedPlaylists = useSetAtom(movedPlaylistsAtom);
 
   const [showAll, setShowAll] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -172,34 +184,28 @@ export default function MoveToFolderMenu({
     onClose,
   });
 
-  // Fetch all folders on mount
+  // Fetch all folders on mount — paginate through all items
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const folders: Folder[] = [];
+      let cursor: string | undefined;
       try {
-        // Try with FOLDER includeOnly first
-        let resp = await getPlaylistFolders("root", 0, 200, "NAME", "ASC", "FOLDER");
-        let normalized = normalizePlaylistFolders(resp);
-        let folders = normalized.items
-          .filter((i): i is Extract<PlaylistOrFolder, { kind: "folder" }> => i.kind === "folder")
-          .map((i) => i.data);
-
-        // If includeOnly didn't work (no items but total > 0), fallback
-        if (folders.length === 0 && resp.totalNumberOfItems > 0) {
-          resp = await getPlaylistFolders("root", 0, 200, "NAME", "ASC");
-          normalized = normalizePlaylistFolders(resp);
-          folders = normalized.items
-            .filter((i): i is Extract<PlaylistOrFolder, { kind: "folder" }> => i.kind === "folder")
-            .map((i) => i.data);
-        }
-
-        if (!cancelled) {
-          setAllFolders(folders);
-        }
-      } catch {
-        // Silently fail — folders will just be empty
-      } finally {
-        if (!cancelled) setFoldersLoading(false);
+        do {
+          const resp = await getPlaylistFolders("root", 0, 50, "DATE_UPDATED", "DESC", undefined, cursor);
+          if (cancelled) return;
+          const normalized = normalizePlaylistFolders(resp);
+          for (const item of normalized.items) {
+            if (item.kind === "folder") folders.push(item.data);
+          }
+          cursor = normalized.cursor ?? undefined;
+        } while (cursor);
+      } catch (err) {
+        console.error("[MoveToFolderMenu] failed to fetch folders:", err);
+      }
+      if (!cancelled) {
+        setAllFolders(folders.sort((a, b) => a.name.localeCompare(b.name)));
+        setFoldersLoading(false);
       }
     })();
     return () => { cancelled = true; };
@@ -229,8 +235,24 @@ export default function MoveToFolderMenu({
       setError(null);
       setMovingTo(folder.id);
       try {
-        await movePlaylistTo(playlistUuid, folder.id);
-        pushRecentFolderId(folder.id);
+        await movePlaylistTo(playlistUuid, folder.id, sourceFolderId);
+        // Optimistic count adjustments
+        setCountAdjustments((prev) => {
+          const next = new Map(prev);
+          next.set(folder.id, (next.get(folder.id) ?? 0) + 1);
+          if (sourceFolderId) next.set(sourceFolderId, (next.get(sourceFolderId) ?? 0) - 1);
+          return next;
+        });
+        // Optimistic add to target folder
+        setAddedToFolder((prev) => {
+          const next = new Map(prev);
+          const list = next.get(folder.id) ?? [];
+          next.set(folder.id, [...list, {
+            kind: "playlist" as const,
+            data: { uuid: playlistUuid, title: playlistTitle, image: playlistImage, creator: { id: 0, name: playlistCreatorName } } as any,
+          }]);
+          return next;
+        });
         setMovedTo((prev) => new Set([...prev, folder.id]));
         const playlistLabel =
           playlistTitle.length > 25
@@ -248,14 +270,32 @@ export default function MoveToFolderMenu({
         setMovingTo(null);
       }
     },
-    [movePlaylistTo, playlistUuid, playlistTitle, onClose, showToast],
+    [movePlaylistTo, playlistUuid, playlistTitle, playlistImage, playlistCreatorName, sourceFolderId, onClose, showToast, setCountAdjustments, setAddedToFolder],
   );
 
   const handleMoveToRoot = useCallback(async () => {
     setError(null);
     setMovingTo("root");
     try {
-      await movePlaylistTo(playlistUuid, "root");
+      await movePlaylistTo(playlistUuid, "root", sourceFolderId);
+      // Optimistic count adjustment on source
+      if (sourceFolderId) {
+        setCountAdjustments((prev) => {
+          const next = new Map(prev);
+          next.set(sourceFolderId, (next.get(sourceFolderId) ?? 0) - 1);
+          return next;
+        });
+      }
+      // Optimistic add to root (sidebar)
+      setAddedToFolder((prev) => {
+        const next = new Map(prev);
+        const list = next.get("root") ?? [];
+        next.set("root", [...list, {
+          kind: "playlist" as const,
+          data: { uuid: playlistUuid, title: playlistTitle, image: playlistImage, creator: { id: 0, name: playlistCreatorName } } as any,
+        }]);
+        return next;
+      });
       setMovedTo((prev) => new Set([...prev, "root"]));
       const playlistLabel =
         playlistTitle.length > 25
@@ -268,7 +308,7 @@ export default function MoveToFolderMenu({
     } finally {
       setMovingTo(null);
     }
-  }, [movePlaylistTo, playlistUuid, playlistTitle, onClose, showToast]);
+  }, [movePlaylistTo, playlistUuid, playlistTitle, playlistImage, playlistCreatorName, sourceFolderId, onClose, showToast, setCountAdjustments, setAddedToFolder]);
 
   // ── Row components ──
 
@@ -327,7 +367,7 @@ export default function MoveToFolderMenu({
             {folder.name}
           </span>
           <span className="text-[12px] text-th-text-faint leading-snug">
-            Folder
+            {folderSubtitle(folder.totalNumberOfItems)}
           </span>
         </div>
 
@@ -500,7 +540,31 @@ export default function MoveToFolderMenu({
           playlistUuid={playlistUuid}
           playlistTitle={playlistTitle}
           onClose={() => setShowCreateModal(false)}
-          onCreated={() => {
+          onCreated={(folderName) => {
+            // Optimistic: add new folder to sidebar
+            const folderId = `optimistic-${Date.now()}`;
+            setAddedToFolder((prev) => {
+              const next = new Map(prev);
+              const list = next.get("root") ?? [];
+              next.set("root", [...list, {
+                kind: "folder" as const,
+                data: { id: folderId, name: folderName, parent: null, addedAt: new Date().toISOString(), lastModifiedAt: new Date().toISOString(), totalNumberOfItems: 1 },
+              }]);
+              return next;
+            });
+            // Optimistic: hide playlist from source
+            if (sourceFolderId) {
+              setMovedPlaylists((prev) => {
+                const next = new Map(prev);
+                next.set(playlistUuid, sourceFolderId);
+                return next;
+              });
+              setCountAdjustments((prev) => {
+                const next = new Map(prev);
+                next.set(sourceFolderId, (next.get(sourceFolderId) ?? 0) - 1);
+                return next;
+              });
+            }
             setShowCreateModal(false);
             onClose();
           }}

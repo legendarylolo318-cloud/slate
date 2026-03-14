@@ -883,6 +883,8 @@ export async function getPlaylistFolders(
 
 function normalizeFolderItem(item: PlaylistFolderItem): PlaylistOrFolder {
   if (item.itemType === "FOLDER") {
+    // totalNumberOfItems lives inside item.data for FOLDER items
+    const folderData = item.data as unknown as Record<string, unknown>;
     return {
       kind: "folder",
       data: {
@@ -891,6 +893,9 @@ function normalizeFolderItem(item: PlaylistFolderItem): PlaylistOrFolder {
         parent: item.parent,
         addedAt: item.addedAt,
         lastModifiedAt: item.lastModifiedAt,
+        totalNumberOfItems: typeof folderData.totalNumberOfItems === "number"
+          ? folderData.totalNumberOfItems
+          : undefined,
       },
     };
   }
