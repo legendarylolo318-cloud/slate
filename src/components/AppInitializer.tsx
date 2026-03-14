@@ -619,6 +619,25 @@ export function AppInitializer() {
   }, [showToast]);
 
   // ================================================================
+  //  BIT-DEPTH CHANGE — toast when bit-perfect promotes sample format
+  // ================================================================
+  useEffect(() => {
+    const unlisten = listen<{ from: string; to: string }>(
+      "audio-bit-depth-changed",
+      (event) => {
+        const { from, to } = event.payload;
+        showToast(
+          `DAC doesn't support ${from} — playing as ${to} (lossless)`,
+          "info",
+        );
+      },
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [showToast]);
+
+  // ================================================================
   //  SCROBBLE AUTH ERROR — toast when a provider's session expires
   // ================================================================
   useEffect(() => {
