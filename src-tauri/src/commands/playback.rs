@@ -235,6 +235,10 @@ pub struct MprisMetadata {
     pub album: String,
     pub art_url: String,
     pub duration_secs: f64,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub quality_text: String,
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -260,6 +264,8 @@ pub fn update_mpris_metadata(
             album: metadata.album,
             art_url: metadata.art_url,
             duration_secs: metadata.duration_secs,
+            url: metadata.url,
+            quality_text: metadata.quality_text,
         });
     Ok(())
 }

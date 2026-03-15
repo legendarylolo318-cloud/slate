@@ -11,6 +11,8 @@ pub enum DiscordCommand {
         album: String,
         art_url: String,
         duration_secs: f64,
+        url: String,
+        quality_text: String,
     },
     SetPlaying {
         is_playing: bool,
@@ -38,6 +40,8 @@ impl DiscordHandle {
             let mut current_album = String::new();
             let mut current_art_url = String::new();
             let mut current_duration_secs: f64 = 0.0;
+            let mut current_url = String::new();
+            let mut current_quality_text = String::new();
             let mut is_playing = false;
             let mut play_start_epoch: i64 = 0;
 
@@ -83,12 +87,16 @@ impl DiscordHandle {
                         album,
                         art_url,
                         duration_secs,
+                        url,
+                        quality_text,
                     } => {
                         current_title = title;
                         current_artist = artist;
                         current_album = album;
                         current_art_url = art_url;
                         current_duration_secs = duration_secs;
+                        current_url = url;
+                        current_quality_text = quality_text;
 
                         if is_playing {
                             play_start_epoch = now_epoch_secs();
@@ -106,6 +114,8 @@ impl DiscordHandle {
                                     current_duration_secs,
                                     is_playing,
                                     play_start_epoch,
+                                    &current_url,
+                                    &current_quality_text,
                                 )
                                 .is_err()
                                 {
@@ -137,6 +147,8 @@ impl DiscordHandle {
                                         current_duration_secs,
                                         is_playing,
                                         play_start_epoch,
+                                        &current_url,
+                                        &current_quality_text,
                                     )
                                     .is_err()
                                 };
@@ -191,6 +203,8 @@ fn set_activity(
     duration_secs: f64,
     is_playing: bool,
     play_start_epoch: i64,
+    url: &str,
+    quality_text: &str,
 ) -> Result<(), ()> {
     let state_text = if artist.is_empty() {
         album.to_string()
@@ -218,12 +232,22 @@ fn set_activity(
         act = act.timestamps(timestamps);
     }
 
-    // Album art
+    // Album art + quality hover text
     let assets;
     if !art_url.is_empty() {
-        assets = activity::Assets::new()
-            .large_image(art_url);
+        let mut a = activity::Assets::new().large_image(art_url);
+        if !quality_text.is_empty() {
+            a = a.large_text(quality_text);
+        }
+        assets = a;
         act = act.assets(assets);
+    }
+
+    // "Listen on TIDAL" button
+    let buttons;
+    if !url.is_empty() {
+        buttons = vec![activity::Button::new("Listen on TIDAL", url)];
+        act = act.buttons(buttons);
     }
 
     if let Err(e) = client.set_activity(act) {

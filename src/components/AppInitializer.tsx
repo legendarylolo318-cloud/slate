@@ -50,6 +50,7 @@ import {
   contextSourceAtom,
   shuffleAtom,
   repeatAtom,
+  streamInfoAtom,
 } from "../atoms/playback";
 import { drawerOpenAtom, maximizedPlayerAtom } from "../atoms/ui";
 import { proxySettingsAtom, type ProxySettings } from "../atoms/proxy";
@@ -81,7 +82,11 @@ import type {
   PlaylistOrFolder,
 } from "../types";
 import { getTidalImageUrl, getTrackDisplayTitle } from "../types";
-import { getTrackArtistDisplay } from "../utils/itemHelpers";
+import {
+  getTrackArtistDisplay,
+  getTrackArtistDiscordDisplay,
+  getTrackShareUrl,
+} from "../utils/itemHelpers";
 import { ensureQid, advanceCounterPast } from "../lib/qid";
 import {
   initPositionInterpolator,
@@ -743,17 +748,32 @@ export function AppInitializer() {
   //  MPRIS — push metadata & playback status to backend for D-Bus
   // ================================================================
   useEffect(() => {
+    const formatQualityText = (info: import("../types").StreamInfo | null): string => {
+      if (!info) return "";
+      const parts: string[] = [];
+      if (info.bitDepth) parts.push(`${info.bitDepth}-BIT`);
+      if (info.sampleRate) {
+        const khz = info.sampleRate / 1000;
+        parts.push(`${info.sampleRate % 1000 ? khz.toFixed(1) : khz}KHZ`);
+      }
+      if (info.codec) parts.push(info.codec.toUpperCase());
+      return parts.join(" ");
+    };
+
     const pushMetadata = () => {
       const track = store.get(currentTrackAtom);
       if (!track) return;
+      const streamInfo = store.get(streamInfoAtom);
       invoke("update_mpris_metadata", {
         metadata: {
           trackId: track.id,
           title: getTrackDisplayTitle(track),
-          artist: getTrackArtistDisplay(track),
+          artist: getTrackArtistDiscordDisplay(track),
           album: track.album?.title || "",
           artUrl: getTidalImageUrl(track.album?.cover, 320),
           durationSecs: track.duration,
+          url: getTrackShareUrl(track.id),
+          qualityText: formatQualityText(streamInfo),
         },
       }).catch(() => {});
       // Re-push playback status — isPlayingAtom may not have changed
@@ -764,8 +784,9 @@ export function AppInitializer() {
     };
 
     pushMetadata();
-    const unsub = store.sub(currentTrackAtom, pushMetadata);
-    return unsub;
+    const unsubTrack = store.sub(currentTrackAtom, pushMetadata);
+    const unsubStream = store.sub(streamInfoAtom, pushMetadata);
+    return () => { unsubTrack(); unsubStream(); };
   }, [store]);
 
   useEffect(() => {

@@ -205,6 +205,38 @@ export function getTrackArtistDisplay(track: { artist?: { name?: string }; artis
   return track.artist?.name || "Unknown Artist";
 }
 
+/** Format artists with "ft." notation for Discord Rich Presence. */
+export function getTrackArtistDiscordDisplay(track: {
+  artist?: { name?: string };
+  artists?: { name: string; artistType?: string }[];
+}): string {
+  if (!track.artists || track.artists.length === 0) {
+    return track.artist?.name || "Unknown Artist";
+  }
+  if (track.artists.length === 1) {
+    return track.artists[0].name;
+  }
+  const main = track.artists.filter((a) => a.artistType === "MAIN");
+  const featured = track.artists.filter((a) => a.artistType !== "MAIN");
+
+  if (main.length === 0) {
+    // No type info — fall back to comma-separated
+    return track.artists.map((a) => a.name).join(", ");
+  }
+
+  const mainStr = main.map((a) => a.name).join(", ");
+  if (featured.length === 0) return mainStr;
+
+  const featStr =
+    featured.length === 1
+      ? featured[0].name
+      : featured.slice(0, -1).map((a) => a.name).join(", ") +
+        " & " +
+        featured[featured.length - 1].name;
+
+  return `${mainStr} ft. ${featStr}`;
+}
+
 const TIDAL_SHARE_BASE = "https://tidal.com";
 
 /** Build a Tidal share URL for a track. */
