@@ -92,6 +92,7 @@ import {
   initPositionInterpolator,
   destroyPositionInterpolator,
   notifySeek,
+  getInterpolatedPosition,
 } from "../lib/playbackPosition";
 
 const PLAYBACK_STATE_KEY = "sone.playback-state.v1";
@@ -792,9 +793,10 @@ export function AppInitializer() {
   useEffect(() => {
     const pushStatus = () => {
       const playing = store.get(isPlayingAtom);
-      invoke("update_mpris_playback_status", { isPlaying: playing }).catch(
-        () => {},
-      );
+      invoke("update_mpris_playback_status", {
+        isPlaying: playing,
+        positionSecs: getInterpolatedPosition(),
+      }).catch(() => {});
     };
 
     pushStatus();

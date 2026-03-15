@@ -16,8 +16,12 @@ pub enum DiscordCommand {
     },
     SetPlaying {
         is_playing: bool,
+        position_secs: f64,
     },
     Stop,
+    Seeked {
+        position_secs: f64,
+    },
     Connect,
     Disconnect,
 }
@@ -71,6 +75,25 @@ impl DiscordHandle {
                     DiscordCommand::Connect => {
                         want_connected = true;
                         try_connect(&mut client, &mut connected);
+                        if connected && is_playing && !current_title.is_empty() {
+                            if set_activity(
+                                &mut client,
+                                &current_title,
+                                &current_artist,
+                                &current_album,
+                                &current_art_url,
+                                current_duration_secs,
+                                is_playing,
+                                play_start_epoch,
+                                &current_url,
+                                &current_quality_text,
+                            )
+                            .is_err()
+                            {
+                                client.close().ok();
+                                connected = false;
+                            }
+                        }
                     }
                     DiscordCommand::Disconnect => {
                         want_connected = false;
@@ -125,17 +148,17 @@ impl DiscordHandle {
                             }
                         }
                     }
-                    DiscordCommand::SetPlaying { is_playing: playing } => {
+                    DiscordCommand::SetPlaying { is_playing: playing, position_secs } => {
                         is_playing = playing;
 
                         if playing {
-                            play_start_epoch = now_epoch_secs();
+                            play_start_epoch = now_epoch_secs() - position_secs as i64;
                         }
 
                         if want_connected {
                             try_connect(&mut client, &mut connected);
                             if connected {
-                                let failed = if current_title.is_empty() && !playing {
+                                let failed = if !playing {
                                     client.clear_activity().is_err()
                                 } else {
                                     set_activity(
@@ -160,12 +183,29 @@ impl DiscordHandle {
                         }
                     }
                     DiscordCommand::Stop => {
-                        is_playing = false;
                         current_title.clear();
-                        if connected {
-                            if client.clear_activity().is_err() {
-                                client.close().ok();
-                                connected = false;
+                    }
+                    DiscordCommand::Seeked { position_secs } => {
+                        if is_playing {
+                            play_start_epoch = now_epoch_secs() - position_secs as i64;
+                            if want_connected && connected {
+                                if set_activity(
+                                    &mut client,
+                                    &current_title,
+                                    &current_artist,
+                                    &current_album,
+                                    &current_art_url,
+                                    current_duration_secs,
+                                    is_playing,
+                                    play_start_epoch,
+                                    &current_url,
+                                    &current_quality_text,
+                                )
+                                .is_err()
+                                {
+                                    client.close().ok();
+                                    connected = false;
+                                }
                             }
                         }
                     }

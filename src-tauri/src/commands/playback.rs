@@ -201,6 +201,9 @@ pub async fn seek_track(state: State<'_, AppState>, position_secs: f32) -> Resul
     state.mpris.send(crate::mpris::MprisCommand::Seeked {
         position_secs: position_secs as f64,
     });
+    state.discord.send(crate::discord::DiscordCommand::Seeked {
+        position_secs: position_secs as f64,
+    });
     state.scrobble_manager.on_seek().await;
     result
 }
@@ -275,6 +278,7 @@ pub fn update_mpris_metadata(
 pub fn update_mpris_playback_status(
     state: State<'_, AppState>,
     is_playing: bool,
+    position_secs: Option<f64>,
 ) -> Result<(), SoneError> {
     #[cfg(target_os = "linux")]
     state
@@ -282,7 +286,10 @@ pub fn update_mpris_playback_status(
         .send(crate::mpris::MprisCommand::SetPlaybackStatus { is_playing });
     state
         .discord
-        .send(crate::discord::DiscordCommand::SetPlaying { is_playing });
+        .send(crate::discord::DiscordCommand::SetPlaying {
+            is_playing,
+            position_secs: position_secs.unwrap_or(0.0),
+        });
     Ok(())
 }
 
