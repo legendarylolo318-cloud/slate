@@ -279,3 +279,29 @@ pub fn update_mpris_playback_status(
         .send(crate::discord::DiscordCommand::SetPlaying { is_playing });
     Ok(())
 }
+
+#[tauri::command]
+#[allow(unused_variables)]
+pub fn update_mpris_shuffle(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), SoneError> {
+    #[cfg(target_os = "linux")]
+    state
+        .mpris
+        .send(crate::mpris::MprisCommand::SetShuffle { enabled });
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(unused_variables)]
+pub fn update_mpris_loop_status(
+    state: State<'_, AppState>,
+    mode: u8,
+) -> Result<(), SoneError> {
+    #[cfg(target_os = "linux")]
+    state
+        .mpris
+        .send(crate::mpris::MprisCommand::SetLoopStatus { mode });
+    Ok(())
+}

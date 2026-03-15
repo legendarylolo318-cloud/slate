@@ -48,6 +48,8 @@ import {
   manualQueueAtom,
   playbackSourceAtom,
   contextSourceAtom,
+  shuffleAtom,
+  repeatAtom,
 } from "../atoms/playback";
 import { drawerOpenAtom, maximizedPlayerAtom } from "../atoms/ui";
 import { proxySettingsAtom, type ProxySettings } from "../atoms/proxy";
@@ -119,7 +121,7 @@ export function AppInitializer() {
   const setContextSource = useSetAtom(contextSourceAtom);
 
   // ---- Stable playback actions (no subscriptions) ----
-  const { playTrack, playNext, playPrevious, pauseTrack, resumeTrack, setVolume } =
+  const { playTrack, playNext, playPrevious, pauseTrack, resumeTrack, setVolume, toggleShuffle, seekTo } =
     usePlaybackActions();
   const { addFavoriteTrack, removeFavoriteTrack, favoriteTrackIds } =
     useFavorites();
@@ -780,6 +782,22 @@ export function AppInitializer() {
   }, [store]);
 
   useEffect(() => {
+    const push = () => {
+      invoke("update_mpris_shuffle", { enabled: store.get(shuffleAtom) }).catch(() => {});
+    };
+    push();
+    return store.sub(shuffleAtom, push);
+  }, [store]);
+
+  useEffect(() => {
+    const push = () => {
+      invoke("update_mpris_loop_status", { mode: store.get(repeatAtom) }).catch(() => {});
+    };
+    push();
+    return store.sub(repeatAtom, push);
+  }, [store]);
+
+  useEffect(() => {
     const unlistenSeek = listen<number>("mpris:seek", async (event) => {
       try {
         const current = await invoke<number>("get_playback_position");
@@ -791,11 +809,26 @@ export function AppInitializer() {
     const unlistenVolume = listen<number>("mpris:set-volume", (event) => {
       setVolume(Math.max(0, Math.min(1, event.payload)));
     });
+    const unlistenShuffle = listen<boolean>("mpris:set-shuffle", (event) => {
+      if (store.get(shuffleAtom) !== event.payload) {
+        toggleShuffle();
+      }
+    });
+    const unlistenLoop = listen<number>("mpris:set-loop-status", (event) => {
+      store.set(repeatAtom, event.payload);
+    });
+    const unlistenSetPosition = listen<number>("mpris:set-position", async (event) => {
+      const pos = Math.max(0, event.payload);
+      await seekTo(pos);
+    });
     return () => {
       unlistenSeek.then((fn) => fn());
       unlistenVolume.then((fn) => fn());
+      unlistenShuffle.then((fn) => fn());
+      unlistenLoop.then((fn) => fn());
+      unlistenSetPosition.then((fn) => fn());
     };
-  }, [setVolume]);
+  }, [store, setVolume, toggleShuffle, seekTo]);
 
   // ================================================================
   //  KEYBOARD SHORTCUTS

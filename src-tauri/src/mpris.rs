@@ -1,4 +1,4 @@
-use mpris_server::{Metadata, PlaybackStatus, Player, Time, TrackId};
+use mpris_server::{LoopStatus, Metadata, PlaybackStatus, Player, Time, TrackId};
 use tauri::Emitter;
 use tokio::sync::mpsc;
 
@@ -19,6 +19,12 @@ pub enum MprisCommand {
     },
     Seeked {
         position_secs: f64,
+    },
+    SetShuffle {
+        enabled: bool,
+    },
+    SetLoopStatus {
+        mode: u8,
     },
     Stop,
 }
@@ -47,6 +53,8 @@ impl MprisHandle {
                     .can_go_previous(true)
                     .can_seek(true)
                     .can_control(true)
+                    .shuffle(false)
+                    .loop_status(LoopStatus::None)
                     .build()
                     .await
                 {
@@ -106,6 +114,27 @@ impl MprisHandle {
                     app.emit("mpris:set-volume", volume).ok();
                 });
 
+                let app = app_handle.clone();
+                player.connect_set_shuffle(move |_, shuffle| {
+                    app.emit("mpris:set-shuffle", shuffle).ok();
+                });
+
+                let app = app_handle.clone();
+                player.connect_set_loop_status(move |_, status| {
+                    let mode: u8 = match status {
+                        LoopStatus::None => 0,
+                        LoopStatus::Playlist => 1,
+                        LoopStatus::Track => 2,
+                    };
+                    app.emit("mpris:set-loop-status", mode).ok();
+                });
+
+                let app = app_handle.clone();
+                player.connect_set_position(move |_, _track_id, position| {
+                    let secs = position.as_micros() as f64 / 1_000_000.0;
+                    app.emit("mpris:set-position", secs).ok();
+                });
+
                 // Run the D-Bus server in the background
                 tokio::task::spawn_local(player.run());
 
@@ -155,6 +184,17 @@ impl MprisHandle {
                             let time = Time::from_micros((position_secs * 1_000_000.0) as i64);
                             player.set_position(time);
                             player.seeked(time).await.ok();
+                        }
+                        MprisCommand::SetShuffle { enabled } => {
+                            player.set_shuffle(enabled).await.ok();
+                        }
+                        MprisCommand::SetLoopStatus { mode } => {
+                            let status = match mode {
+                                1 => LoopStatus::Playlist,
+                                2 => LoopStatus::Track,
+                                _ => LoopStatus::None,
+                            };
+                            player.set_loop_status(status).await.ok();
                         }
                         MprisCommand::Stop => {
                             player

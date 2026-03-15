@@ -666,6 +666,8 @@ pub fn run() {
             commands::playback::load_playback_queue,
             commands::playback::update_mpris_metadata,
             commands::playback::update_mpris_playback_status,
+            commands::playback::update_mpris_shuffle,
+            commands::playback::update_mpris_loop_status,
             // scrobble
             commands::scrobble::notify_track_started,
             commands::scrobble::notify_track_paused,
