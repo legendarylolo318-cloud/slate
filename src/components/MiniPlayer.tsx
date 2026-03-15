@@ -17,6 +17,7 @@ import { useMiniplayerBridge } from "../hooks/useMiniplayerBridge";
 import { getTidalImageUrl, getTrackDisplayTitle } from "../types";
 import { formatTime } from "../lib/format";
 import TidalImage from "./TidalImage";
+import ResizeEdges from "./ResizeEdges";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -972,6 +973,7 @@ export default function MiniPlayer() {
       className="group w-full h-full overflow-hidden relative"
       style={{ borderRadius: 12 }}
     >
+      <ResizeEdges />
       {/* Dark base background */}
       <div
         className="absolute inset-0"
