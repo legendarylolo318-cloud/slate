@@ -39,6 +39,8 @@ const SHORTCUTS = [
   { keys: "Ctrl + +", desc: "Zoom in" },
   { keys: "Ctrl + -", desc: "Zoom out" },
   { keys: "Ctrl + 0", desc: "Reset zoom to 100%" },
+  { keys: "Ctrl + E", desc: "Toggle exclusive output" },
+  { keys: "Ctrl + B", desc: "Toggle bit-perfect mode" },
   { keys: "?", desc: "Show keyboard shortcuts" },
 ] as const;
 
@@ -327,7 +329,7 @@ export default function UserMenu() {
                 <X size={18} />
               </button>
             </div>
-            <div className="px-5 pb-5 flex flex-col gap-1">
+            <div className="px-5 pb-5 flex flex-col gap-1 overflow-y-auto min-h-0">
               {SHORTCUTS.map((s) => (
                 <div
                   key={s.keys}

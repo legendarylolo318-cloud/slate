@@ -888,6 +888,64 @@ export function AppInitializer() {
             clearCache();
             window.location.reload();
             return;
+          case "KeyE":
+            if (e.repeat) return;
+            e.preventDefault();
+            {
+              const isExclusive = store.get(exclusiveModeAtom);
+              if (isExclusive) {
+                // Exclusive on → turn off (bit-perfect follows)
+                store.set(exclusiveModeAtom, false);
+                store.set(bitPerfectAtom, false);
+                invoke("set_exclusive_mode", { enabled: false }).catch(() => {});
+                showToast("Exclusive output off — takes effect next track");
+              } else {
+                // Exclusive off → turn on, auto-select device if needed
+                store.set(exclusiveModeAtom, true);
+                invoke("set_exclusive_mode", { enabled: true }).catch(() => {});
+                invoke<Array<{ id: string; name: string }>>("list_audio_devices")
+                  .then((devices) => {
+                    if (!store.get(exclusiveDeviceAtom) && devices.length > 0) {
+                      store.set(exclusiveDeviceAtom, devices[0].id);
+                      invoke("set_exclusive_device", { device: devices[0].id }).catch(() => {});
+                    }
+                  })
+                  .catch(() => {});
+                showToast("Exclusive output on — takes effect next track");
+              }
+            }
+            return;
+          case "KeyB":
+            if (e.repeat) return;
+            e.preventDefault();
+            {
+              const isBP = store.get(bitPerfectAtom);
+              if (isBP) {
+                // Bit-perfect on → turn off, exclusive stays
+                store.set(bitPerfectAtom, false);
+                invoke("set_bit_perfect", { enabled: false }).catch(() => {});
+                showToast("Bit-perfect off — takes effect next track");
+              } else {
+                // Bit-perfect off → turn on (auto-enable exclusive if needed)
+                const isExclusive = store.get(exclusiveModeAtom);
+                if (!isExclusive) {
+                  store.set(exclusiveModeAtom, true);
+                  invoke("set_exclusive_mode", { enabled: true }).catch(() => {});
+                  invoke<Array<{ id: string; name: string }>>("list_audio_devices")
+                    .then((devices) => {
+                      if (!store.get(exclusiveDeviceAtom) && devices.length > 0) {
+                        store.set(exclusiveDeviceAtom, devices[0].id);
+                        invoke("set_exclusive_device", { device: devices[0].id }).catch(() => {});
+                      }
+                    })
+                    .catch(() => {});
+                }
+                store.set(bitPerfectAtom, true);
+                invoke("set_bit_perfect", { enabled: true }).catch(() => {});
+                showToast("Bit-perfect on — takes effect next track");
+              }
+            }
+            return;
         }
       }
 
@@ -967,6 +1025,7 @@ export function AppInitializer() {
     favoriteTrackIds,
     addFavoriteTrack,
     removeFavoriteTrack,
+    showToast,
   ]);
 
   // ================================================================
