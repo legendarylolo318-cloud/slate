@@ -7,9 +7,12 @@
     "core:default",
     "core:window:allow-set-fullscreen",
     "core:window:allow-create",
+    "core:webview:allow-create-webview-window",
     "core:window:allow-set-always-on-top",
     "core:window:allow-close",
     "core:window:allow-set-size",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
     "opener:default",
     "global-shortcut:allow-register",
     "deep-link:default"

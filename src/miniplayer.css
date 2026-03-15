@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
 
+html, body, #root {
+  height: 100%;
+}
+
 body {
   margin: 0;
   overflow: hidden;
