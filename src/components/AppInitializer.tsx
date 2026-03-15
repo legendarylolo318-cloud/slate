@@ -754,6 +754,11 @@ export function AppInitializer() {
           durationSecs: track.duration,
         },
       }).catch(() => {});
+      // Re-push playback status — isPlayingAtom may not have changed
+      // (was true before, still true after), so its subscriber won't fire
+      invoke("update_mpris_playback_status", {
+        isPlaying: store.get(isPlayingAtom),
+      }).catch(() => {});
     };
 
     pushMetadata();
