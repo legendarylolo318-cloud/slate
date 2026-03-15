@@ -1142,6 +1142,10 @@ impl AudioPlayer {
                                     udb = udb
                                         .property("buffer-duration", 15_000_000_000i64)
                                         .property("use-buffering", true);
+                                } else {
+                                    udb = udb
+                                        .property("buffer-duration", 5_000_000_000i64)
+                                        .property("use-buffering", true);
                                 }
                                 let uridecodebin = udb
                                     .build()
@@ -1572,6 +1576,10 @@ fn build_appsink_pipeline(
     if is_dash {
         udb = udb
             .property("buffer-duration", 15_000_000_000i64)
+            .property("use-buffering", true);
+    } else {
+        udb = udb
+            .property("buffer-duration", 5_000_000_000i64)
             .property("use-buffering", true);
     }
     let uridecodebin = udb
