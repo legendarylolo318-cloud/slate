@@ -82,7 +82,7 @@ export function useMiniplayerWindow() {
         minWidth: 220,
         minHeight: 64,
         maxWidth: 600,
-        maxHeight: 600,
+        maxHeight: 700,
         decorations: false,
         transparent: true,
         alwaysOnTop: true,

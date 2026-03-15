@@ -13,6 +13,9 @@
     "core:window:allow-set-size",
     "core:window:allow-start-dragging",
     "core:window:allow-start-resize-dragging",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
     "opener:default",
     "global-shortcut:allow-register",
     "deep-link:default"

@@ -15,6 +15,7 @@ import { getInterpolatedPosition } from "../lib/playbackPosition";
 import { usePlaybackActions } from "./usePlaybackActions";
 import { useFavorites } from "./useFavorites";
 import { useDrawer } from "./useDrawer";
+import { useNavigation } from "./useNavigation";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -35,7 +36,7 @@ export interface MiniplayerState {
   shuffle: boolean;
   repeat: number;
   volume: number;
-  playbackSourceLabel: { type: string; name: string } | null;
+  playbackSourceLabel: { type: string; id: string | number; name: string } | null;
   accentColor: string;
   error?: string;
 }
@@ -91,7 +92,7 @@ export function useMiniplayerEmitter() {
       repeat,
       volume,
       playbackSourceLabel: source
-        ? { type: source.type, name: source.name }
+        ? { type: source.type, id: source.id, name: source.name }
         : null,
       accentColor,
       error: lastErrorRef.current,
@@ -158,6 +159,14 @@ export function useMiniplayerEmitter() {
     usePlaybackActions();
   const { addFavoriteTrack, removeFavoriteTrack } = useFavorites();
   const { openDrawerToTab } = useDrawer();
+  const { navigateToArtist, navigateToAlbum, navigateToPlaylist, navigateToMix, navigateToFavorites } = useNavigation();
+
+  const focusMainWindow = useCallback(async () => {
+    const appWindow = getCurrentWindow();
+    await appWindow.show();
+    await appWindow.unminimize();
+    await appWindow.setFocus();
+  }, []);
 
   useEffect(() => {
     if (!miniplayerOpen) return;
@@ -204,12 +213,31 @@ export function useMiniplayerEmitter() {
           case "seek":
             if (value !== undefined) await seekTo(value);
             break;
+          case "focus-main": {
+            await focusMainWindow();
+            break;
+          }
           case "show-now-playing": {
-            const appWindow = getCurrentWindow();
-            await appWindow.show();
-            await appWindow.unminimize();
-            await appWindow.setFocus();
+            await focusMainWindow();
             openDrawerToTab("queue");
+            break;
+          }
+          case "show-artist": {
+            const t = store.get(currentTrackAtom);
+            if (t?.artist) {
+              await focusMainWindow();
+              navigateToArtist(t.artist.id, { name: t.artist.name });
+            }
+            break;
+          }
+          case "show-source": {
+            const src = store.get(contextSourceAtom) || store.get(playbackSourceAtom);
+            if (!src) break;
+            await focusMainWindow();
+            if (src.type === "favorites") navigateToFavorites();
+            else if (src.type === "album") navigateToAlbum(Number(src.id), { title: src.name });
+            else if (src.type === "playlist") navigateToPlaylist(String(src.id), { title: src.name });
+            else if (src.type === "mix") navigateToMix(String(src.id), { title: src.name });
             break;
           }
           case "share":
@@ -225,6 +253,7 @@ export function useMiniplayerEmitter() {
     pauseTrack, resumeTrack, playNext, playPrevious,
     toggleShuffle, seekTo, setVolume,
     addFavoriteTrack, removeFavoriteTrack, openDrawerToTab,
+    focusMainWindow, navigateToArtist, navigateToAlbum, navigateToPlaylist, navigateToMix, navigateToFavorites,
   ]);
 
   // Close miniplayer when queue empties (if main window is visible)

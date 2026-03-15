@@ -119,7 +119,7 @@ function useVibrantColors(vibrantColor?: string): VibrantColors {
 
 // ─── DragHandle ─────────────────────────────────────────────────────────────
 
-function DragHandle({ tier, colors }: { tier: Tier; colors: VibrantColors }) {
+function DragHandle({ tier }: { tier: Tier }) {
   const dotColor = "rgba(255,255,255,0.5)";
   const isNarrow = tier === "narrow";
 
@@ -219,17 +219,19 @@ function AlbumArt({
   cover,
   title,
   className,
+  style,
   imageSize,
   onClick,
 }: {
   cover?: string;
   title: string;
   className?: string;
+  style?: React.CSSProperties;
   imageSize: number;
   onClick?: () => void;
 }) {
   return (
-    <div className={`overflow-hidden ${className ?? ""}`} onClick={onClick}>
+    <div className={`overflow-hidden ${className ?? ""}`} style={style} onClick={onClick}>
       <TidalImage
         src={getTidalImageUrl(cover, imageSize)}
         alt={title}
@@ -605,23 +607,26 @@ function NarrowTier({
   const showShare = containerWidth >= 520;
 
   return (
-    <div className="flex items-center gap-1.5 w-full h-full p-1.5">
+    <div className="flex items-center gap-1.5 w-full h-full p-1.5" style={{ containerType: "size" }}>
       <AlbumArt
         cover={track?.album?.cover}
         title={title}
-        className="h-full aspect-square max-w-[30%] rounded-md flex-shrink-0"
+        className="rounded-md flex-shrink-0"
+        style={{ width: "min(100cqh, 30cqw)", height: "min(100cqh, 30cqw)" }}
         imageSize={160}
       />
       <div className="flex flex-col justify-center min-w-0 flex-1">
         <span
-          className="text-[12px] font-bold truncate leading-tight"
+          className="text-[12px] font-bold truncate leading-tight cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
           style={{ color: colors.textPrimary }}
+          onClick={() => sendCommand("focus-main")}
         >
           {title}
         </span>
         <span
-          className="text-[11px] truncate mt-0.5"
+          className="text-[11px] truncate mt-0.5 cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
           style={{ color: colors.textSecondary }}
+          onClick={() => sendCommand("show-artist")}
         >
           {artistName}
         </span>
@@ -720,6 +725,7 @@ function CompactTier({
   colors,
   accentColor,
   containerHeight,
+  containerWidth,
 }: {
   track: ReturnType<typeof useMiniplayerBridge>["state"]["track"];
   isPlaying: boolean;
@@ -733,39 +739,46 @@ function CompactTier({
   colors: VibrantColors;
   accentColor: string;
   containerHeight: number;
+  containerWidth: number;
 }) {
   const title = track ? getTrackDisplayTitle(track) : "";
   const artistName = track?.artist?.name ?? "";
   const [showVolume, setShowVolume] = useState(false);
   const showPlayingFrom = containerHeight >= 130 && playbackSourceLabel;
+  const showCompactVolume = containerWidth >= 300;
+  const showCompactShare = containerWidth >= 300;
 
   return (
     <div className="flex flex-col w-full h-full p-2 pb-3 gap-1.5">
       {/* Row 1: Art + Info + Fav */}
-      <div className="flex items-center gap-2.5 min-w-0 min-h-0 flex-1">
+      <div className="flex items-center gap-2.5 min-w-0 min-h-0 flex-1" style={{ containerType: "size" }}>
         <AlbumArt
           cover={track?.album?.cover}
           title={title}
-          className="h-full aspect-square max-w-[40%] rounded-md flex-shrink-0"
+          className="rounded-md flex-shrink-0"
+          style={{ width: "min(100cqh, 40cqw)", height: "min(100cqh, 40cqw)" }}
           imageSize={320}
         />
         <div className="flex flex-col justify-center min-w-0 flex-1">
           <span
-            className="text-[15px] font-bold truncate leading-tight"
+            className="text-[15px] font-bold truncate leading-tight cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
             style={{ color: colors.textPrimary }}
+            onClick={() => sendCommand("focus-main")}
           >
             {title}
           </span>
           <span
-            className="text-[13px] truncate mt-0.5"
+            className="text-[13px] truncate mt-0.5 cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
             style={{ color: colors.textSecondary }}
+            onClick={() => sendCommand("show-artist")}
           >
             {artistName}
           </span>
           {showPlayingFrom && (
             <span
-              className="text-[11px] truncate mt-0.5"
+              className="text-[11px] truncate mt-0.5 cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
               style={{ color: colors.textMuted }}
+              onClick={() => sendCommand("show-source")}
             >
               Playing from {playbackSourceLabel.name}
             </span>
@@ -782,18 +795,20 @@ function CompactTier({
 
       {/* Row 2: Controls */}
       <div className="flex items-center justify-center gap-2.5 flex-shrink-0">
-        <div className="relative flex-shrink-0">
-          <button
-            onClick={() => setShowVolume((v) => !v)}
-            className="w-8 h-8 flex items-center justify-center transition-colors"
-            style={{ color: colors.textSecondary }}
-          >
-            {volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
-          </button>
-          {showVolume && (
-            <VolumeSlider volume={volume} sendVolume={sendVolume} colors={colors} horizontal={containerHeight < 180} onClose={() => setShowVolume(false)} />
-          )}
-        </div>
+        {showCompactVolume && (
+          <div className="relative flex-shrink-0">
+            <button
+              onClick={() => setShowVolume((v) => !v)}
+              className="w-8 h-8 flex items-center justify-center transition-colors"
+              style={{ color: colors.textSecondary }}
+            >
+              {volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
+            </button>
+            {showVolume && (
+              <VolumeSlider volume={volume} sendVolume={sendVolume} colors={colors} horizontal={containerHeight < 180} onClose={() => setShowVolume(false)} />
+            )}
+          </div>
+        )}
         <button
           onClick={() => sendCommand("toggle-shuffle")}
           className="w-8 h-8 flex items-center justify-center transition-colors flex-shrink-0"
@@ -837,13 +852,15 @@ function CompactTier({
             </span>
           )}
         </button>
-        <button
-          onClick={() => sendCommand("share")}
-          className="w-8 h-8 flex items-center justify-center transition-colors flex-shrink-0"
-          style={{ color: colors.textSecondary }}
-        >
-          <Share2 size={18} />
-        </button>
+        {showCompactShare && (
+          <button
+            onClick={() => sendCommand("share")}
+            className="w-8 h-8 flex items-center justify-center transition-colors flex-shrink-0"
+            style={{ color: colors.textSecondary }}
+          >
+            <Share2 size={18} />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -893,7 +910,7 @@ function FullTier({
         <div
           className="rounded-lg overflow-hidden cursor-pointer"
           style={{ width: "min(100cqw, 100cqh)", height: "min(100cqw, 100cqh)" }}
-          onClick={() => sendCommand("show-now-playing")}
+          onClick={() => sendCommand("focus-main")}
         >
           <TidalImage
             src={getTidalImageUrl(track?.album?.cover, 640)}
@@ -922,22 +939,24 @@ function FullTier({
       <div className="flex items-start gap-2 mt-1.5 min-w-0 flex-shrink-0">
         <div className="flex flex-col min-w-0 flex-1">
           <span
-            className="text-[18px] font-bold truncate leading-tight cursor-pointer"
+            className="text-[18px] font-bold truncate leading-tight cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
             style={{ color: colors.textPrimary }}
-            onClick={() => sendCommand("show-now-playing")}
+            onClick={() => sendCommand("focus-main")}
           >
             {title}
           </span>
           <span
-            className="text-[14px] truncate mt-0.5"
+            className="text-[14px] truncate mt-0.5 cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
             style={{ color: colors.textSecondary }}
+            onClick={() => sendCommand("show-artist")}
           >
             {artistName}
           </span>
           {playbackSourceLabel && (
             <span
-              className="text-[12px] truncate mt-0.5"
+              className="text-[12px] truncate mt-0.5 cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
               style={{ color: colors.textMuted }}
+              onClick={() => sendCommand("show-source")}
             >
               Playing from {playbackSourceLabel.name}
             </span>
@@ -1059,6 +1078,7 @@ export default function MiniPlayer() {
             colors={colors}
             accentColor={state.accentColor}
             containerHeight={height}
+            containerWidth={width}
           />
         );
       case "full":
@@ -1091,12 +1111,12 @@ export default function MiniPlayer() {
       <ResizeEdges />
       {/* Dark base background */}
       <div
-        className="absolute inset-0"
+        className="absolute inset-0 pointer-events-none"
         style={{ backgroundColor: colors.bg }}
       />
       {/* Vibrant color at 50% opacity */}
       <div
-        className="absolute inset-0"
+        className="absolute inset-0 pointer-events-none"
         style={{
           backgroundColor: colors.bgRgba,
           transition: "background-color 500ms ease",
@@ -1104,12 +1124,12 @@ export default function MiniPlayer() {
       />
       {/* Overlay */}
       <div
-        className="absolute inset-0"
+        className="absolute inset-0 pointer-events-none"
         style={{ backgroundColor: colors.overlay }}
       />
 
       {/* Drag region + close */}
-      <DragHandle tier={tier} colors={colors} />
+      <DragHandle tier={tier} />
       <CloseButton tier={tier} colors={colors} />
 
       {/* Error */}
