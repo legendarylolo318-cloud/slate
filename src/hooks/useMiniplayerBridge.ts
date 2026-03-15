@@ -19,6 +19,7 @@ export function useMiniplayerBridge() {
 
   // Local position interpolation
   const posAnchor = useRef({ position: 0, time: performance.now(), playing: false });
+  const seekUntil = useRef(0); // suppress incoming position updates until this timestamp
   const [displayPosition, setDisplayPosition] = useState(0);
 
   // Listen for state updates from main window
@@ -26,11 +27,16 @@ export function useMiniplayerBridge() {
     const unlisten = getCurrentWindow().listen<MiniplayerState>("miniplayer-state-update", (event) => {
       const s = event.payload;
       setState(s);
-      posAnchor.current = {
-        position: s.position,
-        time: performance.now(),
-        playing: s.isPlaying,
-      };
+      // Skip position update if we recently did an optimistic seek
+      if (performance.now() < seekUntil.current) {
+        posAnchor.current.playing = s.isPlaying;
+      } else {
+        posAnchor.current = {
+          position: s.position,
+          time: performance.now(),
+          playing: s.isPlaying,
+        };
+      }
     });
 
     // Signal readiness — main window will respond with full state
@@ -83,6 +89,16 @@ export function useMiniplayerBridge() {
         optimisticPlayRef.current = setTimeout(() => {
           setOptimisticPlaying(null);
         }, 2000);
+      }
+      // Optimistic seek — update anchor + displayPosition immediately, suppress stale echoes for 500ms
+      if (action === "seek" && value !== undefined) {
+        posAnchor.current = {
+          position: value,
+          time: performance.now(),
+          playing: posAnchor.current.playing,
+        };
+        setDisplayPosition(value);
+        seekUntil.current = performance.now() + 500;
       }
       emitTo("main", "miniplayer-command", { action, value }).catch(() => {});
     },
