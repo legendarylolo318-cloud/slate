@@ -32,6 +32,7 @@ impl DiscordHandle {
             let mut client = DiscordIpcClient::new(APPLICATION_ID);
 
             let mut connected = false;
+            let mut want_connected = false;
             let mut current_title = String::new();
             let mut current_artist = String::new();
             let mut current_album = String::new();
@@ -40,22 +41,35 @@ impl DiscordHandle {
             let mut is_playing = false;
             let mut play_start_epoch: i64 = 0;
 
+            // Try to establish or re-establish the IPC connection.
+            // Always creates a fresh client to avoid stale socket issues.
+            let try_connect =
+                |client: &mut DiscordIpcClient, connected: &mut bool| -> bool {
+                    if *connected {
+                        return true;
+                    }
+                    *client = DiscordIpcClient::new(APPLICATION_ID);
+                    match client.connect() {
+                        Ok(()) => {
+                            *connected = true;
+                            log::info!("Discord Rich Presence connected");
+                            true
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to connect Discord IPC: {e}");
+                            false
+                        }
+                    }
+                };
+
             for cmd in rx {
                 match cmd {
                     DiscordCommand::Connect => {
-                        if !connected {
-                            match client.connect() {
-                                Ok(()) => {
-                                    connected = true;
-                                    log::info!("Discord Rich Presence connected");
-                                }
-                                Err(e) => {
-                                    log::warn!("Failed to connect Discord IPC: {e}");
-                                }
-                            }
-                        }
+                        want_connected = true;
+                        try_connect(&mut client, &mut connected);
                     }
                     DiscordCommand::Disconnect => {
+                        want_connected = false;
                         if connected {
                             client.clear_activity().ok();
                             client.close().ok();
@@ -80,17 +94,25 @@ impl DiscordHandle {
                             play_start_epoch = now_epoch_secs();
                         }
 
-                        if connected {
-                            set_activity(
-                                &mut client,
-                                &current_title,
-                                &current_artist,
-                                &current_album,
-                                &current_art_url,
-                                current_duration_secs,
-                                is_playing,
-                                play_start_epoch,
-                            );
+                        if want_connected {
+                            try_connect(&mut client, &mut connected);
+                            if connected {
+                                if set_activity(
+                                    &mut client,
+                                    &current_title,
+                                    &current_artist,
+                                    &current_album,
+                                    &current_art_url,
+                                    current_duration_secs,
+                                    is_playing,
+                                    play_start_epoch,
+                                )
+                                .is_err()
+                                {
+                                    client.close().ok();
+                                    connected = false;
+                                }
+                            }
                         }
                     }
                     DiscordCommand::SetPlaying { is_playing: playing } => {
@@ -100,20 +122,28 @@ impl DiscordHandle {
                             play_start_epoch = now_epoch_secs();
                         }
 
-                        if connected {
-                            if current_title.is_empty() && !playing {
-                                client.clear_activity().ok();
-                            } else {
-                                set_activity(
-                                    &mut client,
-                                    &current_title,
-                                    &current_artist,
-                                    &current_album,
-                                    &current_art_url,
-                                    current_duration_secs,
-                                    is_playing,
-                                    play_start_epoch,
-                                );
+                        if want_connected {
+                            try_connect(&mut client, &mut connected);
+                            if connected {
+                                let failed = if current_title.is_empty() && !playing {
+                                    client.clear_activity().is_err()
+                                } else {
+                                    set_activity(
+                                        &mut client,
+                                        &current_title,
+                                        &current_artist,
+                                        &current_album,
+                                        &current_art_url,
+                                        current_duration_secs,
+                                        is_playing,
+                                        play_start_epoch,
+                                    )
+                                    .is_err()
+                                };
+                                if failed {
+                                    client.close().ok();
+                                    connected = false;
+                                }
                             }
                         }
                     }
@@ -121,7 +151,10 @@ impl DiscordHandle {
                         is_playing = false;
                         current_title.clear();
                         if connected {
-                            client.clear_activity().ok();
+                            if client.clear_activity().is_err() {
+                                client.close().ok();
+                                connected = false;
+                            }
                         }
                     }
                 }
@@ -158,13 +191,13 @@ fn set_activity(
     duration_secs: f64,
     is_playing: bool,
     play_start_epoch: i64,
-) {
+) -> Result<(), ()> {
     let state_text = if artist.is_empty() {
         album.to_string()
     } else if album.is_empty() {
         format!("by {artist}")
     } else {
-        format!("by {artist}")
+        format!("by {artist} on {album}")
     };
 
     let mut act = activity::Activity::new()
@@ -189,13 +222,13 @@ fn set_activity(
     let assets;
     if !art_url.is_empty() {
         assets = activity::Assets::new()
-            .large_image(art_url)
-            .large_text(album);
+            .large_image(art_url);
         act = act.assets(assets);
     }
 
     if let Err(e) = client.set_activity(act) {
         log::warn!("Failed to set Discord activity: {e}");
-        // Try to reconnect on next opportunity
+        return Err(());
     }
+    Ok(())
 }
