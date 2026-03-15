@@ -21,7 +21,7 @@ import ResizeEdges from "./ResizeEdges";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Tier = "narrow" | "compact" | "square" | "tall";
+type Tier = "narrow" | "compact" | "full";
 
 interface VibrantColors {
   bg: string;
@@ -35,8 +35,10 @@ interface VibrantColors {
 
 // ─── useTier ────────────────────────────────────────────────────────────────
 
-function useTier(ref: RefObject<HTMLDivElement | null>): Tier {
-  const [tier, setTier] = useState<Tier>("square");
+function useTier(ref: RefObject<HTMLDivElement | null>): { tier: Tier; width: number; height: number } {
+  const [state, setState] = useState<{ tier: Tier; width: number; height: number }>({
+    tier: "full", width: 300, height: 120,
+  });
 
   useEffect(() => {
     const el = ref.current;
@@ -47,22 +49,22 @@ function useTier(ref: RefObject<HTMLDivElement | null>): Tier {
       if (!entry) return;
       const { width, height } = entry.contentRect;
 
-      if (width < 260) {
-        setTier("narrow");
-      } else if (height < 120) {
-        setTier("compact");
-      } else if (height < 380) {
-        setTier("square");
+      let tier: Tier;
+      if (width < 280) {
+        tier = "narrow";
+      } else if (height < 180) {
+        tier = "compact";
       } else {
-        setTier("tall");
+        tier = "full";
       }
+      setState({ tier, width, height });
     });
 
     observer.observe(el);
     return () => observer.disconnect();
   }, [ref]);
 
-  return tier;
+  return state;
 }
 
 // ─── useVibrantColors ───────────────────────────────────────────────────────
@@ -117,22 +119,43 @@ function useVibrantColors(vibrantColor?: string): VibrantColors {
 
 // ─── DragHandle ─────────────────────────────────────────────────────────────
 
-function DragHandle({ horizontal, colors }: { horizontal: boolean; colors: VibrantColors }) {
+function DragHandle({ tier, colors }: { tier: Tier; colors: VibrantColors }) {
   const dotColor = colors.isDark ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.25)";
-  const visibilityClass = horizontal ? "opacity-0 group-hover:opacity-100 transition-opacity" : "";
+  const isNarrow = tier === "narrow";
+
+  if (isNarrow) {
+    return (
+      <div
+        data-tauri-drag-region
+        className="absolute top-0 left-0 bottom-0 z-10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+        style={{ width: 20 }}
+      >
+        <div data-tauri-drag-region className="grid grid-cols-2 grid-rows-3 gap-[2px]">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div
+              key={i}
+              data-tauri-drag-region
+              className="w-[3px] h-[3px] rounded-full"
+              style={{ backgroundColor: dotColor }}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
       data-tauri-drag-region
-      className={`absolute top-0 left-0 right-0 z-10 flex justify-center items-center ${visibilityClass}`}
-      style={{ height: 20 }}
+      className="absolute top-0 left-0 right-0 z-10 flex justify-center items-center opacity-0 group-hover:opacity-100 transition-opacity"
+      style={{ height: 16 }}
     >
-      <div data-tauri-drag-region className="grid grid-cols-3 gap-[3px]">
+      <div data-tauri-drag-region className="grid grid-cols-3 gap-[2px]">
         {Array.from({ length: 6 }).map((_, i) => (
           <div
             key={i}
             data-tauri-drag-region
-            className="w-[4px] h-[4px] rounded-full"
+            className="w-[3px] h-[3px] rounded-full"
             style={{ backgroundColor: dotColor }}
           />
         ))}
@@ -143,11 +166,15 @@ function DragHandle({ horizontal, colors }: { horizontal: boolean; colors: Vibra
 
 // ─── CloseButton ────────────────────────────────────────────────────────────
 
-function CloseButton({ colors }: { colors: VibrantColors }) {
+function CloseButton({ tier, colors }: { tier: Tier; colors: VibrantColors }) {
+  const isNarrow = tier === "narrow";
+
   return (
     <button
       onClick={() => getCurrentWindow().close()}
-      className="absolute top-1.5 left-1.5 z-20 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+      className={`absolute z-20 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${
+        isNarrow ? "top-1 left-0.5" : "top-1 left-1.5"
+      }`}
       style={{
         backgroundColor: colors.isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.1)",
         color: colors.textPrimary,
@@ -212,7 +239,7 @@ function AlbumArt({
   );
 }
 
-// ─── ArtOverlayControls (for square/tall hover) ─────────────────────────────
+// ─── ArtOverlayControls ─────────────────────────────────────────────────────
 
 function ArtOverlayControls({
   isPlaying,
@@ -264,7 +291,6 @@ function VolumePopup({
     const el = barRef.current;
     if (!el) return 0;
     const rect = el.getBoundingClientRect();
-    // Inverted: top = 1, bottom = 0
     return Math.max(0, Math.min(1, 1 - (clientY - rect.top) / rect.height));
   }, []);
 
@@ -318,226 +344,7 @@ function VolumePopup({
   );
 }
 
-// ─── NarrowTier ─────────────────────────────────────────────────────────────
-
-function NarrowTier({
-  track,
-  isPlaying,
-  sendCommand,
-  colors,
-}: {
-  track: ReturnType<typeof useMiniplayerBridge>["state"]["track"];
-  isPlaying: boolean;
-  sendCommand: (action: string, value?: number) => void;
-  colors: VibrantColors;
-}) {
-  const title = track ? getTrackDisplayTitle(track) : "";
-
-  return (
-    <div className="flex items-center gap-2 w-full h-full px-2">
-      <AlbumArt
-        cover={track?.album?.cover}
-        title={title}
-        className="w-12 h-12 rounded-md flex-shrink-0"
-        imageSize={160}
-      />
-      <div className="flex items-center gap-1 ml-auto flex-shrink-0">
-        <button
-          onClick={() => sendCommand("toggle-play")}
-          className="w-7 h-7 flex items-center justify-center transition-colors duration-150 flex-shrink-0"
-          style={{ color: colors.textPrimary }}
-        >
-          {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" style={{ marginLeft: 1 }} />}
-        </button>
-        <button
-          onClick={() => sendCommand("play-next")}
-          className="w-7 h-7 flex items-center justify-center transition-colors duration-150 flex-shrink-0"
-          style={{ color: colors.textSecondary }}
-        >
-          <SkipForward size={16} fill="currentColor" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── CompactTier ────────────────────────────────────────────────────────────
-
-function CompactTier({
-  track,
-  isPlaying,
-  isFavorite,
-  playbackSourceLabel,
-  sendCommand,
-  colors,
-  accentColor,
-}: {
-  track: ReturnType<typeof useMiniplayerBridge>["state"]["track"];
-  isPlaying: boolean;
-  isFavorite: boolean;
-  playbackSourceLabel: { type: string; name: string } | null;
-  sendCommand: (action: string, value?: number) => void;
-  colors: VibrantColors;
-  accentColor: string;
-}) {
-  const title = track ? getTrackDisplayTitle(track) : "";
-  const artistName = track?.artist?.name ?? "";
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [showFav, setShowFav] = useState(true);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      setShowFav(entry.contentRect.width >= 300);
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  return (
-    <div ref={containerRef} className="flex items-center gap-2.5 w-full h-full px-2.5 py-2">
-      <AlbumArt
-        cover={track?.album?.cover}
-        title={title}
-        className="w-14 h-14 rounded-md flex-shrink-0"
-        imageSize={320}
-      />
-      <div className="flex flex-col justify-center min-w-0 flex-1 overflow-hidden">
-        <span
-          className="text-[13px] font-bold truncate leading-tight"
-          style={{ color: colors.textPrimary }}
-        >
-          {title}
-        </span>
-        <span
-          className="text-[11px] truncate mt-0.5"
-          style={{ color: colors.textSecondary }}
-        >
-          {artistName}
-        </span>
-        {playbackSourceLabel && (
-          <span
-            className="text-[10px] truncate mt-0.5"
-            style={{ color: colors.textMuted }}
-          >
-            Playing from {playbackSourceLabel.name}
-          </span>
-        )}
-      </div>
-      <div className="flex items-center gap-1.5 flex-shrink-0">
-        {showFav && (
-          <FavoriteButton
-            isFavorite={isFavorite}
-            onClick={() => sendCommand("toggle-favorite")}
-            colors={colors}
-            accentColor={accentColor}
-            size={16}
-          />
-        )}
-        <button
-          onClick={() => sendCommand("toggle-play")}
-          className="w-7 h-7 flex items-center justify-center transition-colors duration-150 flex-shrink-0"
-          style={{ color: colors.textPrimary }}
-        >
-          {isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" style={{ marginLeft: 1 }} />}
-        </button>
-        <button
-          onClick={() => sendCommand("play-next")}
-          className="w-7 h-7 flex items-center justify-center transition-colors duration-150 flex-shrink-0"
-          style={{ color: colors.textSecondary }}
-        >
-          <SkipForward size={16} fill="currentColor" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── SquareTier ─────────────────────────────────────────────────────────────
-
-function SquareTier({
-  track,
-  isPlaying,
-  isFavorite,
-  playbackSourceLabel,
-  sendCommand,
-  colors,
-  accentColor,
-}: {
-  track: ReturnType<typeof useMiniplayerBridge>["state"]["track"];
-  isPlaying: boolean;
-  isFavorite: boolean;
-  playbackSourceLabel: { type: string; name: string } | null;
-  sendCommand: (action: string, value?: number) => void;
-  colors: VibrantColors;
-  accentColor: string;
-}) {
-  const title = track ? getTrackDisplayTitle(track) : "";
-  const artistName = track?.artist?.name ?? "";
-
-  return (
-    <div className="flex flex-col w-full h-full p-3 pt-6 min-h-0">
-      {/* Album art — shrinks to fill available space */}
-      <div
-        className="w-full rounded-lg overflow-hidden cursor-pointer min-h-0 flex-1 relative"
-        onClick={() => sendCommand("show-now-playing")}
-      >
-        <TidalImage
-          src={getTidalImageUrl(track?.album?.cover, 640)}
-          alt={title}
-          className="w-full h-full object-cover"
-        />
-        <ArtOverlayControls isPlaying={isPlaying} sendCommand={sendCommand} />
-      </div>
-      {/* Track info + fav/share on same row */}
-      <div className="flex items-start gap-2 mt-2.5 min-w-0">
-        <div className="flex flex-col min-w-0 flex-1">
-          <span
-            className="text-[13px] font-bold truncate leading-tight cursor-pointer"
-            style={{ color: colors.textPrimary }}
-            onClick={() => sendCommand("show-now-playing")}
-          >
-            {title}
-          </span>
-          <span
-            className="text-[11px] truncate mt-0.5"
-            style={{ color: colors.textSecondary }}
-          >
-            {artistName}
-          </span>
-          {playbackSourceLabel && (
-            <span
-              className="text-[10px] truncate mt-0.5"
-              style={{ color: colors.textMuted }}
-            >
-              Playing from {playbackSourceLabel.name}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
-          <FavoriteButton
-            isFavorite={isFavorite}
-            onClick={() => sendCommand("toggle-favorite")}
-            colors={colors}
-            accentColor={accentColor}
-          />
-          <button
-            onClick={() => sendCommand("share")}
-            className="flex items-center justify-center transition-colors duration-150"
-            style={{ color: colors.textSecondary }}
-          >
-            <Share2 size={15} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── ProgressBar (TallTier) ─────────────────────────────────────────────────
+// ─── ProgressBar ────────────────────────────────────────────────────────────
 
 function ProgressBar({
   displayPosition,
@@ -642,9 +449,239 @@ function ProgressBar({
   );
 }
 
-// ─── TallTier ───────────────────────────────────────────────────────────────
+// ─── NarrowTier ─────────────────────────────────────────────────────────────
 
-function TallTier({
+function NarrowTier({
+  track,
+  isPlaying,
+  isFavorite,
+  sendCommand,
+  colors,
+  accentColor,
+  containerWidth,
+}: {
+  track: ReturnType<typeof useMiniplayerBridge>["state"]["track"];
+  isPlaying: boolean;
+  isFavorite: boolean;
+  sendCommand: (action: string, value?: number) => void;
+  colors: VibrantColors;
+  accentColor: string;
+  containerWidth: number;
+}) {
+  const title = track ? getTrackDisplayTitle(track) : "";
+  const artistName = track?.artist?.name ?? "";
+
+  // Progressive controls based on width
+  const showNext = containerWidth >= 230;
+  const showPrev = containerWidth >= 255;
+
+  return (
+    <div className="flex items-center gap-2 w-full h-full px-3 py-2">
+      <AlbumArt
+        cover={track?.album?.cover}
+        title={title}
+        className="w-11 h-11 rounded-md flex-shrink-0"
+        imageSize={160}
+      />
+      <div className="flex flex-col justify-center min-w-0 flex-1">
+        <span
+          className="text-[11px] font-bold truncate leading-tight"
+          style={{ color: colors.textPrimary }}
+        >
+          {title}
+        </span>
+        <span
+          className="text-[10px] truncate mt-0.5"
+          style={{ color: colors.textSecondary }}
+        >
+          {artistName}
+        </span>
+      </div>
+      <div className="flex items-center gap-1 flex-shrink-0">
+        <FavoriteButton
+          isFavorite={isFavorite}
+          onClick={() => sendCommand("toggle-favorite")}
+          colors={colors}
+          accentColor={accentColor}
+          size={14}
+        />
+        {showPrev && (
+          <button
+            onClick={() => sendCommand("play-previous")}
+            className="w-6 h-6 flex items-center justify-center transition-colors flex-shrink-0"
+            style={{ color: colors.textSecondary }}
+          >
+            <SkipBack size={14} fill="currentColor" />
+          </button>
+        )}
+        <button
+          onClick={() => sendCommand("toggle-play")}
+          className="w-8 h-8 rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-transform flex-shrink-0"
+          style={{ backgroundColor: colors.textPrimary, color: colors.bg }}
+        >
+          {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" style={{ marginLeft: 1 }} />}
+        </button>
+        {showNext && (
+          <button
+            onClick={() => sendCommand("play-next")}
+            className="w-6 h-6 flex items-center justify-center transition-colors flex-shrink-0"
+            style={{ color: colors.textSecondary }}
+          >
+            <SkipForward size={14} fill="currentColor" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── CompactTier ────────────────────────────────────────────────────────────
+
+function CompactTier({
+  track,
+  isPlaying,
+  isFavorite,
+  shuffle,
+  repeat,
+  volume,
+  playbackSourceLabel,
+  sendCommand,
+  sendVolume,
+  colors,
+  accentColor,
+  containerHeight,
+}: {
+  track: ReturnType<typeof useMiniplayerBridge>["state"]["track"];
+  isPlaying: boolean;
+  isFavorite: boolean;
+  shuffle: boolean;
+  repeat: number;
+  volume: number;
+  playbackSourceLabel: { type: string; name: string } | null;
+  sendCommand: (action: string, value?: number) => void;
+  sendVolume: (vol: number) => void;
+  colors: VibrantColors;
+  accentColor: string;
+  containerHeight: number;
+}) {
+  const title = track ? getTrackDisplayTitle(track) : "";
+  const artistName = track?.artist?.name ?? "";
+  const [showVolume, setShowVolume] = useState(false);
+  const showPlayingFrom = containerHeight >= 130 && playbackSourceLabel;
+
+  return (
+    <div className="flex flex-col w-full h-full px-3 py-2 gap-1.5">
+      {/* Row 1: Art + Info + Fav */}
+      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+        <AlbumArt
+          cover={track?.album?.cover}
+          title={title}
+          className="w-14 h-14 rounded-md flex-shrink-0"
+          imageSize={320}
+        />
+        <div className="flex flex-col justify-center min-w-0 flex-1">
+          <span
+            className="text-[13px] font-bold truncate leading-tight"
+            style={{ color: colors.textPrimary }}
+          >
+            {title}
+          </span>
+          <span
+            className="text-[11px] truncate mt-0.5"
+            style={{ color: colors.textSecondary }}
+          >
+            {artistName}
+          </span>
+          {showPlayingFrom && (
+            <span
+              className="text-[10px] truncate mt-0.5"
+              style={{ color: colors.textMuted }}
+            >
+              Playing from {playbackSourceLabel.name}
+            </span>
+          )}
+        </div>
+        <FavoriteButton
+          isFavorite={isFavorite}
+          onClick={() => sendCommand("toggle-favorite")}
+          colors={colors}
+          accentColor={accentColor}
+          size={16}
+        />
+      </div>
+
+      {/* Row 2: Controls */}
+      <div className="flex items-center justify-center gap-2 flex-shrink-0">
+        <div className="relative flex-shrink-0">
+          <button
+            onClick={() => setShowVolume((v) => !v)}
+            className="w-6 h-6 flex items-center justify-center transition-colors"
+            style={{ color: colors.textSecondary }}
+          >
+            {volume === 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
+          </button>
+          {showVolume && (
+            <VolumePopup volume={volume} sendVolume={sendVolume} colors={colors} onClose={() => setShowVolume(false)} />
+          )}
+        </div>
+        <button
+          onClick={() => sendCommand("toggle-shuffle")}
+          className="w-6 h-6 flex items-center justify-center transition-colors flex-shrink-0"
+          style={{ color: shuffle ? accentColor : colors.textSecondary }}
+        >
+          <Shuffle size={14} strokeWidth={2} />
+        </button>
+        <button
+          onClick={() => sendCommand("play-previous")}
+          className="w-6 h-6 flex items-center justify-center transition-colors flex-shrink-0"
+          style={{ color: colors.textSecondary }}
+        >
+          <SkipBack size={14} fill="currentColor" />
+        </button>
+        <button
+          onClick={() => sendCommand("toggle-play")}
+          className="w-8 h-8 rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-transform flex-shrink-0"
+          style={{ backgroundColor: colors.textPrimary, color: colors.bg }}
+        >
+          {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" style={{ marginLeft: 1 }} />}
+        </button>
+        <button
+          onClick={() => sendCommand("play-next")}
+          className="w-6 h-6 flex items-center justify-center transition-colors flex-shrink-0"
+          style={{ color: colors.textSecondary }}
+        >
+          <SkipForward size={14} fill="currentColor" />
+        </button>
+        <button
+          onClick={() => sendCommand("cycle-repeat")}
+          className="w-6 h-6 flex items-center justify-center transition-colors relative flex-shrink-0"
+          style={{ color: repeat > 0 ? accentColor : colors.textSecondary }}
+        >
+          <Repeat size={14} strokeWidth={2} />
+          {repeat === 2 && (
+            <span
+              className="absolute -top-0.5 -right-0.5 text-[6px] font-bold rounded-full w-2.5 h-2.5 flex items-center justify-center leading-none"
+              style={{ backgroundColor: accentColor, color: colors.bg }}
+            >
+              1
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => sendCommand("share")}
+          className="w-6 h-6 flex items-center justify-center transition-colors flex-shrink-0"
+          style={{ color: colors.textSecondary }}
+        >
+          <Share2 size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── FullTier ───────────────────────────────────────────────────────────────
+
+function FullTier({
   track,
   isPlaying,
   isFavorite,
@@ -680,59 +717,19 @@ function TallTier({
   const secondaryBtnStyle = { color: colors.textSecondary };
 
   return (
-    <div className="flex flex-col w-full h-full p-3 pt-6 min-h-0">
-      {/* Album art — shrinks to fill available space */}
-      <div
-        className="w-full rounded-lg overflow-hidden cursor-pointer min-h-0 flex-1 relative"
-        onClick={() => sendCommand("show-now-playing")}
-      >
-        <TidalImage
-          src={getTidalImageUrl(track?.album?.cover, 640)}
-          alt={title}
-          className="w-full h-full object-cover"
-        />
-        <ArtOverlayControls isPlaying={isPlaying} sendCommand={sendCommand} />
-      </div>
-
-      {/* Track info + fav/share on same row */}
-      <div className="flex items-start gap-2 mt-2.5 min-w-0">
-        <div className="flex flex-col min-w-0 flex-1">
-          <span
-            className="text-[13px] font-bold truncate leading-tight cursor-pointer"
-            style={{ color: colors.textPrimary }}
-            onClick={() => sendCommand("show-now-playing")}
-          >
-            {title}
-          </span>
-          <span
-            className="text-[11px] truncate mt-0.5"
-            style={{ color: colors.textSecondary }}
-          >
-            {artistName}
-          </span>
-          {playbackSourceLabel && (
-            <span
-              className="text-[10px] truncate mt-0.5"
-              style={{ color: colors.textMuted }}
-            >
-              Playing from {playbackSourceLabel.name}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
-          <FavoriteButton
-            isFavorite={isFavorite}
-            onClick={() => sendCommand("toggle-favorite")}
-            colors={colors}
-            accentColor={accentColor}
+    <div className="flex flex-col w-full h-full p-3 min-h-0">
+      {/* Album art — square, centered */}
+      <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden">
+        <div
+          className="w-full max-h-full aspect-square rounded-lg overflow-hidden cursor-pointer relative"
+          onClick={() => sendCommand("show-now-playing")}
+        >
+          <TidalImage
+            src={getTidalImageUrl(track?.album?.cover, 640)}
+            alt={title}
+            className="w-full h-full object-cover"
           />
-          <button
-            onClick={() => sendCommand("share")}
-            className="flex items-center justify-center transition-colors duration-150"
-            style={{ color: colors.textSecondary }}
-          >
-            <Share2 size={15} />
-          </button>
+          <ArtOverlayControls isPlaying={isPlaying} sendCommand={sendCommand} />
         </div>
       </div>
 
@@ -746,60 +743,70 @@ function TallTier({
         />
       </div>
 
-      {/* Controls */}
-      <div className="flex items-center justify-center gap-3 mt-2 flex-shrink-0">
-        {/* Shuffle */}
+      {/* Track info + fav */}
+      <div className="flex items-start gap-2 mt-1.5 min-w-0 flex-shrink-0">
+        <div className="flex flex-col min-w-0 flex-1">
+          <span
+            className="text-[15px] font-bold truncate leading-tight cursor-pointer"
+            style={{ color: colors.textPrimary }}
+            onClick={() => sendCommand("show-now-playing")}
+          >
+            {title}
+          </span>
+          <span
+            className="text-[12px] truncate mt-0.5"
+            style={{ color: colors.textSecondary }}
+          >
+            {artistName}
+          </span>
+          {playbackSourceLabel && (
+            <span
+              className="text-[10px] truncate mt-0.5"
+              style={{ color: colors.textMuted }}
+            >
+              Playing from {playbackSourceLabel.name}
+            </span>
+          )}
+        </div>
+        <FavoriteButton
+          isFavorite={isFavorite}
+          onClick={() => sendCommand("toggle-favorite")}
+          colors={colors}
+          accentColor={accentColor}
+          size={18}
+        />
+      </div>
+
+      {/* Controls row — secondary controls only (primary are in art overlay) */}
+      <div className="flex items-center justify-center gap-3 mt-1.5 flex-shrink-0">
+        <div className="relative flex-shrink-0">
+          <button
+            onClick={() => setShowVolume((v) => !v)}
+            className="w-7 h-7 flex items-center justify-center rounded-full transition-colors duration-200"
+            style={secondaryBtnStyle}
+          >
+            {volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
+          </button>
+          {showVolume && (
+            <VolumePopup volume={volume} sendVolume={sendVolume} colors={colors} onClose={() => setShowVolume(false)} />
+          )}
+        </div>
         <button
           onClick={() => sendCommand("toggle-shuffle")}
           className="w-7 h-7 flex items-center justify-center rounded-full transition-colors duration-200 relative flex-shrink-0"
           style={{ color: shuffle ? accentColor : colors.textSecondary }}
         >
-          <Shuffle size={14} strokeWidth={2} />
+          <Shuffle size={16} strokeWidth={2} />
           {shuffle && (
-            <span
-              className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full"
-              style={{ backgroundColor: accentColor }}
-            />
+            <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full" style={{ backgroundColor: accentColor }} />
           )}
         </button>
-        {/* Prev */}
-        <button
-          onClick={() => sendCommand("play-previous")}
-          className="w-7 h-7 flex items-center justify-center rounded-full transition-colors duration-150 flex-shrink-0"
-          style={secondaryBtnStyle}
-        >
-          <SkipBack size={16} fill="currentColor" />
-        </button>
-        {/* Play */}
-        <button
-          onClick={() => sendCommand("toggle-play")}
-          className="w-9 h-9 rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-transform duration-150 flex-shrink-0"
-          style={{
-            backgroundColor: colors.textPrimary,
-            color: colors.bg,
-          }}
-        >
-          {isPlaying ? (
-            <Pause size={18} fill="currentColor" />
-          ) : (
-            <Play size={18} fill="currentColor" style={{ marginLeft: 2 }} />
-          )}
-        </button>
-        {/* Next */}
-        <button
-          onClick={() => sendCommand("play-next")}
-          className="w-7 h-7 flex items-center justify-center rounded-full transition-colors duration-150 flex-shrink-0"
-          style={secondaryBtnStyle}
-        >
-          <SkipForward size={16} fill="currentColor" />
-        </button>
-        {/* Repeat */}
         <button
           onClick={() => sendCommand("cycle-repeat")}
           className="w-7 h-7 flex items-center justify-center rounded-full transition-colors duration-200 relative flex-shrink-0"
           style={{ color: repeat > 0 ? accentColor : colors.textSecondary }}
         >
-          <Repeat size={14} strokeWidth={2} />
+          <Repeat size={16} strokeWidth={2} />
           {repeat === 2 && (
             <span
               className="absolute -top-0.5 -right-0.5 text-[7px] font-bold rounded-full w-3 h-3 flex items-center justify-center leading-none"
@@ -809,30 +816,16 @@ function TallTier({
             </span>
           )}
           {repeat > 0 && (
-            <span
-              className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full"
-              style={{ backgroundColor: accentColor }}
-            />
+            <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full" style={{ backgroundColor: accentColor }} />
           )}
         </button>
-        {/* Volume icon */}
-        <div className="relative flex-shrink-0">
-          <button
-            onClick={() => setShowVolume((v) => !v)}
-            className="w-7 h-7 flex items-center justify-center rounded-full transition-colors duration-200"
-            style={{ color: colors.textSecondary }}
-          >
-            {volume === 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
-          </button>
-          {showVolume && (
-            <VolumePopup
-              volume={volume}
-              sendVolume={sendVolume}
-              colors={colors}
-              onClose={() => setShowVolume(false)}
-            />
-          )}
-        </div>
+        <button
+          onClick={() => sendCommand("share")}
+          className="w-7 h-7 flex items-center justify-center rounded-full transition-colors duration-200 flex-shrink-0"
+          style={secondaryBtnStyle}
+        >
+          <Share2 size={16} />
+        </button>
       </div>
     </div>
   );
@@ -867,7 +860,7 @@ function ErrorOverlay({ error }: { error?: string }) {
 
 export default function MiniPlayer() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const tier = useTier(containerRef);
+  const { tier, width, height } = useTier(containerRef);
   const { state, displayPosition, isPlaying, sendCommand, sendVolume } = useMiniplayerBridge();
   const colors = useVibrantColors(state.track?.album?.vibrantColor);
 
@@ -909,8 +902,6 @@ export default function MiniPlayer() {
     return () => window.removeEventListener("keydown", handler);
   }, [sendCommand]);
 
-  const isHorizontal = tier === "narrow" || tier === "compact";
-
   const renderTier = () => {
     switch (tier) {
       case "narrow":
@@ -918,8 +909,11 @@ export default function MiniPlayer() {
           <NarrowTier
             track={state.track}
             isPlaying={isPlaying}
+            isFavorite={state.isFavorite}
             sendCommand={sendCommand}
             colors={colors}
+            accentColor={state.accentColor}
+            containerWidth={width}
           />
         );
       case "compact":
@@ -928,27 +922,20 @@ export default function MiniPlayer() {
             track={state.track}
             isPlaying={isPlaying}
             isFavorite={state.isFavorite}
+            shuffle={state.shuffle}
+            repeat={state.repeat}
+            volume={state.volume}
             playbackSourceLabel={state.playbackSourceLabel}
             sendCommand={sendCommand}
+            sendVolume={sendVolume}
             colors={colors}
             accentColor={state.accentColor}
+            containerHeight={height}
           />
         );
-      case "square":
+      case "full":
         return (
-          <SquareTier
-            track={state.track}
-            isPlaying={isPlaying}
-            isFavorite={state.isFavorite}
-            playbackSourceLabel={state.playbackSourceLabel}
-            sendCommand={sendCommand}
-            colors={colors}
-            accentColor={state.accentColor}
-          />
-        );
-      case "tall":
-        return (
-          <TallTier
+          <FullTier
             track={state.track}
             isPlaying={isPlaying}
             isFavorite={state.isFavorite}
@@ -993,19 +980,23 @@ export default function MiniPlayer() {
         style={{ backgroundColor: colors.overlay }}
       />
 
-      {/* Drag region — full 20px top area */}
-      <DragHandle horizontal={isHorizontal} colors={colors} />
-      <CloseButton colors={colors} />
+      {/* Drag region + close */}
+      <DragHandle tier={tier} colors={colors} />
+      <CloseButton tier={tier} colors={colors} />
 
       {/* Error */}
       <ErrorOverlay error={state.error} />
 
-      {/* Content with crossfade */}
+      {/* Content with crossfade + hover padding */}
       <div
-        className="relative z-0 w-full h-full"
+        className={`relative z-0 w-full h-full ${
+          tier === "narrow"
+            ? "pl-0 group-hover:pl-[20px]"
+            : "pt-0 group-hover:pt-[16px]"
+        }`}
         style={{
           opacity,
-          transition: "opacity 150ms ease",
+          transition: "opacity 150ms ease, padding 200ms ease",
         }}
       >
         {renderTier()}
