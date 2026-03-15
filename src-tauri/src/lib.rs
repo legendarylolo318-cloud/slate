@@ -110,7 +110,7 @@ pub struct Settings {
     pub scrobble: ScrobbleSettings,
     #[serde(default)]
     pub proxy: ProxySettings,
-    #[serde(default)]
+    #[serde(default = "defaults::yes")]
     pub discord_rpc: bool,
 }
 
@@ -130,7 +130,7 @@ impl Default for Settings {
             bit_perfect: false,
             scrobble: Default::default(),
             proxy: Default::default(),
-            discord_rpc: false,
+            discord_rpc: true,
         }
     }
 }
@@ -241,7 +241,7 @@ impl AppState {
             scrobble_http_client,
         );
 
-        let discord_rpc_enabled = saved.as_ref().map(|s| s.discord_rpc).unwrap_or(false);
+        let discord_rpc_enabled = saved.as_ref().map(|s| s.discord_rpc).unwrap_or(true);
         let discord_handle = discord::DiscordHandle::new();
         if discord_rpc_enabled {
             discord_handle.send(discord::DiscordCommand::Connect);
