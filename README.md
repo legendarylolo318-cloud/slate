@@ -23,6 +23,14 @@ https://github.com/user-attachments/assets/67d7a8ed-352b-4ce6-8b9c-70b7427a5f22
   <img src="data/sone_theme_readme.png" width="32%" alt="SONE custom theme — native Linux music player with full color customization" />
 </p>
 
+## The Vision
+
+The Linux desktop app TIDAL never built. 
+
+SONE finally gives Linux users a first-class streaming client. It delivers the complete, fully-featured experience you expect with seamless library management and a sleek, familiar workflow—and then supercharges it. 
+
+We went beyond the basics with direct-to-DAC bit-perfect ALSA output, a resizable-adaptive floating miniplayer, custom themes, Discord Rich Presence, and multi-service scrobbling (Last.fm, Libre.fm, ListenBrainz)—all wrapped in a fast, native Linux app.
+
 <details>
 <summary>Table of Contents</summary>
 
@@ -53,13 +61,21 @@ https://github.com/user-attachments/assets/67d7a8ed-352b-4ce6-8b9c-70b7427a5f22
 
 - **Custom themes** — 9 presets and a full color picker for accent and background
 - **Lyrics** — synced lyrics display for supported tracks
+- **Miniplayer** — compact floating window with album art, playback controls, and resizable-adaptive layout
 - **Full-screen player** — maximized view with album art, lyrics option and auto-hiding controls
 - **Queue persistence** — picks up where you left off across restarts
-- **MPRIS integration** — media keys, desktop taskbar widgets, and system media controls
+- **MPRIS integration** — media keys, shuffle, repeat, seek, and desktop widget support
 - **Scrobbling** — track your listening history on Last.fm, Libre.fm, and ListenBrainz with full ISRC and MusicBrainz metadata
 - **Proxy support** — route traffic through HTTP, HTTPS, or SOCKS5 proxies
+- **Discord Rich Presence** — show what you're listening to with album art, track info, and a direct TIDAL link
 - **System tray** with playback controls and minimize-to-tray
 - **Keyboard shortcuts** for all common actions with a built-in shortcut overlay
+
+### Library
+
+- **Library management** — browse and sort your playlists, albums, artists, and mixes with playlist folder support
+- **Share** — share tracks, albums, playlists, artists, and mixes with your friends via a direct TIDAL link
+- **Deep links** — open `tidal://` URLs directly in SONE
 
 ## Why SONE?
 
