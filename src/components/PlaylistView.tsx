@@ -8,6 +8,8 @@ import {
   MoreHorizontal,
   Pencil,
   RefreshCw,
+  Lock,
+  Unlock,
 } from "lucide-react";
 import {
   useEffect,
@@ -74,22 +76,35 @@ export default function PlaylistView({
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fetchedInfo, setFetchedInfo] = useState<typeof playlistInfo>(undefined);
+  const [resolvedAccessType, setResolvedAccessType] = useState<string | undefined>();
 
   // Fetch playlist metadata when playlistInfo is not provided (e.g. deep link)
   useEffect(() => {
     if (playlistInfo) return;
     getPlaylistDetails(playlistId)
-      .then((p) =>
+      .then((p) => {
         setFetchedInfo({
           title: p.title,
           image: p.squareImage || p.image,
           description: p.description,
           creatorName: p.creator?.name,
           numberOfTracks: p.numberOfTracks,
-        }),
-      )
+        });
+        setResolvedAccessType(p.accessType);
+      })
       .catch(() => {});
   }, [playlistId, playlistInfo]);
+
+  // Resolve accessType for playlists not in the root userPlaylists atom (e.g. in folders)
+  useEffect(() => {
+    if (resolvedAccessType) return;
+    if (userPlaylists.find((p) => p.uuid === playlistId)?.accessType) return;
+    getPlaylistDetails(playlistId)
+      .then((p) => {
+        if (p.accessType) setResolvedAccessType(p.accessType);
+      })
+      .catch(() => {});
+  }, [playlistId]);
 
   // fetchedInfo takes priority when set (e.g. after editing), otherwise use navigation prop
   const effectiveInfo = fetchedInfo
@@ -109,7 +124,7 @@ export default function PlaylistView({
   const [recPageIndex, setRecPageIndex] = useState(0);
   const [recApiOffset, setRecApiOffset] = useState(0);
   const [loadingRecs, setLoadingRecs] = useState(false);
-  const { userPlaylists, addTrackToPlaylist } = usePlaylists();
+  const { userPlaylists, addTrackToPlaylist, updatePlaylist } = usePlaylists();
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -431,6 +446,25 @@ export default function PlaylistView({
     }
   };
 
+  const isPublic = resolvedAccessType === "PUBLIC";
+
+  const handleToggleAccess = async () => {
+    const newAccessType = isPublic ? "UNLISTED" : "PUBLIC";
+    const prevAccessType = resolvedAccessType;
+    setResolvedAccessType(newAccessType);
+    try {
+      await updatePlaylist(
+        playlistId,
+        displayTitle,
+        effectiveInfo?.description || "",
+        newAccessType,
+      );
+      showToast(newAccessType === "PUBLIC" ? "Playlist is now public" : "Playlist is now private");
+    } catch {
+      setResolvedAccessType(prevAccessType);
+    }
+  };
+
   // Context menu
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -556,13 +590,26 @@ export default function PlaylistView({
         {/* Right — Heart, Edit & More icons */}
         <div className="flex items-center gap-2 relative">
           {effectiveInfo?.isUserPlaylist && (
-            <button
-              onClick={() => setShowEditModal(true)}
-              className="w-10 h-10 rounded-full flex items-center justify-center text-th-text-muted hover:text-th-text-primary hover:bg-th-hl-med transition-colors"
-              title="Edit playlist"
-            >
-              <Pencil size={18} />
-            </button>
+            <>
+              <button
+                onClick={() => setShowEditModal(true)}
+                className="w-10 h-10 rounded-full flex items-center justify-center text-th-text-muted hover:text-th-text-primary hover:bg-th-hl-med transition-colors"
+                title="Edit playlist"
+              >
+                <Pencil size={18} />
+              </button>
+              <button
+                onClick={handleToggleAccess}
+                className={`w-10 h-10 rounded-full flex items-center justify-center transition-[color,filter] duration-150 ${
+                  isPublic
+                    ? "text-th-accent hover:brightness-110"
+                    : "text-th-text-muted hover:text-th-text-primary hover:bg-th-hl-med"
+                }`}
+                title={isPublic ? "Make private" : "Make public"}
+              >
+                {isPublic ? <Unlock size={18} /> : <Lock size={18} />}
+              </button>
+            </>
           )}
           <button
             onClick={handleToggleFavorite}
@@ -744,11 +791,12 @@ export default function PlaylistView({
             uuid: playlistId,
             title: displayTitle,
             description: effectiveInfo.description,
-            accessType: userPlaylists.find((p) => p.uuid === playlistId)?.accessType,
+            accessType: resolvedAccessType ?? userPlaylists.find((p) => p.uuid === playlistId)?.accessType,
           }}
           onClose={() => setShowEditModal(false)}
           onUpdated={(updated) => {
             setShowEditModal(false);
+            if (updated.accessType) setResolvedAccessType(updated.accessType);
             setFetchedInfo({
               ...playlistInfo,
               title: updated.title,
