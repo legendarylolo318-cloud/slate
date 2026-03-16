@@ -38,6 +38,7 @@ pub fn build_http_client(proxy: &ProxySettings) -> Result<Client, reqwest::Error
 const TIDAL_AUTH_URL: &str = "https://auth.tidal.com/v1/oauth2";
 const TIDAL_API_URL: &str = "https://api.tidal.com/v1";
 const TIDAL_API_V2_URL: &str = "https://api.tidal.com/v2";
+const TIDAL_OPENAPI_URL: &str = "https://openapi.tidal.com/v2";
 const TIDAL_CLIENT_VERSION: &str = "2025.11.3";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1339,35 +1340,44 @@ impl TidalClient {
 
     pub async fn create_playlist(
         &self,
-        user_id: u64,
         title: &str,
         description: &str,
+        access_type: &str,
     ) -> Result<TidalPlaylist, SoneError> {
         let tokens = self.tokens.as_ref().ok_or(SoneError::NotAuthenticated)?;
 
+        let body = serde_json::json!({
+            "type": "playlists",
+            "attributes": {
+                "name": title,
+                "description": description,
+                "accessType": access_type
+            }
+        });
+
         let response = self
             .client
-            .post(format!("{}/users/{}/playlists", TIDAL_API_URL, user_id))
+            .post(format!("{}/playlists", TIDAL_OPENAPI_URL))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())])
-            .form(&[("title", title), ("description", description)])
+            .json(&body)
             .send()
             .await?;
 
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body_text = response.text().await.unwrap_or_default();
 
         if !status.is_success() {
             return Err(SoneError::Api {
                 status: status.as_u16(),
-                body,
+                body: body_text,
             });
         }
 
-        let raw = serde_json::from_str::<TidalPlaylistRaw>(&body)
-            .map_err(|e| SoneError::Parse(format!("{} - Body: {}", e, body)))?;
+        let resp = serde_json::from_str::<OpenApiPlaylistResponse>(&body_text)
+            .map_err(|e| SoneError::Parse(format!("{} - Body: {}", e, body_text)))?;
 
-        Ok(raw.into())
+        Ok(resp.into())
     }
 
     pub async fn add_track_to_playlist(
