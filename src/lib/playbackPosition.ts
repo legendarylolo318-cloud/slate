@@ -9,12 +9,16 @@ let seekCorrectionTimer: ReturnType<typeof setTimeout> | null = null;
 let initialized = false;
 let unsubPlaying: (() => void) | null = null;
 let unsubTrack: (() => void) | null = null;
+let trackGeneration = 0;
 
 // ─── Private helpers ─────────────────────────────────────────────────────
 
 async function fetchAndAnchor() {
+  const gen = trackGeneration;
   try {
     const pos = await invoke<number>("get_playback_position");
+    // Discard stale response if track changed while awaiting
+    if (gen !== trackGeneration) return;
     lastKnownPosition = pos;
     lastFetchTime = performance.now();
   } catch {
@@ -111,6 +115,7 @@ export function initPositionInterpolator(
 
   // Subscribe to track changes — reset to 0
   unsubTrack = store.sub(currentTrackAtom, () => {
+    trackGeneration++;
     lastKnownPosition = 0;
     lastFetchTime = performance.now();
 
