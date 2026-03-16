@@ -17,6 +17,8 @@ import { usePlaybackActions } from "./usePlaybackActions";
 import { useFavorites } from "./useFavorites";
 import { useDrawer } from "./useDrawer";
 import { useNavigation } from "./useNavigation";
+import { useToast } from "../contexts/ToastContext";
+import { getTrackShareUrl } from "../utils/itemHelpers";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -169,6 +171,7 @@ export function useMiniplayerEmitter() {
   const { addFavoriteTrack, removeFavoriteTrack } = useFavorites();
   const { openDrawerToTab } = useDrawer();
   const { navigateToArtist, navigateToAlbum, navigateToPlaylist, navigateToMix, navigateToFavorites } = useNavigation();
+  const { showToast } = useToast();
 
   const focusMainWindow = useCallback(async () => {
     const appWindow = getCurrentWindow();
@@ -249,9 +252,18 @@ export function useMiniplayerEmitter() {
             else if (src.type === "mix") navigateToMix(String(src.id), { title: src.name });
             break;
           }
-          case "share":
-            // TODO: implement share -- copy track URL to clipboard
+          case "share": {
+            const shareTrack = store.get(currentTrackAtom);
+            if (shareTrack) {
+              try {
+                await navigator.clipboard.writeText(getTrackShareUrl(shareTrack.id));
+                showToast("Copied share link to clipboard");
+              } catch {
+                showToast("Failed to copy link", "error");
+              }
+            }
             break;
+          }
         }
       },
     );
@@ -263,6 +275,7 @@ export function useMiniplayerEmitter() {
     toggleShuffle, seekTo, setVolume,
     addFavoriteTrack, removeFavoriteTrack, openDrawerToTab,
     focusMainWindow, navigateToArtist, navigateToAlbum, navigateToPlaylist, navigateToMix, navigateToFavorites,
+    showToast,
   ]);
 
   // Close miniplayer when queue empties (if main window is visible)
