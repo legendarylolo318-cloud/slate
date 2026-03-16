@@ -382,6 +382,32 @@ fn spawn_alsa_writer(
     let supported_rates = probe_supported_rates(&pcm);
     log::debug!("[alsa-writer] DAC supported rates: {:?}", supported_rates);
 
+    // Adjust initial format to something the DAC actually supports.
+    // This is a placeholder — the real format arrives via FormatHint/pad_added
+    // once GStreamer decodes the stream. We just need the DAC to accept it.
+    let initial_format = {
+        let mut fmt = initial_format;
+        if !supported_gst_formats.contains(&fmt.gst_format.as_str()) {
+            let best = supported_gst_formats[0]; // probe orders by quality (S32>S24>S16)
+            let (_, bps) = alsa_format_to_gst(gst_format_to_alsa(best));
+            log::info!(
+                "[alsa-writer] DAC doesn't support {}, using {} for initial config",
+                fmt.gst_format, best
+            );
+            fmt.gst_format = best.to_string();
+            fmt.bytes_per_sample = bps;
+        }
+        if !supported_rates.is_empty() && !supported_rates.contains(&fmt.sample_rate) {
+            let fallback = supported_rates[0]; // first probed rate (44100 typically)
+            log::info!(
+                "[alsa-writer] DAC doesn't support {}Hz, using {}Hz for initial config",
+                fmt.sample_rate, fallback
+            );
+            fmt.sample_rate = fallback;
+        }
+        fmt
+    };
+
     let initial_format = configure_alsa_hwparams(&pcm, &initial_format, bit_perfect)?;
     pcm.prepare().map_err(|e| format!("pcm.prepare: {e}"))?;
     current_sample_rate.store(initial_format.sample_rate, Ordering::Relaxed);
@@ -1593,16 +1619,20 @@ fn build_appsink_pipeline(
         .sync(false)
         .build();
 
-    // DASH + bit-perfect: constrain appsink to ALSA-safe formats.
-    // No rate/channel constraint — allows mid-stream renegotiation.
-    // Capsfilter is omitted for DASH; appsink caps negotiate without blocking renegotiation.
+    // DASH + bit-perfect: constrain appsink to ALSA-safe formats and rates.
+    // This prevents mid-stream renegotiation to a rate the DAC can't handle.
     if is_dash && bit_perfect {
-        appsink.set_caps(Some(
-            &gst::Caps::builder("audio/x-raw")
-                .field("format", gst::List::new(supported_gst_formats.iter().copied()))
-                .build(),
-        ));
-        log::debug!("[audio] bit-perfect DASH: appsink caps = {:?}", supported_gst_formats);
+        let rate_list: Vec<i32> = supported_rates.iter().map(|&r| r as i32).collect();
+        let mut caps_builder = gst::Caps::builder("audio/x-raw")
+            .field("format", gst::List::new(supported_gst_formats.iter().copied()));
+        if !rate_list.is_empty() {
+            caps_builder = caps_builder.field("rate", gst::List::new(rate_list));
+        }
+        appsink.set_caps(Some(&caps_builder.build()));
+        log::debug!(
+            "[audio] bit-perfect DASH: appsink caps = formats:{:?} rates:{:?}",
+            supported_gst_formats, supported_rates
+        );
     }
 
     log::debug!(
