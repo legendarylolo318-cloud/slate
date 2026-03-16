@@ -9,14 +9,14 @@ import {
   Shuffle,
   Minimize2,
   Mic2,
-  Infinity as InfinityIcon,
+
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { useAtomValue, useSetAtom, useAtom, useStore } from "jotai";
 import {
   currentTrackAtom,
   isPlayingAtom,
-  autoplayAtom,
+
   repeatAtom,
   shuffleAtom,
 } from "../atoms/playback";
@@ -159,7 +159,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
 }) {
   const isPlaying = useAtomValue(isPlayingAtom);
   const [repeatMode, setRepeatMode] = useAtom(repeatAtom);
-  const [autoplay, setAutoplay] = useAtom(autoplayAtom);
+
   const isShuffle = useAtomValue(shuffleAtom);
   const [showLyrics, setShowLyrics] = useAtom(maximizedLyricsAtom);
   const { pauseTrack, resumeTrack, playNext, playPrevious, toggleShuffle } = usePlaybackActions();
@@ -243,20 +243,6 @@ const MaxTransportBar = memo(function MaxTransportBar({
                 </span>
               )}
               {repeatMode > 0 && (
-                <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-th-accent" />
-              )}
-            </button>
-            <button
-              onClick={() => setAutoplay(!autoplay)}
-              className={`w-8 h-8 flex items-center justify-center rounded-full transition-[color,background-color,transform] duration-200 active:scale-90 relative ${
-                autoplay
-                  ? "text-th-accent"
-                  : "text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle"
-              }`}
-              title="Autoplay"
-            >
-              <InfinityIcon size={17} strokeWidth={2.5} />
-              {autoplay && (
                 <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-th-accent" />
               )}
             </button>

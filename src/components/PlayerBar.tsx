@@ -8,7 +8,7 @@ import {
   Heart,
   ListMusic,
   Mic2,
-  Infinity as InfinityIcon,
+
   Maximize2,
   MoreHorizontal,
   PictureInPicture2,
@@ -21,7 +21,7 @@ import { useAtomValue, useAtom, useSetAtom } from "jotai";
 import {
   currentTrackAtom,
   isPlayingAtom,
-  autoplayAtom,
+
   repeatAtom,
   shuffleAtom,
   playbackSourceAtom,
@@ -312,26 +312,6 @@ const ProgressScrubber = memo(function ProgressScrubber() {
 
 // ─── TransportControls ─────────────────────────────────────────────────────
 
-const AutoplayButton = memo(function AutoplayButton() {
-  const [autoplay, setAutoplay] = useAtom(autoplayAtom);
-
-  return (
-    <button
-      onClick={() => setAutoplay(!autoplay)}
-      className={`w-8 h-8 flex items-center justify-center rounded-full transition-[color,background-color,transform] duration-200 active:scale-90 relative ${
-        autoplay
-          ? "text-th-accent"
-          : "text-th-text-secondary hover:text-th-text-primary hover:bg-th-border-subtle"
-      }`}
-      title="Autoplay"
-    >
-      <InfinityIcon size={17} strokeWidth={2.5} />
-      {autoplay && (
-        <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-th-accent" />
-      )}
-    </button>
-  );
-});
 
 const TransportControls = memo(function TransportControls() {
   const isPlaying = useAtomValue(isPlayingAtom);
@@ -398,7 +378,7 @@ const TransportControls = memo(function TransportControls() {
             <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-th-accent" />
           )}
         </button>
-        <AutoplayButton />
+
       </div>
 
       {/* Progress bar */}
