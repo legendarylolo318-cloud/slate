@@ -224,6 +224,155 @@ export function CreatePlaylistModal({
   );
 }
 
+// ─── Edit-playlist modal ──────────────────────────────────────
+
+export function EditPlaylistModal({
+  playlist,
+  onClose,
+  onUpdated,
+}: {
+  playlist: { uuid: string; title: string; description?: string; accessType?: string };
+  onClose: () => void;
+  onUpdated: (playlist: Playlist) => void;
+}) {
+  const { updatePlaylist } = usePlaylists();
+  const { showToast } = useToast();
+
+  const [title, setTitle] = useState(playlist.title);
+  const [description, setDescription] = useState(playlist.description || "");
+  const [isPublic, setIsPublic] = useState(playlist.accessType === "PUBLIC");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const titleRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    titleRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const handleSave = useCallback(async () => {
+    if (!title.trim() || saving) return;
+    setError(null);
+    setSaving(true);
+    try {
+      const updated = await updatePlaylist(
+        playlist.uuid,
+        title.trim(),
+        description.trim(),
+        isPublic ? "PUBLIC" : "UNLISTED",
+      );
+      showToast(`Updated playlist "${title.trim()}"`);
+      onUpdated(updated);
+    } catch {
+      setError("Failed to update playlist");
+      setSaving(false);
+    }
+  }, [title, description, isPublic, saving, updatePlaylist, playlist.uuid, showToast, onUpdated]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[10000] flex items-center justify-center"
+      style={{ animation: "fadeIn 0.15s ease-out" }}
+    >
+      <div
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div
+        className="relative w-full max-w-[520px] bg-th-surface rounded-xl shadow-2xl overflow-hidden mx-4"
+        style={{ animation: "slideUp 0.2s ease-out" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-6 pb-4">
+          <h2 className="text-[18px] font-semibold text-th-text-primary">
+            Edit playlist
+          </h2>
+          <button
+            className="p-1 text-th-text-muted hover:text-th-text-primary rounded-full transition-colors"
+            onClick={onClose}
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 pb-2 flex flex-col gap-4">
+          <div>
+            <input
+              ref={titleRef}
+              type="text"
+              placeholder="Title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              disabled={saving}
+              className="w-full bg-transparent text-th-text-primary text-[15px] px-4 py-3.5 rounded-lg border border-th-inset-hover focus:border-th-text-faint focus:outline-none placeholder-th-text-faint transition-colors"
+            />
+          </div>
+          <div>
+            <textarea
+              placeholder="Write a description"
+              value={description}
+              onChange={(e) => {
+                if (e.target.value.length <= 500) setDescription(e.target.value);
+              }}
+              disabled={saving}
+              rows={4}
+              className="w-full bg-transparent text-th-text-primary text-[14px] px-4 py-3 rounded-lg border border-th-inset-hover focus:border-th-text-faint focus:outline-none placeholder-th-text-faint resize-none transition-colors"
+            />
+            <div className="text-right mt-1">
+              <span className="text-[12px] text-th-text-faint">
+                {description.length}/500 characters
+              </span>
+            </div>
+          </div>
+
+          {/* Make it public */}
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[13px] font-semibold text-th-text-primary">
+                Make it public
+              </p>
+              <p className="text-[11px] text-th-text-muted">
+                Your playlist will be visible on your Profile and accessible by anyone.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsPublic(!isPublic)}
+              disabled={saving}
+              className="ml-4 shrink-0"
+            >
+              <Toggle on={isPublic} />
+            </button>
+          </div>
+
+          {error && <p className="text-[13px] text-th-error">{error}</p>}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end px-6 pt-2 pb-6">
+          <button
+            onClick={handleSave}
+            disabled={!title.trim() || saving}
+            className="px-6 py-2.5 bg-th-accent text-black text-[14px] font-semibold rounded-full hover:bg-th-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+          >
+            {saving && <Loader2 size={16} className="animate-spin" />}
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main context-menu component ───────────────────────────────
 
 export default function AddToPlaylistMenu({
