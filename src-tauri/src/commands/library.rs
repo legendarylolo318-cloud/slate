@@ -439,21 +439,43 @@ pub async fn get_favorite_albums(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn create_playlist(
     state: State<'_, AppState>,
-    user_id: u64,
     title: String,
     description: String,
+    access_type: String,
 ) -> Result<TidalPlaylist, SoneError> {
-    log::debug!("[create_playlist]: user_id={}, title={}", user_id, title);
+    log::debug!("[create_playlist]: title={}, access_type={}", title, access_type);
     let client = state.tidal_client.lock().await;
     let playlist = client
-        .create_playlist(user_id, &title, &description)
+        .create_playlist(&title, &description, &access_type)
         .await?;
+    // Get user_id for cache invalidation before dropping the lock
+    let user_id = client.tokens.as_ref().and_then(|t| t.user_id);
     drop(client);
-    // Invalidate user playlists cache + folder listings (playlist appears in folder view)
-    state
-        .disk_cache
-        .invalidate_tag(&format!("user:{}", user_id))
-        .await;
+    if let Some(uid) = user_id {
+        state.disk_cache.invalidate_tag(&format!("user:{}", uid)).await;
+    }
+    state.disk_cache.invalidate_tag("folders").await;
+    Ok(playlist)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn update_playlist(
+    state: State<'_, AppState>,
+    playlist_id: String,
+    title: String,
+    description: String,
+    access_type: String,
+) -> Result<TidalPlaylist, SoneError> {
+    log::debug!("[update_playlist]: playlist_id={}, title={}", playlist_id, title);
+    let client = state.tidal_client.lock().await;
+    let playlist = client
+        .update_playlist(&playlist_id, &title, &description, &access_type)
+        .await?;
+    let user_id = client.tokens.as_ref().and_then(|t| t.user_id);
+    drop(client);
+    if let Some(uid) = user_id {
+        state.disk_cache.invalidate_tag(&format!("user:{}", uid)).await;
+    }
     state.disk_cache.invalidate_tag("folders").await;
     Ok(playlist)
 }
