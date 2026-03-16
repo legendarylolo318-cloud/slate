@@ -347,7 +347,9 @@ pub fn run() {
             // Deep link: register tidal:// scheme handler
             app.handle().plugin(tauri_plugin_deep_link::init())?;
             #[cfg(target_os = "linux")]
-            app.deep_link().register_all()?;
+            if let Err(e) = app.deep_link().register_all() {
+                log::warn!("Deep link registration failed: {e}");
+            }
 
             app.manage(AppState::new(app.handle().clone()));
 
