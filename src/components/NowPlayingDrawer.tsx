@@ -782,7 +782,10 @@ const SuggestedTab = memo(function SuggestedTab() {
   // Stable callbacks passed to every row — hooks called once here, not per row
   const handleAddToQueue = useCallback(
     (track: Track) => {
-      addToQueue(track);
+      const trackSource = track.album
+        ? { type: "album" as const, id: track.album.id, name: track.album.title, image: track.album.cover }
+        : undefined;
+      addToQueue(track, trackSource);
       const displayTitle = getTrackDisplayTitle(track);
       const label = displayTitle.length > 30 ? displayTitle.slice(0, 28) + "…" : displayTitle;
       showToast(`Added "${label}" to queue`, "success");

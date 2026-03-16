@@ -140,6 +140,9 @@ export function usePlaybackActions() {
       if (previousTrack && !opts?.skipHistoryPush) {
         store.set(historyAtom, [...previousHistory, previousTrack]);
       }
+      // Store source context on track for history-based prev navigation
+      (stamped as any)._playingFrom = store.get(playbackSourceAtom);
+      (stamped as any)._contextFrom = store.get(contextSourceAtom);
       store.set(currentTrackAtom, stamped);
 
       try {
@@ -570,38 +573,40 @@ export function usePlaybackActions() {
       const savedCurrentTrack = store.get(currentTrackAtom);
       const savedQueue = store.get(queueAtom);
       const savedOriginalQueue = store.get(originalQueueAtom);
+      const savedManualQueue = store.get(manualQueueAtom);
+      const savedPlaybackSource = store.get(playbackSourceAtom);
+      const savedContextSource = store.get(contextSourceAtom);
 
       // Eagerly update all state (including UI)
       store.set(historyAtom, newHistory);
       if (savedCurrentTrack) {
-        store.set(queueAtom, [savedCurrentTrack, ...savedQueue]);
-        // Bug G fix: insert at correct position in originalQueueAtom
-        if (savedOriginalQueue) {
-          const source = store.get(playbackSourceAtom);
-          if (source) {
-            const sourceIdx = source.tracks.findIndex(
-              (t) => t.id === savedCurrentTrack.id,
-            );
-            if (sourceIdx >= 0) {
-              const insertIdx = savedOriginalQueue.findIndex((t) => {
-                const tIdx = source.tracks.findIndex((s) => s.id === t.id);
-                return tIdx > sourceIdx;
-              });
-              const newOrig = [...savedOriginalQueue];
-              newOrig.splice(
-                insertIdx === -1 ? savedOriginalQueue.length : insertIdx,
-                0,
-                savedCurrentTrack,
-              );
-              store.set(originalQueueAtom, newOrig);
-            } else {
-              store.set(originalQueueAtom, [savedCurrentTrack, ...savedOriginalQueue]);
-            }
-          } else {
-            store.set(originalQueueAtom, [savedCurrentTrack, ...savedOriginalQueue]);
-          }
-        }
+        // Always push to manual queue with source tag so forward navigation
+        // restores the correct "Playing from" via playNext's _source handling
+        const src = savedPlaybackSource;
+        const sourceTag = src ? {
+          type: src.type,
+          id: src.id,
+          name: src.name,
+          image: src.image,
+          subtitle: src.subtitle,
+          mixType: src.mixType,
+        } : undefined;
+        const tagged = sourceTag
+          ? { ...savedCurrentTrack, _source: sourceTag }
+          : savedCurrentTrack;
+        store.set(manualQueueAtom, [tagged, ...savedManualQueue]);
       }
+
+      // Restore source from history entry for correct "Playing from" display
+      const prevPlayingFrom = (prevTrack as any)._playingFrom;
+      if (prevPlayingFrom !== undefined) {
+        store.set(playbackSourceAtom, prevPlayingFrom);
+        store.set(contextSourceAtom, (prevTrack as any)._contextFrom ?? null);
+      }
+
+      // Stamp source context on prevTrack for future history entries
+      (prevTrack as any)._playingFrom = store.get(playbackSourceAtom);
+      (prevTrack as any)._contextFrom = store.get(contextSourceAtom);
       store.set(currentTrackAtom, prevTrack);
 
       try {
@@ -638,6 +643,9 @@ export function usePlaybackActions() {
         store.set(historyAtom, history);
         store.set(queueAtom, savedQueue);
         store.set(originalQueueAtom, savedOriginalQueue);
+        store.set(manualQueueAtom, savedManualQueue);
+        store.set(playbackSourceAtom, savedPlaybackSource);
+        store.set(contextSourceAtom, savedContextSource);
         console.error("Failed to play previous track:", error);
         store.set(isPlayingAtom, false);
         if (isNetworkError(error)) {
@@ -662,28 +670,46 @@ export function usePlaybackActions() {
           // Save state for rollback
           const savedQueue = store.get(queueAtom);
           const savedOriginalQueue = store.get(originalQueueAtom);
+          const savedManualQueue = store.get(manualQueueAtom);
 
           // Push current back onto queue
-          store.set(queueAtom, [current, ...savedQueue]);
-          // Bug G fix: insert at correct position in originalQueueAtom
-          if (savedOriginalQueue) {
-            const sourceIdx = source.tracks.findIndex(
-              (t) => t.id === current.id,
-            );
-            if (sourceIdx >= 0) {
-              const insertIdx = savedOriginalQueue.findIndex((t) => {
-                const tIdx = source.tracks.findIndex((s) => s.id === t.id);
-                return tIdx > sourceIdx;
-              });
-              const newOrig = [...savedOriginalQueue];
-              newOrig.splice(
-                insertIdx === -1 ? savedOriginalQueue.length : insertIdx,
-                0,
-                current,
+          if (savedManualQueue.length > 0) {
+            // Push to front of manual queue with source tag
+            const src = store.get(playbackSourceAtom);
+            const sourceTag = src ? {
+              type: src.type,
+              id: src.id,
+              name: src.name,
+              image: src.image,
+              subtitle: src.subtitle,
+              mixType: src.mixType,
+            } : undefined;
+            const tagged = sourceTag
+              ? { ...current, _source: sourceTag }
+              : current;
+            store.set(manualQueueAtom, [tagged, ...savedManualQueue]);
+          } else {
+            store.set(queueAtom, [current, ...savedQueue]);
+            // Bug G fix: insert at correct position in originalQueueAtom
+            if (savedOriginalQueue) {
+              const sourceIdx = source.tracks.findIndex(
+                (t) => t.id === current.id,
               );
-              store.set(originalQueueAtom, newOrig);
-            } else {
-              store.set(originalQueueAtom, [current, ...savedOriginalQueue]);
+              if (sourceIdx >= 0) {
+                const insertIdx = savedOriginalQueue.findIndex((t) => {
+                  const tIdx = source.tracks.findIndex((s) => s.id === t.id);
+                  return tIdx > sourceIdx;
+                });
+                const newOrig = [...savedOriginalQueue];
+                newOrig.splice(
+                  insertIdx === -1 ? savedOriginalQueue.length : insertIdx,
+                  0,
+                  current,
+                );
+                store.set(originalQueueAtom, newOrig);
+              } else {
+                store.set(originalQueueAtom, [current, ...savedOriginalQueue]);
+              }
             }
           }
 
@@ -721,6 +747,7 @@ export function usePlaybackActions() {
             store.set(currentTrackAtom, current);
             store.set(queueAtom, savedQueue);
             store.set(originalQueueAtom, savedOriginalQueue);
+            store.set(manualQueueAtom, savedManualQueue);
             console.error("Failed to play previous track:", error);
             store.set(isPlayingAtom, false);
             if (isNetworkError(error)) {

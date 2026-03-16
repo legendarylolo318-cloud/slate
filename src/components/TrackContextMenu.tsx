@@ -68,17 +68,21 @@ export default function TrackContextMenu({
   const trackLabel =
     trackTitle.length > 30 ? trackTitle.slice(0, 28) + "…" : trackTitle;
 
+  const trackSource = track.album
+    ? { type: "album" as const, id: track.album.id, name: track.album.title, image: track.album.cover }
+    : undefined;
+
   const handlePlayNext = useCallback(() => {
-    playNextInQueue(track);
+    playNextInQueue(track, trackSource);
     showToast(`"${trackLabel}" will play next`);
     onClose();
-  }, [track, trackLabel, playNextInQueue, showToast, onClose]);
+  }, [track, trackLabel, trackSource, playNextInQueue, showToast, onClose]);
 
   const handleAddToQueue = useCallback(() => {
-    addToQueue(track);
+    addToQueue(track, trackSource);
     showToast(`Added "${trackLabel}" to queue`);
     onClose();
-  }, [track, trackLabel, addToQueue, showToast, onClose]);
+  }, [track, trackLabel, trackSource, addToQueue, showToast, onClose]);
 
   const handleToggleFavorite = useCallback(async () => {
     try {
