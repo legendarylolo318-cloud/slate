@@ -6,6 +6,7 @@ import {
   Shuffle,
   Heart,
   MoreHorizontal,
+  Pencil,
   RefreshCw,
 } from "lucide-react";
 import {
@@ -33,6 +34,7 @@ import TrackList from "./TrackList";
 import MediaContextMenu from "./MediaContextMenu";
 import DebouncedFilterInput from "./DebouncedFilterInput";
 import PageContainer from "./PageContainer";
+import { EditPlaylistModal } from "./AddToPlaylistMenu";
 import { DetailPageSkeleton } from "./PageSkeleton";
 
 interface PlaylistViewProps {
@@ -433,6 +435,7 @@ export default function PlaylistView({
   } | null>(null);
 
   const [showDescriptionModal, setShowDescriptionModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
 
   const displayTitle = effectiveInfo?.title || "Playlist";
   const displayDescription = effectiveInfo?.description;
@@ -547,8 +550,17 @@ export default function PlaylistView({
             Shuffle
           </button>
         </div>
-        {/* Right — Heart & More icons */}
+        {/* Right — Heart, Edit & More icons */}
         <div className="flex items-center gap-2 relative">
+          {effectiveInfo?.isUserPlaylist && (
+            <button
+              onClick={() => setShowEditModal(true)}
+              className="w-10 h-10 rounded-full flex items-center justify-center text-th-text-muted hover:text-th-text-primary hover:bg-th-hl-med transition-colors"
+              title="Edit playlist"
+            >
+              <Pencil size={18} />
+            </button>
+          )}
           <button
             onClick={handleToggleFavorite}
             className={`w-10 h-10 rounded-full flex items-center justify-center transition-[color,filter] duration-150 ${
@@ -721,6 +733,27 @@ export default function PlaylistView({
             </div>
           </div>
         </div>
+      )}
+
+      {showEditModal && effectiveInfo && (
+        <EditPlaylistModal
+          playlist={{
+            uuid: playlistId,
+            title: displayTitle,
+            description: effectiveInfo.description,
+            accessType: undefined,
+          }}
+          onClose={() => setShowEditModal(false)}
+          onUpdated={(updated) => {
+            setShowEditModal(false);
+            setFetchedInfo((prev) => ({
+              ...prev,
+              title: updated.title,
+              description: updated.description,
+              isUserPlaylist: true,
+            }));
+          }}
+        />
       )}
     </div>
   );
