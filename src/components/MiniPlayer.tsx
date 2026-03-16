@@ -203,7 +203,7 @@ function FavoriteButton({
   return (
     <button
       onClick={onClick}
-      className="flex items-center justify-center transition-[color,transform] duration-200 active:scale-90 flex-shrink-0"
+      className="flex items-center justify-center transition-colors duration-200 hover:!text-white flex-shrink-0"
       style={{
         color: isFavorite ? accentColor : colors.textSecondary,
       }}
@@ -647,7 +647,7 @@ function NarrowTier({
           <div className="relative flex-shrink-0">
             <button
               onClick={() => { if (!bitPerfect) setShowVolumeSlider((v) => !v); }}
-              className={`w-8 h-8 flex items-center justify-center transition-colors ${bitPerfect ? "opacity-30 cursor-not-allowed" : ""}`}
+              className={`w-8 h-8 flex items-center justify-center transition-colors ${bitPerfect ? "opacity-30 cursor-not-allowed" : "hover:!text-white"}`}
               style={{ color: colors.textSecondary }}
               title={bitPerfect ? "Volume disabled in bit-perfect mode" : undefined}
             >
@@ -661,7 +661,7 @@ function NarrowTier({
         {showShuffle && (
           <button
             onClick={() => sendCommand("toggle-shuffle")}
-            className="w-8 h-8 flex items-center justify-center transition-colors flex-shrink-0"
+            className="w-8 h-8 flex items-center justify-center transition-colors hover:!text-white flex-shrink-0"
             style={{ color: shuffle ? accentColor : colors.textSecondary }}
           >
             <Shuffle size={18} strokeWidth={2} />
@@ -670,7 +670,7 @@ function NarrowTier({
         {showPrev && (
           <button
             onClick={() => sendCommand("play-previous")}
-            className="w-8 h-8 flex items-center justify-center transition-colors flex-shrink-0"
+            className="w-8 h-8 flex items-center justify-center transition-colors hover:!text-white flex-shrink-0"
             style={{ color: colors.textSecondary }}
           >
             <SkipBack size={18} fill="currentColor" />
@@ -686,7 +686,7 @@ function NarrowTier({
         {showNext && (
           <button
             onClick={() => sendCommand("play-next")}
-            className="w-8 h-8 flex items-center justify-center transition-colors flex-shrink-0"
+            className="w-8 h-8 flex items-center justify-center transition-colors hover:!text-white flex-shrink-0"
             style={{ color: colors.textSecondary }}
           >
             <SkipForward size={18} fill="currentColor" />
@@ -695,7 +695,7 @@ function NarrowTier({
         {showRepeat && (
           <button
             onClick={() => sendCommand("cycle-repeat")}
-            className="w-8 h-8 flex items-center justify-center transition-colors relative flex-shrink-0"
+            className="w-8 h-8 flex items-center justify-center transition-colors hover:!text-white relative flex-shrink-0"
             style={{ color: repeat > 0 ? accentColor : colors.textSecondary }}
           >
             <Repeat size={18} strokeWidth={2} />
@@ -704,7 +704,7 @@ function NarrowTier({
         {showShare && (
           <button
             onClick={() => sendCommand("share")}
-            className="w-8 h-8 flex items-center justify-center transition-colors flex-shrink-0"
+            className="w-8 h-8 flex items-center justify-center transition-colors hover:!text-white flex-shrink-0"
             style={{ color: colors.textSecondary }}
           >
             <Share2 size={18} />
@@ -806,7 +806,7 @@ function CompactTier({
           <div className="relative flex-shrink-0">
             <button
               onClick={() => { if (!bitPerfect) setShowVolume((v) => !v); }}
-              className={`w-8 h-8 flex items-center justify-center transition-colors ${bitPerfect ? "opacity-30 cursor-not-allowed" : ""}`}
+              className={`w-8 h-8 flex items-center justify-center transition-colors ${bitPerfect ? "opacity-30 cursor-not-allowed" : "hover:!text-white"}`}
               style={{ color: colors.textSecondary }}
               title={bitPerfect ? "Volume disabled in bit-perfect mode" : undefined}
             >
@@ -819,14 +819,14 @@ function CompactTier({
         )}
         <button
           onClick={() => sendCommand("toggle-shuffle")}
-          className="w-8 h-8 flex items-center justify-center transition-colors flex-shrink-0"
+          className="w-8 h-8 flex items-center justify-center transition-colors hover:!text-white flex-shrink-0"
           style={{ color: shuffle ? accentColor : colors.textSecondary }}
         >
           <Shuffle size={18} strokeWidth={2} />
         </button>
         <button
           onClick={() => sendCommand("play-previous")}
-          className="w-8 h-8 flex items-center justify-center transition-colors flex-shrink-0"
+          className="w-8 h-8 flex items-center justify-center transition-colors hover:!text-white flex-shrink-0"
           style={{ color: colors.textSecondary }}
         >
           <SkipBack size={18} fill="currentColor" />
@@ -840,14 +840,14 @@ function CompactTier({
         </button>
         <button
           onClick={() => sendCommand("play-next")}
-          className="w-8 h-8 flex items-center justify-center transition-colors flex-shrink-0"
+          className="w-8 h-8 flex items-center justify-center transition-colors hover:!text-white flex-shrink-0"
           style={{ color: colors.textSecondary }}
         >
           <SkipForward size={18} fill="currentColor" />
         </button>
         <button
           onClick={() => sendCommand("cycle-repeat")}
-          className="w-8 h-8 flex items-center justify-center transition-colors relative flex-shrink-0"
+          className="w-8 h-8 flex items-center justify-center transition-colors hover:!text-white relative flex-shrink-0"
           style={{ color: repeat > 0 ? accentColor : colors.textSecondary }}
         >
           <Repeat size={18} strokeWidth={2} />
@@ -863,7 +863,7 @@ function CompactTier({
         {showCompactShare && (
           <button
             onClick={() => sendCommand("share")}
-            className="w-8 h-8 flex items-center justify-center transition-colors flex-shrink-0"
+            className="w-8 h-8 flex items-center justify-center transition-colors hover:!text-white flex-shrink-0"
             style={{ color: colors.textSecondary }}
           >
             <Share2 size={18} />
