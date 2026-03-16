@@ -335,6 +335,57 @@ pub struct TidalPlaylistRaw {
     pub last_item_added_at: Option<String>,
 }
 
+/// OpenAPI v2 playlist response envelope
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenApiPlaylistResponse {
+    pub data: OpenApiPlaylistData,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenApiPlaylistData {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub data_type: String,
+    pub attributes: OpenApiPlaylistAttributes,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenApiPlaylistAttributes {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub access_type: Option<String>,
+    #[serde(default)]
+    pub playlist_type: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub last_modified_at: Option<String>,
+}
+
+impl From<OpenApiPlaylistResponse> for TidalPlaylist {
+    fn from(resp: OpenApiPlaylistResponse) -> Self {
+        let d = resp.data;
+        let a = d.attributes;
+        TidalPlaylist {
+            uuid: d.id,
+            title: a.name,
+            description: a.description,
+            image: None,
+            number_of_tracks: Some(0),
+            creator: None,
+            playlist_type: a.playlist_type,
+            duration: Some(0),
+            last_updated: a.last_modified_at,
+            access_type: a.access_type,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TidalPlaylist {
@@ -351,6 +402,8 @@ pub struct TidalPlaylist {
     pub duration: Option<u32>,
     #[serde(default)]
     pub last_updated: Option<String>,
+    #[serde(default)]
+    pub access_type: Option<String>,
 }
 
 impl From<TidalPlaylistRaw> for TidalPlaylist {
@@ -366,6 +419,7 @@ impl From<TidalPlaylistRaw> for TidalPlaylist {
             playlist_type: raw.playlist_type,
             duration: raw.duration,
             last_updated: raw.last_updated,
+            access_type: None,
         }
     }
 }
