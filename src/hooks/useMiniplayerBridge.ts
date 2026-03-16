@@ -14,6 +14,7 @@ export function useMiniplayerBridge() {
     repeat: 0,
     volume: 1,
     playbackSourceLabel: null,
+    bitPerfect: false,
     accentColor: "#A855F7",
   });
 

@@ -8,6 +8,7 @@ import {
   volumeAtom,
   playbackSourceAtom,
   contextSourceAtom,
+  bitPerfectAtom,
 } from "../atoms/playback";
 import { favoriteTrackIdsAtom } from "../atoms/favorites";
 import { miniplayerOpenAtom } from "../atoms/ui";
@@ -37,6 +38,7 @@ export interface MiniplayerState {
   repeat: number;
   volume: number;
   playbackSourceLabel: { type: string; id: string | number; name: string } | null;
+  bitPerfect: boolean;
   accentColor: string;
   error?: string;
 }
@@ -94,6 +96,7 @@ export function useMiniplayerEmitter() {
       playbackSourceLabel: source
         ? { type: source.type, id: source.id, name: source.name }
         : null,
+      bitPerfect: store.get(bitPerfectAtom),
       accentColor,
       error: lastErrorRef.current,
     };
@@ -124,6 +127,7 @@ export function useMiniplayerEmitter() {
       favoriteTrackIdsAtom,
       playbackSourceAtom,
       contextSourceAtom,
+      bitPerfectAtom,
     ];
 
     const unsubs = atoms.map((a) => store.sub(a, scheduleEmit));

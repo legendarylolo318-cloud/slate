@@ -254,6 +254,7 @@ function ArtOverlayControls({
     shuffle: boolean;
     repeat: number;
     volume: number;
+    bitPerfect: boolean;
     sendVolume: (vol: number) => void;
     colors: VibrantColors;
     accentColor: string;
@@ -295,12 +296,13 @@ function ArtOverlayControls({
         <div className="flex items-center justify-center gap-4 mt-3">
           <div className="relative">
             <button
-              onClick={(e) => { e.stopPropagation(); setShowVolume((v) => !v); }}
-              className="w-9 h-9 flex items-center justify-center text-white/70 hover:text-white transition-colors"
+              onClick={(e) => { e.stopPropagation(); if (!full.bitPerfect) setShowVolume((v) => !v); }}
+              className={`w-9 h-9 flex items-center justify-center transition-colors ${full.bitPerfect ? "text-white/30 cursor-not-allowed" : "text-white/70 hover:text-white"}`}
+              title={full.bitPerfect ? "Volume disabled in bit-perfect mode" : undefined}
             >
-              {full.volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}
+              {full.bitPerfect ? <VolumeX size={20} /> : full.volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}
             </button>
-            {showVolume && (
+            {showVolume && !full.bitPerfect && (
               <VolumeSlider volume={full.volume} sendVolume={full.sendVolume} colors={full.colors} horizontal={false} onClose={() => setShowVolume(false)} />
             )}
           </div>
@@ -576,6 +578,7 @@ function NarrowTier({
   shuffle,
   repeat,
   volume,
+  bitPerfect,
   sendCommand,
   sendVolume,
   colors,
@@ -588,6 +591,7 @@ function NarrowTier({
   shuffle: boolean;
   repeat: number;
   volume: number;
+  bitPerfect: boolean;
   sendCommand: (action: string, value?: number) => void;
   sendVolume: (vol: number) => void;
   colors: VibrantColors;
@@ -642,13 +646,14 @@ function NarrowTier({
         {showVolume && (
           <div className="relative flex-shrink-0">
             <button
-              onClick={() => setShowVolumeSlider((v) => !v)}
-              className="w-8 h-8 flex items-center justify-center transition-colors"
+              onClick={() => { if (!bitPerfect) setShowVolumeSlider((v) => !v); }}
+              className={`w-8 h-8 flex items-center justify-center transition-colors ${bitPerfect ? "opacity-30 cursor-not-allowed" : ""}`}
               style={{ color: colors.textSecondary }}
+              title={bitPerfect ? "Volume disabled in bit-perfect mode" : undefined}
             >
-              {volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
+              {bitPerfect ? <VolumeX size={18} /> : volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
             </button>
-            {showVolumeSlider && (
+            {showVolumeSlider && !bitPerfect && (
               <VolumeSlider volume={volume} sendVolume={sendVolume} colors={colors} horizontal={true} onClose={() => setShowVolumeSlider(false)} />
             )}
           </div>
@@ -719,6 +724,7 @@ function CompactTier({
   shuffle,
   repeat,
   volume,
+  bitPerfect,
   playbackSourceLabel,
   sendCommand,
   sendVolume,
@@ -733,6 +739,7 @@ function CompactTier({
   shuffle: boolean;
   repeat: number;
   volume: number;
+  bitPerfect: boolean;
   playbackSourceLabel: { type: string; name: string } | null;
   sendCommand: (action: string, value?: number) => void;
   sendVolume: (vol: number) => void;
@@ -798,13 +805,14 @@ function CompactTier({
         {showCompactVolume && (
           <div className="relative flex-shrink-0">
             <button
-              onClick={() => setShowVolume((v) => !v)}
-              className="w-8 h-8 flex items-center justify-center transition-colors"
+              onClick={() => { if (!bitPerfect) setShowVolume((v) => !v); }}
+              className={`w-8 h-8 flex items-center justify-center transition-colors ${bitPerfect ? "opacity-30 cursor-not-allowed" : ""}`}
               style={{ color: colors.textSecondary }}
+              title={bitPerfect ? "Volume disabled in bit-perfect mode" : undefined}
             >
-              {volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
+              {bitPerfect ? <VolumeX size={18} /> : volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
             </button>
-            {showVolume && (
+            {showVolume && !bitPerfect && (
               <VolumeSlider volume={volume} sendVolume={sendVolume} colors={colors} horizontal={containerHeight < 180} onClose={() => setShowVolume(false)} />
             )}
           </div>
@@ -875,6 +883,7 @@ function FullTier({
   shuffle,
   repeat,
   volume,
+  bitPerfect,
   displayPosition,
   duration,
   playbackSourceLabel,
@@ -889,6 +898,7 @@ function FullTier({
   shuffle: boolean;
   repeat: number;
   volume: number;
+  bitPerfect: boolean;
   displayPosition: number;
   duration: number;
   playbackSourceLabel: { type: string; name: string } | null;
@@ -921,7 +931,7 @@ function FullTier({
         <ArtOverlayControls
           isPlaying={isPlaying}
           sendCommand={sendCommand}
-          full={{ shuffle, repeat, volume, sendVolume, colors, accentColor }}
+          full={{ shuffle, repeat, volume, bitPerfect, sendVolume, colors, accentColor }}
         />
       </div>
 
@@ -1056,6 +1066,7 @@ export default function MiniPlayer() {
             shuffle={state.shuffle}
             repeat={state.repeat}
             volume={state.volume}
+            bitPerfect={state.bitPerfect}
             sendCommand={sendCommand}
             sendVolume={sendVolume}
             colors={colors}
@@ -1072,6 +1083,7 @@ export default function MiniPlayer() {
             shuffle={state.shuffle}
             repeat={state.repeat}
             volume={state.volume}
+            bitPerfect={state.bitPerfect}
             playbackSourceLabel={state.playbackSourceLabel}
             sendCommand={sendCommand}
             sendVolume={sendVolume}
@@ -1090,6 +1102,7 @@ export default function MiniPlayer() {
             shuffle={state.shuffle}
             repeat={state.repeat}
             volume={state.volume}
+            bitPerfect={state.bitPerfect}
             displayPosition={displayPosition}
             duration={state.duration}
             playbackSourceLabel={state.playbackSourceLabel}
