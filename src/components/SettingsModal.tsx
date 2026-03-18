@@ -39,7 +39,7 @@ function ExplicitContentToggle() {
             Allow explicit content
           </p>
           <p className="text-[11px] text-th-text-muted">
-            Show and play tracks marked as explicit
+            Allow playing tracks marked as explicit
           </p>
         </div>
       </div>
