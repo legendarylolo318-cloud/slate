@@ -185,6 +185,27 @@ function CloseButton({ tier, colors }: { tier: Tier; colors: VibrantColors }) {
   );
 }
 
+// ─── ResizeGrip ─────────────────────────────────────────────────────────────
+
+function ResizeGrip({ colors }: { colors: VibrantColors }) {
+  return (
+    <div
+      className="absolute z-20 bottom-0.5 right-0.5 w-3 h-3 opacity-0 group-hover:opacity-60 transition-opacity"
+      style={{ cursor: "nwse-resize" }}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        getCurrentWindow().startResizeDragging("SouthEast");
+      }}
+    >
+      <svg width="100%" height="100%" viewBox="0 0 10 10">
+        <line x1="9" y1="1" x2="1" y2="9" stroke={colors.textSecondary} strokeWidth="1.2" />
+        <line x1="9" y1="4.5" x2="4.5" y2="9" stroke={colors.textSecondary} strokeWidth="1.2" />
+        <line x1="9" y1="8" x2="8" y2="9" stroke={colors.textSecondary} strokeWidth="1.2" />
+      </svg>
+    </div>
+  );
+}
+
 // ─── FavoriteButton ─────────────────────────────────────────────────────────
 
 function FavoriteButton({
@@ -615,7 +636,7 @@ function NarrowTier({
       <AlbumArt
         cover={track?.album?.cover}
         title={title}
-        className="rounded-md flex-shrink-0"
+        className="rounded-sm flex-shrink-0"
         style={{ width: "min(100cqh, 30cqw)", height: "min(100cqh, 30cqw)" }}
         imageSize={160}
       />
@@ -762,7 +783,7 @@ function CompactTier({
         <AlbumArt
           cover={track?.album?.cover}
           title={title}
-          className="rounded-md flex-shrink-0"
+          className="rounded-sm flex-shrink-0"
           style={{ width: "min(100cqh, 40cqw)", height: "min(100cqh, 40cqw)" }}
           imageSize={320}
         />
@@ -918,7 +939,7 @@ function FullTier({
         style={{ containerType: "size" }}
       >
         <div
-          className="rounded-lg overflow-hidden cursor-pointer"
+          className="rounded-sm overflow-hidden cursor-pointer"
           style={{ width: "min(100cqw, 100cqh)", height: "min(100cqw, 100cqh)" }}
           onClick={() => sendCommand("focus-main")}
         >
@@ -1116,12 +1137,17 @@ export default function MiniPlayer() {
   };
 
   return (
-    <div
-      ref={containerRef}
-      className="group w-full h-full overflow-hidden relative"
-      style={{ borderRadius: 6 }}
-    >
-      <ResizeEdges />
+    <div className="w-full h-full relative">
+      <ResizeEdges top={28} bottom={48} left={36} right={36} />
+      <div className="w-full h-full pointer-events-none" style={{ padding: "28px 36px 48px 36px" }}>
+      <div
+        ref={containerRef}
+        className="group w-full h-full overflow-hidden relative pointer-events-auto"
+        style={{
+          borderRadius: 0,
+          boxShadow: "2px 4px 8px rgba(0,0,0,0.4), 3px 10px 36px rgba(0,0,0,0.25), 1px 1px 3px rgba(0,0,0,0.15)",
+        }}
+      >
       {/* Dark base background */}
       <div
         className="absolute inset-0 pointer-events-none"
@@ -1141,9 +1167,10 @@ export default function MiniPlayer() {
         style={{ backgroundColor: colors.overlay }}
       />
 
-      {/* Drag region + close */}
+      {/* Drag region + close + resize grip */}
       <DragHandle tier={tier} />
       <CloseButton tier={tier} colors={colors} />
+      <ResizeGrip colors={colors} />
 
       {/* Error */}
       <ErrorOverlay error={state.error} />
@@ -1162,6 +1189,8 @@ export default function MiniPlayer() {
       >
         {renderTier()}
       </div>
+    </div>
+    </div>
     </div>
   );
 }

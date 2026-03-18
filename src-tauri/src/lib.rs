@@ -572,6 +572,22 @@ pub fn run() {
                         let _ = window.app_handle().emit_to("main", "miniplayer-closed", ());
                     }
                 }
+                #[cfg(target_os = "linux")]
+                tauri::WindowEvent::Focused(true) => {
+                    if window.label() == "miniplayer" {
+                        if let Some(ww) = window.app_handle().get_webview_window("miniplayer") {
+                            let _ = ww.with_webview(|webview| {
+                                use gtk::prelude::WidgetExt;
+                                let wv: webkit2gtk::WebView = webview.inner();
+                                if let Some(toplevel) = wv.toplevel() {
+                                    if let Some(gdk_win) = toplevel.window() {
+                                        gdk_win.set_shadow_width(36, 36, 28, 48);
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
                 _ => {}
             }
         })
