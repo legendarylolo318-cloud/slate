@@ -285,6 +285,18 @@ pub async fn set_proxy_settings(
 }
 
 #[tauri::command]
+pub async fn inhibit_idle(state: State<'_, AppState>) -> Result<(), SoneError> {
+    state.idle_inhibitor.lock().await.inhibit().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn uninhibit_idle(state: State<'_, AppState>) -> Result<(), SoneError> {
+    state.idle_inhibitor.lock().await.uninhibit().await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn test_proxy_connection(
     settings: crate::ProxySettings,
 ) -> Result<String, String> {

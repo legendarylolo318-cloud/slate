@@ -7,6 +7,7 @@ mod embedded_config;
 mod embedded_lastfm;
 mod embedded_librefm;
 mod error;
+mod idle_inhibit;
 #[cfg(target_os = "linux")]
 mod mpris;
 mod scrobble;
@@ -159,6 +160,7 @@ pub struct AppState {
     pub mpris: mpris::MprisHandle,
     pub scrobble_manager: scrobble::ScrobbleManager,
     pub discord: discord::DiscordHandle,
+    pub idle_inhibitor: Mutex<idle_inhibit::IdleInhibitor>,
 }
 
 pub fn now_secs() -> u64 {
@@ -267,6 +269,7 @@ impl AppState {
             mpris: mpris::MprisHandle::new(app_handle),
             scrobble_manager,
             discord: discord_handle,
+            idle_inhibitor: Mutex::new(idle_inhibit::IdleInhibitor::new()),
         }
     }
 
@@ -724,6 +727,8 @@ pub fn run() {
             commands::utility::get_proxy_settings,
             commands::utility::set_proxy_settings,
             commands::utility::test_proxy_connection,
+            commands::utility::inhibit_idle,
+            commands::utility::uninhibit_idle,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -732,6 +737,7 @@ pub fn run() {
                 let state = app.state::<AppState>();
                 state.discord.send(crate::discord::DiscordCommand::Disconnect);
                 tauri::async_runtime::block_on(async {
+                    state.idle_inhibitor.lock().await.uninhibit().await;
                     state.scrobble_manager.flush().await;
                 });
             }

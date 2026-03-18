@@ -632,6 +632,12 @@ export default function MaximizedPlayer() {
     return () => { appWindow.setFullscreen(false); };
   }, []);
 
+  // Inhibit screensaver + system sleep while fullscreen
+  useEffect(() => {
+    invoke("inhibit_idle").catch(() => {});
+    return () => { invoke("uninhibit_idle").catch(() => {}); };
+  }, []);
+
   // Hide miniplayer during fullscreen to avoid always-on-top conflict
   useEffect(() => {
     const wasOpenRef = { current: false };
@@ -671,7 +677,7 @@ export default function MaximizedPlayer() {
       role="dialog"
       aria-modal="true"
       onMouseMove={resetHideTimer}
-      className={`fixed inset-0 z-[60] flex flex-col items-center justify-center select-none ${controlsVisible ? "cursor-default" : "cursor-none"}`}
+      className={`fixed inset-0 z-[9999] flex flex-col items-center justify-center select-none ${controlsVisible ? "cursor-default" : "cursor-none"}`}
       style={{ backgroundColor: isDark ? "#000" : `rgb(${bgBaseRgb})` }}
     >
       {/* Blurred album art background — pre-rendered to canvas once, zero per-frame cost */}

@@ -4920,6 +4920,7 @@ dependencies = [
  "tokio",
  "walkdir",
  "webkit2gtk",
+ "zbus",
  "zeroize",
 ]
 
