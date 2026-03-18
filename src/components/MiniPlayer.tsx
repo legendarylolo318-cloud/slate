@@ -642,21 +642,21 @@ function NarrowTier({
       />
       <div className="flex flex-col justify-center min-w-0 flex-1">
         <span
-          className="text-[12px] font-bold truncate leading-tight cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
+          className="text-[15px] font-bold truncate leading-tight cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
           style={{ color: colors.textPrimary }}
           onClick={() => sendCommand("focus-main")}
         >
           {title}
         </span>
         <span
-          className="text-[11px] truncate mt-0.5 cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
+          className="text-[13px] truncate mt-0.5 cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
           style={{ color: colors.textSecondary }}
           onClick={() => sendCommand("show-artist")}
         >
           {artistName}
         </span>
       </div>
-      <div className="flex items-center gap-1 flex-shrink-0">
+      <div className="flex items-center gap-2 flex-shrink-0">
         <FavoriteButton
           isFavorite={isFavorite}
           onClick={() => sendCommand("toggle-favorite")}
@@ -691,7 +691,7 @@ function NarrowTier({
         {showPrev && (
           <button
             onClick={() => sendCommand("play-previous")}
-            className="w-8 h-8 flex items-center justify-center transition-colors hover:!text-white flex-shrink-0"
+            className="w-5 h-8 flex items-center justify-center transition-colors hover:!text-white flex-shrink-0"
             style={{ color: colors.textSecondary }}
           >
             <SkipBack size={18} fill="currentColor" />
@@ -707,7 +707,7 @@ function NarrowTier({
         {showNext && (
           <button
             onClick={() => sendCommand("play-next")}
-            className="w-8 h-8 flex items-center justify-center transition-colors hover:!text-white flex-shrink-0"
+            className="w-5 h-8 flex items-center justify-center transition-colors hover:!text-white flex-shrink-0"
             style={{ color: colors.textSecondary }}
           >
             <SkipForward size={18} fill="currentColor" />
@@ -789,14 +789,14 @@ function CompactTier({
         />
         <div className="flex flex-col justify-center min-w-0 flex-1">
           <span
-            className="text-[15px] font-bold truncate leading-tight cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
+            className="text-[16px] font-bold truncate leading-tight cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
             style={{ color: colors.textPrimary }}
             onClick={() => sendCommand("focus-main")}
           >
             {title}
           </span>
           <span
-            className="text-[13px] truncate mt-0.5 cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
+            className="text-[14px] truncate mt-0.5 cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
             style={{ color: colors.textSecondary }}
             onClick={() => sendCommand("show-artist")}
           >
@@ -804,7 +804,7 @@ function CompactTier({
           </span>
           {showPlayingFrom && (
             <span
-              className="text-[11px] truncate mt-0.5 cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
+              className="text-[12px] truncate mt-0.5 cursor-pointer hover:underline hover:!text-white w-fit max-w-full"
               style={{ color: colors.textMuted }}
               onClick={() => sendCommand("show-source")}
             >
