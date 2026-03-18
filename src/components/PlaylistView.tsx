@@ -705,7 +705,7 @@ export default function PlaylistView({
                 className="flex items-center gap-2 px-5 py-2 bg-th-button text-th-text-primary font-semibold text-sm rounded-full hover:bg-th-button-hover hover:scale-[1.03] transition-[transform,background-color] duration-150 disabled:opacity-50"
               >
                 <RefreshCw size={16} className={loadingRecs ? "animate-spin" : ""} />
-                Refresh suggestions
+                Refresh
               </button>
             </div>
           </div>
