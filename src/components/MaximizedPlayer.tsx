@@ -26,6 +26,7 @@ import { authTokensAtom } from "../atoms/auth";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { useProgressScrub } from "../hooks/useProgressScrub";
 import { getTidalImageUrl, getTrackDisplayTitle } from "../types";
+import ExplicitBadge from "./ExplicitBadge";
 import TidalImage, { fetchCachedImageUrl } from "./TidalImage";
 
 import TrackContextMenu from "./TrackContextMenu";
@@ -149,7 +150,7 @@ const MaxTransportBar = memo(function MaxTransportBar({
   isDark,
   bgBaseRgb,
 }: {
-  currentTrack: { title: string; artist?: { name?: string }; artists?: { name: string }[]; album?: { cover?: string; title?: string } };
+  currentTrack: { title: string; artist?: { name?: string }; artists?: { name: string }[]; album?: { cover?: string; title?: string }; explicit?: boolean };
   controlsVisible: boolean;
   isDraggingRef: React.MutableRefObject<boolean>;
   resetHideTimer: () => void;
@@ -180,9 +181,12 @@ const MaxTransportBar = memo(function MaxTransportBar({
             />
           </div>
           <div className="flex flex-col justify-center min-w-0 gap-0.5">
-            <span className="text-th-text-primary text-[13px] font-semibold truncate leading-tight">
-              {getTrackDisplayTitle(currentTrack)}
-            </span>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-th-text-primary text-[13px] font-semibold truncate leading-tight">
+                {getTrackDisplayTitle(currentTrack)}
+              </span>
+              {currentTrack.explicit && <ExplicitBadge />}
+            </div>
             <span className="text-th-text-secondary text-[11px] truncate">
               {getTrackArtistDisplay(currentTrack)}
             </span>
@@ -726,9 +730,12 @@ export default function MaximizedPlayer() {
               maxWidth: TIER_CONFIG[lyricsTier].artMax,
             }}
           >
-            <span className="text-th-text-primary font-bold truncate max-w-full" style={{ fontSize: TIER_CONFIG[lyricsTier].titleSize }}>
-              {getTrackDisplayTitle(currentTrack)}
-            </span>
+            <div className="flex items-center justify-center gap-2 max-w-full">
+              <span className="text-th-text-primary font-bold truncate" style={{ fontSize: TIER_CONFIG[lyricsTier].titleSize }}>
+                {getTrackDisplayTitle(currentTrack)}
+              </span>
+              {currentTrack?.explicit && <ExplicitBadge />}
+            </div>
             <span className={`${isDark ? "text-th-text-muted" : "text-th-text-secondary"} truncate max-w-full`} style={{ fontSize: TIER_CONFIG[lyricsTier].artistSize }}>
               {getTrackArtistDisplay(currentTrack)}
             </span>

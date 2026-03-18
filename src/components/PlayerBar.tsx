@@ -14,6 +14,7 @@ import {
   PictureInPicture2,
 } from "lucide-react";
 import { getTidalImageUrl, getTrackDisplayTitle } from "../types";
+import ExplicitBadge from "./ExplicitBadge";
 import { formatTime } from "../lib/format";
 import TidalImage from "./TidalImage";
 import { useCallback, useRef, useState, memo } from "react";
@@ -63,14 +64,17 @@ const TrackInfoSection = memo(function TrackInfoSection() {
         />
       </div>
       <div className="flex flex-col justify-center min-w-0">
-        <span
-          onClick={() =>
-            currentTrack.album?.id && navigateToAlbum(currentTrack.album.id)
-          }
-          className="text-th-text-primary text-[13px] font-semibold truncate hover:underline cursor-pointer leading-tight"
-        >
-          {getTrackDisplayTitle(currentTrack)}
-        </span>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span
+            onClick={() =>
+              currentTrack.album?.id && navigateToAlbum(currentTrack.album.id)
+            }
+            className="text-th-text-primary text-[13px] font-semibold truncate hover:underline cursor-pointer leading-tight"
+          >
+            {getTrackDisplayTitle(currentTrack)}
+          </span>
+          {currentTrack.explicit && <ExplicitBadge />}
+        </div>
         <span className="text-th-text-secondary text-[11px] truncate mt-0.5">
           <TrackArtists
             artists={currentTrack.artists}

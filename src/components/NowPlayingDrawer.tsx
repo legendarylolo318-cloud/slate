@@ -12,6 +12,7 @@ import {
   GripVertical,
   Maximize2,
 } from "lucide-react";
+import ExplicitBadge from "./ExplicitBadge";
 import { parseLrc, type LrcLine } from "../lib/lrc";
 import {
   useState,
@@ -640,13 +641,16 @@ function SuggestedTrackRow({
 
         {/* Track info */}
         <div className="flex-1 min-w-0">
-          <p
-            className={`text-[13px] font-medium truncate ${
-              isActive ? "text-th-accent" : "text-th-text-primary"
-            }`}
-          >
-            {getTrackDisplayTitle(track)}
-          </p>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <p
+              className={`text-[13px] font-medium truncate ${
+                isActive ? "text-th-accent" : "text-th-text-primary"
+              }`}
+            >
+              {getTrackDisplayTitle(track)}
+            </p>
+            {track.explicit && <ExplicitBadge />}
+          </div>
           <p className="text-[11px] text-th-text-muted truncate">
             <TrackArtists
               artists={track.artists}
@@ -1381,13 +1385,16 @@ function TrackRow({
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <p
-            className={`text-[13px] font-medium truncate ${
-              isActive ? "text-th-accent" : "text-th-text-primary"
-            }`}
-          >
-            {getTrackDisplayTitle(track)}
-          </p>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <p
+              className={`text-[13px] font-medium truncate ${
+                isActive ? "text-th-accent" : "text-th-text-primary"
+              }`}
+            >
+              {getTrackDisplayTitle(track)}
+            </p>
+            {track.explicit && <ExplicitBadge />}
+          </div>
           <p className="text-[11px] text-th-text-muted truncate">
             <TrackArtists
               artists={track.artists}

@@ -1,5 +1,6 @@
 import { Play, Heart, MoreHorizontal, Plus, ListPlus } from "lucide-react";
 import { type Track, getTidalImageUrl, getTrackDisplayTitle } from "../types";
+import ExplicitBadge from "./ExplicitBadge";
 import TidalImage from "./TidalImage";
 import AddToPlaylistMenu from "./AddToPlaylistMenu";
 import TrackContextMenu from "./TrackContextMenu";
@@ -202,13 +203,16 @@ const TrackRow = memo(function TrackRow({
           </div>
         )}
         <div className="flex flex-col justify-center min-w-0">
-          <span
-            className={`text-[15px] font-medium truncate leading-snug ${
-              isActive ? "text-th-accent" : "text-th-text-primary"
-            }`}
-          >
-            {getTrackDisplayTitle(track)}
-          </span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span
+              className={`text-[15px] font-medium truncate leading-snug ${
+                isActive ? "text-th-accent" : "text-th-text-primary"
+              }`}
+            >
+              {getTrackDisplayTitle(track)}
+            </span>
+            {track.explicit && <ExplicitBadge />}
+          </div>
           {!showArtist && (
             <span className="text-[13px] text-th-text-muted truncate leading-snug">
               <TrackArtists
