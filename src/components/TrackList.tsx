@@ -6,7 +6,7 @@ import AddToPlaylistMenu from "./AddToPlaylistMenu";
 import TrackContextMenu from "./TrackContextMenu";
 import { useRef, useEffect, useState, memo } from "react";
 import { useAtomValue } from "jotai";
-import { currentTrackAtom, isPlayingAtom } from "../atoms/playback";
+import { currentTrackAtom, isPlayingAtom, allowExplicitAtom } from "../atoms/playback";
 import { favoriteTrackIdsAtom } from "../atoms/favorites";
 import { useNavigation } from "../hooks/useNavigation";
 import { useFavorites } from "../hooks/useFavorites";
@@ -108,6 +108,8 @@ const TrackRow = memo(function TrackRow({
   const plusButtonRef = useRef<HTMLButtonElement>(null);
   const dotsButtonRef = useRef<HTMLButtonElement>(null);
 
+  const allowExplicit = useAtomValue(allowExplicitAtom);
+  const isBlocked = !allowExplicit && !!track.explicit;
   const isActive = currentTrackId === track.id;
   const playing = isActive && isCurrentlyPlaying;
   const isFav = favoriteTrackIds.has(track.id);
@@ -148,10 +150,12 @@ const TrackRow = memo(function TrackRow({
 
   return (
     <div
-      onClick={() => onPlay(track, index)}
-      onContextMenu={handleRowContextMenu}
-      className={`grid gap-4 px-4 py-2.5 rounded-md cursor-pointer group transition-colors items-center ${
-        isActive ? "bg-th-hl-faint" : "hover:bg-th-hl-faint"
+      onClick={() => !isBlocked && onPlay(track, index)}
+      onContextMenu={isBlocked ? undefined : handleRowContextMenu}
+      className={`grid gap-4 px-4 py-2.5 rounded-md transition-colors items-center ${
+        isBlocked
+          ? "opacity-40 cursor-default"
+          : `cursor-pointer group ${isActive ? "bg-th-hl-faint" : "hover:bg-th-hl-faint"}`
       }`}
       style={{ gridTemplateColumns: gridCols }}
     >
@@ -278,12 +282,15 @@ const TrackRow = memo(function TrackRow({
         <button
           ref={dotsButtonRef}
           className={`p-1.5 rounded-full transition-colors ${
-            contextMenuOpen
-              ? "text-th-text-primary opacity-100"
-              : "text-th-text-muted hover:text-th-text-primary opacity-0 group-hover:opacity-100"
+            isBlocked
+              ? "hidden"
+              : contextMenuOpen
+                ? "text-th-text-primary opacity-100"
+                : "text-th-text-muted hover:text-th-text-primary opacity-0 group-hover:opacity-100"
           }`}
           title="More options"
           onClick={handleDotsClick}
+          disabled={isBlocked}
         >
           <MoreHorizontal size={18} />
         </button>

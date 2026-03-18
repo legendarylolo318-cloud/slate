@@ -26,6 +26,7 @@ import {
   contextSourceAtom,
   shuffleAtom,
   repeatAtom,
+  allowExplicitAtom,
 } from "../atoms/playback";
 import { getMixItems, checkNetworkError } from "../api/tidal";
 import { useToast } from "../contexts/ToastContext";
@@ -278,6 +279,7 @@ export function usePlaybackActions() {
 
   const addToQueue = useCallback(
     (track: Track, source?: ManualTrackSource) => {
+      if (!store.get(allowExplicitAtom) && track.explicit) return;
       const stamped = stampQid(normalizeTrack(track));
       if (source) (stamped as QueuedTrack)._source = source;
       store.set(manualQueueAtom, [...store.get(manualQueueAtom), stamped]);
@@ -287,6 +289,7 @@ export function usePlaybackActions() {
 
   const playNextInQueue = useCallback(
     (track: Track, source?: ManualTrackSource) => {
+      if (!store.get(allowExplicitAtom) && track.explicit) return;
       const stamped = stampQid(normalizeTrack(track));
       if (source) (stamped as QueuedTrack)._source = source;
       store.set(manualQueueAtom, [stamped, ...store.get(manualQueueAtom)]);
@@ -320,6 +323,8 @@ export function usePlaybackActions() {
         store.set(queueAtom, stamped.slice(mc));
         return;
       }
+      const filterExplicit = !store.get(allowExplicitAtom);
+      const eligible = filterExplicit ? tracks.filter(t => !t.explicit) : tracks;
       store.set(useTrackGainAtom, !options?.albumMode);
       store.set(originalQueueAtom, null);
       store.set(manualQueueAtom, []);
@@ -338,7 +343,7 @@ export function usePlaybackActions() {
             }
           : null,
       );
-      store.set(queueAtom, stampQids(tracks.map(normalizeTrack)));
+      store.set(queueAtom, stampQids(eligible.map(normalizeTrack)));
     },
     [store],
   );
@@ -487,15 +492,17 @@ export function usePlaybackActions() {
         // Repeat-all: rebuild from source (Bug 2) or history+current fallback
         const repeatSource = store.get(contextSourceAtom) ?? store.get(playbackSourceAtom);
         const sourceTracks = repeatSource?.tracks;
-        const all =
+        const explicitOk = store.get(allowExplicitAtom);
+        const raw =
           sourceTracks && sourceTracks.length > 0
-            ? stampQids(sourceTracks)
-            : stampQids([
+            ? sourceTracks
+            : [
                 ...store.get(historyAtom),
                 ...(store.get(currentTrackAtom)
                   ? [store.get(currentTrackAtom)!]
                   : []),
-              ]);
+              ];
+        const all = stampQids(explicitOk ? raw : raw.filter(t => !t.explicit));
 
         if (all.length > 0) {
           store.set(historyAtom, []);
@@ -524,7 +531,8 @@ export function usePlaybackActions() {
             const trackMixId = current.mixes?.TRACK_MIX;
             if (!trackMixId) return;
             const { tracks: radio } = await getMixItems(trackMixId);
-            const fresh = radio.filter((t) => !historyIds.has(t.id));
+            const explicitOk = store.get(allowExplicitAtom);
+            const fresh = radio.filter((t) => !historyIds.has(t.id) && (explicitOk || !t.explicit));
             if (fresh.length > 0) {
               const [next, ...rest] = fresh;
               autoplayIdsRef.current = new Set(rest.map((t) => t.id));
@@ -812,7 +820,9 @@ export function usePlaybackActions() {
         albumMode?: boolean;
       },
     ) => {
-      const stamped = stampQids(tracks.map(normalizeTrack));
+      const filterExplicit = !store.get(allowExplicitAtom);
+      const eligible = filterExplicit ? tracks.filter(t => !t.explicit) : tracks;
+      const stamped = stampQids(eligible.map(normalizeTrack));
       store.set(manualQueueAtom, []);
       store.set(contextSourceAtom, null);
       store.set(originalQueueAtom, stamped);
@@ -890,11 +900,13 @@ export function usePlaybackActions() {
         albumMode?: boolean;
       },
     ) => {
-      const idx = allTracks.findIndex((t) => t.id === track.id);
+      const filterExplicit = !store.get(allowExplicitAtom);
+      const eligible = filterExplicit ? allTracks.filter(t => !t.explicit) : allTracks;
+      const idx = eligible.findIndex((t) => t.id === track.id);
       const rest =
         idx >= 0
-          ? [...allTracks.slice(idx + 1), ...allTracks.slice(0, idx)]
-          : allTracks.filter((t) => t.id !== track.id);
+          ? [...eligible.slice(idx + 1), ...eligible.slice(0, idx)]
+          : eligible.filter((t) => t.id !== track.id);
       if (store.get(shuffleAtom)) {
         setShuffledQueue(rest, options);
       } else {
@@ -921,15 +933,17 @@ export function usePlaybackActions() {
         albumMode?: boolean;
       },
     ) => {
-      if (allTracks.length === 0) return;
+      const filterExplicit = !store.get(allowExplicitAtom);
+      const eligible = filterExplicit ? allTracks.filter(t => !t.explicit) : allTracks;
+      if (eligible.length === 0) return;
       if (store.get(shuffleAtom)) {
-        const firstIdx = Math.floor(Math.random() * allTracks.length);
-        const first = allTracks[firstIdx];
-        const rest = allTracks.filter((_, i) => i !== firstIdx);
+        const firstIdx = Math.floor(Math.random() * eligible.length);
+        const first = eligible[firstIdx];
+        const rest = eligible.filter((_, i) => i !== firstIdx);
         setShuffledQueue(rest, options);
         await playTrack(first);
       } else {
-        const [first, ...rest] = allTracks;
+        const [first, ...rest] = eligible;
         setQueueTracks(rest, options);
         await playTrack(first);
       }

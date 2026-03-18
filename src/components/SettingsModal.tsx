@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useAtom } from "jotai";
+import { useAtom, useStore } from "jotai";
 import {
   X,
   Infinity as InfinityIcon,
@@ -10,8 +10,58 @@ import {
   MonitorDown,
   Globe,
   RefreshCw,
+  ShieldAlert,
 } from "lucide-react";
-import { autoplayAtom, bitPerfectAtom } from "../atoms/playback";
+import {
+  autoplayAtom,
+  bitPerfectAtom,
+  allowExplicitAtom,
+  currentTrackAtom,
+  isPlayingAtom,
+  queueAtom,
+  manualQueueAtom,
+  originalQueueAtom,
+  historyAtom,
+  playbackSourceAtom,
+  contextSourceAtom,
+} from "../atoms/playback";
+
+function ExplicitContentToggle() {
+  const [allowExplicit, setAllowExplicit] = useAtom(allowExplicitAtom);
+  const store = useStore();
+
+  return (
+    <div className="flex items-center justify-between py-3">
+      <div className="flex items-center gap-3 min-w-0">
+        <ShieldAlert size={16} className="text-th-text-muted shrink-0" />
+        <div>
+          <p className="text-[13px] text-th-text-secondary">
+            Allow explicit content
+          </p>
+          <p className="text-[11px] text-th-text-muted">
+            Show and play tracks marked as explicit
+          </p>
+        </div>
+      </div>
+      <button
+        onClick={() => {
+          setAllowExplicit(!allowExplicit);
+          invoke("stop_track").catch(() => {});
+          store.set(currentTrackAtom, null);
+          store.set(isPlayingAtom, false);
+          store.set(queueAtom, []);
+          store.set(manualQueueAtom, []);
+          store.set(originalQueueAtom, null);
+          store.set(historyAtom, []);
+          store.set(playbackSourceAtom, null);
+          store.set(contextSourceAtom, null);
+        }}
+      >
+        <Toggle on={allowExplicit} />
+      </button>
+    </div>
+  );
+}
 import { proxySettingsAtom, type ProxySettings } from "../atoms/proxy";
 import { useToast } from "../contexts/ToastContext";
 import { clearAllCache } from "../api/tidal";
@@ -186,6 +236,9 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                   <Toggle on={volumeNormalization} />
                 </button>
               </div>
+
+              {/* Allow explicit content */}
+              <ExplicitContentToggle />
             </div>
 
             {/* ── Integrations ── */}
