@@ -78,6 +78,26 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.13.0" date="2026-03-19">
+      <description>
+        <p>Explicit Content</p>
+        <ul>
+          <li>Filter explicit content with a new toggle in settings</li>
+          <li>Explicit badge on track titles</li>
+        </ul>
+        <p>Fullscreen Player</p>
+        <ul>
+          <li>Prevent sleep and display off while the fullscreen player is active</li>
+        </ul>
+        <p>Fixes</p>
+        <ul>
+          <li>Adjusted text sizes and spacing and other UI elements for miniplayer</li>
+          <li>Share button copies link to clipboard in miniplayer</li>
+          <li>Fixed "Playing From" not updating when queuing individual tracks</li>
+          <li>Fixed toast z-index in fullscreen player</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.12.1" date="2026-03-16">
       <description>
         <p>Miniplayer</p>
