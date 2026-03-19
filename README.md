@@ -59,7 +59,7 @@ We went beyond the basics with direct-to-DAC bit-perfect ALSA output, a resizabl
 
 ### Interface
 
-- **Custom themes** — 9 presets and a full color picker for accent and background
+- **Custom themes** — 12 presets and a full color picker for accent and background with both light/dark mode
 - **Lyrics** — synced lyrics display for supported tracks
 - **Miniplayer** — compact floating window with album art, playback controls, and resizable-adaptive layout
 - **Full-screen player** — maximized view with album art, lyrics option and auto-hiding controls
