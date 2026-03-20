@@ -19,11 +19,9 @@ import {
   useRef,
   startTransition,
 } from "react";
-import { useStore, useAtom, useAtomValue } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 import {
   isPlayingAtom,
-  currentTrackAtom,
-  shuffleAtom,
   playbackSourceAtom,
 } from "../atoms/playback";
 import { trackSortPrefsAtom } from "../atoms/favorites";
@@ -59,14 +57,13 @@ export default function PlaylistView({
   playlistInfo,
   onBack,
 }: PlaylistViewProps) {
-  const store = useStore();
   const [trackSortPrefs, setTrackSortPrefs] = useAtom(trackSortPrefsAtom);
   const {
     playTrack,
-    setQueueTracks,
     pauseTrack,
     resumeTrack,
     setShuffledQueue,
+    appendToQueue,
     playFromSource,
     playAllFromSource,
   } = usePlaybackActions();
@@ -267,7 +264,7 @@ export default function PlaylistView({
   }, [playlistId, fetchRecBatch]);
 
   // Fetch all remaining pages in the background
-  const fetchRemaining = useCallback(async () => {
+  const fetchRemaining = useCallback(async (onPageFetched?: (items: Track[]) => void) => {
     if (bgFetchingRef.current || !hasMoreRef.current) return;
     const gen = generationRef.current;
 
@@ -280,15 +277,20 @@ export default function PlaylistView({
         );
         if (generationRef.current !== gen) return;
 
+        const newItems = page.items;
         startTransition(() => {
           setAllTracks((prev) => {
             const seen = new Set(prev.map((t) => t.id));
-            return [...prev, ...page.items.filter((t) => !seen.has(t.id))];
+            return [...prev, ...newItems.filter((t) => !seen.has(t.id))];
           });
           setTotalTracks(page.totalNumberOfItems);
         });
-        offsetRef.current += page.items.length;
+        offsetRef.current += newItems.length;
         hasMoreRef.current = offsetRef.current < page.totalNumberOfItems;
+
+        if (onPageFetched) {
+          onPageFetched(newItems);
+        }
       }
     } catch (err) {
       console.error("Failed to background-fetch playlist tracks:", err);
@@ -385,27 +387,14 @@ export default function PlaylistView({
     try {
       await playFromSource(track, tracks, { source: playlistSource(tracks) });
 
-      // Kick off background fetch for the rest if needed
+      // Fire-and-forget: append remaining pages to queue as they arrive
       if (hasMoreRef.current && !bgFetchingRef.current) {
-        await fetchRemaining();
-        const full = allTracksRef.current;
-        const playedIndex = full.findIndex((t) => t.id === track.id);
-        if (playedIndex >= 0) {
-          const rest = [
-            ...full.slice(playedIndex + 1),
-            ...full.slice(0, playedIndex),
-          ];
-          if (store.get(shuffleAtom)) {
-            setShuffledQueue(rest, { source: playlistSource(full) });
-          } else {
-            setQueueTracks(rest, { source: playlistSource(full) });
-          }
-        }
+        fetchRemaining(appendToQueue);
       }
     } catch (err) {
       console.error("Failed to play playlist track:", err);
     }
-  }, [tracks, playlistSource, fetchRemaining, store, playFromSource, setShuffledQueue, setQueueTracks]);
+  }, [tracks, playlistSource, fetchRemaining, appendToQueue, playFromSource]);
 
   const isPlaying = useAtomValue(isPlayingAtom);
   const playbackSource = useAtomValue(playbackSourceAtom);
@@ -433,21 +422,7 @@ export default function PlaylistView({
       await playAllFromSource(tracks, { source: playlistSource(tracks) });
 
       if (hasMoreRef.current && !bgFetchingRef.current) {
-        await fetchRemaining();
-        const full = allTracksRef.current;
-        const current = store.get(currentTrackAtom);
-        if (full.length > 1 && current) {
-          const idx = full.findIndex((t) => t.id === current.id);
-          const rest =
-            idx >= 0
-              ? [...full.slice(idx + 1), ...full.slice(0, idx)]
-              : full.filter((t) => t.id !== current.id);
-          if (store.get(shuffleAtom)) {
-            setShuffledQueue(rest, { source: playlistSource(full) });
-          } else {
-            setQueueTracks(rest, { source: playlistSource(full) });
-          }
-        }
+        fetchRemaining(appendToQueue);
       }
     } catch (err) {
       console.error("Failed to play playlist:", err);
