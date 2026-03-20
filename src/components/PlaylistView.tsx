@@ -77,6 +77,11 @@ export default function PlaylistView({
   const [error, setError] = useState<string | null>(null);
   const [fetchedInfo, setFetchedInfo] = useState<typeof playlistInfo>(undefined);
   const [resolvedAccessType, setResolvedAccessType] = useState<string | undefined>();
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<"ASC" | "DESC" | null>(null);
+  const [sortLoading, setSortLoading] = useState(false);
+  const generationRef = useRef(0);
+  const prevPlaylistIdRef = useRef(playlistId);
 
   // Fetch playlist metadata when playlistInfo is not provided (e.g. deep link)
   useEffect(() => {
@@ -114,7 +119,6 @@ export default function PlaylistView({
   const offsetRef = useRef(0);
   const hasMoreRef = useRef(true);
   const bgFetchingRef = useRef(false);
-  const cancelledRef = useRef(false);
   const allTracksRef = useRef<Track[]>([]);
 
   // Recommendations state
@@ -193,40 +197,53 @@ export default function PlaylistView({
 
   // Load first page only
   useEffect(() => {
-    cancelledRef.current = false;
+    const gen = ++generationRef.current;
     bgFetchingRef.current = false;
 
-    const loadFirstPage = async () => {
+    const isNewPlaylist = prevPlaylistIdRef.current !== playlistId;
+    prevPlaylistIdRef.current = playlistId;
+
+    if (isNewPlaylist) {
+      // Full page skeleton for playlist navigation
       setLoading(true);
       setError(null);
       setAllTracks([]);
-      offsetRef.current = 0;
-      hasMoreRef.current = true;
+      // Reset sort to default when navigating to new playlist
+      setSortColumn(null);
+      setSortDirection(null);
+    } else {
+      // Track-list skeleton for sort change
+      setSortLoading(true);
+    }
 
+    offsetRef.current = 0;
+    hasMoreRef.current = true;
+
+    const loadFirstPage = async () => {
       try {
-        const firstPage = await getPlaylistTracksPage(playlistId, 0, PAGE_SIZE);
-        if (cancelledRef.current) return;
+        const firstPage = await getPlaylistTracksPage(
+          playlistId, 0, PAGE_SIZE,
+          sortColumn ?? undefined, sortDirection ?? undefined,
+        );
+        if (generationRef.current !== gen) return;
 
         setAllTracks(firstPage.items);
         setTotalTracks(firstPage.totalNumberOfItems);
         offsetRef.current = firstPage.items.length;
-        hasMoreRef.current =
-          firstPage.items.length < firstPage.totalNumberOfItems;
+        hasMoreRef.current = firstPage.items.length < firstPage.totalNumberOfItems;
       } catch (err: any) {
-        if (!cancelledRef.current) {
-          console.error("Failed to load playlist:", err);
-          setError(err?.message || String(err));
-        }
+        if (generationRef.current !== gen) return;
+        console.error("Failed to load playlist:", err);
+        setError(err?.message || String(err));
       } finally {
-        if (!cancelledRef.current) setLoading(false);
+        if (generationRef.current !== gen) return;
+        setLoading(false);
+        setSortLoading(false);
       }
     };
 
     loadFirstPage();
-    return () => {
-      cancelledRef.current = true;
-    };
-  }, [playlistId]);
+  }, [playlistId, sortColumn, sortDirection]);
 
   // Fetch initial batch of recommendations when playlist changes
   useEffect(() => {
@@ -241,16 +258,16 @@ export default function PlaylistView({
   // Fetch all remaining pages in the background
   const fetchRemaining = useCallback(async () => {
     if (bgFetchingRef.current || !hasMoreRef.current) return;
+    const gen = generationRef.current;
 
     bgFetchingRef.current = true;
     try {
-      while (hasMoreRef.current && !cancelledRef.current) {
+      while (hasMoreRef.current && generationRef.current === gen) {
         const page = await getPlaylistTracksPage(
-          playlistId,
-          offsetRef.current,
-          PAGE_SIZE,
+          playlistId, offsetRef.current, PAGE_SIZE,
+          sortColumn ?? undefined, sortDirection ?? undefined,
         );
-        if (cancelledRef.current) return;
+        if (generationRef.current !== gen) return;
 
         startTransition(() => {
           setAllTracks((prev) => {
@@ -267,19 +284,21 @@ export default function PlaylistView({
     } finally {
       bgFetchingRef.current = false;
     }
-  }, [playlistId]);
+  }, [playlistId, sortColumn, sortDirection]);
 
   // Manual load-more for infinite scroll
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMoreRef.current || bgFetchingRef.current) return;
+    const gen = generationRef.current;
 
     setLoadingMore(true);
     try {
       const page = await getPlaylistTracksPage(
-        playlistId,
-        offsetRef.current,
-        PAGE_SIZE,
+        playlistId, offsetRef.current, PAGE_SIZE,
+        sortColumn ?? undefined, sortDirection ?? undefined,
       );
+      if (generationRef.current !== gen) return;
+
       setAllTracks((prev) => {
         const seen = new Set(prev.map((t) => t.id));
         return [...prev, ...page.items.filter((t) => !seen.has(t.id))];
@@ -292,7 +311,7 @@ export default function PlaylistView({
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, playlistId]);
+  }, [loadingMore, playlistId, sortColumn, sortDirection]);
 
   const tracks = allTracks;
   const hasMore = allTracks.length < totalTracks;
@@ -326,6 +345,11 @@ export default function PlaylistView({
     }
   }, [fetchRemaining]);
 
+  const handleSort = useCallback((column: string | null, direction: "ASC" | "DESC" | null) => {
+    setSortColumn(column);
+    setSortDirection(direction);
+  }, []);
+
   const trackIds = useMemo(
     () => new Set(tracks.map((track) => track.id)),
     [tracks],
@@ -339,7 +363,7 @@ export default function PlaylistView({
     allTracks,
   });
 
-  const handlePlayTrack = async (track: Track, _index: number) => {
+  const handlePlayTrack = useCallback(async (track: Track, _index: number) => {
     try {
       await playFromSource(track, tracks, { source: playlistSource(tracks) });
 
@@ -363,7 +387,7 @@ export default function PlaylistView({
     } catch (err) {
       console.error("Failed to play playlist track:", err);
     }
-  };
+  }, [tracks, playlistSource, fetchRemaining, store, playFromSource, setShuffledQueue, setQueueTracks]);
 
   const handlePlayAll = async () => {
     if (tracks.length === 0) return;
@@ -678,6 +702,11 @@ export default function PlaylistView({
           context="playlist"
           playlistId={playlistId}
           isUserPlaylist={effectiveInfo?.isUserPlaylist}
+          sortable
+          sortColumn={sortColumn}
+          sortDirection={sortDirection}
+          onSort={handleSort}
+          sortLoading={sortLoading}
           onTrackRemoved={(index) => {
             setAllTracks((prev) => prev.filter((_, i) => i !== index));
           }}
