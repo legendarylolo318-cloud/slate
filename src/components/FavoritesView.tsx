@@ -7,12 +7,11 @@ import {
   useMemo,
   startTransition,
 } from "react";
-import { useAtomValue, useStore, useAtom } from "jotai";
+import { useAtomValue, useAtom } from "jotai";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { useAuth } from "../hooks/useAuth";
 import { getFavoriteTracks } from "../api/tidal";
 import { favoriteTrackIdsAtom, trackSortPrefsAtom } from "../atoms/favorites";
-import { shuffleAtom } from "../atoms/playback";
 import { type Track } from "../types";
 import TrackList from "./TrackList";
 import DebouncedFilterInput from "./DebouncedFilterInput";
@@ -26,10 +25,9 @@ interface FavoritesViewProps {
 const PAGE_SIZE = 100;
 
 export default function FavoritesView({ onBack }: FavoritesViewProps) {
-  const store = useStore();
   const [trackSortPrefs, setTrackSortPrefs] = useAtom(trackSortPrefsAtom);
   const { authTokens } = useAuth();
-  const { playFromSource, setQueueTracks, setShuffledQueue } =
+  const { playFromSource, appendToQueue } =
     usePlaybackActions();
   const favoriteTrackIds = useAtomValue(favoriteTrackIdsAtom);
 
@@ -52,12 +50,6 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
   const hasMoreRef = useRef(true);
 
   const bgFetchingRef = useRef(false);
-  const allTracksRef = useRef<Track[]>([]);
-
-  // Keep ref in sync with state so async callbacks read the latest value
-  useEffect(() => {
-    allTracksRef.current = allTracks;
-  }, [allTracks]);
 
   const handleSort = useCallback(
     (column: string | null, direction: "ASC" | "DESC" | null) => {
@@ -132,7 +124,7 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
   }, [authTokens?.user_id, sortColumn, sortDirection]);
 
   // Fetch all remaining pages in the background, appending to state as they arrive
-  const fetchRemaining = useCallback(async () => {
+  const fetchRemaining = useCallback(async (onPageFetched?: (items: Track[]) => void) => {
     if (bgFetchingRef.current || !hasMoreRef.current) return;
     const userId = authTokens?.user_id;
     if (userId == null) return;
@@ -147,15 +139,20 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
         );
         if (generationRef.current !== gen) return;
 
+        const newItems = page.items;
         startTransition(() => {
           setAllTracks((prev) => {
             const seen = new Set(prev.map((t) => t.id));
-            return [...prev, ...page.items.filter((t) => !seen.has(t.id))];
+            return [...prev, ...newItems.filter((t) => !seen.has(t.id))];
           });
           setTotalTracks(page.totalNumberOfItems);
         });
-        offsetRef.current += page.items.length;
+        offsetRef.current += newItems.length;
         hasMoreRef.current = offsetRef.current < page.totalNumberOfItems;
+
+        if (onPageFetched) {
+          onPageFetched(newItems);
+        }
       }
     } catch (err) {
       console.error("Failed to background-fetch favorites:", err);
@@ -241,29 +238,14 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
     try {
       await playFromSource(track, tracks, { source: favoritesSource(tracks) });
 
-      // Kick off background fetch for the rest if needed
+      // Fire-and-forget: append remaining pages to queue as they arrive
       if (hasMoreRef.current && !bgFetchingRef.current) {
-        await fetchRemaining();
-        const full = allTracksRef.current.filter((t) =>
-          favoriteTrackIds.has(t.id),
-        );
-        const playedIndex = full.findIndex((t) => t.id === track.id);
-        if (playedIndex >= 0) {
-          const rest = [
-            ...full.slice(playedIndex + 1),
-            ...full.slice(0, playedIndex),
-          ];
-          if (store.get(shuffleAtom)) {
-            setShuffledQueue(rest, { source: favoritesSource(full) });
-          } else {
-            setQueueTracks(rest, { source: favoritesSource(full) });
-          }
-        }
+        fetchRemaining(appendToQueue);
       }
     } catch (err) {
       console.error("Failed to play track:", err);
     }
-  }, [tracks, favoritesSource, fetchRemaining, favoriteTrackIds, store, playFromSource, setShuffledQueue, setQueueTracks]);
+  }, [tracks, favoritesSource, fetchRemaining, appendToQueue, playFromSource]);
 
   if (loading) {
     return <DetailPageSkeleton type="favorites" />;
