@@ -38,11 +38,16 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [sortColumn, setSortColumn] = useState<string | null>("DATE");
+  const [sortDirection, setSortDirection] = useState<"ASC" | "DESC" | null>("DESC");
+  const [sortLoading, setSortLoading] = useState(false);
+  const generationRef = useRef(0);
+  const isFirstLoadRef = useRef(true);
+
   const offsetRef = useRef(0);
   const hasMoreRef = useRef(true);
 
   const bgFetchingRef = useRef(false);
-  const cancelledRef = useRef(false);
   const allTracksRef = useRef<Track[]>([]);
 
   // Keep ref in sync with state so async callbacks read the latest value
@@ -50,65 +55,81 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
     allTracksRef.current = allTracks;
   }, [allTracks]);
 
-  // Load first page only
+  const handleSort = useCallback((column: string | null, direction: "ASC" | "DESC" | null) => {
+    if (column === null) {
+      setSortColumn("DATE");
+      setSortDirection("DESC");
+    } else {
+      setSortColumn(column);
+      setSortDirection(direction);
+    }
+  }, []);
+
+  // Load first page only (re-runs on sort change)
   useEffect(() => {
-    cancelledRef.current = false;
+    const gen = ++generationRef.current;
     bgFetchingRef.current = false;
 
-    const loadFavorites = async () => {
-      const userId = authTokens?.user_id;
-      if (userId == null) {
-        setLoading(false);
-        setError("Not authenticated");
-        return;
-      }
+    const userId = authTokens?.user_id;
+    if (userId == null) {
+      setLoading(false);
+      setError("Not authenticated");
+      return;
+    }
 
+    if (isFirstLoadRef.current) {
+      isFirstLoadRef.current = false;
       setLoading(true);
       setError(null);
       setAllTracks([]);
-      offsetRef.current = 0;
-      hasMoreRef.current = true;
+    } else {
+      setSortLoading(true);
+    }
 
+    offsetRef.current = 0;
+    hasMoreRef.current = true;
+
+    const loadFavorites = async () => {
       try {
-        const firstPage = await getFavoriteTracks(userId, 0, PAGE_SIZE);
-        if (cancelledRef.current) return;
+        const firstPage = await getFavoriteTracks(
+          userId, 0, PAGE_SIZE,
+          sortColumn ?? "DATE", sortDirection ?? "DESC",
+        );
+        if (generationRef.current !== gen) return;
 
         setAllTracks(firstPage.items);
         setTotalTracks(firstPage.totalNumberOfItems);
         offsetRef.current = firstPage.items.length;
-        hasMoreRef.current =
-          firstPage.items.length < firstPage.totalNumberOfItems;
+        hasMoreRef.current = firstPage.items.length < firstPage.totalNumberOfItems;
       } catch (err: any) {
-        if (!cancelledRef.current) {
-          console.error("Failed to load favorites:", err);
-          setError(err?.message || String(err));
-        }
+        if (generationRef.current !== gen) return;
+        console.error("Failed to load favorites:", err);
+        setError(err?.message || String(err));
       } finally {
-        if (!cancelledRef.current) setLoading(false);
+        if (generationRef.current !== gen) return;
+        setLoading(false);
+        setSortLoading(false);
       }
     };
 
     loadFavorites();
-    return () => {
-      cancelledRef.current = true;
-    };
-  }, [authTokens?.user_id]);
+  }, [authTokens?.user_id, sortColumn, sortDirection]);
 
   // Fetch all remaining pages in the background, appending to state as they arrive
   const fetchRemaining = useCallback(async () => {
     if (bgFetchingRef.current || !hasMoreRef.current) return;
     const userId = authTokens?.user_id;
     if (userId == null) return;
+    const gen = generationRef.current;
 
     bgFetchingRef.current = true;
     try {
-      while (hasMoreRef.current && !cancelledRef.current) {
+      while (hasMoreRef.current && generationRef.current === gen) {
         const page = await getFavoriteTracks(
-          userId,
-          offsetRef.current,
-          PAGE_SIZE,
+          userId, offsetRef.current, PAGE_SIZE,
+          sortColumn ?? "DATE", sortDirection ?? "DESC",
         );
-        if (cancelledRef.current) return;
+        if (generationRef.current !== gen) return;
 
         startTransition(() => {
           setAllTracks((prev) => {
@@ -125,22 +146,23 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
     } finally {
       bgFetchingRef.current = false;
     }
-  }, [authTokens?.user_id]);
+  }, [authTokens?.user_id, sortColumn, sortDirection]);
 
   // Manual load-more (infinite scroll trigger) — also kicks off full background fetch
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMoreRef.current) return;
     if (bgFetchingRef.current) return; // background fetch already running
 
+    const gen = generationRef.current;
     setLoadingMore(true);
     try {
       const userId = authTokens?.user_id;
       if (userId == null) return;
       const page = await getFavoriteTracks(
-        userId,
-        offsetRef.current,
-        PAGE_SIZE,
+        userId, offsetRef.current, PAGE_SIZE,
+        sortColumn ?? "DATE", sortDirection ?? "DESC",
       );
+      if (generationRef.current !== gen) return;
       setAllTracks((prev) => {
         const seen = new Set(prev.map((t) => t.id));
         return [...prev, ...page.items.filter((t) => !seen.has(t.id))];
@@ -153,7 +175,7 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, authTokens?.user_id]);
+  }, [loadingMore, authTokens?.user_id, sortColumn, sortDirection]);
 
   const hasMore = allTracks.length < totalTracks;
 
@@ -297,6 +319,11 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
           showAlbum={true}
           showCover={true}
           context="favorites"
+          sortable
+          sortColumn={sortColumn}
+          sortDirection={sortDirection}
+          onSort={handleSort}
+          sortLoading={sortLoading}
         />
 
         {/* End of list */}
