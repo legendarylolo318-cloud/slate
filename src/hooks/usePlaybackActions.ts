@@ -348,6 +348,43 @@ export function usePlaybackActions() {
     [store],
   );
 
+  const appendToQueue = useCallback(
+    (newTracks: Track[]) => {
+      const filterExplicit = !store.get(allowExplicitAtom);
+      const eligible = filterExplicit ? newTracks.filter(t => !t.explicit) : newTracks;
+      if (eligible.length === 0) return;
+      const stamped = stampQids(eligible.map(normalizeTrack));
+
+      // Append to playbackSourceAtom.tracks
+      const source = store.get(playbackSourceAtom);
+      if (source) {
+        store.set(playbackSourceAtom, {
+          ...source,
+          tracks: [...source.tracks, ...stamped],
+        });
+      }
+
+      if (store.get(shuffleAtom)) {
+        // Append to originalQueueAtom in order
+        const orig = store.get(originalQueueAtom);
+        if (orig) {
+          store.set(originalQueueAtom, [...orig, ...stamped]);
+        }
+        // Insert into queueAtom at random positions
+        const queue = [...store.get(queueAtom)];
+        for (const track of stamped) {
+          const idx = Math.floor(Math.random() * (queue.length + 1));
+          queue.splice(idx, 0, track);
+        }
+        store.set(queueAtom, queue);
+      } else {
+        // Append to end of queueAtom
+        store.set(queueAtom, [...store.get(queueAtom), ...stamped]);
+      }
+    },
+    [store],
+  );
+
   const removeFromQueue = useCallback(
     (index: number) => {
       const manual = store.get(manualQueueAtom);
@@ -968,6 +1005,7 @@ export function usePlaybackActions() {
     addToQueue,
     playNextInQueue,
     setQueueTracks,
+    appendToQueue,
     removeFromQueue,
     playFromQueue,
     clearQueue,
