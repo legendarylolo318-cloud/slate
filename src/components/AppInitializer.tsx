@@ -490,7 +490,14 @@ export function AppInitializer() {
     };
 
     const setupPersistence = () => {
-      const persist = () => {
+      let dirty = false;
+      let queued = false;
+
+      const flush = () => {
+        queued = false;
+        if (!dirty) return;
+        dirty = false;
+
         const snapshot: PlaybackSnapshot = {
           currentTrack: store.get(currentTrackAtom),
           queue: store.get(queueAtom),
@@ -521,13 +528,21 @@ export function AppInitializer() {
         }, 2000);
       };
 
-      unsub1 = store.sub(currentTrackAtom, persist);
-      unsub2 = store.sub(queueAtom, persist);
-      unsub3 = store.sub(historyAtom, persist);
-      unsub4 = store.sub(manualQueueAtom, persist);
-      unsub5 = store.sub(originalQueueAtom, persist);
-      unsub6 = store.sub(playbackSourceAtom, persist);
-      unsub7 = store.sub(contextSourceAtom, persist);
+      const markDirty = () => {
+        dirty = true;
+        if (!queued) {
+          queued = true;
+          queueMicrotask(flush);
+        }
+      };
+
+      unsub1 = store.sub(currentTrackAtom, markDirty);
+      unsub2 = store.sub(queueAtom, markDirty);
+      unsub3 = store.sub(historyAtom, markDirty);
+      unsub4 = store.sub(manualQueueAtom, markDirty);
+      unsub5 = store.sub(originalQueueAtom, markDirty);
+      unsub6 = store.sub(playbackSourceAtom, markDirty);
+      unsub7 = store.sub(contextSourceAtom, markDirty);
     };
 
     restore().finally(() => {
