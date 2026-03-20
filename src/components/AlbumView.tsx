@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAtomValue } from "jotai";
-import { isPlayingAtom, currentTrackAtom } from "../atoms/playback";
+import { isPlayingAtom, playbackSourceAtom } from "../atoms/playback";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { useFavorites } from "../hooks/useFavorites";
 import { useNavigation } from "../hooks/useNavigation";
@@ -74,7 +74,7 @@ export default function AlbumView({
   onBack,
 }: AlbumViewProps) {
   const isPlaying = useAtomValue(isPlayingAtom);
-  const currentTrack = useAtomValue(currentTrackAtom);
+  const playbackSource = useAtomValue(playbackSourceAtom);
   const {
     playTrack,
     pauseTrack,
@@ -182,10 +182,18 @@ export default function AlbumView({
     }
   };
 
+  const fromThisSource =
+    playbackSource?.type === "album" && playbackSource?.id === albumId;
+  const buttonState = fromThisSource
+    ? isPlaying
+      ? "pause"
+      : "resume"
+    : "play";
+
   const handlePlayAll = async () => {
     if (tracks.length === 0) return;
 
-    if (currentTrack && currentTrack.album?.id === albumId) {
+    if (fromThisSource) {
       if (isPlaying) {
         await pauseTrack();
       } else {
@@ -238,9 +246,6 @@ export default function AlbumView({
       setFavoritePending(false);
     }
   };
-
-  const albumPlaying =
-    currentTrack && currentTrack.album?.id === albumId && isPlaying;
 
   const displayTitle = album?.title || albumInfo?.title || "Album";
   const displayCover = album?.cover || albumInfo?.cover;
@@ -420,12 +425,16 @@ export default function AlbumView({
             onClick={handlePlayAll}
             className="flex items-center gap-2 px-6 py-2.5 bg-th-accent text-black font-bold text-sm rounded-full shadow-lg hover:brightness-110 hover:scale-[1.03] transition-[transform,filter] duration-150"
           >
-            {albumPlaying ? (
+            {buttonState === "pause" ? (
               <Pause size={18} fill="black" className="text-black" />
             ) : (
               <Play size={18} fill="black" className="text-black" />
             )}
-            {albumPlaying ? "Pause" : "Play"}
+            {buttonState === "pause"
+              ? "Pause"
+              : buttonState === "resume"
+                ? "Resume"
+                : "Play"}
           </button>
           <button
             onClick={handleShuffle}

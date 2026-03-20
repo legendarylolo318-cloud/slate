@@ -7,9 +7,9 @@ import {
   MoreHorizontal,
   Radio,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useAtomValue } from "jotai";
-import { isPlayingAtom, currentTrackAtom } from "../atoms/playback";
+import { isPlayingAtom, playbackSourceAtom } from "../atoms/playback";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { useFavorites } from "../hooks/useFavorites";
 import { getMixItems } from "../api/tidal";
@@ -27,7 +27,7 @@ interface MixPageProps {
 
 export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
   const isPlaying = useAtomValue(isPlayingAtom);
-  const currentTrack = useAtomValue(currentTrackAtom);
+  const playbackSource = useAtomValue(playbackSourceAtom);
   const {
     playTrack,
     pauseTrack,
@@ -86,11 +86,6 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
     };
   }, [mixId]);
 
-  const trackIds = useMemo(
-    () => new Set(tracks.map((track) => track.id)),
-    [tracks],
-  );
-
   const isTrackRadio = mixType === "TRACK_MIX";
 
   const mixSource = {
@@ -111,10 +106,18 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
     }
   };
 
+  const fromThisSource =
+    playbackSource?.type === mixSource.type && playbackSource?.id === mixId;
+  const buttonState = fromThisSource
+    ? isPlaying
+      ? "pause"
+      : "resume"
+    : "play";
+
   const handlePlayAll = async () => {
     if (tracks.length === 0) return;
 
-    if (currentTrack && trackIds.has(currentTrack.id)) {
+    if (fromThisSource) {
       if (isPlaying) {
         await pauseTrack();
       } else {
@@ -142,12 +145,6 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
       console.error("Failed to shuffle play:", err);
     }
   };
-
-  const mixPlaying = !!(
-    currentTrack &&
-    trackIds.has(currentTrack.id) &&
-    isPlaying
-  );
 
   // Favorite state
   const { favoriteMixIds, addFavoriteMix, removeFavoriteMix } = useFavorites();
@@ -266,12 +263,16 @@ export default function MixPage({ mixId, mixInfo, onBack }: MixPageProps) {
             onClick={handlePlayAll}
             className="flex items-center gap-2 px-6 py-2.5 bg-th-accent text-black font-bold text-sm rounded-full shadow-lg hover:brightness-110 hover:scale-[1.03] transition-[transform,filter] duration-150"
           >
-            {mixPlaying ? (
+            {buttonState === "pause" ? (
               <Pause size={18} fill="black" className="text-black" />
             ) : (
               <Play size={18} fill="black" className="text-black" />
             )}
-            {mixPlaying ? "Pause" : "Play"}
+            {buttonState === "pause"
+              ? "Pause"
+              : buttonState === "resume"
+                ? "Resume"
+                : "Play"}
           </button>
           <button
             onClick={handleShuffle}

@@ -19,11 +19,12 @@ import {
   useRef,
   startTransition,
 } from "react";
-import { useStore, useAtom } from "jotai";
+import { useStore, useAtom, useAtomValue } from "jotai";
 import {
   isPlayingAtom,
   currentTrackAtom,
   shuffleAtom,
+  playbackSourceAtom,
 } from "../atoms/playback";
 import { trackSortPrefsAtom } from "../atoms/favorites";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
@@ -372,11 +373,6 @@ export default function PlaylistView({
     [playlistId, setTrackSortPrefs],
   );
 
-  const trackIds = useMemo(
-    () => new Set(tracks.map((track) => track.id)),
-    [tracks],
-  );
-
   const playlistSource = (allTracks: Track[]) => ({
     type: "playlist" as const,
     id: playlistId,
@@ -411,12 +407,20 @@ export default function PlaylistView({
     }
   }, [tracks, playlistSource, fetchRemaining, store, playFromSource, setShuffledQueue, setQueueTracks]);
 
+  const isPlaying = useAtomValue(isPlayingAtom);
+  const playbackSource = useAtomValue(playbackSourceAtom);
+  const fromThisSource =
+    playbackSource?.type === "playlist" && playbackSource?.id === playlistId;
+  const buttonState = fromThisSource
+    ? isPlaying
+      ? "pause"
+      : "resume"
+    : "play";
+
   const handlePlayAll = async () => {
     if (tracks.length === 0) return;
 
-    const currentTrack = store.get(currentTrackAtom);
-    const isPlaying = store.get(isPlayingAtom);
-    if (currentTrack && trackIds.has(currentTrack.id)) {
+    if (fromThisSource) {
       if (isPlaying) {
         await pauseTrack();
       } else {
@@ -469,11 +473,6 @@ export default function PlaylistView({
       console.error("Failed to shuffle play:", err);
     }
   };
-
-  const playlistPlaying = (() => {
-    const ct = store.get(currentTrackAtom);
-    return !!(ct && trackIds.has(ct.id) && store.get(isPlayingAtom));
-  })();
 
   // Favorite state — driven by atom for instant updates everywhere
   const { favoritePlaylistUuids, addFavoritePlaylist, removeFavoritePlaylist } =
@@ -618,12 +617,16 @@ export default function PlaylistView({
             onClick={handlePlayAll}
             className="flex items-center gap-2 px-6 py-2.5 bg-th-accent text-black font-bold text-sm rounded-full shadow-lg hover:brightness-110 hover:scale-[1.03] transition-[transform,filter] duration-150"
           >
-            {playlistPlaying ? (
+            {buttonState === "pause" ? (
               <Pause size={18} fill="black" className="text-black" />
             ) : (
               <Play size={18} fill="black" className="text-black" />
             )}
-            {playlistPlaying ? "Pause" : "Play"}
+            {buttonState === "pause"
+              ? "Pause"
+              : buttonState === "resume"
+                ? "Resume"
+                : "Play"}
           </button>
           <button
             onClick={handleShuffle}
