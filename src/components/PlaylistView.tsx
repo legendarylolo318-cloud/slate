@@ -209,8 +209,9 @@ export default function PlaylistView({
       setError(null);
       setAllTracks([]);
       // Reset sort to default when navigating to new playlist
-      setSortColumn(null);
-      setSortDirection(null);
+      // Guard: only set if not already null to avoid triggering a spurious re-run
+      if (sortColumn !== null) setSortColumn(null);
+      if (sortDirection !== null) setSortDirection(null);
     } else {
       // Track-list skeleton for sort change
       setSortLoading(true);
