@@ -221,7 +221,7 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
     allTracks,
   });
 
-  const handlePlayTrack = async (track: Track, _index: number) => {
+  const handlePlayTrack = useCallback(async (track: Track, _index: number) => {
     try {
       await playFromSource(track, tracks, { source: favoritesSource(tracks) });
 
@@ -247,7 +247,7 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
     } catch (err) {
       console.error("Failed to play track:", err);
     }
-  };
+  }, [tracks, favoritesSource, fetchRemaining, favoriteTrackIds, store, playFromSource, setShuffledQueue, setQueueTracks]);
 
   if (loading) {
     return <DetailPageSkeleton type="favorites" />;
