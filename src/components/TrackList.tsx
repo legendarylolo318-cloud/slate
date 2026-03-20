@@ -436,11 +436,8 @@ export default memo(function TrackList({
   const handleHeaderClick = (column: string) => {
     if (!onSort) return;
     if (sortColumn === column) {
-      if (sortDirection === "ASC") {
-        onSort(column, "DESC");
-      } else {
-        onSort(null, null);
-      }
+      // Toggle direction
+      onSort(column, sortDirection === "ASC" ? "DESC" : "ASC");
     } else {
       onSort(column, "ASC");
     }
@@ -454,41 +451,46 @@ export default memo(function TrackList({
         style={{ gridTemplateColumns: gridCols }}
       >
         <span className="text-right">#</span>
-        <span
-          className={sortable ? "cursor-pointer select-none hover:text-th-text-primary" : ""}
-          onClick={sortable ? () => handleHeaderClick("NAME") : undefined}
-        >
-          Title{sortColumn === "NAME" && sortDirection && <SortIndicator direction={sortDirection} />}
+        <span>
+          {sortable ? (
+            <span className="cursor-pointer select-none hover:text-th-accent whitespace-nowrap" onClick={() => handleHeaderClick("NAME")}>
+              Title{sortColumn === "NAME" && sortDirection && <SortIndicator direction={sortDirection} />}
+            </span>
+          ) : "Title"}
         </span>
         {showArtist && (
-          <span
-            className={sortable ? "cursor-pointer select-none hover:text-th-text-primary" : ""}
-            onClick={sortable ? () => handleHeaderClick("ARTIST") : undefined}
-          >
-            Artist{sortColumn === "ARTIST" && sortDirection && <SortIndicator direction={sortDirection} />}
+          <span>
+            {sortable ? (
+              <span className="cursor-pointer select-none hover:text-th-accent whitespace-nowrap" onClick={() => handleHeaderClick("ARTIST")}>
+                Artist{sortColumn === "ARTIST" && sortDirection && <SortIndicator direction={sortDirection} />}
+              </span>
+            ) : "Artist"}
           </span>
         )}
         {showAlbum && (
-          <span
-            className={sortable ? "cursor-pointer select-none hover:text-th-text-primary" : ""}
-            onClick={sortable ? () => handleHeaderClick("ALBUM") : undefined}
-          >
-            Album{sortColumn === "ALBUM" && sortDirection && <SortIndicator direction={sortDirection} />}
+          <span>
+            {sortable ? (
+              <span className="cursor-pointer select-none hover:text-th-accent whitespace-nowrap" onClick={() => handleHeaderClick("ALBUM")}>
+                Album{sortColumn === "ALBUM" && sortDirection && <SortIndicator direction={sortDirection} />}
+              </span>
+            ) : "Album"}
           </span>
         )}
         {showDateAdded && (
-          <span
-            className={sortable ? "cursor-pointer select-none hover:text-th-text-primary" : ""}
-            onClick={sortable ? () => handleHeaderClick("DATE") : undefined}
-          >
-            Date Added{sortColumn === "DATE" && sortDirection && <SortIndicator direction={sortDirection} />}
+          <span>
+            {sortable ? (
+              <span className="cursor-pointer select-none hover:text-th-accent whitespace-nowrap" onClick={() => handleHeaderClick("DATE")}>
+                Date Added{sortColumn === "DATE" && sortDirection && <SortIndicator direction={sortDirection} />}
+              </span>
+            ) : "Date Added"}
           </span>
         )}
-        <span
-          className={`text-right${sortable ? " cursor-pointer select-none hover:text-th-text-primary" : ""}`}
-          onClick={sortable ? () => handleHeaderClick("LENGTH") : undefined}
-        >
-          Time{sortColumn === "LENGTH" && sortDirection && <SortIndicator direction={sortDirection} />}
+        <span className="text-right">
+          {sortable ? (
+            <span className="cursor-pointer select-none hover:text-th-accent whitespace-nowrap" onClick={() => handleHeaderClick("LENGTH")}>
+              Time{sortColumn === "LENGTH" && sortDirection && <SortIndicator direction={sortDirection} />}
+            </span>
+          ) : "Time"}
         </span>
         <span /> {/* Actions column header */}
       </div>
