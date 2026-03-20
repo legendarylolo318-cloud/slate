@@ -1,6 +1,4 @@
 import {
-  Play,
-  Pause,
   Music,
   X,
   Shuffle,
@@ -19,11 +17,7 @@ import {
   useRef,
   startTransition,
 } from "react";
-import { useAtom, useAtomValue } from "jotai";
-import {
-  isPlayingAtom,
-  playbackSourceAtom,
-} from "../atoms/playback";
+import { useAtom } from "jotai";
 import { trackSortPrefsAtom } from "../atoms/favorites";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { useFavorites } from "../hooks/useFavorites";
@@ -38,6 +32,7 @@ import DebouncedFilterInput from "./DebouncedFilterInput";
 import PageContainer from "./PageContainer";
 import { EditPlaylistModal } from "./AddToPlaylistMenu";
 import { DetailPageSkeleton } from "./PageSkeleton";
+import SourcePlayButton from "./SourcePlayButton";
 
 interface PlaylistViewProps {
   playlistId: string;
@@ -60,8 +55,6 @@ export default function PlaylistView({
   const [trackSortPrefs, setTrackSortPrefs] = useAtom(trackSortPrefsAtom);
   const {
     playTrack,
-    pauseTrack,
-    resumeTrack,
     setShuffledQueue,
     appendToQueue,
     playFromSource,
@@ -396,28 +389,8 @@ export default function PlaylistView({
     }
   }, [tracks, playlistSource, fetchRemaining, appendToQueue, playFromSource]);
 
-  const isPlaying = useAtomValue(isPlayingAtom);
-  const playbackSource = useAtomValue(playbackSourceAtom);
-  const fromThisSource =
-    playbackSource?.type === "playlist" && playbackSource?.id === playlistId;
-  const buttonState = fromThisSource
-    ? isPlaying
-      ? "pause"
-      : "resume"
-    : "play";
-
   const handlePlayAll = async () => {
     if (tracks.length === 0) return;
-
-    if (fromThisSource) {
-      if (isPlaying) {
-        await pauseTrack();
-      } else {
-        await resumeTrack();
-      }
-      return;
-    }
-
     try {
       await playAllFromSource(tracks, { source: playlistSource(tracks) });
 
@@ -588,21 +561,11 @@ export default function PlaylistView({
       <div className="px-8 py-5 flex items-center justify-between">
         {/* Left — Play & Shuffle buttons */}
         <div className="flex items-center gap-3">
-          <button
-            onClick={handlePlayAll}
-            className="flex items-center gap-2 px-6 py-2.5 bg-th-accent text-black font-bold text-sm rounded-full shadow-lg hover:brightness-110 hover:scale-[1.03] transition-[transform,filter] duration-150"
-          >
-            {buttonState === "pause" ? (
-              <Pause size={18} fill="black" className="text-black" />
-            ) : (
-              <Play size={18} fill="black" className="text-black" />
-            )}
-            {buttonState === "pause"
-              ? "Pause"
-              : buttonState === "resume"
-                ? "Resume"
-                : "Play"}
-          </button>
+          <SourcePlayButton
+            sourceType="playlist"
+            sourceId={playlistId}
+            onPlay={handlePlayAll}
+          />
           <button
             onClick={handleShuffle}
             className="flex items-center gap-2 px-6 py-2.5 bg-th-button text-th-text-primary font-bold text-sm rounded-full hover:bg-th-button-hover hover:scale-[1.03] transition-[transform,filter,background-color] duration-150"

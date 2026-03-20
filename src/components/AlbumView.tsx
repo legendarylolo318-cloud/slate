@@ -1,6 +1,4 @@
 import {
-  Play,
-  Pause,
   Music,
   Loader2,
   Heart,
@@ -8,8 +6,7 @@ import {
   MoreHorizontal,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { useAtomValue } from "jotai";
-import { isPlayingAtom, playbackSourceAtom } from "../atoms/playback";
+import SourcePlayButton from "./SourcePlayButton";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { useFavorites } from "../hooks/useFavorites";
 import { useNavigation } from "../hooks/useNavigation";
@@ -73,12 +70,8 @@ export default function AlbumView({
   albumInfo,
   onBack,
 }: AlbumViewProps) {
-  const isPlaying = useAtomValue(isPlayingAtom);
-  const playbackSource = useAtomValue(playbackSourceAtom);
   const {
     playTrack,
-    pauseTrack,
-    resumeTrack,
     setShuffledQueue,
     playFromSource,
     playAllFromSource,
@@ -182,26 +175,8 @@ export default function AlbumView({
     }
   };
 
-  const fromThisSource =
-    playbackSource?.type === "album" && playbackSource?.id === albumId;
-  const buttonState = fromThisSource
-    ? isPlaying
-      ? "pause"
-      : "resume"
-    : "play";
-
   const handlePlayAll = async () => {
     if (tracks.length === 0) return;
-
-    if (fromThisSource) {
-      if (isPlaying) {
-        await pauseTrack();
-      } else {
-        await resumeTrack();
-      }
-      return;
-    }
-
     try {
       await playAllFromSource(tracks, { albumMode: true, source: albumSource });
     } catch (err) {
@@ -421,21 +396,11 @@ export default function AlbumView({
       {/* Play Controls */}
       <div className="px-8 py-5 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button
-            onClick={handlePlayAll}
-            className="flex items-center gap-2 px-6 py-2.5 bg-th-accent text-black font-bold text-sm rounded-full shadow-lg hover:brightness-110 hover:scale-[1.03] transition-[transform,filter] duration-150"
-          >
-            {buttonState === "pause" ? (
-              <Pause size={18} fill="black" className="text-black" />
-            ) : (
-              <Play size={18} fill="black" className="text-black" />
-            )}
-            {buttonState === "pause"
-              ? "Pause"
-              : buttonState === "resume"
-                ? "Resume"
-                : "Play"}
-          </button>
+          <SourcePlayButton
+            sourceType="album"
+            sourceId={albumId}
+            onPlay={handlePlayAll}
+          />
           <button
             onClick={handleShuffle}
             className="flex items-center gap-2 px-6 py-2.5 bg-th-button text-th-text-primary font-bold text-sm rounded-full hover:bg-th-button-hover hover:scale-[1.03] transition-[transform,filter,background-color] duration-150"

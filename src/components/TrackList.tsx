@@ -5,7 +5,7 @@ import TidalImage from "./TidalImage";
 import AddToPlaylistMenu from "./AddToPlaylistMenu";
 import TrackContextMenu from "./TrackContextMenu";
 import { useRef, useEffect, useState, memo, useMemo } from "react";
-import { useAtomValue } from "jotai";
+import { useAtomValue, atom } from "jotai";
 import { currentTrackAtom, isPlayingAtom, allowExplicitAtom } from "../atoms/playback";
 import { favoriteTrackIdsAtom } from "../atoms/favorites";
 import { useNavigation } from "../hooks/useNavigation";
@@ -75,8 +75,6 @@ interface TrackRowProps {
   showDateAdded: boolean;
   context: string;
   onPlay: (track: Track, index: number) => void;
-  currentTrackId: number | null;
-  isCurrentlyPlaying: boolean;
   playlistId?: string;
   isUserPlaylist?: boolean;
   onTrackRemoved?: (index: number) => void;
@@ -94,8 +92,6 @@ const TrackRow = memo(function TrackRow({
   showDateAdded,
   context,
   onPlay,
-  currentTrackId,
-  isCurrentlyPlaying,
   playlistId,
   isUserPlaylist,
   onTrackRemoved,
@@ -115,8 +111,19 @@ const TrackRow = memo(function TrackRow({
 
   const allowExplicit = useAtomValue(allowExplicitAtom);
   const isBlocked = !allowExplicit && !!track.explicit;
-  const isActive = currentTrackId === track.id;
-  const playing = isActive && isCurrentlyPlaying;
+
+  const isActiveAtom = useMemo(
+    () => atom((get) => (get(currentTrackAtom)?.id ?? null) === track.id),
+    [track.id],
+  );
+  const isActive = useAtomValue(isActiveAtom);
+
+  const isPlayingHereAtom = useMemo(
+    () => atom((get) => (get(currentTrackAtom)?.id ?? null) === track.id && get(isPlayingAtom)),
+    [track.id],
+  );
+  const playing = useAtomValue(isPlayingHereAtom);
+
   const isFav = favoriteTrackIds.has(track.id);
 
   const toggleFavorite = async (e: React.MouseEvent) => {
@@ -389,9 +396,6 @@ export default memo(function TrackList({
   onSort,
   sortLoading = false,
 }: TrackListProps) {
-  const currentTrack = useAtomValue(currentTrackAtom);
-  const isPlaying = useAtomValue(isPlayingAtom);
-  const currentTrackId = currentTrack?.id ?? null;
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
@@ -551,8 +555,6 @@ export default memo(function TrackList({
               showDateAdded={showDateAdded}
               context={context}
               onPlay={onPlay}
-              currentTrackId={currentTrackId}
-              isCurrentlyPlaying={isPlaying}
               playlistId={playlistId}
               isUserPlaylist={isUserPlaylist}
               onTrackRemoved={onTrackRemoved}
