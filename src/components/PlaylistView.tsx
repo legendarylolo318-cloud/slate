@@ -19,12 +19,13 @@ import {
   useRef,
   startTransition,
 } from "react";
-import { useStore } from "jotai";
+import { useStore, useAtom } from "jotai";
 import {
   isPlayingAtom,
   currentTrackAtom,
   shuffleAtom,
 } from "../atoms/playback";
+import { trackSortPrefsAtom } from "../atoms/favorites";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { useFavorites } from "../hooks/useFavorites";
 import { usePlaylists } from "../hooks/usePlaylists";
@@ -58,6 +59,7 @@ export default function PlaylistView({
   onBack,
 }: PlaylistViewProps) {
   const store = useStore();
+  const [trackSortPrefs, setTrackSortPrefs] = useAtom(trackSortPrefsAtom);
   const {
     playTrack,
     setQueueTracks,
@@ -77,8 +79,11 @@ export default function PlaylistView({
   const [error, setError] = useState<string | null>(null);
   const [fetchedInfo, setFetchedInfo] = useState<typeof playlistInfo>(undefined);
   const [resolvedAccessType, setResolvedAccessType] = useState<string | undefined>();
-  const [sortColumn, setSortColumn] = useState<string | null>(null);
-  const [sortDirection, setSortDirection] = useState<"ASC" | "DESC" | null>(null);
+  const savedSort = trackSortPrefs[playlistId];
+  const [sortColumn, setSortColumn] = useState<string | null>(savedSort?.order ?? null);
+  const [sortDirection, setSortDirection] = useState<"ASC" | "DESC" | null>(
+    (savedSort?.direction as "ASC" | "DESC") ?? null,
+  );
   const [sortLoading, setSortLoading] = useState(false);
   const generationRef = useRef(0);
   const prevPlaylistIdRef = useRef(playlistId);
@@ -208,13 +213,14 @@ export default function PlaylistView({
       setLoading(true);
       setError(null);
       setAllTracks([]);
-      // Reset sort to default when navigating to new playlist
-      // Skip fetch on this run — the sort reset will trigger a fresh effect run with null sort
-      if (sortColumn !== null || sortDirection !== null) {
-        setSortColumn(null);
-        setSortDirection(null);
-        return;
-      }
+      // Load saved sort preference for the new playlist
+      const newSort = trackSortPrefs[playlistId];
+      const newCol = newSort?.order ?? null;
+      const newDir = (newSort?.direction as "ASC" | "DESC") ?? null;
+      if (sortColumn !== newCol) setSortColumn(newCol);
+      if (sortDirection !== newDir) setSortDirection(newDir);
+      // If sort state changed, skip this fetch — the state update will trigger a new effect run
+      if (sortColumn !== newCol || sortDirection !== newDir) return;
     } else {
       // Track-list skeleton for sort change
       setSortLoading(true);
@@ -349,10 +355,22 @@ export default function PlaylistView({
     }
   }, [fetchRemaining]);
 
-  const handleSort = useCallback((column: string | null, direction: "ASC" | "DESC" | null) => {
-    setSortColumn(column);
-    setSortDirection(direction);
-  }, []);
+  const handleSort = useCallback(
+    (column: string | null, direction: "ASC" | "DESC" | null) => {
+      setSortColumn(column);
+      setSortDirection(direction);
+      setTrackSortPrefs((prev) => {
+        const next = { ...prev };
+        if (column === null) {
+          delete next[playlistId];
+        } else {
+          next[playlistId] = { order: column, direction: direction! };
+        }
+        return next;
+      });
+    },
+    [playlistId, setTrackSortPrefs],
+  );
 
   const trackIds = useMemo(
     () => new Set(tracks.map((track) => track.id)),

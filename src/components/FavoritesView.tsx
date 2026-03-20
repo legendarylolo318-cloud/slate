@@ -7,11 +7,11 @@ import {
   useMemo,
   startTransition,
 } from "react";
-import { useAtomValue, useStore } from "jotai";
+import { useAtomValue, useStore, useAtom } from "jotai";
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
 import { useAuth } from "../hooks/useAuth";
 import { getFavoriteTracks } from "../api/tidal";
-import { favoriteTrackIdsAtom } from "../atoms/favorites";
+import { favoriteTrackIdsAtom, trackSortPrefsAtom } from "../atoms/favorites";
 import { shuffleAtom } from "../atoms/playback";
 import { type Track } from "../types";
 import TrackList from "./TrackList";
@@ -27,6 +27,7 @@ const PAGE_SIZE = 100;
 
 export default function FavoritesView({ onBack }: FavoritesViewProps) {
   const store = useStore();
+  const [trackSortPrefs, setTrackSortPrefs] = useAtom(trackSortPrefsAtom);
   const { authTokens } = useAuth();
   const { playFromSource, setQueueTracks, setShuffledQueue } =
     usePlaybackActions();
@@ -38,8 +39,11 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [sortColumn, setSortColumn] = useState<string | null>("DATE");
-  const [sortDirection, setSortDirection] = useState<"ASC" | "DESC" | null>("DESC");
+  const savedSort = trackSortPrefs["__favorites__"];
+  const [sortColumn, setSortColumn] = useState<string | null>(savedSort?.order ?? "DATE");
+  const [sortDirection, setSortDirection] = useState<"ASC" | "DESC" | null>(
+    (savedSort?.direction as "ASC" | "DESC") ?? "DESC",
+  );
   const [sortLoading, setSortLoading] = useState(false);
   const generationRef = useRef(0);
   const isFirstLoadRef = useRef(true);
@@ -55,15 +59,27 @@ export default function FavoritesView({ onBack }: FavoritesViewProps) {
     allTracksRef.current = allTracks;
   }, [allTracks]);
 
-  const handleSort = useCallback((column: string | null, direction: "ASC" | "DESC" | null) => {
-    if (column === null) {
-      setSortColumn("DATE");
-      setSortDirection("DESC");
-    } else {
-      setSortColumn(column);
-      setSortDirection(direction);
-    }
-  }, []);
+  const handleSort = useCallback(
+    (column: string | null, direction: "ASC" | "DESC" | null) => {
+      if (column === null) {
+        setSortColumn("DATE");
+        setSortDirection("DESC");
+        setTrackSortPrefs((prev) => {
+          const next = { ...prev };
+          delete next["__favorites__"];
+          return next;
+        });
+      } else {
+        setSortColumn(column);
+        setSortDirection(direction);
+        setTrackSortPrefs((prev) => ({
+          ...prev,
+          __favorites__: { order: column, direction: direction! },
+        }));
+      }
+    },
+    [setTrackSortPrefs],
+  );
 
   // Load first page only (re-runs on sort change)
   useEffect(() => {
