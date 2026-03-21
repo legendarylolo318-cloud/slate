@@ -88,6 +88,7 @@ function fisherYatesShuffle<T>(arr: T[]): T[] {
 
 const DEVICE_RETRY_DELAY = 500;
 const DEVICE_MAX_RETRIES = 10;
+const MAX_HISTORY_TRACKS = 500;
 
 /** Invoke play_tidal_track with automatic device-busy retry.
  *  When PipeWire holds the ALSA device after pipeline teardown, this retries
@@ -139,7 +140,13 @@ export function usePlaybackActions() {
 
       // Eagerly update UI so album art / blur transitions start immediately
       if (previousTrack && !opts?.skipHistoryPush) {
-        store.set(historyAtom, [...previousHistory, previousTrack]);
+        const nextHistory = [...previousHistory, previousTrack];
+        store.set(
+          historyAtom,
+          nextHistory.length > MAX_HISTORY_TRACKS
+            ? nextHistory.slice(nextHistory.length - MAX_HISTORY_TRACKS)
+            : nextHistory,
+        );
       }
       // Store source context on track for history-based prev navigation
       (stamped as any)._playingFrom = store.get(playbackSourceAtom);
