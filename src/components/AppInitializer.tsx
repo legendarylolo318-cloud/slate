@@ -77,6 +77,7 @@ import {
 import { useFavorites } from "../hooks/useFavorites";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { useMcpBridge } from "../hooks/useMcpBridge";
+import { useOverlayBridge } from "../hooks/useOverlayBridge";
 import { useToast } from "../contexts/ToastContext";
 import {
   checkNetworkError,
@@ -198,6 +199,7 @@ export function AppInitializer() {
   const { addFavoriteTrack, removeFavoriteTrack, favoriteTrackIds } =
     useFavorites();
   useMcpBridge();
+  useOverlayBridge();
   const setDrawerOpen = useSetAtom(drawerOpenAtom);
   const setMaximized = useSetAtom(maximizedPlayerAtom);
   const setDecorations = useSetAtom(decorationsAtom);
