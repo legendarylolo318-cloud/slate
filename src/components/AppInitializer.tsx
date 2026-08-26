@@ -13,6 +13,7 @@ import { useSetAtom, useStore, useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { parseTidalUrl } from "../lib/tidalUrl";
 import { updateToastSeenAtom } from "../atoms/updates";
@@ -68,7 +69,9 @@ import {
   feedUnseenCountAtom,
   maximizedPlayerAtom,
 } from "../atoms/ui";
+import { themeAtom } from "../atoms/theme";
 import { proxySettingsAtom, type ProxySettings } from "../atoms/proxy";
+import { syncThemeToFile, handleThemeFocusChange } from "../lib/themeFile";
 
 // Stable action callbacks (no atom subscriptions)
 import { usePlaybackActions } from "../hooks/usePlaybackActions";
@@ -774,6 +777,45 @@ export function AppInitializer() {
         );
       }
     };
+  }, [store]);
+
+  // ================================================================
+  //  THEME FILE WRITE-THROUGH — persist themeAtom ->
+  //  CONFIG_SONE_DIR/theme.json
+  // ================================================================
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const unsub = store.sub(themeAtom, () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void syncThemeToFile(store.get(themeAtom));
+      }, 150);
+    });
+    return () => {
+      unsub();
+      if (timer) clearTimeout(timer);
+    };
+  }, [store]);
+
+  // ================================================================
+  //  EXTERNAL THEME FILE — re-read when window is displayed
+  //  (tray/taskbar restore, re-focus)
+  // ================================================================
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        void handleThemeFocusChange(
+          focused,
+          () => store.get(themeAtom),
+          (t) => store.set(themeAtom, t),
+        );
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => unlisten?.();
   }, [store]);
 
   // ================================================================

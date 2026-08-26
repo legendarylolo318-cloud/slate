@@ -15,6 +15,7 @@ mod rate_gate;
 mod scrobble;
 mod signal_path;
 mod pipeline_probe;
+mod theme_config;
 #[cfg(target_os = "linux")]
 mod tray;
 mod tidal_api;
@@ -767,7 +768,7 @@ pub fn run() {
                         })
                         .ok();
                 }
-                
+
                 // tauri.conf.json sets decorations: false, so the window is
                 // born without GTK CSD. Only re-enable native chrome if the
                 // user has explicitly opted in via the escape-hatch toggle.
@@ -863,6 +864,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            // theme file
+            theme_config::theme_file_get,
+            theme_config::theme_file_set,
             // auth
             commands::auth::greet,
             commands::auth::load_saved_auth,

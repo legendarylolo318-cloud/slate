@@ -423,6 +423,32 @@ This is a known issue with NVIDIA's proprietary drivers and WebKitGTK hardware a
 
 </details>
 
+## Custom theme file
+
+The theme presets/custom colors are stored at:
+
+```
+~/.config/sone/theme.json
+```
+
+SONE picks it up **at startup and whenever the window is displayed** (e.g. restoring from the tray).
+
+```json
+{
+    "version": 1,
+    "preset": "custom",
+    "custom": {
+        "accent": "#3B82F6",
+        "background": "#0E1118"
+    }
+}
+```
+
+- `preset` = values can be `"custom"` or one of the built-in preset names (e.g. `"Ocean"`, `"Forest"`, `"Noir"`), case-sensitive.
+- `custom.accent` / `custom.background` = `#RGB` or `#RRGGBB` colors.
+
+Invalid files are ignored, the in-app config in localStorage wins.
+
 ## FAQ
 
 <details>
