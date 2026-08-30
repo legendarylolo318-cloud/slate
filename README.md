@@ -425,13 +425,22 @@ This is a known issue with NVIDIA's proprietary drivers and WebKitGTK hardware a
 
 ## Custom theme file
 
-The theme presets/custom colors are stored at:
+The theme presets/custom colors are stored in `theme.json`, inside SONE's config
+directory. **That directory depends on how you installed SONE**, because Flatpak
+and Snap both redirect `XDG_CONFIG_HOME` into their own sandbox:
 
-```
-~/.config/sone/theme.json
-```
+| Install | `theme.json` |
+| --- | --- |
+| Native (AUR, `.deb`, `.rpm`, AppImage) | `~/.config/sone/theme.json` |
+| Flatpak | `~/.var/app/io.github.lullabyX.sone/config/sone/theme.json` |
+| Snap | `~/snap/sone/current/.config/sone/theme.json` |
 
-SONE picks it up **at startup and whenever the window is displayed** (e.g. restoring from the tray).
+A sandboxed SONE cannot read `~/.config/sone/`, so tools that write the theme
+for you need the matching path above.
+
+SONE reads the file **at startup, and whenever the window regains focus**. A
+change made while SONE is unfocused or in the tray is applied the next time you
+focus the window, not immediately.
 
 ```json
 {
@@ -444,10 +453,17 @@ SONE picks it up **at startup and whenever the window is displayed** (e.g. resto
 }
 ```
 
-- `preset` = values can be `"custom"` or one of the built-in preset names (e.g. `"Ocean"`, `"Forest"`, `"Noir"`), case-sensitive.
+- `preset` = `"custom"`, or one of the built-in preset names (e.g. `"Ocean"`, `"Forest"`, `"Noir"`), case-sensitive.
 - `custom.accent` / `custom.background` = `#RGB` or `#RRGGBB` colors.
+- Both keys are required, even when `preset` names a built-in — `{"preset": "Ocean"}` on its own is rejected.
+- Strict JSON only: comments and trailing commas are not accepted.
 
-Invalid files are ignored, the in-app config in localStorage wins.
+When `preset` names a built-in, that preset's colors win and `custom` is ignored
+for display. SONE rewrites `custom` to match the preset the next time you change
+the theme in Settings.
+
+A file SONE cannot parse is left alone and the in-app theme is kept. Fix the
+file and restart, or change the theme in Settings to overwrite it.
 
 ## FAQ
 

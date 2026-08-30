@@ -40,13 +40,23 @@ describe("themeToFile", () => {
     });
   });
 
-  it("is case-insensitive for preset matching", () => {
+  it("is case-insensitive when matching a preset's colors", () => {
+    const f = themeToFile({
+      name: "Ocean",
+      accent: "#3b82f6",
+      bgBase: "#0e1118",
+    });
+    expect(f.preset).toBe("Ocean");
+    expect(f.custom.accent).toBe("#3B82F6");
+  });
+
+  it("leaves a Custom theme custom even on a preset's exact colors", () => {
     const f = themeToFile({
       name: "Custom",
       accent: "#3b82f6",
       bgBase: "#0e1118",
     });
-    expect(f.preset).toBe("Ocean");
+    expect(f.preset).toBe("custom");
     expect(f.custom.accent).toBe("#3B82F6");
   });
 
@@ -182,5 +192,39 @@ describe("themesEqual", () => {
         { name: "b", accent: "#111111", bgBase: "#000001" },
       ),
     ).toBe(false);
+  });
+});
+
+describe("themeToFile round-trip fidelity", () => {
+  const roundTrip = (f: ThemeFile) => themeToFile(resolveThemeFile(f)!);
+
+  it("keeps preset:'custom' when the colors happen to equal a preset", () => {
+    const file: ThemeFile = {
+      version: 1,
+      preset: "custom",
+      custom: { accent: "#3B82F6", background: "#0E1118" }, // == Ocean
+    };
+    expect(roundTrip(file)).toEqual(file);
+  });
+
+  it("keeps a named preset", () => {
+    const file: ThemeFile = {
+      version: 1,
+      preset: "Forest",
+      custom: { accent: "#22C55E", background: "#0E1410" },
+    };
+    expect(roundTrip(file)).toEqual(file);
+  });
+
+  it("does not trust a theme name whose colors no longer match the preset", () => {
+    // A stale localStorage entry claiming to be Ocean with edited colors is
+    // a custom theme, not Ocean.
+    expect(
+      themeToFile({ name: "Ocean", accent: "#FF00AA", bgBase: "#101010" }),
+    ).toEqual({
+      version: 1,
+      preset: "custom",
+      custom: { accent: "#FF00AA", background: "#101010" },
+    });
   });
 });

@@ -115,7 +115,7 @@ describe("syncThemeToFile (write-through, §5)", () => {
     invokeMock.mockResolvedValue(undefined);
     const { syncThemeToFile } = await freshThemeFile();
     await syncThemeToFile(OCEAN);
-    await syncThemeToFile({ ...OCEAN, name: "Renamed" }); // same colors
+    await syncThemeToFile({ ...OCEAN }); // same theme, fresh object
     const setCalls = invokeMock.mock.calls.filter(
       (c) => c[0] === "theme_file_set",
     );
@@ -208,5 +208,86 @@ describe("handleThemeFocusChange (window display, §6)", () => {
     );
     expect(invokeMock).toHaveBeenCalledTimes(1);
     expect(applied).toBeUndefined();
+  });
+});
+
+// The write-through subscription in AppInitializer fires once on mount, when
+// jotai's atomWithStorage hydrates themeAtom from localStorage. That echo must
+// never reach the file.
+async function simulateLaunchEcho(theme: typeof OCEAN) {
+  const { syncThemeToFile } = await import("./themeFile");
+  await syncThemeToFile(theme);
+}
+
+describe("startup echo must not touch theme.json", () => {
+  it("no write when the file already agrees with localStorage", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(OCEAN));
+    const mod = await freshThemeFile();
+    invokeMock.mockResolvedValue({
+      version: 1,
+      preset: "Ocean",
+      custom: { accent: "#3B82F6", background: "#0E1118" },
+    });
+    await mod.bootstrapThemeFile();
+    invokeMock.mockClear();
+
+    await simulateLaunchEcho(OCEAN);
+    expect(
+      invokeMock.mock.calls.filter((c) => c[0] === "theme_file_set"),
+    ).toHaveLength(0);
+  });
+
+  it("no write when the file names a preset but localStorage says Custom", async () => {
+    // Colors agree, so bootstrap's themesEqual check finds nothing to do --
+    // but the stored `name` still disagrees with the file's `preset`.
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ name: "Custom", accent: "#3B82F6", bgBase: "#0E1118" }),
+    );
+    const mod = await freshThemeFile();
+    invokeMock.mockResolvedValue({
+      version: 1,
+      preset: "Ocean",
+      custom: { accent: "#3B82F6", background: "#0E1118" },
+    });
+    await mod.bootstrapThemeFile();
+    invokeMock.mockClear();
+
+    await simulateLaunchEcho(OCEAN);
+    expect(
+      invokeMock.mock.calls.filter((c) => c[0] === "theme_file_set"),
+    ).toHaveLength(0);
+  });
+
+  it("never overwrites a file that failed to parse", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(CUSTOM));
+    const mod = await freshThemeFile();
+    invokeMock.mockImplementation((cmd: string) =>
+      cmd === "theme_file_get"
+        ? Promise.reject('invalid accent color "#ZZZ"')
+        : Promise.resolve(),
+    );
+    await mod.bootstrapThemeFile();
+    invokeMock.mockClear();
+
+    await simulateLaunchEcho(CUSTOM);
+    expect(
+      invokeMock.mock.calls.filter((c) => c[0] === "theme_file_set"),
+    ).toHaveLength(0);
+  });
+
+  it("a real theme change still repairs an unreadable file", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(CUSTOM));
+    const mod = await freshThemeFile();
+    invokeMock.mockImplementation((cmd: string) =>
+      cmd === "theme_file_get" ? Promise.reject("bad hex") : Promise.resolve(),
+    );
+    await mod.bootstrapThemeFile();
+    invokeMock.mockClear();
+
+    await mod.syncThemeToFile(OCEAN); // user picks a preset in Settings
+    const sets = invokeMock.mock.calls.filter((c) => c[0] === "theme_file_set");
+    expect(sets).toHaveLength(1);
+    expect(sets[0][1].file.preset).toBe("Ocean");
   });
 });

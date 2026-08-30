@@ -328,6 +328,10 @@ export interface ThemeFile {
 
 export const THEME_STORAGE_KEY = "sone.theme.v1";
 
+/** The `"preset"` meaning "use the `custom` colors". Mirrors `CUSTOM_PRESET`
+ *  in `src-tauri/src/theme_config.rs`. */
+export const CUSTOM_PRESET = "custom";
+
 const PRESET_NAMES = new Set(PRESET_THEMES.map((p) => p.name));
 
 /** Normalize a `#RGB`/`#RrGgBb` color to uppercase `#RRGGBB` */
@@ -365,7 +369,7 @@ export function resolveThemeFile(
   const bgBase = normalizeHex(String(custom.background));
   if (!accent || !bgBase) return null;
 
-  if (file.preset === "custom") {
+  if (file.preset === CUSTOM_PRESET) {
     return { name: "Custom", accent, bgBase };
   }
   if (!PRESET_NAMES.has(file.preset)) return null;
@@ -377,13 +381,18 @@ export function resolveThemeFile(
 export function themeToFile(theme: Theme): ThemeFile {
   const accent = normalizeHex(theme.accent) ?? theme.accent.toUpperCase();
   const bgBase = normalizeHex(theme.bgBase) ?? theme.bgBase.toUpperCase();
-  const preset = PRESET_THEMES.find(
+  // Trust the theme's own name rather than matching colors back to a preset --
+  // a custom theme that happens to land on a preset's colors is still custom.
+  // The colors are still checked so a stale name can't mislabel edited colors.
+  const isPreset = PRESET_THEMES.some(
     (p) =>
-      p.accent.toUpperCase() === accent && p.bgBase.toUpperCase() === bgBase,
+      p.name === theme.name &&
+      p.accent.toUpperCase() === accent &&
+      p.bgBase.toUpperCase() === bgBase,
   );
   return {
     version: 1,
-    preset: preset ? preset.name : "custom",
+    preset: isPreset ? theme.name : CUSTOM_PRESET,
     custom: { accent, background: bgBase },
   };
 }

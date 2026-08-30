@@ -20,8 +20,21 @@ function warnWrite(err: unknown) {
   }
 }
 
-/** Last successfully persisted serialized file (no-op write guard) */
+/**
+ * Serialized form of the file we last wrote, or last agreed with on disk.
+ *
+ * This guards against the echo that arrives at startup: jotai's
+ * `atomWithStorage` hydrates `themeAtom` inside `onMount`, so the
+ * write-through subscription in `AppInitializer` fires once on mount even
+ * when nothing changed. Guarding on what we *would write* (rather than on the
+ * bytes on disk) means a hand-written file is left alone until the theme
+ * genuinely changes.
+ */
 let lastPersisted = "";
+
+function markPersisted(theme: Theme) {
+  lastPersisted = JSON.stringify(themeToFile(theme));
+}
 
 function readStoredTheme(): Theme {
   try {
@@ -51,7 +64,12 @@ export async function bootstrapThemeFile(): Promise<void> {
   try {
     file = await invoke<ThemeFile | null>("theme_file_get");
   } catch {
-    return; // Invalid file or backend unavailable
+    // Invalid file or backend unavailable. Seed the guard from the theme we
+    // are about to render so the mount-time echo (below) cannot overwrite a
+    // file the user may be part-way through editing. A deliberate theme
+    // change still writes, repairing the file.
+    markPersisted(current);
+    return;
   }
   if (file === null) {
     // Create if not exists
@@ -65,10 +83,16 @@ export async function bootstrapThemeFile(): Promise<void> {
     return;
   }
   const resolved = resolveThemeFile(file);
-  if (resolved && !themesEqual(resolved, current)) {
-    // If theme in file != from localStorage, update
-    writeStoredTheme(resolved);
+  if (!resolved) {
+    markPersisted(current);
+    return;
   }
+  // Mirror the file into localStorage unconditionally, not just when the
+  // colors differ: a stored `name` of "Custom" against a file preset of
+  // "Ocean" describes the same colors but serializes differently, and the
+  // disagreement would surface as a spurious write on the next launch.
+  writeStoredTheme(resolved);
+  markPersisted(resolved);
 }
 
 export async function syncThemeToFile(theme: Theme): Promise<void> {
@@ -100,14 +124,18 @@ export async function handleThemeFocusChange(
     const current = getCurrent();
     try {
       await invoke("theme_file_set", { file: themeToFile(current) });
-      lastPersisted = JSON.stringify(themeToFile(current));
+      markPersisted(current);
     } catch (err) {
       warnWrite(err);
     }
     return;
   }
   const resolved = resolveThemeFile(file);
-  if (resolved && !themesEqual(resolved, getCurrent())) {
+  if (!resolved) return;
+  if (!themesEqual(resolved, getCurrent())) {
     setCurrent(resolved);
   }
+  // Either way the file and the live theme now agree -- record that, so the
+  // write-through this may have just triggered does not echo back to disk.
+  markPersisted(resolved);
 }
