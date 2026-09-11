@@ -158,6 +158,113 @@ pub fn plan(s: &crate::ProxySettings, _env: &HostCaps) -> Result<ProxyPlan, Plan
     })
 }
 
+/// Which consumer is asking. The spelling of a SOCKS5 URI and the element
+/// requirements differ per consumer, so this is not cosmetic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capability {
+    /// reqwest: API, auth, scrobbling, play reports, artwork, update check.
+    Api,
+    /// GStreamer progressive HTTP (lossy) — may use souphttpsrc.
+    Lossy,
+    /// GStreamer DASH segments (lossless/hi-res).
+    Dash,
+    /// The shared WebKit network session.
+    Webview,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Route {
+    /// Proceed with the system's own configuration.
+    NoProxy,
+    Via {
+        uri: String,
+        creds: Option<Creds>,
+    },
+}
+
+/// Why a capability cannot be served. Carries a cause because failures are
+/// discovered in places `plan()` cannot see, such as resolving the proxy host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockReason {
+    pub cause: String,
+}
+
+impl BlockReason {
+    fn new(cause: impl Into<String>) -> Self {
+        Self {
+            cause: cause.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for BlockReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.cause)
+    }
+}
+
+/// Minimum GStreamer with a working `curlhttpsrc` progressive seek.
+const CURL_SEEK_FIXED: (u32, u32, u32) = (1, 26, 10);
+
+fn authority(host: &str, port: u16) -> String {
+    if host.parse::<Ipv6Addr>().is_ok() {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+impl ProxyPlan {
+    pub fn route(&self, c: Capability, env: &HostCaps) -> Result<Route, BlockReason> {
+        let (host, port, creds, socks) = match self {
+            ProxyPlan::Direct => return Ok(Route::NoProxy),
+            ProxyPlan::Http { host, port, creds } => (host, *port, creds, false),
+            ProxyPlan::Socks5 { host, port, creds } => (host, *port, creds, true),
+        };
+
+        if matches!(c, Capability::Lossy | Capability::Dash) {
+            // souphttpsrc cannot authenticate over a CONNECT tunnel, so credentials
+            // force curlhttpsrc; and it cannot do authenticated SOCKS5 at all.
+            if creds.is_some() && !env.has_curlhttpsrc {
+                return Err(BlockReason::new(
+                    "audio cannot be proxied with credentials: the curl source plugin is missing",
+                ));
+            }
+            if socks && creds.is_some() && !env.has_curlhttpsrc {
+                return Err(BlockReason::new(
+                    "authenticated SOCKS5 audio requires the curl source plugin",
+                ));
+            }
+        }
+
+        if c == Capability::Dash && !env.has_dashdemux {
+            return Err(BlockReason::new(
+                "high-resolution audio cannot be proxied: the legacy adaptive demuxer is missing",
+            ));
+        }
+
+        if c == Capability::Lossy && creds.is_some() && env.gst_version < CURL_SEEK_FIXED {
+            let (a, b, d) = env.gst_version;
+            return Err(BlockReason::new(format!(
+                "authenticated proxies need GStreamer 1.26.10 or newer for seeking (found {a}.{b}.{d})"
+            )));
+        }
+
+        let scheme = match (socks, c) {
+            (false, _) => "http",
+            // gio implements socks5 only, and its socks5 already resolves at the
+            // proxy; libcurl and reqwest need socks5h for the same behaviour.
+            (true, Capability::Lossy) => "socks5",
+            (true, _) => "socks5h",
+        };
+
+        Ok(Route::Via {
+            uri: format!("{scheme}://{}", authority(host, port)),
+            creds: creds.clone(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,5 +483,140 @@ mod tests {
         let debug = format!("{c:?}");
         assert!(debug.contains("bob"));
         assert!(!debug.contains("hunter2"));
+    }
+
+    fn http_plan(port: u16) -> ProxyPlan {
+        plan(&settings("proxy.example", port), &HostCaps::assume_all_present()).unwrap()
+    }
+
+    fn socks_plan(with_creds: bool) -> ProxyPlan {
+        let mut s = settings("proxy.example", 1080);
+        s.proxy_type = ProxyType::Socks5;
+        if with_creds {
+            s.username = Some("bob".into());
+            s.password = Some("hunter2".into());
+        }
+        plan(&s, &HostCaps::assume_all_present()).unwrap()
+    }
+
+    fn uri_of(r: &Route) -> &str {
+        match r {
+            Route::Via { uri, .. } => uri,
+            Route::NoProxy => panic!("expected a proxied route"),
+        }
+    }
+
+    #[test]
+    fn direct_routes_to_noproxy_for_every_capability() {
+        let caps = HostCaps::assume_all_present();
+        for c in [Capability::Api, Capability::Lossy, Capability::Dash, Capability::Webview] {
+            assert!(matches!(
+                ProxyPlan::Direct.route(c, &caps),
+                Ok(Route::NoProxy)
+            ));
+        }
+    }
+
+    #[test]
+    fn port_80_is_preserved_for_every_capability() {
+        // Regression: round-tripping through url::Url drops a default port and
+        // libcurl then silently dials 1080.
+        let caps = HostCaps::assume_all_present();
+        let p = http_plan(80);
+        for c in [Capability::Api, Capability::Lossy, Capability::Dash, Capability::Webview] {
+            let r = p.route(c, &caps).unwrap();
+            assert_eq!(uri_of(&r), "http://proxy.example:80", "capability {c:?}");
+        }
+    }
+
+    #[test]
+    fn every_port_round_trips_exactly() {
+        let caps = HostCaps::assume_all_present();
+        for port in [1u16, 80, 443, 1080, 8080, 65535] {
+            let r = http_plan(port).route(Capability::Api, &caps).unwrap();
+            assert_eq!(uri_of(&r), format!("http://proxy.example:{port}"));
+        }
+    }
+
+    #[test]
+    fn ipv6_is_bracketed_exactly_once_in_the_uri() {
+        let caps = HostCaps::assume_all_present();
+        let p = plan(&settings("2001:db8::1", 8080), &caps).unwrap();
+        let r = p.route(Capability::Lossy, &caps).unwrap();
+        assert_eq!(uri_of(&r), "http://[2001:db8::1]:8080");
+    }
+
+    #[test]
+    fn socks5_spellings_are_inverted_between_the_two_audio_elements() {
+        // reqwest and curlhttpsrc need socks5h (proxy-side DNS); gio has no
+        // socks5h impl and its socks5 already sends the hostname.
+        let caps = HostCaps::assume_all_present();
+        let p = socks_plan(false);
+        assert_eq!(uri_of(&p.route(Capability::Api, &caps).unwrap()), "socks5h://proxy.example:1080");
+        assert_eq!(uri_of(&p.route(Capability::Dash, &caps).unwrap()), "socks5h://proxy.example:1080");
+        assert_eq!(uri_of(&p.route(Capability::Lossy, &caps).unwrap()), "socks5://proxy.example:1080");
+    }
+
+    #[test]
+    fn no_route_uri_ever_contains_credentials() {
+        let caps = HostCaps::assume_all_present();
+        let mut s = settings("proxy.example", 3128);
+        s.username = Some("bob".into());
+        s.password = Some("hunter2".into());
+        let p = plan(&s, &caps).unwrap();
+        for c in [Capability::Api, Capability::Lossy, Capability::Dash, Capability::Webview] {
+            let r = p.route(c, &caps).unwrap();
+            let uri = uri_of(&r);
+            assert!(!uri.contains('@'), "{uri}");
+            assert!(!uri.contains("bob"), "{uri}");
+            assert!(!uri.contains("hunter2"), "{uri}");
+            assert!(matches!(r, Route::Via { creds: Some(_), .. }));
+        }
+    }
+
+    #[test]
+    fn socks5_with_credentials_needs_curlhttpsrc_for_audio() {
+        let mut caps = HostCaps::assume_all_present();
+        caps.has_curlhttpsrc = false;
+        let p = socks_plan(true);
+        assert!(p.route(Capability::Lossy, &caps).is_err());
+        assert!(p.route(Capability::Dash, &caps).is_err());
+        // The API transport is unaffected by a missing GStreamer plugin.
+        assert!(p.route(Capability::Api, &caps).is_ok());
+    }
+
+    #[test]
+    fn socks5_without_credentials_works_without_curlhttpsrc() {
+        let mut caps = HostCaps::assume_all_present();
+        caps.has_curlhttpsrc = false;
+        assert!(socks_plan(false).route(Capability::Lossy, &caps).is_ok());
+    }
+
+    #[test]
+    fn missing_legacy_demuxer_blocks_dash_but_not_lossy() {
+        let mut caps = HostCaps::assume_all_present();
+        caps.has_dashdemux = false;
+        let p = http_plan(3128);
+        assert!(p.route(Capability::Dash, &caps).is_err());
+        assert!(p.route(Capability::Lossy, &caps).is_ok());
+        assert!(p.route(Capability::Api, &caps).is_ok());
+    }
+
+    #[test]
+    fn old_gstreamer_blocks_lossy_only_when_credentials_are_present() {
+        // curlhttpsrc progressive seek is broken below 1.26.10 and it is the only
+        // element that can authenticate over a CONNECT tunnel.
+        let mut caps = HostCaps::assume_all_present();
+        caps.gst_version = (1, 24, 2);
+
+        let mut s = settings("proxy.example", 3128);
+        s.username = Some("bob".into());
+        s.password = Some("hunter2".into());
+        let with_creds = plan(&s, &caps).unwrap();
+        assert!(with_creds.route(Capability::Lossy, &caps).is_err());
+        assert!(with_creds.route(Capability::Dash, &caps).is_ok());
+
+        let without = http_plan(3128);
+        assert!(without.route(Capability::Lossy, &caps).is_ok());
     }
 }
