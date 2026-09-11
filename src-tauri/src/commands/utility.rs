@@ -377,6 +377,25 @@ pub fn get_proxy_settings(state: State<'_, AppState>) -> crate::ProxySettings {
         .unwrap_or_default()
 }
 
+/// The standing report of what the proxy is doing, for the banner that has to
+/// be visible before anyone is logged in.
+///
+/// Reads the live cell rather than only the saved settings, because the state
+/// that strands a user is a plan that is fine and a client that could not be
+/// built — see `ProxyStatus::observed`. `degraded` stays empty until stage 3
+/// supplies a real `HostCaps` probe; `Blocked` is fully determined today, and
+/// it is the one the user cannot otherwise escape.
+#[tauri::command]
+pub fn get_proxy_status(state: State<'_, AppState>) -> crate::proxy::ProxyStatus {
+    let settings = state.load_settings().map(|s| s.proxy).unwrap_or_default();
+    let block = state.proxied_http.client().err();
+    crate::proxy::ProxyStatus::observed(
+        &settings,
+        &crate::proxy::HostCaps::assume_all_present(),
+        block.as_ref().map(|e| e.cause.as_str()),
+    )
+}
+
 /// Persist the proxy settings, then reconfigure the transports — in that
 /// order, and the order is the whole point.
 ///
@@ -398,12 +417,13 @@ pub fn get_proxy_settings(state: State<'_, AppState>) -> crate::ProxySettings {
 /// "connection failed". Playback does the same, as its own toast, and that path
 /// deliberately does not treat a block as an unplayable track.
 ///
-/// Two things this still does not cover, so nobody reads it as full coverage.
-/// `ProxyStatus` exists but nothing emits it, so there is no *standing* report
-/// of a proxy that is merely degraded — a plan that serves the API while
-/// refusing one audio tier surfaces only when that tier is actually used, and a
-/// per-feature notice waits on the real `HostCaps` probe. And the reason is
-/// reported, not acted on: recovery is still the user's, from the same screen.
+/// One thing this still does not cover, so nobody reads it as full coverage.
+/// `get_proxy_status` now emits `ProxyStatus`, and `ProxyBlockedBanner.tsx`
+/// renders a block outside the authenticated shell with a button that turns
+/// the proxy off — so a block has a standing report and a way out. But
+/// `degraded` is still always empty: a plan that serves the API while refusing
+/// one audio tier surfaces only when that tier is actually used, because the
+/// per-feature notice waits on the real `HostCaps` probe in stage 3.
 ///
 /// Split out from the command so the ordering can be tested without an
 /// `AppState`; `persist` stands in for the encrypted read-modify-write.
@@ -810,6 +830,43 @@ mod tests {
             format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
             "the cell must carry the proxy that was just saved: {c:?}"
         );
+    }
+
+    /// The recovery the pre-login banner's button performs, end to end.
+    ///
+    /// Reachable state: a proxy that persists and cannot build, a logged-out
+    /// user, and no settings screen — every request is refused, login
+    /// included. The button sends the same settings with `enabled: false`, and
+    /// that must both reach disk and unblock the cell while the cell is
+    /// blocked. It does because the persist runs first and the reconfigure
+    /// never reads the cell it is replacing.
+    #[tokio::test]
+    async fn disabling_a_blocked_proxy_saves_and_unblocks_the_cell() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let http = direct_cell();
+
+        let bad = enabled(ProxyType::Socks5, "no-such-host.invalid", 3128);
+        persist_then_reconfigure(&bad, |s| save_json(&file, s), http.clone(), caps())
+            .await
+            .expect_err("this proxy cannot be applied");
+        assert!(
+            http.client().is_err(),
+            "the cell must be blocked for this test to mean anything"
+        );
+
+        let mut off = bad.clone();
+        off.enabled = false;
+        persist_then_reconfigure(&off, |s| save_json(&file, s), http.clone(), caps())
+            .await
+            .expect("turning the proxy off must succeed from a blocked cell");
+
+        assert!(
+            !on_disk(&file).enabled,
+            "the next start must read the proxy back as off"
+        );
+        http.client()
+            .expect("disabling the proxy must restore a usable client");
     }
 
     /// The banner paints any `Ok` green, so "cannot report success" means the

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getProxyBlockedReason, safeErrorMessage } from "../../lib/errorUtils";
 import type { ProxySettings } from "../../atoms/proxy";
+import { PROXY_STATUS_EVENT } from "../ProxyBlockedBanner";
 
 /**
  * Whether these settings are complete enough to send to the backend.
@@ -43,6 +44,11 @@ export async function submitProxy(
   } catch (err) {
     console.error("Failed to save proxy settings:", err);
     onError(describe(err, "Could not apply proxy settings"));
+  } finally {
+    // On both paths. A save that succeeded may have cleared a block, and one
+    // that was refused may have created one — the global banner re-reads the
+    // status either way rather than inferring it from what was sent.
+    window.dispatchEvent(new Event(PROXY_STATUS_EVENT));
   }
 }
 

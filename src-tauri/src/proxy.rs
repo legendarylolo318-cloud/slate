@@ -697,6 +697,28 @@ impl ProxyStatus {
                 .collect(),
         }
     }
+
+    /// `evaluate`, corrected by what the live client cell actually holds.
+    ///
+    /// `evaluate` alone is not enough to report a block, because a `PlanError`
+    /// is not the only way to reach one. reqwest resolves a SOCKS5 proxy host
+    /// while building the client, so `socks5://no-such-host:1080` plans
+    /// perfectly and blocks the cell anyway — and that is precisely the state
+    /// a user can save, log out of, and then be unable to reach the settings
+    /// screen to undo. Reporting `Active` for it would leave the banner that
+    /// carries the way out unrendered.
+    ///
+    /// The cell wins whenever it is blocked, including over `Off`: it is what
+    /// egresses, so if it cannot hand out a client then nothing is getting out
+    /// regardless of what the settings say.
+    pub fn observed(s: &crate::ProxySettings, caps: &HostCaps, cell_block: Option<&str>) -> Self {
+        match cell_block {
+            Some(reason) => Self::Blocked {
+                reason: reason.to_string(),
+            },
+            None => Self::evaluate(s, caps),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1597,6 +1619,48 @@ mod tests {
                 .unwrap()
                 .starts_with("invalid proxy host"),
             "{v}"
+        );
+    }
+
+    /// The block a `PlanError` cannot see, and the one that strands a user.
+    ///
+    /// A SOCKS5 proxy whose host does not resolve plans fine and fails while
+    /// the client is being built. Save it, log out, and login is refused with
+    /// `ProxyBlocked` while the settings screen sits behind the login — so the
+    /// pre-login banner has to render for this, which means the status has to
+    /// report it.
+    #[test]
+    fn a_cell_that_cannot_hand_out_a_client_is_blocked_whatever_the_plan_says() {
+        let caps = HostCaps::assume_all_present();
+        let s = settings("proxy.example", 3128);
+        assert!(matches!(
+            ProxyStatus::observed(&s, &caps, None),
+            ProxyStatus::Active { .. }
+        ));
+
+        let st = ProxyStatus::observed(&s, &caps, Some("proxy unusable (socks5h://x:1): oops"));
+        assert_eq!(
+            serde_json::to_value(&st).unwrap(),
+            serde_json::json!({
+                "state": "blocked",
+                "reason": "proxy unusable (socks5h://x:1): oops"
+            })
+        );
+    }
+
+    /// Even with the proxy off. The cell is what egresses: if it holds no
+    /// client, nothing is getting out, and saying `Off` would render no banner
+    /// and no way to act.
+    #[test]
+    fn a_blocked_cell_outranks_a_disabled_proxy() {
+        let mut s = settings("127.0.0.1", 8080);
+        s.enabled = false;
+        let st = ProxyStatus::observed(&s, &HostCaps::assume_all_present(), Some("no client"));
+        assert_eq!(
+            st,
+            ProxyStatus::Blocked {
+                reason: "no client".into()
+            }
         );
     }
 

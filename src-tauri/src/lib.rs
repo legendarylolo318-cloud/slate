@@ -1083,6 +1083,7 @@ pub fn run() {
             commands::utility::set_discord_status_text,
             commands::utility::get_proxy_settings,
             commands::utility::set_proxy_settings,
+            commands::utility::get_proxy_status,
             commands::utility::test_proxy_connection,
             commands::utility::inhibit_idle,
             commands::utility::uninhibit_idle,
