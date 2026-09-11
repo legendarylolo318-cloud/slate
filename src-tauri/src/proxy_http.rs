@@ -708,11 +708,22 @@ mod tests {
         );
     }
 
-    /// `block` must not be able to wait on another writer's `getaddrinfo`: it
-    /// runs inline on the Tauri runtime. Nothing is held across the build, so
-    /// this completes while a slow `replace` is still resolving.
+    /// A smoke test, and labelled as one so it is not mistaken for the proof.
+    ///
+    /// The property — `block` runs inline on the Tauri runtime and must never
+    /// wait on another writer's `getaddrinfo` — is carried by the structure:
+    /// `replace` builds outside every lock, so there is nothing for `block` to
+    /// queue behind. The structure is what to check in review.
+    ///
+    /// The timing here does not falsify a regression on its own. The `replace`
+    /// it races is ~17ms against a 100ms threshold, so an implementation that
+    /// did hold the lock across the build would still pass. Making it sharp
+    /// needs a build that blocks for a controllable duration, which means
+    /// injecting the builder; that is worth doing the day the structure
+    /// changes, and until then this catches only a gross regression — a lock
+    /// held across a real DNS timeout.
     #[test]
-    fn block_does_not_queue_behind_a_slow_replace() {
+    fn block_does_not_visibly_queue_behind_a_slow_replace_smoke() {
         let caps = HostCaps::assume_all_present();
         let h = ProxiedHttp::from_plan(&ProxyPlan::Direct, &caps);
         let p = plan(&enabled("127.0.0.1", 3128), &caps).unwrap();
@@ -733,7 +744,9 @@ mod tests {
 
         assert!(
             waited < std::time::Duration::from_millis(100),
-            "block waited {waited:?} — it is holding, or queueing behind, the build lock"
+            "block waited {waited:?} — it is holding, or queueing behind, the \
+             build lock. Note the converse does not hold: passing this is not \
+             evidence that it is not."
         );
     }
 

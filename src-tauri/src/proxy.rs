@@ -1411,10 +1411,19 @@ mod tests {
         assert_eq!(e.no_proxy.as_deref(), Some(""));
     }
 
-    /// Whatever `main.rs` captured must survive the round trip unchanged; the
-    /// default is empty, so a process that never scrubbed restores nothing.
+    /// What this pins, and all it pins: `scrubbed_env()` reads back as an empty
+    /// slice when `remember_scrubbed_env` was never called, rather than
+    /// panicking or standing in for a live environment read.
+    ///
+    /// It cannot pin more. `SCRUBBED_ENV` is a process-wide `OnceLock` that no
+    /// test can set — the first capture is the only true one, by design — so
+    /// this only ever exercises the default arm, and the resolution it drives
+    /// is `system_proxy_from_env(&[])`, which the cases above already cover
+    /// against explicit inputs. A non-empty capture is tested by handing those
+    /// cases their variables directly.
     #[test]
-    fn the_capture_defaults_to_empty_and_resolves_to_nothing() {
+    fn the_unset_capture_reads_back_as_an_empty_slice() {
+        assert!(scrubbed_env().is_empty());
         let e = system_proxy_from_env(scrubbed_env(), |_, uri| {
             parses(uri).then(|| uri.to_string())
         });

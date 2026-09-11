@@ -175,6 +175,13 @@ fn proxy_objects_and_http_clients_are_built_only_in_proxy_http() {
 /// port 80 turns into `http://host/` and the port is lost. URIs are built by
 /// concatenation in `proxy.rs` instead.
 ///
+/// `Url::parse` is the same trap one step earlier and is banned with it, which
+/// is what the spec asked for: `Url::parse("http://h:80/")` normalises the port
+/// away on its own, so reaching for it to "validate" a proxy URI reintroduces
+/// the defect without ever calling the setter. The damage is invisible to a
+/// string comparison — libcurl was measured dialling 1080 — so the lint is the
+/// guard, not a test of the output.
+///
 /// `audio.rs` is the sole exemption, and only because its `gstreamer_proxy_uri`
 /// helper *is* that defect, awaiting deletion with the rest of the GStreamer
 /// proxy helpers. The exemption asserts its own reason for existing: when
@@ -184,14 +191,17 @@ fn proxy_objects_and_http_clients_are_built_only_in_proxy_http() {
 /// first would hide the obsolescence signal in the case where `audio.rs` is
 /// cleaned up and a new offender appears in the same change.
 #[test]
-fn set_port_is_confined_to_the_one_helper_that_is_slated_for_deletion() {
+fn the_url_port_manglers_are_confined_to_the_one_helper_slated_for_deletion() {
     const EXEMPT: &str = "audio.rs";
 
     let mut offenders = Vec::new();
     let mut exemption_still_needed = false;
 
     for f in rust_sources() {
-        if !fs::read_to_string(&f).unwrap().contains(".set_port(") {
+        let body = fs::read_to_string(&f).unwrap();
+        // `Url::parse` as a path segment, so `TidalUrl::parse` and the like do
+        // not trip it; `.set_port(` needs no such care.
+        if !body.contains(".set_port(") && !mentions_path_segment(&body, "Url::parse") {
             continue;
         }
         if file_name(&f) == EXEMPT {
@@ -204,13 +214,14 @@ fn set_port_is_confined_to_the_one_helper_that_is_slated_for_deletion() {
     let mut problems = Vec::new();
     if !offenders.is_empty() {
         problems.push(format!(
-            "{offenders:?}: Url::set_port drops default ports; build URIs by \
-             concatenation in proxy.rs. {EXEMPT} is the only permitted exemption."
+            "{offenders:?}: Url::set_port and Url::parse both drop a port equal \
+             to the scheme default; build URIs by concatenation in proxy.rs. \
+             {EXEMPT} is the only permitted exemption."
         ));
     }
     if !exemption_still_needed {
         problems.push(format!(
-            "{EXEMPT} no longer calls .set_port(): the exemption in this test is \
+            "{EXEMPT} no longer calls .set_port() or Url::parse: the exemption in this test is \
              obsolete, so delete the exemption (or this whole test) rather than \
              leaving an allowlist nobody re-reads."
         ));
