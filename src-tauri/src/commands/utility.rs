@@ -377,34 +377,84 @@ pub fn get_proxy_settings(state: State<'_, AppState>) -> crate::ProxySettings {
         .unwrap_or_default()
 }
 
+/// Persist the proxy settings, then reconfigure the transports — in that
+/// order, and the order is the whole point.
+///
+/// The settings file is AES-GCM encrypted and the proxy screen is its only
+/// editor, so a reconfiguration failure that aborted the save would strand the
+/// user: the proxy they just tried to turn *off* never reaches disk, the next
+/// start reads the bad value back, and every request — including the ones the
+/// UI needs — stays blocked. Saving first makes a bad proxy recoverable from
+/// the same screen that set it.
+///
+/// Persisting first must not become swallowing, so the save succeeds *and* the
+/// error is returned: the UI reports what is wrong with settings it has
+/// already accepted.
+///
+/// Split out from the command so the ordering can be tested without an
+/// `AppState`; `persist` stands in for the encrypted read-modify-write.
+async fn persist_then_reconfigure(
+    settings: &crate::ProxySettings,
+    persist: impl FnOnce(&crate::ProxySettings) -> Result<(), SoneError>,
+    http: crate::proxy_http::ProxiedHttp,
+    caps: crate::proxy::HostCaps,
+) -> Result<(), SoneError> {
+    // Before any transport is touched. A failure to save is the one reason to
+    // leave the transports alone: nothing changed, so nothing should move.
+    //
+    // Known hazard, not closed here: the client cell is generation-ordered
+    // (the newest caller wins no matter which build finishes last) but
+    // `save_settings` is not, so two overlapping saves can leave the older
+    // settings on disk while the cell holds the newer caller's. It is not
+    // fail-open — the cell is what egresses, it always matches the newest
+    // caller, and the next start re-derives from disk — but cell and disk can
+    // disagree for one session. Closing it means claiming the cell's
+    // generation and writing the file under one lock, which would queue a save
+    // behind another save's `getaddrinfo`; that is exactly the "turn it off"
+    // path this ordering exists to keep responsive.
+    persist(settings)?;
+
+    // Swapping the one shared cell is the whole transport update: every reqwest
+    // consumer reads through it, so there is nothing left to push out to them.
+    // `apply` is the single place that decides what unplannable settings mean,
+    // so this cannot drift back to a direct connection independently of
+    // startup. It is blocking (`build_client` may resolve the proxy host),
+    // hence the detour off the runtime worker.
+    let candidate = settings.clone();
+    let applied = tokio::task::spawn_blocking(move || http.apply(&candidate, &caps))
+        .await
+        .map_err(|e| SoneError::Io(format!("proxy update task failed: {e}")))?;
+
+    applied.map_err(|e| {
+        log::warn!("[proxy] settings saved but unusable: {}", e.cause);
+        SoneError::ProxyBlocked { reason: e.cause }
+    })
+}
+
 #[tauri::command]
 pub async fn set_proxy_settings(
     state: State<'_, AppState>,
     settings: crate::ProxySettings,
 ) -> Result<(), SoneError> {
-    let caps = crate::proxy::HostCaps::assume_all_present();
+    let outcome = persist_then_reconfigure(
+        &settings,
+        |s| {
+            let mut app_settings = state.load_settings().unwrap_or_default();
+            app_settings.proxy = s.clone();
+            state.save_settings(&app_settings)
+        },
+        state.proxied_http.clone(),
+        crate::proxy::HostCaps::assume_all_present(),
+    )
+    .await;
 
-    // Swapping the one shared cell is the whole update: every reqwest consumer
-    // reads through it, so there is nothing left to push out to them. `apply`
-    // is the single place that decides what unplannable settings mean, so this
-    // cannot drift back to a direct connection independently of startup.
-    // It is blocking (`build_client` may resolve the proxy host), hence the
-    // detour off the runtime worker.
-    let http = state.proxied_http.clone();
-    let candidate = settings.clone();
-    tokio::task::spawn_blocking(move || http.apply(&candidate, &caps))
-        .await
-        .map_err(|e| SoneError::Io(format!("proxy update task failed: {e}")))?;
+    // Applies to future GStreamer HTTP sources without disrupting the currently
+    // playing pipeline. Pushed even when the plan is unusable: the audio thread
+    // keeps its own copy, and leaving it on the settings the user just replaced
+    // is wrong under either outcome.
+    state.audio_player.set_proxy_settings(settings);
 
-    // Apply proxy changes to future GStreamer HTTP sources without disrupting
-    // the currently playing pipeline.
-    state.audio_player.set_proxy_settings(settings.clone());
-
-    // Save to disk
-    let mut app_settings = state.load_settings().unwrap_or_default();
-    app_settings.proxy = settings;
-    state.save_settings(&app_settings)?;
-    Ok(())
+    outcome
 }
 
 #[tauri::command]
@@ -523,6 +573,169 @@ mod tests {
             username: None,
             password: None,
         }
+    }
+
+    /// A stand-in for the encrypted read-modify-write, writing real bytes to a
+    /// real file: "persisted" has to mean a restart would read it back, not
+    /// that a closure was called.
+    fn save_json(path: &std::path::Path, s: &ProxySettings) -> Result<(), SoneError> {
+        std::fs::write(path, serde_json::to_string(s)?)?;
+        Ok(())
+    }
+
+    /// What the next start would read.
+    fn on_disk(path: &std::path::Path) -> ProxySettings {
+        serde_json::from_str(&std::fs::read_to_string(path).expect("nothing was saved"))
+            .expect("saved settings must parse")
+    }
+
+    fn same(a: &ProxySettings, b: &ProxySettings) -> bool {
+        serde_json::to_string(a).unwrap() == serde_json::to_string(b).unwrap()
+    }
+
+    fn direct_cell() -> crate::proxy_http::ProxiedHttp {
+        crate::proxy_http::ProxiedHttp::from_plan(&crate::proxy::ProxyPlan::Direct, &caps())
+    }
+
+    /// The recovery property, and the reason the order was inverted: a proxy
+    /// whose client cannot be built must still reach disk. It is what the next
+    /// start reads back, the file is encrypted so nothing else can edit it, and
+    /// every request the app makes — including the ones behind the settings
+    /// screen — is blocked until it changes.
+    #[tokio::test]
+    async fn a_proxy_that_cannot_be_applied_is_still_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+
+        // Plans fine and fails at build: reqwest resolves a SOCKS5 proxy host
+        // eagerly, so this is the failure `plan()` cannot see coming. No
+        // network is touched — `.invalid` can never resolve (RFC 6761).
+        let bad = enabled(ProxyType::Socks5, "no-such-host.invalid", 3128);
+        assert!(crate::proxy::plan(&bad, &caps()).is_ok());
+
+        let http = direct_cell();
+        let err = persist_then_reconfigure(&bad, |s| save_json(&file, s), http.clone(), caps())
+            .await
+            .expect_err("an unusable proxy must not report success");
+
+        assert!(
+            matches!(&err, SoneError::ProxyBlocked { reason } if reason.contains("no-such-host.invalid")),
+            "the failure must name its cause, got: {err:?}"
+        );
+        assert!(
+            same(&on_disk(&file), &bad),
+            "the settings the user submitted must survive the transport failure"
+        );
+        // Saving first must not have loosened containment.
+        assert!(
+            http.client().is_err(),
+            "a proxy that could not be built must leave egress blocked"
+        );
+    }
+
+    /// Same property one step earlier: settings that form no plan at all.
+    #[tokio::test]
+    async fn a_proxy_that_forms_no_plan_is_still_saved() {
+        let dir = tempfile::tempdir().unwrap();
+
+        for bad in [
+            enabled(ProxyType::Http, "127.0.0.1", 0),
+            enabled(ProxyType::Http, "ho st", 3128),
+            enabled(ProxyType::Http, "пример.рф", 3128),
+        ] {
+            let file = dir.path().join(format!("{}-{}.json", bad.host, bad.port));
+            let http = direct_cell();
+            let err = persist_then_reconfigure(&bad, |s| save_json(&file, s), http.clone(), caps())
+                .await
+                .expect_err("unplannable settings must not report success");
+
+            assert!(
+                matches!(&err, SoneError::ProxyBlocked { reason } if !reason.is_empty()),
+                "{bad:?} must be refused with a reason, got: {err:?}"
+            );
+            assert!(same(&on_disk(&file), &bad), "{bad:?} must still be saved");
+            assert!(http.client().is_err(), "{bad:?} must leave egress blocked");
+        }
+    }
+
+    /// Pins the order itself, not merely that both things happened: at save
+    /// time the cell must still hold the *previous* client. Put the save back
+    /// after the transport swap and this fails.
+    #[tokio::test]
+    async fn the_save_lands_before_the_transports_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let http = direct_cell();
+
+        let observed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let witness = (http.clone(), observed.clone());
+        let bad = enabled(ProxyType::Socks5, "no-such-host.invalid", 3128);
+
+        let err = persist_then_reconfigure(
+            &bad,
+            move |s| {
+                let (cell, flag) = witness;
+                flag.store(cell.client().is_ok(), Ordering::SeqCst);
+                save_json(&file, s)
+            },
+            http.clone(),
+            caps(),
+        )
+        .await
+        .expect_err("the reconfiguration still has to fail for this to mean anything");
+
+        assert!(matches!(err, SoneError::ProxyBlocked { .. }));
+        assert!(
+            observed.load(Ordering::SeqCst),
+            "the transports were already reconfigured when the save ran — the \
+             save must come first, or a failure to apply strands the user"
+        );
+        assert!(http.client().is_err(), "and the reconfiguration did happen");
+    }
+
+    /// The one case where the transports must NOT move: nothing was saved, so
+    /// the cell must keep matching what a restart would read.
+    #[tokio::test]
+    async fn a_save_that_fails_leaves_the_transports_alone() {
+        let http = direct_cell();
+        let good = enabled(ProxyType::Http, "127.0.0.1", 3128);
+
+        let err = persist_then_reconfigure(
+            &good,
+            |_| Err(SoneError::Io("disk full".into())),
+            http.clone(),
+            caps(),
+        )
+        .await
+        .expect_err("a failed save must be reported");
+
+        assert!(matches!(err, SoneError::Io(_)), "got: {err:?}");
+        let c = http
+            .client()
+            .expect("the previous, working client must survive");
+        assert!(
+            !format!("{c:?}").contains("127.0.0.1:3128"),
+            "settings that never reached disk must not reach the transports: {c:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_usable_proxy_is_saved_and_reported_as_applied() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let http = direct_cell();
+        let good = enabled(ProxyType::Http, "127.0.0.1", 3128);
+
+        persist_then_reconfigure(&good, |s| save_json(&file, s), http.clone(), caps())
+            .await
+            .expect("a usable proxy must apply cleanly");
+
+        assert!(same(&on_disk(&file), &good));
+        let c = http.client().expect("a usable proxy must yield a client");
+        assert!(
+            format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
+            "the cell must carry the proxy that was just saved: {c:?}"
+        );
     }
 
     /// The banner paints any `Ok` green, so "cannot report success" means the

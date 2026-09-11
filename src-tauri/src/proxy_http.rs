@@ -91,12 +91,22 @@ impl ProxiedHttp {
 
     /// Swap in the client for a new plan. Blocking: `build_client` may resolve
     /// the proxy host, so call it off the async runtime (`spawn_blocking`).
-    pub fn replace(&self, p: &ProxyPlan, env: &HostCaps) {
+    ///
+    /// `Err` is *this* caller's own build outcome, not the cell's. It stays
+    /// true even when a newer caller's generation wins the store below, so a
+    /// caller is told what its own settings did rather than what someone
+    /// else's did — which is what reading the cell back would report.
+    pub fn replace(&self, p: &ProxyPlan, env: &HostCaps) -> Result<(), BlockReason> {
         let generation = self.claim();
         // Deliberately outside every lock: this can block on `getaddrinfo`, and
         // a reader or a concurrent `block` must never wait on that.
         let built = build_client(p, env);
+        let outcome = match &built {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.clone()),
+        };
         self.store(generation, built);
+        outcome
     }
 
     /// Block the cell outright, for settings that do not form a plan at all.
@@ -112,12 +122,19 @@ impl ProxiedHttp {
 
     /// Apply a settings value to the live cell. Blocking, for the same reason
     /// as `replace`.
-    pub fn apply(&self, s: &crate::ProxySettings, env: &HostCaps) {
+    ///
+    /// `Err` means egress is now blocked, and carries why. Both ways of
+    /// failing arrive here: settings that form no plan at all, and a plan
+    /// whose client cannot be built (SOCKS5 resolves the proxy host eagerly,
+    /// so `plan` cannot see that one coming).
+    pub fn apply(&self, s: &crate::ProxySettings, env: &HostCaps) -> Result<(), BlockReason> {
         match crate::proxy::plan(s, env) {
             Ok(p) => self.replace(&p, env),
             Err(e) => {
                 log::error!("proxy settings unusable, blocking all HTTP: {e}");
-                self.block(e.to_string())
+                let cause = e.to_string();
+                self.block(cause.clone());
+                Err(BlockReason { cause })
             }
         }
     }
@@ -245,7 +262,10 @@ mod tests {
         let h = ProxiedHttp::from_plan(&ProxyPlan::Direct, &caps);
         let clone = h.clone();
         let p = plan(&enabled_socks("no-such-host.invalid", 3128), &caps).unwrap();
-        h.replace(&p, &caps);
+        assert!(
+            h.replace(&p, &caps).is_err(),
+            "an unresolvable proxy must report its own build failure"
+        );
         // The clone observes the new state: there is one cell, not two clients.
         assert!(clone.client().is_err());
     }
@@ -283,7 +303,7 @@ mod tests {
         // Writing through the poison: `replace` still lands, and a clone sees it.
         let observer = h.clone();
         let blocked = plan(&enabled_socks("no-such-host.invalid", 3128), &caps).unwrap();
-        h.replace(&blocked, &caps);
+        assert!(h.replace(&blocked, &caps).is_err());
         assert!(
             observer.client().is_err(),
             "replace must land through the poison, not be dropped"
@@ -329,7 +349,9 @@ mod tests {
 
             let before = h.next.load(Ordering::SeqCst);
             let slow = h.clone();
-            let t = std::thread::spawn(move || slow.replace(&older, &caps));
+            let t = std::thread::spawn(move || {
+                slow.replace(&older, &caps).expect("the older plan builds");
+            });
 
             // Pin the generation order without pinning the completion order:
             // spin only until the older caller has claimed its generation. It
@@ -337,7 +359,7 @@ mod tests {
             while h.next.load(Ordering::SeqCst) == before {
                 std::hint::spin_loop();
             }
-            h.replace(&newer, &caps);
+            assert!(h.replace(&newer, &caps).is_err());
             t.join().unwrap();
 
             let err = h.client().unwrap_err();
@@ -398,7 +420,9 @@ mod tests {
 
         let before = h.next.load(Ordering::SeqCst);
         let slow = h.clone();
-        let t = std::thread::spawn(move || slow.replace(&p, &caps));
+        let t = std::thread::spawn(move || {
+            slow.replace(&p, &caps).expect("a valid plan builds");
+        });
         while h.next.load(Ordering::SeqCst) == before {
             std::hint::spin_loop();
         }
@@ -457,15 +481,44 @@ mod tests {
         let observer = h.clone();
         assert!(h.client().is_ok());
 
-        h.apply(&enabled("127.0.0.1", 0), &caps);
+        let reported = h
+            .apply(&enabled("127.0.0.1", 0), &caps)
+            .expect_err("apply must hand the caller the reason it blocked");
+        assert!(reported.cause.contains("port"), "got: {}", reported.cause);
         let err = observer
             .client()
             .expect_err("unplannable settings must block the shared cell");
         assert!(err.cause.contains("port"), "got: {}", err.cause);
 
         // And a subsequent good save recovers it, through the same entry point.
-        h.apply(&enabled("127.0.0.1", 3128), &caps);
+        h.apply(&enabled("127.0.0.1", 3128), &caps)
+            .expect("a usable proxy must report success");
         let c = observer.client().expect("a valid save must unblock the cell");
         assert!(format!("{c:?}").contains("All(http://127.0.0.1:3128)"));
+    }
+
+    #[test]
+    fn apply_reports_the_failures_plan_cannot_see() {
+        // A SOCKS5 host resolves when the client is built, so `plan` says yes
+        // and the build says no. `apply` must still hand that back: the save
+        // path has nothing else to report to the user, and reading the cell
+        // instead would report whatever a concurrent caller left there.
+        let caps = HostCaps::assume_all_present();
+        let h = ProxiedHttp::from_plan(&ProxyPlan::Direct, &caps);
+        let s = enabled_socks("no-such-host.invalid", 3128);
+        assert!(plan(&s, &caps).is_ok(), "this must fail at build, not plan");
+
+        let err = h
+            .apply(&s, &caps)
+            .expect_err("an unbuildable plan must not report success");
+        assert!(
+            err.cause.contains("no-such-host.invalid"),
+            "got: {}",
+            err.cause
+        );
+        assert!(
+            h.client().is_err(),
+            "and the cell must be blocked, not direct"
+        );
     }
 }
