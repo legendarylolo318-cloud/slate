@@ -727,13 +727,31 @@ mod props {
     use crate::{ProxySettings, ProxyType};
     use proptest::prelude::*;
 
+    /// Mixes shapes that each reach a different branch of `validate_host`. An
+    /// arbitrary-Unicode host alone is almost never accepted, which leaves the
+    /// accept path and the bracketing in `authority()` untested.
+    fn any_host() -> impl Strategy<Value = String> {
+        prop_oneof![
+            // Reaches the accept path.
+            4 => "[a-z][a-z0-9._-]{0,20}",
+            // Reaches the IPv6 accept branch, and the single-bracketing in `authority`.
+            3 => any::<std::net::Ipv6Addr>().prop_map(|a| a.to_string()),
+            // Reaches `BracketedHost`: the input that double-brackets a URI and
+            // core-dumps souphttpsrc if it is ever let through.
+            3 => any::<std::net::Ipv6Addr>().prop_map(|a| format!("[{a}]")),
+            // Reaches `EmbeddedPort`.
+            3 => (any::<std::net::Ipv4Addr>(), any::<u16>()).prop_map(|(a, p)| format!("{a}:{p}")),
+            // Broad adversarial coverage: brackets, colons, percent signs,
+            // delimiters, non-ASCII and whitespace.
+            2 => "[\\PC]{0,40}",
+        ]
+    }
+
     fn any_settings() -> impl Strategy<Value = ProxySettings> {
         (
             any::<bool>(),
             any::<bool>(),
-            // Deliberately includes brackets, colons, percent signs, delimiters,
-            // non-ASCII and whitespace.
-            "[\\PC]{0,40}",
+            any_host(),
             any::<u16>(),
             proptest::option::of("[\\PC]{0,20}"),
             proptest::option::of("[\\PC]{0,20}"),
@@ -756,14 +774,19 @@ mod props {
                 for c in [Capability::Api, Capability::Lossy, Capability::Dash, Capability::Webview] {
                     if let Ok(Route::Via { uri, .. }) = p.route(c, &caps) {
                         prop_assert!(!uri.contains('@'), "uri leaked a delimiter: {uri}");
+                        // A one- or two-character credential collides with a port
+                        // digit or a `:`/`/` delimiter by coincidence, not by
+                        // leaking, so only a credential long enough to be
+                        // unambiguous proves anything. The `@` check above stays
+                        // unconditional: it cannot false-positive.
                         if let Some(u) = s.username.as_deref() {
                             let u = u.trim();
-                            if !u.is_empty() {
+                            if u.len() >= 4 {
                                 prop_assert!(!uri.contains(u), "uri leaked the username: {uri}");
                             }
                         }
                         if let Some(pw) = s.password.as_deref() {
-                            if !pw.is_empty() {
+                            if pw.len() >= 4 {
                                 prop_assert!(!uri.contains(pw), "uri leaked the password: {uri}");
                             }
                         }
