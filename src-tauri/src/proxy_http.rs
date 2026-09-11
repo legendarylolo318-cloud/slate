@@ -102,16 +102,25 @@ mod tests {
     }
 
     #[test]
-    fn credentials_build_a_client_without_entering_the_uri() {
+    fn credentials_travel_beside_the_uri_not_inside_it() {
         let caps = HostCaps::assume_all_present();
         let mut s = enabled("127.0.0.1", 3128);
-        s.username = Some("u".into());
+        s.username = Some("bob".into());
         s.password = Some("hunter2".into());
         let p = plan(&s, &caps).unwrap();
-        // `Route::Via` hands the credentials over separately; only
-        // `Proxy::basic_auth` ever reunites them with the endpoint.
-        assert!(!format!("{p:?}").contains("hunter2"));
-        assert!(ProxiedHttp::from_plan(&p, &caps).client().is_ok());
+
+        // This is the exact string `build_client` hands to `reqwest::Proxy::all`.
+        // Asserting the whole URI, not just the absence of a password, is what
+        // makes this fail if credentials ever get folded into it.
+        let route = p.route(Capability::Api, &caps).unwrap();
+        let Route::Via { uri, creds } = route else {
+            panic!("an enabled proxy must not route as NoProxy");
+        };
+        assert_eq!(uri, "http://127.0.0.1:3128");
+        assert!(creds.is_some(), "credentials must arrive beside the uri");
+
+        // Only `Proxy::basic_auth` reunites them with that endpoint.
+        assert!(build_client(&p, &caps).is_ok());
     }
 
     #[test]
@@ -126,6 +135,14 @@ mod tests {
         let err = ProxiedHttp::from_plan(&p, &caps).client().unwrap_err();
         assert!(!err.cause.is_empty());
         assert!(err.cause.contains("socks5h://no-such-host.invalid:3128"));
+        // Name the failure, not just its existence: without reqwest's `socks`
+        // feature `Proxy::all` still errors here, with "unknown proxy scheme",
+        // and this test would stay green while real SOCKS5 support was gone.
+        assert!(
+            err.cause.contains("failed to lookup address"),
+            "expected an eager resolution failure, got: {}",
+            err.cause
+        );
     }
 
     #[test]
@@ -149,5 +166,45 @@ mod tests {
         h.replace(&p, &caps);
         // The clone observes the new state: there is one cell, not two clients.
         assert!(clone.client().is_err());
+    }
+
+    #[test]
+    fn a_poisoned_cell_neither_blocks_egress_nor_drops_the_proxy() {
+        let caps = HostCaps::assume_all_present();
+        let p = plan(&enabled("127.0.0.1", 3128), &caps).unwrap();
+        let h = ProxiedHttp::from_plan(&p, &caps);
+
+        // A std lock is only poisoned by a real panic, so stage one. The hook is
+        // silenced across the join and restored before any assertion below, so a
+        // genuine failure still prints.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let poisoner = h.clone();
+        let outcome = std::thread::spawn(move || {
+            let _held = poisoner.0.write().unwrap();
+            panic!("deliberate: poisons the cell while the write lock is held");
+        })
+        .join();
+        std::panic::set_hook(prev);
+
+        assert!(
+            outcome.is_err(),
+            "the staged panic must actually have happened"
+        );
+        assert!(h.0.read().is_err(), "the cell must now be poisoned");
+
+        // Reading through the poison: an unrelated panic must not block egress,
+        // and must not hand back a client that lost its proxy.
+        let c = h.client().expect("a poisoned cell must not block egress");
+        assert!(format!("{c:?}").contains("All(http://127.0.0.1:3128)"));
+
+        // Writing through the poison: `replace` still lands, and a clone sees it.
+        let observer = h.clone();
+        let blocked = plan(&enabled_socks("no-such-host.invalid", 3128), &caps).unwrap();
+        h.replace(&blocked, &caps);
+        assert!(
+            observer.client().is_err(),
+            "replace must land through the poison, not be dropped"
+        );
     }
 }
