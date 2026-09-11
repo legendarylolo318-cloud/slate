@@ -385,20 +385,16 @@ pub async fn set_proxy_settings(
     let caps = crate::proxy::HostCaps::assume_all_present();
 
     // Swapping the one shared cell is the whole update: every reqwest consumer
-    // reads through it, so there is nothing left to push out to them.
-    // Settings that do not form a plan block egress instead of reverting to a
-    // direct connection.
-    match crate::proxy::plan(&settings, &caps) {
-        Ok(plan) => {
-            let http = state.proxied_http.clone();
-            // `build_client` resolves the proxy host for SOCKS5, which would
-            // stall a runtime worker if it ran inline.
-            tokio::task::spawn_blocking(move || http.replace(&plan, &caps))
-                .await
-                .map_err(|e| SoneError::Io(format!("proxy update task failed: {e}")))?;
-        }
-        Err(e) => state.proxied_http.block(e.to_string()),
-    }
+    // reads through it, so there is nothing left to push out to them. `apply`
+    // is the single place that decides what unplannable settings mean, so this
+    // cannot drift back to a direct connection independently of startup.
+    // It is blocking (`build_client` may resolve the proxy host), hence the
+    // detour off the runtime worker.
+    let http = state.proxied_http.clone();
+    let candidate = settings.clone();
+    tokio::task::spawn_blocking(move || http.apply(&candidate, &caps))
+        .await
+        .map_err(|e| SoneError::Io(format!("proxy update task failed: {e}")))?;
 
     // Apply proxy changes to future GStreamer HTTP sources without disrupting
     // the currently playing pipeline.
@@ -550,19 +546,43 @@ mod tests {
         // Each of these used to reach `build_http_client`, which silently
         // returned a proxy-LESS client — so the request went out direct and the
         // banner said "Connection successful".
-        for bad in [
-            enabled(ProxyType::Http, "127.0.0.1", 0),
-            enabled(ProxyType::Http, "proxy.local:3128", 3128),
-            enabled(ProxyType::Http, "ho st", 3128),
-            enabled(ProxyType::Http, "[::1]", 3128),
-            enabled(ProxyType::Http, "", 3128),
+        //
+        // Asserting the specific refusal, not merely the absence of the word
+        // "successful": this function can also return `Ok("… responded with
+        // status …")`, which contains neither, so a weaker assertion would pass
+        // on a request that actually went out.
+        for (bad, expected) in [
+            (
+                enabled(ProxyType::Http, "127.0.0.1", 0),
+                "proxy port must not be 0",
+            ),
+            (
+                enabled(ProxyType::Http, "proxy.local:3128", 3128),
+                "enter the host without a port; use the port field",
+            ),
+            (
+                enabled(ProxyType::Http, "ho st", 3128),
+                "invalid proxy host: ho st",
+            ),
+            (
+                enabled(ProxyType::Http, "[::1]", 3128),
+                "enter an IPv6 address without brackets",
+            ),
+            (
+                enabled(ProxyType::Http, "", 3128),
+                "invalid proxy host: ",
+            ),
+            (
+                enabled(ProxyType::Http, "пример.рф", 3128),
+                "proxy host must be ASCII",
+            ),
         ] {
             let err = test_proxy_connection(bad.clone())
                 .await
-                .unwrap_or_else(|e| e);
-            assert!(
-                !err.contains("successful"),
-                "unplannable settings {bad:?} reported: {err}"
+                .expect_err("unplannable settings must never reach the network");
+            assert_eq!(
+                err, expected,
+                "{bad:?} must be refused with its own reason"
             );
             assert!(
                 proxy_test_client(&bad, &caps()).is_err(),

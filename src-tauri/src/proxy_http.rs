@@ -6,7 +6,8 @@
 //! proxy" would egress.
 
 use crate::proxy::{BlockReason, Capability, HostCaps, ProxyPlan, Route};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 pub fn build_client(p: &ProxyPlan, env: &HostCaps) -> Result<reqwest::Client, BlockReason> {
@@ -36,19 +37,19 @@ pub fn build_client(p: &ProxyPlan, env: &HostCaps) -> Result<reqwest::Client, Bl
 
 #[derive(Clone)]
 pub struct ProxiedHttp {
-    cell: Arc<RwLock<Result<reqwest::Client, BlockReason>>>,
-    /// Held across build-and-store so two concurrent `replace` calls cannot
-    /// interleave and leave the older plan's client in the cell. `build_client`
-    /// resolves names, so the window between build and store is long enough to
-    /// lose that race in practice.
-    updating: Arc<Mutex<()>>,
+    /// The generation that produced the current state, beside the state itself.
+    cell: Arc<RwLock<(u64, Result<reqwest::Client, BlockReason>)>>,
+    /// Dispenses a generation to each writer BEFORE it starts building, so
+    /// "newest" means the newest caller rather than whichever build happened to
+    /// finish last. A slow build must never resurrect the settings it replaced.
+    next: Arc<AtomicU64>,
 }
 
 impl ProxiedHttp {
     fn wrap(state: Result<reqwest::Client, BlockReason>) -> Self {
         Self {
-            cell: Arc::new(RwLock::new(state)),
-            updating: Arc::new(Mutex::new(())),
+            cell: Arc::new(RwLock::new((0, state))),
+            next: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -65,42 +66,79 @@ impl ProxiedHttp {
         }))
     }
 
+    /// The cell for a settings value. The single place that decides what an
+    /// unplannable proxy means, so neither startup nor a settings save can
+    /// drift back to `Direct`.
+    pub fn from_settings(s: &crate::ProxySettings, env: &HostCaps) -> Self {
+        match crate::proxy::plan(s, env) {
+            Ok(p) => Self::from_plan(&p, env),
+            Err(e) => {
+                log::error!("proxy settings unusable, blocking all HTTP: {e}");
+                Self::blocked(e.to_string())
+            }
+        }
+    }
+
     /// Blocked plans return `Err`; there is no proxy-less fallback.
     pub fn client(&self) -> Result<reqwest::Client, BlockReason> {
         match self.cell.read() {
-            Ok(g) => g.clone(),
+            Ok(g) => g.1.clone(),
             // A panic elsewhere must not downgrade egress: read through the
             // poison rather than substituting a fresh, unproxied client.
-            Err(poisoned) => poisoned.into_inner().clone(),
+            Err(poisoned) => poisoned.into_inner().1.clone(),
         }
     }
 
     /// Swap in the client for a new plan. Blocking: `build_client` may resolve
     /// the proxy host, so call it off the async runtime (`spawn_blocking`).
     pub fn replace(&self, p: &ProxyPlan, env: &HostCaps) {
-        let _serialized = self
-            .updating
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let next = build_client(p, env);
-        match self.cell.write() {
-            Ok(mut g) => *g = next,
-            Err(poisoned) => *poisoned.into_inner() = next,
-        }
+        let generation = self.claim();
+        // Deliberately outside every lock: this can block on `getaddrinfo`, and
+        // a reader or a concurrent `block` must never wait on that.
+        let built = build_client(p, env);
+        self.store(generation, built);
     }
 
     /// Block the cell outright, for settings that do not form a plan at all.
     pub fn block(&self, cause: impl Into<String>) {
-        let _serialized = self
-            .updating
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let next = Err(BlockReason {
-            cause: cause.into(),
-        });
-        match self.cell.write() {
-            Ok(mut g) => *g = next,
-            Err(poisoned) => *poisoned.into_inner() = next,
+        let generation = self.claim();
+        self.store(
+            generation,
+            Err(BlockReason {
+                cause: cause.into(),
+            }),
+        );
+    }
+
+    /// Apply a settings value to the live cell. Blocking, for the same reason
+    /// as `replace`.
+    pub fn apply(&self, s: &crate::ProxySettings, env: &HostCaps) {
+        match crate::proxy::plan(s, env) {
+            Ok(p) => self.replace(&p, env),
+            Err(e) => {
+                log::error!("proxy settings unusable, blocking all HTTP: {e}");
+                self.block(e.to_string())
+            }
+        }
+    }
+
+    /// Claim a generation. Must happen before the build, never after.
+    fn claim(&self) -> u64 {
+        self.next.fetch_add(1, Ordering::SeqCst)
+    }
+
+    fn store(&self, generation: u64, built: Result<reqwest::Client, BlockReason>) {
+        let mut g = match self.cell.write() {
+            Ok(g) => g,
+            // A panic elsewhere must not strand the cell on stale settings.
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        // The whole point. Without this comparison a slow build started under
+        // the OLD settings lands last and wins, so the cell disagrees with what
+        // the user saved — including the enable -> disable -> enable case, where
+        // the loser's client carries no proxy at all.
+        if generation >= g.0 {
+            *g = (generation, built);
         }
     }
 }
@@ -274,43 +312,160 @@ mod tests {
         );
     }
 
+    /// The falsifying test for the generation guard. Note the direction: the
+    /// SLOW build is the one that yields a real client (~17ms to stand up a
+    /// connector), and the FAST one is the blocked plan (~0.3ms, because
+    /// `Proxy::all` rejects `socks5h://…invalid` before any connector is built).
+    /// So the stale winner under a broken implementation is a *usable* client
+    /// built from settings the user already replaced.
     #[test]
-    fn concurrent_replaces_cannot_leave_the_older_plan_in_the_cell() {
-        // `build_client` is slow (it may resolve a name) and `replace` is called
-        // from a Tauri command, so two settings saves can overlap. Without the
-        // update lock, the slower build can store *after* the faster one and
-        // resurrect the plan the user just replaced.
+    fn a_slow_older_replace_never_overwrites_the_newer_settings() {
         let caps = HostCaps::assume_all_present();
-        let h = ProxiedHttp::from_plan(&ProxyPlan::Direct, &caps);
 
-        // The slow one blocks on DNS; the fast one is a literal address.
-        let slow = plan(&enabled_socks("no-such-host.invalid", 3128), &caps).unwrap();
-        let fast = plan(&enabled("127.0.0.1", 3128), &caps).unwrap();
+        for _ in 0..16 {
+            let h = ProxiedHttp::from_plan(&ProxyPlan::Direct, &caps);
+            let older = plan(&enabled("127.0.0.1", 3128), &caps).unwrap();
+            let newer = plan(&enabled_socks("no-such-host.invalid", 3128), &caps).unwrap();
 
-        for _ in 0..8 {
-            let a = h.clone();
-            let b = h.clone();
-            let (s, f) = (slow.clone(), fast.clone());
-            let t = std::thread::spawn(move || a.replace(&s, &caps));
-            b.replace(&f, &caps);
+            let before = h.next.load(Ordering::SeqCst);
+            let slow = h.clone();
+            let t = std::thread::spawn(move || slow.replace(&older, &caps));
+
+            // Pin the generation order without pinning the completion order:
+            // spin only until the older caller has claimed its generation. It
+            // is then ~17ms from storing, while this thread is ~0.3ms from it.
+            while h.next.load(Ordering::SeqCst) == before {
+                std::hint::spin_loop();
+            }
+            h.replace(&newer, &caps);
             t.join().unwrap();
 
-            // Whichever finished last wins, but the winner must be one of the
-            // two plans in full — never a torn state, and never a client that
-            // lost its proxy.
-            match h.client() {
-                Ok(c) => assert!(
-                    format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
-                    "a surviving client must still carry its proxy: {c:?}"
-                ),
-                Err(e) => assert!(e.cause.contains("no-such-host.invalid")),
-            }
+            let err = h.client().unwrap_err();
+            assert!(
+                err.cause.contains("no-such-host.invalid"),
+                "the newest settings must win even though their predecessor's \
+                 build finished last; cell holds a client from the old ones"
+            );
+        }
+    }
+
+    /// The same rule with the race removed, so it cannot pass by luck — and in
+    /// the direction that actually fails open. `next` and `store` are exactly
+    /// what two interleaved `replace` calls use; only the interleaving is
+    /// pinned. enable -> disable -> enable: if the `Direct` build lands last,
+    /// the cell goes unproxied while the saved settings say enabled.
+    #[test]
+    fn the_newest_caller_wins_no_matter_which_build_finished_last() {
+        let caps = HostCaps::assume_all_present();
+        let h = ProxiedHttp::from_plan(&ProxyPlan::Direct, &caps);
+        let proxied = plan(&enabled("127.0.0.1", 3128), &caps).unwrap();
+
+        // Two callers claim in order; their builds complete in the opposite one.
+        let disable = h.claim();
+        let reenable = h.claim();
+        h.store(reenable, build_client(&proxied, &caps));
+        h.store(disable, build_client(&ProxyPlan::Direct, &caps));
+
+        let c = h
+            .client()
+            .expect("a usable plan must still yield a usable client");
+        assert!(
+            format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
+            "a late `Direct` build must not strip the proxy the user re-enabled: {c:?}"
+        );
+
+        // And the reverse: a late proxied build must not resurrect a proxy the
+        // user has since turned off.
+        let enable = h.claim();
+        let disable = h.claim();
+        h.store(disable, build_client(&ProxyPlan::Direct, &caps));
+        h.store(enable, build_client(&proxied, &caps));
+        let c = h.client().unwrap();
+        assert!(
+            !format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
+            "a late proxied build must not outlive the settings that asked for it"
+        );
+    }
+
+    /// `block` must not be able to wait on another writer's `getaddrinfo`: it
+    /// runs inline on the Tauri runtime. Nothing is held across the build, so
+    /// this completes while a slow `replace` is still resolving.
+    #[test]
+    fn block_does_not_queue_behind_a_slow_replace() {
+        let caps = HostCaps::assume_all_present();
+        let h = ProxiedHttp::from_plan(&ProxyPlan::Direct, &caps);
+        let p = plan(&enabled("127.0.0.1", 3128), &caps).unwrap();
+
+        let before = h.next.load(Ordering::SeqCst);
+        let slow = h.clone();
+        let t = std::thread::spawn(move || slow.replace(&p, &caps));
+        while h.next.load(Ordering::SeqCst) == before {
+            std::hint::spin_loop();
         }
 
-        // The last word belongs to whoever wrote last: a final uncontended
-        // replace must be observable through every clone.
-        h.replace(&fast, &caps);
-        let c = h.clone().client().unwrap();
+        let t0 = std::time::Instant::now();
+        h.block("proxy port must not be 0");
+        let waited = t0.elapsed();
+        t.join().unwrap();
+
+        assert!(
+            waited < std::time::Duration::from_millis(100),
+            "block waited {waited:?} — it is holding, or queueing behind, the build lock"
+        );
+    }
+
+    #[test]
+    fn settings_that_do_not_form_a_plan_block_the_cell_instead_of_going_direct() {
+        // This is the case `AppState::new` hits on a corrupt saved proxy. A
+        // `ProxyPlan::Direct` fallback here would mean every request silently
+        // leaves the machine unproxied.
+        let caps = HostCaps::assume_all_present();
+        for bad in [
+            enabled("127.0.0.1", 0),
+            enabled("proxy.local:3128", 3128),
+            enabled("ho st", 3128),
+            enabled("[::1]", 3128),
+            enabled("", 3128),
+            enabled("пример.рф", 3128),
+        ] {
+            assert!(
+                crate::proxy::plan(&bad, &caps).is_err(),
+                "{bad:?} was expected to be unplannable"
+            );
+            let err = match ProxiedHttp::from_settings(&bad, &caps).client() {
+                Err(e) => e,
+                Ok(c) => panic!("{bad:?} must block, but yielded a client: {c:?}"),
+            };
+            assert!(!err.cause.is_empty(), "a block must carry its cause");
+        }
+
+        // The legitimate direct case must survive that strictness.
+        let mut off = enabled("127.0.0.1", 3128);
+        off.enabled = false;
+        assert!(
+            ProxiedHttp::from_settings(&off, &caps).client().is_ok(),
+            "a disabled proxy is Direct, not a block"
+        );
+    }
+
+    #[test]
+    fn applying_unplannable_settings_blocks_a_live_cell() {
+        // The `set_proxy_settings` path: a cell that is serving traffic must go
+        // blocked, not fall back to direct, when the new settings do not plan.
+        let caps = HostCaps::assume_all_present();
+        let h = ProxiedHttp::from_plan(&ProxyPlan::Direct, &caps);
+        let observer = h.clone();
+        assert!(h.client().is_ok());
+
+        h.apply(&enabled("127.0.0.1", 0), &caps);
+        let err = observer
+            .client()
+            .expect_err("unplannable settings must block the shared cell");
+        assert!(err.cause.contains("port"), "got: {}", err.cause);
+
+        // And a subsequent good save recovers it, through the same entry point.
+        h.apply(&enabled("127.0.0.1", 3128), &caps);
+        let c = observer.client().expect("a valid save must unblock the cell");
         assert!(format!("{c:?}").contains("All(http://127.0.0.1:3128)"));
     }
 }

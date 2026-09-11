@@ -379,13 +379,7 @@ impl AppState {
         // Settings that do not form a plan block egress rather than falling back
         // to Direct: "we could not read your proxy" must not become "so we went
         // around it". The user fixes it in settings, which needs no network.
-        let proxied_http = match crate::proxy::plan(&proxy_settings, &host_caps) {
-            Ok(p) => crate::proxy_http::ProxiedHttp::from_plan(&p, &host_caps),
-            Err(e) => {
-                log::error!("proxy settings unusable, blocking all HTTP: {e}");
-                crate::proxy_http::ProxiedHttp::blocked(e.to_string())
-            }
-        };
+        let proxied_http = crate::proxy_http::ProxiedHttp::from_settings(&proxy_settings, &host_caps);
 
         let scrobble_manager = scrobble::ScrobbleManager::new(
             app_handle.clone(),
