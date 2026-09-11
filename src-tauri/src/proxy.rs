@@ -245,8 +245,9 @@ impl ProxyPlan {
 
         if c == Capability::Lossy && creds.is_some() && env.gst_version < CURL_SEEK_FIXED {
             let (a, b, d) = env.gst_version;
+            let (x, y, z) = CURL_SEEK_FIXED;
             return Err(BlockReason::new(format!(
-                "authenticated proxies need GStreamer 1.26.10 or newer for seeking (found {a}.{b}.{d})"
+                "authenticated proxies need GStreamer {x}.{y}.{z} or newer for seeking (found {a}.{b}.{d})"
             )));
         }
 
@@ -264,6 +265,11 @@ impl ProxyPlan {
             // when authenticating, soup source (gio, needs socks5) otherwise.
             (true, Capability::Lossy) | (true, Capability::Dash) => {
                 if creds.is_some() {
+                    debug_assert!(
+                        env.has_curlhttpsrc,
+                        "authenticated audio reached the scheme match without the curl source; \
+                         the guard above must block this",
+                    );
                     "socks5h"
                 } else {
                     "socks5"
@@ -742,8 +748,11 @@ mod props {
             // Reaches `EmbeddedPort`.
             3 => (any::<std::net::Ipv4Addr>(), any::<u16>()).prop_map(|(a, p)| format!("{a}:{p}")),
             // Broad adversarial coverage: brackets, colons, percent signs,
-            // delimiters, non-ASCII and whitespace.
-            2 => "[\\PC]{0,40}",
+            // delimiters, non-ASCII and whitespace. Weighted to roughly a third
+            // of generated hosts — both historical crashes came from here, and
+            // starving this arm to steer cases at the structured shapes is what
+            // would let the next one through.
+            7 => "[\\PC]{0,40}",
         ]
     }
 
@@ -778,15 +787,17 @@ mod props {
                         // digit or a `:`/`/` delimiter by coincidence, not by
                         // leaking, so only a credential long enough to be
                         // unambiguous proves anything. The `@` check above stays
-                        // unconditional: it cannot false-positive.
+                        // unconditional: it cannot false-positive. A non-ASCII
+                        // credential needs no length floor at all: the host is
+                        // ASCII-only by `validate_host`, so it cannot collide.
                         if let Some(u) = s.username.as_deref() {
                             let u = u.trim();
-                            if u.len() >= 4 {
+                            if !u.is_ascii() || u.len() >= 4 {
                                 prop_assert!(!uri.contains(u), "uri leaked the username: {uri}");
                             }
                         }
                         if let Some(pw) = s.password.as_deref() {
-                            if pw.len() >= 4 {
+                            if !pw.is_ascii() || pw.len() >= 4 {
                                 prop_assert!(!uri.contains(pw), "uri leaked the password: {uri}");
                             }
                         }
