@@ -169,7 +169,77 @@ describe("NetworkTab reports a blocked proxy to the user", () => {
       await vi.advanceTimersByTimeAsync(600);
     });
 
-    expect(screen.getByText("proxy port must not be 0")).toBeTruthy();
+    const msg = screen.getByText("proxy port must not be 0");
+    expect(msg).toBeTruthy();
+    // Not just the text: the banner has to LOOK wrong too. Without this the
+    // status could be set to a value outside the BannerStatus union and every
+    // text assertion would still pass — only the typechecker would object.
+    expect(msg.className).toContain("text-[#ff6666]");
+  });
+
+  it("keeps reporting a refusal after the proxy has been switched off", async () => {
+    // The config block — banner included — used to be inside `enabled &&`.
+    // Turning the proxy off always submits, by design, because that is the
+    // recovery path; if that save is refused (an encrypted-write failure, say)
+    // the error was written into an unmounted subtree and the user saw nothing.
+    vi.useFakeTimers();
+    invoke.mockRejectedValue({
+      kind: "Io",
+      message: "settings file is read-only",
+    });
+    const store = createStore();
+    store.set(proxySettingsAtom, {
+      enabled: true,
+      proxy_type: "http",
+      host: "127.0.0.1",
+      port: 3128,
+      username: null,
+      password: null,
+    });
+    render(
+      <Provider store={store}>
+        <NetworkTab />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getAllByRole("button")[0]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    // Toggle is off, so the address and auth fields are gone …
+    expect(store.get(proxySettingsAtom).enabled).toBe(false);
+    expect(screen.queryByPlaceholderText("host")).toBeNull();
+    // … but the reason is still on screen, in the error treatment.
+    const msg = screen.getByText("settings file is read-only");
+    expect(msg.className).toContain("text-[#ff6666]");
+  });
+
+  it("lets a long refusal wrap instead of clipping or spilling the row", async () => {
+    // A real one, ~80 characters. The message span was `flex-shrink-0` with no
+    // wrapping and the endpoint beside it was the only shrinkable item, so this
+    // crushed the endpoint to zero width and then spilled the bordered row.
+    const reason =
+      "authenticated proxies need GStreamer 1.26.10 or newer for seeking (found 1.24.0)";
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "test_proxy_connection"
+        ? Promise.reject(reason)
+        : Promise.resolve(undefined),
+    );
+    renderTab(true);
+
+    fireEvent.click(screen.getByText("Test connection"));
+    const msg = await screen.findByText(reason);
+
+    // jsdom does no layout, so assert the mechanism: the span may shrink and
+    // may wrap. Truncation was the alternative and was rejected — a clipped
+    // reason is the "banner that says nothing useful" this task removed.
+    expect(msg.className).not.toContain("flex-shrink-0");
+    expect(msg.className).toContain("min-w-0");
+    expect(msg.className).toContain("break-words");
+    expect(msg.parentElement?.className).toContain("flex-wrap");
+    // And the whole reason is present, not an ellipsis of it.
+    expect(msg.textContent).toBe(reason);
   });
 
   it("does not submit while the host field is still empty", async () => {
