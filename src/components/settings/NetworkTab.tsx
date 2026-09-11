@@ -5,6 +5,7 @@ import { ChevronDown } from "lucide-react";
 import { proxySettingsAtom, type ProxySettings } from "../../atoms/proxy";
 import Toggle from "../Toggle";
 import SettingRow from "./SettingRow";
+import { shouldSubmitProxy, submitProxy, proxyTestError } from "./proxySubmit";
 
 type BannerStatus = "idle" | "testing" | "ok" | "err";
 
@@ -27,7 +28,18 @@ export default function NetworkTab() {
     setBannerMessage("Not tested");
     clearTimeout(proxySaveTimer.current);
     proxySaveTimer.current = window.setTimeout(() => {
-      invoke("set_proxy_settings", { settings: next }).catch(() => {});
+      // Half-typed settings are withheld rather than sent. The backend fails
+      // closed, so `{enabled: true, host: "1", port: 0}` — which this debounce
+      // produces on the first keystroke, and the moment the toggle flips —
+      // would leave the app with no HTTP client at all until the user finishes.
+      if (!shouldSubmitProxy(next)) return;
+      // Not `.catch(() => {})`. The backend produces a precise reason for every
+      // refusal; swallowing it is why a blocked proxy used to look like the app
+      // simply not working.
+      void submitProxy(next, (reason) => {
+        setBannerStatus("err");
+        setBannerMessage(reason);
+      });
     }, 500);
   };
 
@@ -49,7 +61,9 @@ export default function NetworkTab() {
     } catch (e: unknown) {
       console.error("Proxy connection test failed:", e);
       setBannerStatus("err");
-      setBannerMessage("Connection failed — check host, port, and credentials");
+      // The cause, not a guess at it: the backend already says which field is
+      // wrong, or which host capability refused.
+      setBannerMessage(proxyTestError(e));
     }
   };
 

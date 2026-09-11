@@ -161,7 +161,8 @@ pub fn plan(s: &crate::ProxySettings, _env: &HostCaps) -> Result<ProxyPlan, Plan
 
 /// Which consumer is asking. The spelling of a SOCKS5 URI and the element
 /// requirements differ per consumer, so this is not cosmetic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Capability {
     /// reqwest: API, auth, scrobbling, play reports, artwork, update check.
     Api,
@@ -171,6 +172,17 @@ pub enum Capability {
     Dash,
     /// The shared WebKit network session.
     Webview,
+}
+
+impl Capability {
+    /// Every capability, so a status sweep cannot silently omit one the way a
+    /// hand-written list does when a variant is added.
+    pub const ALL: [Capability; 4] = [
+        Capability::Api,
+        Capability::Lossy,
+        Capability::Dash,
+        Capability::Webview,
+    ];
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -561,6 +573,64 @@ pub fn system_proxy_from_env<T>(
         }
     }
     resolved
+}
+
+/// What the settings screen shows for the proxy as a whole.
+///
+/// The three states are not interchangeable, and the distinction is the point:
+///
+/// - `Off` — the user has no proxy enabled. `ProxyPlan::Direct`, the system's
+///   own configuration applies, and there is nothing to report.
+/// - `Blocked` — the settings cannot be turned into a plan at all, so *every*
+///   capability is refused and nothing egresses through the proxy. Per the
+///   spec this is exactly the `PlanError` case; it carries the reason so the
+///   banner can say which field is wrong instead of "connection failed".
+/// - `Active { degraded }` — the plan is usable, but some capabilities cannot
+///   be served on this host (a missing GStreamer element, a GStreamer too old
+///   to seek through an authenticated proxy). That is a per-feature notice,
+///   never a global "your proxy is broken" banner: the API, and therefore the
+///   whole UI, is working.
+///
+/// `degraded` is `Vec<Capability>` rather than a vector of strings so a caller
+/// cannot match on prose. The refusal text for each one lives in `BlockReason`
+/// and is re-derived by `route()` where it is needed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub enum ProxyStatus {
+    Off,
+    Active { degraded: Vec<Capability> },
+    Blocked { reason: String },
+}
+
+impl ProxyStatus {
+    /// Pure, so the whole table can be tested without a GStreamer registry or
+    /// an `AppState`. `caps` is `HostCaps::assume_all_present()` until stage 3
+    /// replaces it with a real probe — until then `degraded` is always empty,
+    /// which is honest rather than useful.
+    pub fn evaluate(s: &crate::ProxySettings, caps: &HostCaps) -> Self {
+        let plan = match plan(s, caps) {
+            Ok(p) => p,
+            // Unplannable settings block every capability, not some of them.
+            Err(e) => {
+                return Self::Blocked {
+                    reason: e.to_string(),
+                }
+            }
+        };
+        if plan == ProxyPlan::Direct {
+            return Self::Off;
+        }
+        // Deliberately not "if everything is degraded, call it Blocked".
+        // `Capability::Api` has no host requirement once a plan exists, so a
+        // usable plan always serves it, and collapsing a partial refusal into a
+        // global banner is the failure mode the spec calls out by name.
+        Self::Active {
+            degraded: Capability::ALL
+                .into_iter()
+                .filter(|c| plan.route(*c, caps).is_err())
+                .collect(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1318,6 +1388,108 @@ mod tests {
             let upper = name.to_uppercase();
             assert!(PROXY_ENV_VARS.contains(&upper.as_str()), "missing {upper}");
         }
+    }
+
+    // ---- ProxyStatus -----------------------------------------------------
+    //
+    // The serialized shape is a contract with the settings screen, so it is
+    // asserted as JSON rather than by matching the Rust enum: a rename or a
+    // change of representation would be invisible to a `matches!` test and
+    // would silently break the UI.
+
+    #[test]
+    fn a_disabled_proxy_is_off_not_active() {
+        let mut s = settings("127.0.0.1", 8080);
+        s.enabled = false;
+        let st = ProxyStatus::evaluate(&s, &HostCaps::assume_all_present());
+        assert_eq!(st, ProxyStatus::Off);
+        assert_eq!(
+            serde_json::to_value(&st).unwrap(),
+            serde_json::json!({ "state": "off" })
+        );
+    }
+
+    #[test]
+    fn a_usable_plan_is_active_with_nothing_degraded() {
+        let st = ProxyStatus::evaluate(
+            &settings("proxy.example", 3128),
+            &HostCaps::assume_all_present(),
+        );
+        assert_eq!(
+            serde_json::to_value(&st).unwrap(),
+            serde_json::json!({ "state": "active", "degraded": [] })
+        );
+    }
+
+    #[test]
+    fn unplannable_settings_are_blocked_and_carry_the_reason() {
+        // The reason is the whole value of this variant: "connection failed" is
+        // what the UI said before, and it named no field.
+        let st = ProxyStatus::evaluate(&settings("127.0.0.1", 0), &HostCaps::assume_all_present());
+        assert_eq!(
+            serde_json::to_value(&st).unwrap(),
+            serde_json::json!({ "state": "blocked", "reason": "proxy port must not be 0" })
+        );
+
+        let st = ProxyStatus::evaluate(
+            &settings("bad host!", 3128),
+            &HostCaps::assume_all_present(),
+        );
+        let v = serde_json::to_value(&st).unwrap();
+        assert_eq!(v["state"], "blocked");
+        assert!(
+            v["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("invalid proxy host"),
+            "{v}"
+        );
+    }
+
+    #[test]
+    fn a_missing_dash_demuxer_degrades_one_capability_rather_than_blocking() {
+        // The regression this guards: reporting a global `Blocked` banner for a
+        // proxy that serves the API, the webview and lossy audio perfectly well.
+        let caps = HostCaps {
+            has_dashdemux: false,
+            ..HostCaps::assume_all_present()
+        };
+        let st = ProxyStatus::evaluate(&settings("proxy.example", 3128), &caps);
+        assert_eq!(
+            serde_json::to_value(&st).unwrap(),
+            serde_json::json!({ "state": "active", "degraded": ["dash"] })
+        );
+    }
+
+    #[test]
+    fn an_authenticated_proxy_on_an_old_gstreamer_degrades_audio_only() {
+        let mut s = settings("proxy.example", 3128);
+        s.username = Some("u".into());
+        s.password = Some("p".into());
+        let caps = HostCaps {
+            has_dashdemux: false,
+            has_curlhttpsrc: false,
+            gst_version: (1, 24, 0),
+        };
+        let st = ProxyStatus::evaluate(&s, &caps);
+        let v = serde_json::to_value(&st).unwrap();
+        assert_eq!(v["state"], "active");
+        // Both audio tiers refuse; the API and the webview still work, so this
+        // is never a global block.
+        assert_eq!(v["degraded"], serde_json::json!(["lossy", "dash"]));
+    }
+
+    #[test]
+    fn degraded_is_capabilities_not_prose() {
+        // Serializing as lowercase identifiers is what lets the UI attach a
+        // per-feature notice; a sentence would force it to match on text.
+        let st = ProxyStatus::Active {
+            degraded: Capability::ALL.to_vec(),
+        };
+        assert_eq!(
+            serde_json::to_value(&st).unwrap()["degraded"],
+            serde_json::json!(["api", "lossy", "dash", "webview"])
+        );
     }
 }
 

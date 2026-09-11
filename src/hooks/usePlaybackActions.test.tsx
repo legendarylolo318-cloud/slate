@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, screen } from "@testing-library/react";
 import { Provider, createStore } from "jotai";
 import type { PropsWithChildren } from "react";
 import { usePlaybackActions } from "./usePlaybackActions";
@@ -13,13 +13,20 @@ import {
   repeatAtom,
   playbackSourceAtom,
   contextSourceAtom,
+  manualQueueAtom,
+  consecutiveFailCountAtom,
 } from "../atoms/playback";
 import type { Track } from "../types";
 
 // playNext drives the audio backend through invoke(); stub it so play_tidal_track
-// resolves and the repeat-all rebuild runs to completion.
+// resolves and the repeat-all rebuild runs to completion. `playResult` lets a
+// single case make play_tidal_track reject without disturbing the others.
+let playResult: () => Promise<unknown> = () => Promise.resolve({});
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue({}),
+  invoke: vi.fn((cmd: string) => {
+    if (cmd === "play_tidal_track") return playResult();
+    return Promise.resolve({});
+  }),
 }));
 
 const track = (over: Partial<Track> = {}): Track =>
@@ -122,5 +129,82 @@ describe("repeat-all loop keeps play history for source-backed playlists", () =>
     expect(store.get(historyAtom)).toEqual([]);
     expect(store.get(currentTrackAtom)?.id).toBe(1);
     expect(store.get(queueAtom).map((t) => t.id)).toEqual([2, 3, 4]);
+  });
+});
+
+describe("a blocked proxy never enters the skip drain", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    playResult = () => Promise.resolve({});
+  });
+
+  /** As Tauri delivers it: SoneError is #[serde(tag="kind", content="message")],
+   *  so ProxyBlocked's `message` is an OBJECT carrying `reason`. */
+  const proxyBlocked = {
+    kind: "ProxyBlocked",
+    message: { reason: "proxy port must not be 0" },
+  };
+
+  it("leaves the context queue intact instead of skipping through it", async () => {
+    const { store, result } = setup();
+    store.set(queueAtom, tracks(3));
+    playResult = () => Promise.reject(proxyBlocked);
+
+    await act(async () => {
+      await result.current.playNext();
+    });
+
+    // The failure mode this guards: a blocked proxy refuses every track
+    // identically, so classifying it as "unplayable" would walk the whole queue
+    // one refusal at a time and leave the user with an empty queue, three
+    // "Track unavailable — skipping" toasts, and no explanation.
+    expect(store.get(queueAtom).map((t) => t.id)).toEqual([1, 2, 3]);
+    expect(store.get(currentTrackAtom)).toBeNull();
+    // The skip counter is for tracks that are genuinely gone; a refused
+    // connection must not spend it.
+    expect(store.get(consecutiveFailCountAtom)).toBe(0);
+    // And the user is told why, with the backend's own words — the reason lives
+    // in `message.reason`, an object, so a naive read would have shown
+    // "[object Object]" or the generic "Playback failed".
+    expect(screen.getByText("proxy port must not be 0")).toBeTruthy();
+    expect(screen.queryByText(/Track unavailable/)).toBeNull();
+  });
+
+  it("leaves the manual queue intact too", async () => {
+    const { store, result } = setup();
+    store.set(manualQueueAtom, tracks(2));
+    store.set(queueAtom, tracks(2));
+    playResult = () => Promise.reject(proxyBlocked);
+
+    await act(async () => {
+      await result.current.playNext();
+    });
+
+    expect(store.get(manualQueueAtom).map((t) => t.id)).toEqual([1, 2]);
+    // Bailing out of the manual queue must not fall through into the context
+    // queue either — that would drain both.
+    expect(store.get(queueAtom).map((t) => t.id)).toEqual([1, 2]);
+    expect(store.get(consecutiveFailCountAtom)).toBe(0);
+  });
+
+  it("still advances past a genuinely unplayable track", async () => {
+    // The complement: this is the behaviour the block guard must not break.
+    const { store, result } = setup();
+    store.set(queueAtom, tracks(3));
+    let calls = 0;
+    playResult = () => {
+      calls += 1;
+      return calls === 1
+        ? Promise.reject({ kind: "Api", message: { status: 404, body: "" } })
+        : Promise.resolve({});
+    };
+
+    await act(async () => {
+      await result.current.playNext();
+    });
+
+    expect(calls).toBe(2);
+    expect(store.get(currentTrackAtom)?.id).toBe(2);
+    expect(store.get(queueAtom).map((t) => t.id)).toEqual([3]);
   });
 });
