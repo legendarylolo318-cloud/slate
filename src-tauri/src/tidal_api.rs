@@ -1,5 +1,4 @@
 use crate::SoneError;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -1315,12 +1314,12 @@ impl TidalClient {
     /// The proxy-aware client, for non-API hosts (artwork, scrobble providers).
     /// `Err` means the proxy plan is blocked and nothing may be sent — there is
     /// deliberately no proxy-less client to fall back to.
-    pub fn raw_client(&self) -> Result<Client, crate::proxy::BlockReason> {
+    pub fn raw_client(&self) -> Result<reqwest::Client, crate::proxy::BlockReason> {
         self.http.client()
     }
 
     /// Same cell, mapped into the error type the API methods return.
-    fn client(&self) -> Result<Client, SoneError> {
+    fn client(&self) -> Result<reqwest::Client, SoneError> {
         self.http
             .client()
             .map_err(|e| SoneError::ProxyBlocked { reason: e.cause })

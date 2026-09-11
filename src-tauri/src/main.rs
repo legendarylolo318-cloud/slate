@@ -129,6 +129,34 @@ mod tests {
         );
     }
 
+    /// The ordinary AppImage layout: AppRun exports GST_PLUGIN_PATH_1_0 and the
+    /// host has no GST_PLUGIN_PATH at all. Every other bundle case here passes a
+    /// *set* plugin_path, so without this one an implementation that only
+    /// honours _1_0 when something is already set passes the whole suite while
+    /// leaving the most common bundle with no plugin path.
+    #[test]
+    fn a_bundle_plugin_path_is_used_when_nothing_was_inherited() {
+        assert_eq!(
+            gst_plugin_path_choice(Some("/app/lib/gstreamer-1.0"), None, None, &DIRS),
+            Some("/app/lib/gstreamer-1.0".to_string()),
+            "the canonical AppImage layout must still get the bundle's plugins"
+        );
+    }
+
+    /// Same, with APPDIR also exported, which is what AppRun actually does.
+    #[test]
+    fn a_bundle_plugin_path_wins_with_appdir_present_and_nothing_inherited() {
+        assert_eq!(
+            gst_plugin_path_choice(
+                Some("/app/lib/gstreamer-1.0"),
+                Some("/tmp/.mount_sone"),
+                None,
+                &DIRS,
+            ),
+            Some("/app/lib/gstreamer-1.0".to_string())
+        );
+    }
+
     #[test]
     fn appdir_without_a_bundle_plugin_path_probes_nothing() {
         assert_eq!(
