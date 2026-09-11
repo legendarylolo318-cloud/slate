@@ -307,9 +307,14 @@ impl ProxyPlan {
 }
 
 /// Every variable libcurl, libproxy or reqwest may read to find a proxy, in
-/// both spellings. `curlhttpsrc` reads `no_proxy` at construction and there is
-/// no property to override it, so an ambient value must be gone before any
-/// element exists.
+/// both spellings — the list that is **captured** at startup, which is wider
+/// than the list that is removed. See `SCRUBBED_PROXY_ENV_VARS` for what
+/// actually goes, and why the two differ.
+///
+/// The capture has to be the full union even while the scrub is narrow: stage
+/// 4a sets WebKit's proxy explicitly and will scrub the per-scheme names too,
+/// and by then the values are gone from the environment. Capturing everything
+/// once, at the only sound moment, is what leaves that stage a restore path.
 ///
 /// Both cases of all four, because the three readers disagree and the union is
 /// what has to go:
@@ -346,6 +351,36 @@ pub const PROXY_ENV_VARS: [&str; 8] = [
     "no_proxy",
     "NO_PROXY",
 ];
+
+/// What `main.rs` actually removes when the launch sidecar says SONE is
+/// proxying: the bypass list, and nothing else.
+///
+/// Narrower than `PROXY_ENV_VARS` on purpose, and the narrowness is the safe
+/// direction. Removing `no_proxy` can only ever *increase* what gets proxied,
+/// which is all finding F6 requires — `curlhttpsrc` forwards an ambient
+/// `no_proxy` as `CURLOPT_NOPROXY` and it defeats an explicitly-set `proxy`
+/// property, so it has to be gone before any element is constructed.
+///
+/// Removing a per-scheme variable is the opposite direction, and until the
+/// stage that sets the corresponding explicit proxy has landed it is a
+/// downgrade rather than containment. Nothing in this stage sets WebKit's
+/// proxy, and `audio.rs` only honours an `http_proxy` for `ProxyType::Http`,
+/// so for a user who exports `http_proxy` *and* enables SONE's proxy, deleting
+/// it would move the WebView surfaces and SOCKS5 audio from "proxied by their
+/// own ambient configuration" to direct, from the real IP.
+///
+/// So each of the remaining six is scrubbed by the stage that replaces it:
+///
+/// - `http_proxy` / `HTTP_PROXY`, `https_proxy` / `HTTPS_PROXY` and
+///   `all_proxy` / `ALL_PROXY` — **stage 3** for the GStreamer sources (which
+///   gain an explicit `proxy` property) and **stage 4a** for WebKit (which
+///   gains an explicit `WebKitNetworkProxySettings`). Until both are in force
+///   the ambient value is the only thing routing those surfaces.
+///
+/// reqwest is already independent of all of this: `proxy_http.rs` builds every
+/// client from the plan, and the `Direct` route restores the captured values
+/// rather than reading the environment.
+pub const SCRUBBED_PROXY_ENV_VARS: [&str; 2] = ["no_proxy", "NO_PROXY"];
 
 /// A plaintext companion to the encrypted settings, holding only what `main.rs`
 /// needs before `AppState` (and therefore the decryption key) exists.
@@ -1379,14 +1414,62 @@ mod tests {
 
     /// Both spellings, because the consumers disagree about which they read:
     /// libcurl takes lowercase `http_proxy` only but uppercase for the rest,
-    /// while reqwest and libproxy read either. Scrubbing one case leaves the
-    /// other live.
+    /// while reqwest and libproxy read either. Capturing one case leaves the
+    /// other unrecoverable for the stage that scrubs it.
     #[test]
-    fn env_var_list_covers_both_cases_of_all_four_names() {
+    fn the_capture_list_covers_both_cases_of_all_four_names() {
         for name in ["http_proxy", "https_proxy", "all_proxy", "no_proxy"] {
             assert!(PROXY_ENV_VARS.contains(&name), "missing {name}");
             let upper = name.to_uppercase();
             assert!(PROXY_ENV_VARS.contains(&upper.as_str()), "missing {upper}");
+        }
+    }
+
+    /// The scrub is the bypass list and nothing else, in both spellings.
+    ///
+    /// Widening it is the regression this pins. Removing a per-scheme variable
+    /// before the stage that sets the corresponding explicit proxy has landed
+    /// takes the WebView surfaces — and SOCKS5 audio, which `audio.rs` never
+    /// routed through `http_proxy` — from proxied by the user's own ambient
+    /// configuration to direct, from the real IP. Narrowing it is the other
+    /// failure: without `no_proxy` gone, `curlhttpsrc` forwards it as
+    /// `CURLOPT_NOPROXY` and bypasses the proxy property outright (F6).
+    #[test]
+    fn the_scrub_removes_the_bypass_list_and_nothing_else() {
+        assert_eq!(
+            SCRUBBED_PROXY_ENV_VARS.len(),
+            2,
+            "the startup scrub grew past the bypass list: {SCRUBBED_PROXY_ENV_VARS:?}"
+        );
+        for name in ["no_proxy", "NO_PROXY"] {
+            assert!(SCRUBBED_PROXY_ENV_VARS.contains(&name), "missing {name}");
+        }
+        for name in [
+            "http_proxy",
+            "HTTP_PROXY",
+            "https_proxy",
+            "HTTPS_PROXY",
+            "all_proxy",
+            "ALL_PROXY",
+        ] {
+            assert!(
+                !SCRUBBED_PROXY_ENV_VARS.contains(&name),
+                "{name} is scrubbed, but nothing in this stage sets the explicit \
+                 proxy that would replace it — removing it egresses direct"
+            );
+        }
+    }
+
+    /// Everything that is removed must have been captured, or the `Direct`
+    /// route hands back an environment missing the value it just deleted.
+    #[test]
+    fn everything_scrubbed_is_also_captured() {
+        for name in SCRUBBED_PROXY_ENV_VARS {
+            assert!(
+                PROXY_ENV_VARS.contains(&name),
+                "{name} is scrubbed but never captured, so restoring cannot \
+                 reproduce the user's own routing"
+            );
         }
     }
 

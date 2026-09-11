@@ -483,17 +483,19 @@ pub async fn set_proxy_settings(
             //    `no_proxy` for matching hosts until SONE is restarted.
             //
             // 2. Disabling the proxy mid-session after startup scrubbed. The
-            //    system's own configuration is what `Direct` means, and we
-            //    deleted the variables carrying it. reqwest is covered:
-            //    `main.rs` captures the values before removing them and
-            //    `proxy_http::restore_system_proxy` hands them back on the
+            //    system's own configuration is what `Direct` means, and the
+            //    scrub deleted part of it — `no_proxy`/`NO_PROXY` only, since
+            //    that is all `SCRUBBED_PROXY_ENV_VARS` removes. reqwest is
+            //    covered: `main.rs` captures the values before removing them
+            //    and `proxy_http::restore_system_proxy` hands them back on the
             //    `Direct` route, so this command's own reconfiguration is
             //    correct. The GStreamer and WebKit paths are not: gio and
             //    libproxy read the process environment directly and there is
-            //    nowhere to inject a captured value, so for the rest of the
-            //    session those two egress direct rather than through the
-            //    user's system proxy. That needs a restart, plainly, and is
-            //    not fixable from here.
+            //    nowhere to inject a captured value. Those two still find the
+            //    user's `http_proxy`/`https_proxy` — those were never removed
+            //    — but not their bypass list, so for the rest of the session
+            //    they proxy hosts the user had excluded. That needs a restart,
+            //    plainly, and is not fixable from here.
             if let Some(dir) = state.settings_path.parent() {
                 crate::proxy::write_sidecar(dir, s);
             }

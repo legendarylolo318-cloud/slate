@@ -18,7 +18,8 @@
 //!   and accepted rather than chased: the guard matches the literal prefix
 //!   `if should_scrub_proxy_env(` without inspecting the argument, so a
 //!   hand-written `if should_scrub_proxy_env(Some((true, "http".into())))`
-//!   passes while scrubbing unconditionally; `PROXY_ENV_VARS.iter().take(1)`
+//!   passes while scrubbing unconditionally;
+//!   `SCRUBBED_PROXY_ENV_VARS.iter().take(1)`
 //!   passes; and renaming the loop's binding breaks the guard, though it fails
 //!   red rather than green. Every one of those takes deliberate effort, and a
 //!   substring guard is the wrong tool for stopping an author who is trying.
@@ -279,12 +280,15 @@ fn the_startup_proxy_scrub_stays_gated_on_the_launch_sidecar() {
     });
 
     let loop_at = body
-        .find("for v in tauri_app_lib::proxy::PROXY_ENV_VARS")
+        .find("for v in tauri_app_lib::proxy::SCRUBBED_PROXY_ENV_VARS")
         .unwrap_or_else(|| {
             panic!(
                 "the scrub loop in src/main.rs does not iterate \
-                 `tauri_app_lib::proxy::PROXY_ENV_VARS`: that array is the \
-                 audited list, and a different one scrubs the wrong variables"
+                 `tauri_app_lib::proxy::SCRUBBED_PROXY_ENV_VARS`: that array \
+                 is the audited removal list, and a different one scrubs the \
+                 wrong variables — `PROXY_ENV_VARS` in particular is the wider \
+                 capture list, and removing all of it downgrades the surfaces \
+                 no stage has taken over yet"
             )
         });
 
@@ -297,8 +301,8 @@ fn the_startup_proxy_scrub_stays_gated_on_the_launch_sidecar() {
     assert!(
         block_of(&body, loop_at).contains(&removal),
         "src/main.rs: `env::remove_var` is not inside the `for v in \
-         PROXY_ENV_VARS` loop, so it is removing something other than the \
-         audited list"
+         SCRUBBED_PROXY_ENV_VARS` loop, so it is removing something other \
+         than the audited list"
     );
 
     // The capture is the same shape of hole one level down: deleting it, or

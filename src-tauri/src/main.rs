@@ -66,13 +66,18 @@ fn main() {
                 // the only thing routing them — but it lived in exactly the
                 // variables about to be deleted. reqwest reads them back from
                 // this capture instead of from an environment we emptied.
+                //
+                // The capture is the full list and the removal is only the
+                // bypass pair. That is not an oversight: this is the sole
+                // sound moment to read these values, and stage 4a needs the
+                // per-scheme ones when it starts scrubbing them.
                 let captured: Vec<(String, String)> = tauri_app_lib::proxy::PROXY_ENV_VARS
                     .into_iter()
                     .filter_map(|v| std::env::var(v).ok().map(|value| (v.to_string(), value)))
                     .collect();
                 tauri_app_lib::proxy::remember_scrubbed_env(captured);
 
-                for v in tauri_app_lib::proxy::PROXY_ENV_VARS {
+                for v in tauri_app_lib::proxy::SCRUBBED_PROXY_ENV_VARS {
                     std::env::remove_var(v);
                 }
             }
