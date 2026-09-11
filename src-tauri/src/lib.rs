@@ -351,6 +351,27 @@ impl AppState {
             }
         }
 
+        // One-shot proxy migration. A pre-branch install can hold an enabled
+        // proxy with no host or a zero port, which the old client builder read
+        // as "no proxy". This module fails closed instead, so left alone it
+        // would come up with every request blocked and no way in. Turning it
+        // off restores exactly what that install already had.
+        if let Some(ref mut s) = saved {
+            if crate::proxy::migrate_incomplete_proxy(&mut s.proxy) {
+                log::info!(
+                    "[migration] proxy was enabled with no host or port; disabling it \
+                     so the app is not blocked by settings a previous version accepted"
+                );
+                if let Ok(json) = serde_json::to_string_pretty(s) {
+                    if let Ok(encrypted) = crypto.encrypt(json.as_bytes()) {
+                        if let Err(e) = fs::write(&settings_path, encrypted) {
+                            log::warn!("[migration] failed to persist the proxy migration: {e}");
+                        }
+                    }
+                }
+            }
+        }
+
         // Eager migration: if settings exist but aren't encrypted, re-save encrypted
         if settings_path.exists() {
             if let Ok(raw) = fs::read(&settings_path) {

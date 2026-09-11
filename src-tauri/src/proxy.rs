@@ -382,6 +382,37 @@ pub const PROXY_ENV_VARS: [&str; 8] = [
 /// rather than reading the environment.
 pub const SCRUBBED_PROXY_ENV_VARS: [&str; 2] = ["no_proxy", "NO_PROXY"];
 
+/// One-shot repair of settings written before this module existed.
+///
+/// The old `build_http_client` read `enabled: true, host: "", port: 0` as "no
+/// proxy" and handed back a direct client, so that combination is a real state
+/// on disk today: an install where the user flipped the toggle, never filled
+/// the fields in, and saw nothing go wrong. `plan()` is fail-closed and calls
+/// the same value `PlanError::PortZero`, which blocks every capability — no
+/// API, no artwork, no login, no update check, and a settings screen the user
+/// cannot reach without logging in.
+///
+/// Disabling it reproduces exactly what that install already had: `Direct`,
+/// the system's own configuration. It is the one shape where fail-closed would
+/// punish a user for a state a previous version told them was fine, so it is
+/// migrated rather than blocked. Everything else still fails closed.
+///
+/// Worth naming, because the two halves of this branch disagreed about this
+/// value: `shouldSubmitProxy` calls it half-typed and withholds it, while
+/// `plan()` calls it a hard block. Both are right about live input — the
+/// frontend never sends it, so `plan()` never sees it from there — but neither
+/// covers a value already sitting on disk from before either existed.
+///
+/// Returns whether anything changed, so the caller can persist and log once
+/// rather than on every read.
+pub fn migrate_incomplete_proxy(s: &mut crate::ProxySettings) -> bool {
+    if s.enabled && (s.host.trim().is_empty() || s.port == 0) {
+        s.enabled = false;
+        return true;
+    }
+    false
+}
+
 /// A plaintext companion to the encrypted settings, holding only what `main.rs`
 /// needs before `AppState` (and therefore the decryption key) exists.
 pub fn sidecar_path(config_dir: &Path) -> PathBuf {
@@ -1458,6 +1489,46 @@ mod tests {
                  proxy that would replace it — removing it egresses direct"
             );
         }
+    }
+
+    /// The legacy shape, and only the legacy shape.
+    ///
+    /// `enabled: true, host: "", port: 0` is what the old `build_http_client`
+    /// silently treated as no proxy, so it exists on disk. Under `plan()` it is
+    /// `PortZero`, which blocks everything including the login screen. The
+    /// migration must catch every spelling of "incomplete" — and must not
+    /// widen into disabling proxies that are merely wrong, which stay blocked.
+    #[test]
+    fn an_enabled_proxy_with_no_host_or_port_is_migrated_off() {
+        for (host, port) in [("", 0u16), ("", 3128), ("127.0.0.1", 0), ("   ", 8080)] {
+            let mut s = settings(host, port);
+            assert!(
+                migrate_incomplete_proxy(&mut s),
+                "{host:?}:{port} should have migrated"
+            );
+            assert!(!s.enabled);
+            assert!(
+                matches!(plan(&s, &HostCaps::assume_all_present()), Ok(ProxyPlan::Direct)),
+                "a migrated proxy must plan as Direct, not block the app"
+            );
+        }
+    }
+
+    #[test]
+    fn a_complete_or_disabled_proxy_is_left_alone() {
+        let mut s = settings("127.0.0.1", 3128);
+        assert!(!migrate_incomplete_proxy(&mut s));
+        assert!(s.enabled);
+
+        // Invalid, not incomplete: fail-closed still applies to these.
+        let mut s = settings("http://proxy.example", 3128);
+        assert!(!migrate_incomplete_proxy(&mut s));
+        assert!(s.enabled);
+
+        let mut s = settings("", 0);
+        s.enabled = false;
+        assert!(!migrate_incomplete_proxy(&mut s));
+        assert!(!s.enabled);
     }
 
     /// Everything that is removed must have been captured, or the `Direct`
