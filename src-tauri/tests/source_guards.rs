@@ -2,6 +2,14 @@
 //! classes of regression that runtime tests structurally cannot: a test can
 //! observe what a proxied client *does*, but not that a second, unproxied one
 //! was built somewhere else in the tree.
+//!
+//! Still owed, and deliberately not guarded here: no `window.open` fallbacks in
+//! the frontend. `src/components/Login.tsx` has five live ones, each a `catch`
+//! after `openUrl` from `@tauri-apps/plugin-opener` fails, and a `window.open`
+//! escapes the proxied transport entirely. Removing them is a frontend task;
+//! adding the guard before that lands would only break a green suite. When they
+//! are gone, guard it — the natural home is a frontend lint, since these tests
+//! scan Rust only.
 
 use std::fs;
 use std::path::{Path, PathBuf};
