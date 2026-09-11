@@ -720,3 +720,80 @@ mod tests {
         assert!(p.route(Capability::Lossy, &exactly_fixed).is_ok());
     }
 }
+
+#[cfg(test)]
+mod props {
+    use super::*;
+    use crate::{ProxySettings, ProxyType};
+    use proptest::prelude::*;
+
+    fn any_settings() -> impl Strategy<Value = ProxySettings> {
+        (
+            any::<bool>(),
+            any::<bool>(),
+            // Deliberately includes brackets, colons, percent signs, delimiters,
+            // non-ASCII and whitespace.
+            "[\\PC]{0,40}",
+            any::<u16>(),
+            proptest::option::of("[\\PC]{0,20}"),
+            proptest::option::of("[\\PC]{0,20}"),
+        )
+            .prop_map(|(enabled, socks, host, port, username, password)| ProxySettings {
+                enabled,
+                proxy_type: if socks { ProxyType::Socks5 } else { ProxyType::Http },
+                host,
+                port,
+                username,
+                password,
+            })
+    }
+
+    proptest! {
+        #[test]
+        fn plan_never_panics_and_routes_are_credential_free(s in any_settings()) {
+            let caps = HostCaps::assume_all_present();
+            if let Ok(p) = plan(&s, &caps) {
+                for c in [Capability::Api, Capability::Lossy, Capability::Dash, Capability::Webview] {
+                    if let Ok(Route::Via { uri, .. }) = p.route(c, &caps) {
+                        prop_assert!(!uri.contains('@'), "uri leaked a delimiter: {uri}");
+                        if let Some(u) = s.username.as_deref() {
+                            let u = u.trim();
+                            if !u.is_empty() {
+                                prop_assert!(!uri.contains(u), "uri leaked the username: {uri}");
+                            }
+                        }
+                        if let Some(pw) = s.password.as_deref() {
+                            if !pw.is_empty() {
+                                prop_assert!(!uri.contains(pw), "uri leaked the password: {uri}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn accepted_uris_are_single_bracketed_and_end_in_the_given_port(s in any_settings()) {
+            let caps = HostCaps::assume_all_present();
+            if let Ok(p @ (ProxyPlan::Http { .. } | ProxyPlan::Socks5 { .. })) = plan(&s, &caps) {
+                if let Ok(Route::Via { uri, .. }) = p.route(Capability::Api, &caps) {
+                    prop_assert!(!uri.contains("[["), "double bracketed: {uri}");
+                    prop_assert!(!uri.contains("]]"), "double bracketed: {uri}");
+                    prop_assert!(
+                        uri.ends_with(&format!(":{}", s.port)),
+                        "port not preserved: {uri}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn enabled_settings_never_silently_become_direct(s in any_settings()) {
+            // The original fail-open: `enabled` with unusable input resolved to Direct.
+            let caps = HostCaps::assume_all_present();
+            if s.enabled {
+                prop_assert!(!matches!(plan(&s, &caps), Ok(ProxyPlan::Direct)));
+            }
+        }
+    }
+}
