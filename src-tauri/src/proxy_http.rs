@@ -5,35 +5,67 @@
 //! direct one. reqwest auto-detects the system proxy, so a client "without a
 //! proxy" would egress.
 
-use crate::proxy::{BlockReason, Capability, HostCaps, ProxyPlan, Route, SystemProxyEnv};
+use crate::proxy::{BlockReason, Capability, EnvScheme, HostCaps, ProxyPlan, Route, SystemProxyEnv};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+/// Captured system proxies, already built. Parsing a value and constructing
+/// its proxy object are one step, so nothing is parsed twice.
+type CapturedProxies = SystemProxyEnv<reqwest::Proxy>;
+
 pub fn build_client(p: &ProxyPlan, env: &HostCaps) -> Result<reqwest::Client, BlockReason> {
-    build_client_with(p, env, captured_system_proxy())
+    build_client_with(p, env, captured_system_proxy)
 }
 
 /// The system's proxy configuration as it stood before startup scrubbed it.
 ///
-/// `usable` is supplied here rather than inside `proxy.rs` because deciding
-/// whether a captured string parses as a proxy URI means building a
-/// `reqwest::Proxy`, and this is the only file allowed to. `Proxy::all` runs
+/// The parser is supplied here rather than inside `proxy.rs` because building a
+/// `reqwest::Proxy` is confined to this file. `Proxy::http`/`Proxy::https` run
 /// the same `into_proxy_scheme` that reqwest's own environment detection uses,
-/// so accepting a value here means reqwest would have accepted it too.
-fn captured_system_proxy() -> SystemProxyEnv {
-    crate::proxy::system_proxy_from_env(crate::proxy::scrubbed_env(), |uri| {
-        reqwest::Proxy::all(uri).is_ok()
+/// so a value accepted here would have been accepted by it too.
+///
+/// Never call this speculatively: for a `socks5h://` value `into_proxy_scheme`
+/// resolves the proxy host, so this can block on `getaddrinfo`. It is reached
+/// only from the `Direct` arm of `build_client_with`, where the result is
+/// actually used.
+fn captured_system_proxy() -> CapturedProxies {
+    crate::proxy::system_proxy_from_env(crate::proxy::scrubbed_env(), |scheme, uri| {
+        let built = match scheme {
+            EnvScheme::Http => reqwest::Proxy::http(uri),
+            EnvScheme::Https => reqwest::Proxy::https(uri),
+        };
+        match built {
+            Ok(obj) => Some(obj),
+            Err(e) => {
+                log::warn!("[proxy] captured system proxy unusable ({uri}): {e}");
+                None
+            }
+        }
     })
 }
 
-/// The system's configuration is a parameter rather than a global read so the
-/// `Direct` behaviour can be tested: the real one is a process-wide capture
-/// that can only be written once, before any test runs.
+/// The system's configuration arrives as a thunk, for two reasons.
+///
+/// It must be *lazy*: producing it parses captured URIs, and parsing a
+/// `socks5h://` one resolves its host. `AppState::new` builds a client
+/// synchronously inside Tauri's `setup` closure, so evaluating it eagerly would
+/// stall startup on a `getaddrinfo` for a value the proxied path discards
+/// unused — and the ordinary configuration, sidecar on and settings on, is
+/// exactly that path. Only the `Direct` arm needs it.
+///
+/// (Settings that cannot be planned never arrive here at all: `from_settings`
+/// blocks the cell before building anything. And `route` cannot currently fail
+/// for `Capability::Api` — its refusals are all audio capabilities — so `Via`
+/// is the one path that would have paid for an eager capture.)
+///
+/// And it is a parameter rather than a global read so the `Direct` behaviour
+/// can be tested at all: the real capture is a process-wide cell that can only
+/// be written once, before any test runs.
 fn build_client_with(
     p: &ProxyPlan,
     env: &HostCaps,
-    system: SystemProxyEnv,
+    system: impl FnOnce() -> CapturedProxies,
 ) -> Result<reqwest::Client, BlockReason> {
     let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(30));
 
@@ -49,7 +81,7 @@ fn build_client_with(
         // SONE's proxy off — and without this their traffic would go direct
         // instead of through the proxy their system is configured for. We
         // destroyed the information `Direct` depends on, so we hand it back.
-        Route::NoProxy => builder = restore_system_proxy(builder, &system),
+        Route::NoProxy => builder = restore_system_proxy(builder, system()),
         Route::Via { uri, creds } => {
             // Credentials never travel in the URI: `Route::Via` keeps them
             // apart and `basic_auth` is the only thing that reunites them.
@@ -79,7 +111,7 @@ fn build_client_with(
 /// app.
 fn restore_system_proxy(
     mut builder: reqwest::ClientBuilder,
-    system: &SystemProxyEnv,
+    system: CapturedProxies,
 ) -> reqwest::ClientBuilder {
     if system.is_empty() {
         return builder;
@@ -89,20 +121,11 @@ fn restore_system_proxy(
         .as_deref()
         .and_then(reqwest::NoProxy::from_string);
 
-    // Spelled out rather than looped: `Proxy::http` and `Proxy::https` are
-    // generic over `IntoProxyScheme`, so they do not share a function pointer
-    // type and a table of them will not compile.
-    if let Some(uri) = system.http.as_deref() {
-        match reqwest::Proxy::http(uri) {
-            Ok(obj) => builder = builder.proxy(obj.no_proxy(bypass.clone())),
-            Err(e) => log::warn!("[proxy] captured http proxy unusable ({uri}): {e}"),
-        }
-    }
-    if let Some(uri) = system.https.as_deref() {
-        match reqwest::Proxy::https(uri) {
-            Ok(obj) => builder = builder.proxy(obj.no_proxy(bypass.clone())),
-            Err(e) => log::warn!("[proxy] captured https proxy unusable ({uri}): {e}"),
-        }
+    // The objects arrive built: `system_proxy_from_env` parsed each captured
+    // value exactly once, for the scheme it fills. Re-parsing them here would
+    // mean a second `getaddrinfo` for every socks value.
+    for obj in [system.http, system.https].into_iter().flatten() {
+        builder = builder.proxy(obj.no_proxy(bypass.clone()));
     }
     builder
 }
@@ -259,12 +282,12 @@ mod tests {
     }
 
 
-    /// The real parseability predicate, not the stand-in `proxy.rs` tests use:
-    /// an unparseable uppercase value must fall through to the lowercase one,
-    /// exactly as reqwest 0.11.27's own detection would have. Getting this
-    /// wrong leaves the user with no http proxy where they had a working one.
+    /// The real parser, not the stand-in `proxy.rs` tests use: an unparseable
+    /// uppercase value must fall through to the lowercase one, exactly as
+    /// reqwest 0.11.27's own detection would have. Getting this wrong leaves
+    /// the user with no http proxy where they had a working one.
     #[test]
-    fn the_real_predicate_falls_through_from_an_unparseable_uppercase_value() {
+    fn the_real_parser_falls_through_from_an_unparseable_uppercase_value() {
         // `ftp://` is genuinely rejected by `into_proxy_scheme`, which knows
         // only http, https and socks5. A bare word would NOT do: reqwest
         // accepts `garbage` as `http://garbage`, so a test written with one
@@ -272,20 +295,67 @@ mod tests {
         let vars = [("HTTP_PROXY", "ftp://nope:1"), ("http_proxy", "http://ok:1")]
             .map(|(k, v)| (k.to_string(), v.to_string()));
 
-        let e = crate::proxy::system_proxy_from_env(&vars, |uri| {
-            reqwest::Proxy::all(uri).is_ok()
+        let e = crate::proxy::system_proxy_from_env(&vars, |scheme, uri| match scheme {
+            EnvScheme::Http => reqwest::Proxy::http(uri).ok(),
+            EnvScheme::Https => reqwest::Proxy::https(uri).ok(),
         });
-        assert_eq!(e.http.as_deref(), Some("http://ok:1"));
+        assert!(e.http.is_some(), "the lowercase spelling must be used");
 
         let caps = HostCaps::assume_all_present();
-        let d = format!("{:?}", build_client_with(&ProxyPlan::Direct, &caps, e).unwrap());
+        let d = format!("{:?}", build_client_with(&ProxyPlan::Direct, &caps, || e).unwrap());
         assert!(d.contains("Http(http://ok:1)"), "{d}");
     }
 
-    fn corporate() -> crate::proxy::SystemProxyEnv {
-        crate::proxy::SystemProxyEnv {
-            http: Some("http://corp:8080".into()),
-            https: Some("http://corp:8443".into()),
+    /// Producing the captured environment parses URIs, and parsing a
+    /// `socks5h://` one resolves its host — so it must not happen on a path
+    /// that discards the result. `AppState::new` builds a client synchronously
+    /// inside Tauri's `setup` closure, which is where an eager call would
+    /// become a `getaddrinfo` stall at startup in the ordinary configuration:
+    /// sidecar on, settings on, so the route is `Via` and the captured values
+    /// are never looked at.
+    ///
+    /// Observable because the thunk is the seam: a real call flips the flag.
+    #[test]
+    fn a_proxied_build_never_produces_the_captured_environment() {
+        let caps = HostCaps::assume_all_present();
+        let asked = std::cell::Cell::new(false);
+        let never = || {
+            asked.set(true);
+            CapturedProxies::default()
+        };
+
+        let p = plan(&enabled("127.0.0.1", 3128), &caps).unwrap();
+        build_client_with(&p, &caps, never).expect("a valid plan builds");
+        assert!(
+            !asked.get(),
+            "the captured environment was produced for a proxied plan, where it \
+             is thrown away — that is a `getaddrinfo` on the startup thread for \
+             nothing"
+        );
+    }
+
+    /// And this proves the test above is not vacuous: the `Direct` arm does
+    /// reach for it, so the flag is capable of being set.
+    #[test]
+    fn a_direct_build_does_produce_the_captured_environment() {
+        let caps = HostCaps::assume_all_present();
+        let asked = std::cell::Cell::new(false);
+        let once = || {
+            asked.set(true);
+            CapturedProxies::default()
+        };
+        build_client_with(&ProxyPlan::Direct, &caps, once).unwrap();
+        assert!(asked.get(), "the Direct route must consult the capture");
+    }
+
+    fn proxy_for(uri: &str) -> reqwest::Proxy {
+        reqwest::Proxy::http(uri).expect("test proxy uri")
+    }
+
+    fn corporate() -> CapturedProxies {
+        CapturedProxies {
+            http: Some(proxy_for("http://corp:8080")),
+            https: Some(reqwest::Proxy::https("http://corp:8443").unwrap()),
             no_proxy: Some("intranet.example".into()),
         }
     }
@@ -300,7 +370,7 @@ mod tests {
     #[test]
     fn turning_the_proxy_off_restores_the_system_proxy_we_removed() {
         let caps = HostCaps::assume_all_present();
-        let c = build_client_with(&ProxyPlan::Direct, &caps, corporate()).unwrap();
+        let c = build_client_with(&ProxyPlan::Direct, &caps, corporate).unwrap();
         let d = format!("{c:?}");
         assert!(d.contains("Http(http://corp:8080)"), "{d}");
         assert!(d.contains("Https(http://corp:8443)"), "{d}");
@@ -315,12 +385,7 @@ mod tests {
     #[test]
     fn an_unscrubbed_direct_client_carries_no_proxy_of_our_own() {
         let caps = HostCaps::assume_all_present();
-        let c = build_client_with(
-            &ProxyPlan::Direct,
-            &caps,
-            crate::proxy::SystemProxyEnv::default(),
-        )
-        .unwrap();
+        let c = build_client_with(&ProxyPlan::Direct, &caps, CapturedProxies::default).unwrap();
         // reqwest's own `System(...)` entry, still doing its own detection —
         // and nothing we put there.
         let d = format!("{c:?}");
@@ -336,7 +401,7 @@ mod tests {
     fn a_proxied_client_never_also_carries_the_captured_system_proxy() {
         let caps = HostCaps::assume_all_present();
         let p = plan(&enabled("127.0.0.1", 3128), &caps).unwrap();
-        let d = format!("{:?}", build_client_with(&p, &caps, corporate()).unwrap());
+        let d = format!("{:?}", build_client_with(&p, &caps, corporate).unwrap());
         assert!(d.contains("All(http://127.0.0.1:3128)"), "{d}");
         assert!(!d.contains("corp"), "SONE's plan must be the only proxy: {d}");
     }
@@ -347,16 +412,17 @@ mod tests {
     #[test]
     fn an_unusable_captured_value_is_skipped_rather_than_blocking() {
         let caps = HostCaps::assume_all_present();
-        let sys = crate::proxy::SystemProxyEnv {
-            http: Some("not a proxy uri".into()),
-            https: Some("http://corp:8443".into()),
-            no_proxy: None,
-        };
-        let c = build_client_with(&ProxyPlan::Direct, &caps, sys)
+        let vars = [("http_proxy", "ftp://nope:1"), ("https_proxy", "http://corp:8443")]
+            .map(|(k, v)| (k.to_string(), v.to_string()));
+        let sys = crate::proxy::system_proxy_from_env(&vars, |scheme, uri| match scheme {
+            EnvScheme::Http => reqwest::Proxy::http(uri).ok(),
+            EnvScheme::Https => reqwest::Proxy::https(uri).ok(),
+        });
+        let c = build_client_with(&ProxyPlan::Direct, &caps, || sys)
             .expect("a malformed captured value must not block egress");
         let d = format!("{c:?}");
         assert!(d.contains("Https(http://corp:8443)"), "{d}");
-        assert!(!d.contains("not a proxy uri"), "{d}");
+        assert!(!d.contains("nope"), "{d}");
     }
 
     #[test]

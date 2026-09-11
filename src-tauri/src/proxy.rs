@@ -418,15 +418,46 @@ pub fn scrubbed_env() -> &'static [(String, String)] {
     SCRUBBED_ENV.get().map(Vec::as_slice).unwrap_or(&[])
 }
 
+/// Which slot a captured value is being resolved for.
+///
+/// reqwest builds a *different* proxy object per scheme from the same string,
+/// so the parse cannot be shared between the two and the caller has to be told
+/// which one it is producing. That is also why `ALL_PROXY` costs two parses:
+/// it fills both slots, and 0.11.27 likewise calls `insert_from_env` twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvScheme {
+    Http,
+    Https,
+}
+
 /// What the system's own configuration said, resolved from captured variables.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SystemProxyEnv {
-    pub http: Option<String>,
-    pub https: Option<String>,
+///
+/// Generic over what a captured value resolves *to* so the resolution and the
+/// construction are a single step: `proxy_http.rs` instantiates it with
+/// `reqwest::Proxy`, so every string that is parsed yields the object that is
+/// then used, and nothing is parsed twice. That matters because parsing a
+/// `socks5h://` value resolves its host — a second parse is a second
+/// `getaddrinfo`. Tests here use `String`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemProxyEnv<T> {
+    pub http: Option<T>,
+    pub https: Option<T>,
     pub no_proxy: Option<String>,
 }
 
-impl SystemProxyEnv {
+// Hand-written: the derive would bound `T: Default`, and `reqwest::Proxy` is
+// not — every field here is an `Option`, so nothing about `T` is needed.
+impl<T> Default for SystemProxyEnv<T> {
+    fn default() -> Self {
+        Self {
+            http: None,
+            https: None,
+            no_proxy: None,
+        }
+    }
+}
+
+impl<T> SystemProxyEnv<T> {
     pub fn is_empty(&self) -> bool {
         self.http.is_none() && self.https.is_none() && self.no_proxy.is_none()
     }
@@ -464,37 +495,70 @@ impl SystemProxyEnv {
 /// desktop application, never a CGI process, and `REQUEST_METHOD` is not among
 /// the variables `main.rs` captures, so there is nothing to reproduce.
 ///
-/// `usable` is injected rather than called directly because deciding whether a
-/// string parses as a proxy URI means building a `reqwest::Proxy`, and those
-/// are confined to `proxy_http.rs`. Pure otherwise, because the precedence is
-/// the whole of the risk and is not observable from outside the process.
-pub fn system_proxy_from_env(
+/// `parse` is injected rather than called directly for two reasons: deciding
+/// whether a captured string is a usable proxy means building a
+/// `reqwest::Proxy`, and those are confined to `proxy_http.rs`; and returning
+/// the parsed object rather than a yes/no keeps this to one parse per value.
+/// Pure otherwise, because the precedence is the whole of the risk and is not
+/// observable from outside the process.
+pub fn system_proxy_from_env<T>(
     vars: &[(String, String)],
-    usable: impl Fn(&str) -> bool,
-) -> SystemProxyEnv {
+    parse: impl Fn(EnvScheme, &str) -> Option<T>,
+) -> SystemProxyEnv<T> {
     let present = |name: &str| {
         vars.iter()
             .find(|(k, _)| k == name)
-            .map(|(_, v)| v.to_string())
+            .map(|(_, v)| v.as_str())
     };
     // `insert_proxy`: empty or whitespace is rejected before parsing, and an
     // unparseable value is rejected too — both leave the lowercase fallback to
     // be tried.
-    let get = |name: &str| present(name).filter(|v| !v.trim().is_empty() && usable(v));
+    let get = |scheme, name: &str| {
+        present(name)
+            .filter(|v| !v.trim().is_empty())
+            .and_then(|v| parse(scheme, v))
+    };
 
     let mut resolved = SystemProxyEnv {
-        http: get("HTTP_PROXY").or_else(|| get("http_proxy")),
-        https: get("HTTPS_PROXY").or_else(|| get("https_proxy")),
+        http: get(EnvScheme::Http, "HTTP_PROXY").or_else(|| get(EnvScheme::Http, "http_proxy")),
+        https: get(EnvScheme::Https, "HTTPS_PROXY")
+            .or_else(|| get(EnvScheme::Https, "https_proxy")),
         // Presence, not usability: `from_env` reads the variable and hands
         // whatever it finds to `from_string`, which rejects an empty list on
         // its own.
-        no_proxy: present("NO_PROXY").or_else(|| present("no_proxy")),
+        no_proxy: present("NO_PROXY")
+            .or_else(|| present("no_proxy"))
+            .map(str::to_string),
     };
 
     // Last, and overwriting. See the note above before changing this.
-    if let Some(all) = get("ALL_PROXY").or_else(|| get("all_proxy")) {
-        resolved.http = Some(all.clone());
-        resolved.https = Some(all);
+    //
+    // Shaped to match 0.11.27 statement for statement, including two things
+    // that look like slips and are not. The `&&` short-circuits, so the https
+    // insert never runs when the http one failed. And a failed `insert_proxy`
+    // leaves the slot alone rather than clearing it, so a value that parses for
+    // one scheme and not the other keeps whatever the per-scheme name put
+    // there — which is why each assignment is guarded instead of unconditional.
+    let upper = get(EnvScheme::Http, "ALL_PROXY");
+    let both_landed = match upper {
+        Some(http) => {
+            let https = get(EnvScheme::Https, "ALL_PROXY");
+            resolved.http = Some(http);
+            let landed = https.is_some();
+            if https.is_some() {
+                resolved.https = https;
+            }
+            landed
+        }
+        None => false,
+    };
+    if !both_landed {
+        if let Some(http) = get(EnvScheme::Http, "all_proxy") {
+            resolved.http = Some(http);
+        }
+        if let Some(https) = get(EnvScheme::Https, "all_proxy") {
+            resolved.https = Some(https);
+        }
     }
     resolved
 }
@@ -1059,12 +1123,16 @@ mod tests {
         uri.starts_with("http://") || uri.starts_with("https://")
     }
 
-    fn resolve(vars: &[(&str, &str)]) -> SystemProxyEnv {
-        let owned: Vec<(String, String)> = vars
-            .iter()
+    fn owned(vars: &[(&str, &str)]) -> Vec<(String, String)> {
+        vars.iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        system_proxy_from_env(&owned, parses)
+            .collect()
+    }
+
+    fn resolve(vars: &[(&str, &str)]) -> SystemProxyEnv<String> {
+        system_proxy_from_env(&owned(vars), |_, uri| {
+            parses(uri).then(|| uri.to_string())
+        })
     }
 
     /// Nothing was scrubbed, so nothing is restored and every consumer keeps
@@ -1178,7 +1246,65 @@ mod tests {
     /// default is empty, so a process that never scrubbed restores nothing.
     #[test]
     fn the_capture_defaults_to_empty_and_resolves_to_nothing() {
-        assert!(system_proxy_from_env(scrubbed_env(), parses).is_empty());
+        let e = system_proxy_from_env(scrubbed_env(), |_, uri| {
+            parses(uri).then(|| uri.to_string())
+        });
+        assert!(e.is_empty());
+    }
+
+    /// The scheme reaches the parser, and reaches it correctly. reqwest builds
+    /// a different proxy object per scheme from the same string, so a resolver
+    /// that passed the wrong one would attach an https proxy to http traffic —
+    /// invisible in every precedence assertion above, because those only look
+    /// at which *value* landed in which slot.
+    #[test]
+    fn each_slot_is_parsed_for_its_own_scheme() {
+        let seen = std::cell::RefCell::new(Vec::new());
+        let vars = owned(&[
+            ("HTTP_PROXY", "http://h:1"),
+            ("HTTPS_PROXY", "http://s:2"),
+            ("ALL_PROXY", "http://a:3"),
+        ]);
+        let _ = system_proxy_from_env(&vars, |scheme, uri| {
+            seen.borrow_mut().push((scheme, uri.to_string()));
+            Some(uri.to_string())
+        });
+
+        assert_eq!(
+            seen.into_inner(),
+            vec![
+                (EnvScheme::Http, "http://h:1".to_string()),
+                (EnvScheme::Https, "http://s:2".to_string()),
+                (EnvScheme::Http, "http://a:3".to_string()),
+                (EnvScheme::Https, "http://a:3".to_string()),
+            ],
+            "each value must be parsed once, for the slot it fills"
+        );
+    }
+
+    /// No value is parsed twice. A second parse of a `socks5h://` value is a
+    /// second `getaddrinfo`, and this function used to hand back strings that
+    /// the caller then re-parsed to build the proxy objects.
+    #[test]
+    fn no_captured_value_is_parsed_more_than_once_per_slot() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let vars = owned(&[
+            ("HTTP_PROXY", "http://h:1"),
+            ("http_proxy", "http://h:2"),
+            ("HTTPS_PROXY", "http://s:1"),
+        ]);
+        let _ = system_proxy_from_env(&vars, |scheme, uri| {
+            calls.borrow_mut().push((scheme, uri.to_string()));
+            Some(uri.to_string())
+        });
+
+        let calls = calls.into_inner();
+        let mut unique = calls.clone();
+        unique.dedup();
+        assert_eq!(calls, unique, "a value was parsed twice: {calls:?}");
+        // The lowercase fallback is never even looked at once the uppercase
+        // spelling lands.
+        assert_eq!(calls.len(), 2, "{calls:?}");
     }
 
     /// Both spellings, because the consumers disagree about which they read:

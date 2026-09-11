@@ -24,6 +24,13 @@
 //!   substring guard is the wrong tool for stopping an author who is trying.
 //!   These guards exist to catch the accidental deletion and the innocent
 //!   refactor.
+//! - Same test, same acceptance: the capture assertions count no occurrences,
+//!   so a commented-out decoy `remember_scrubbed_env(` inside the gate would
+//!   satisfy both of them while the live call sat below the removal loop.
+//! - `the_mirrored_reqwest_major_version_is_still_what_we_pin` matches the
+//!   literal `0.11`, so pinning the dependency exactly (`version = "0.11.27"`)
+//!   fails it spuriously. Red rather than green, so it is safe — just noisy,
+//!   and the fix is to widen the match when someone actually pins that way.
 //!
 //! Still owed, and deliberately not guarded here: no `window.open` fallbacks in
 //! the frontend. `src/components/Login.tsx` has five live ones, each a `catch`
