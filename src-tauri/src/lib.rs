@@ -24,6 +24,7 @@ pub mod mcp;
 pub mod overlay;
 mod http_util;
 pub mod proxy;
+pub mod proxy_http;
 
 pub use error::SoneError;
 pub use signal_path::{SignalPath, SignalPathTracker};
