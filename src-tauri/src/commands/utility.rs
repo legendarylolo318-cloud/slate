@@ -391,12 +391,19 @@ pub fn get_proxy_settings(state: State<'_, AppState>) -> crate::ProxySettings {
 /// error is returned: a blocked plan yields `ProxyBlocked` carrying the cause,
 /// alongside settings that are already on disk.
 ///
-/// That is the whole of what is guaranteed today. Nothing surfaces the reason
-/// yet — `NetworkTab.tsx` saves with `.catch(() => {})`, so the rejection is
-/// discarded and the user sees no explanation of why the proxy is not working.
-/// Recovery works regardless (the form keeps its own state and the value is
-/// persisted); reporting is owed by a later task that wires this error into the
-/// UI. Do not read this comment as a claim that the reason reaches anyone.
+/// The reason now reaches the user. `NetworkTab.tsx` no longer discards the
+/// rejection: it reads the cause out of `ProxyBlocked` — whose `message` is an
+/// object, never a string — and prints it in the settings banner, so a refusal
+/// names the field or the missing host capability instead of saying
+/// "connection failed". Playback does the same, as its own toast, and that path
+/// deliberately does not treat a block as an unplayable track.
+///
+/// Two things this still does not cover, so nobody reads it as full coverage.
+/// `ProxyStatus` exists but nothing emits it, so there is no *standing* report
+/// of a proxy that is merely degraded — a plan that serves the API while
+/// refusing one audio tier surfaces only when that tier is actually used, and a
+/// per-feature notice waits on the real `HostCaps` probe. And the reason is
+/// reported, not acted on: recovery is still the user's, from the same screen.
 ///
 /// Split out from the command so the ordering can be tested without an
 /// `AppState`; `persist` stands in for the encrypted read-modify-write.
@@ -423,7 +430,10 @@ async fn persist_then_reconfigure(
     // Not a rare race, either: `NetworkTab.tsx` debounces a save on every
     // keystroke, so typing a hostname fires several, and once one of them is a
     // SOCKS5 host that takes seconds to resolve they overlap as a matter of
-    // course rather than by bad luck.
+    // course rather than by bad luck. Narrower than it was — the settings screen
+    // now withholds an enabled proxy until both host and port are present, so
+    // the half-typed prefixes no longer arrive — but every keystroke after the
+    // port is set still sends one, so the overlap stands.
     persist(settings)?;
 
     // Swapping the one shared cell is the whole transport update: every reqwest
