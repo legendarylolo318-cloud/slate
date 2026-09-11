@@ -294,18 +294,36 @@ impl ProxyPlan {
     }
 }
 
-/// Every variable libcurl, libsoup or gio may read to find a proxy, in both
-/// spellings. `curlhttpsrc` reads `no_proxy` at construction and there is no
-/// property to override it, so an ambient value must be gone before any
+/// Every variable libcurl, libproxy or reqwest may read to find a proxy, in
+/// both spellings. `curlhttpsrc` reads `no_proxy` at construction and there is
+/// no property to override it, so an ambient value must be gone before any
 /// element exists.
 ///
-/// Both cases of all four, because the readers disagree: libcurl honours
-/// lowercase `http_proxy` only (an uppercase one would be attacker-controlled
-/// under CGI) but reads either case of the other three, while reqwest and
-/// libproxy read both cases throughout. Scrubbing one spelling leaves the
-/// other live. Per-scheme names SONE never speaks (`ftp_proxy`, `rsync_proxy`)
-/// are deliberately absent: no transport in this process reads them, and
-/// removing a variable that is not ours to remove is its own surprise.
+/// Both cases of all four, because the three readers disagree and the union is
+/// what has to go:
+///
+/// - libcurl (so `curlhttpsrc`) honours lowercase `http_proxy` only — an
+///   uppercase one would be attacker-controlled through the `Proxy:` request
+///   header under CGI — but reads either case of `https_proxy`, `all_proxy`
+///   and `no_proxy`.
+/// - reqwest prefers the uppercase spelling of `HTTP_PROXY`, `HTTPS_PROXY` and
+///   `ALL_PROXY` and falls back to lowercase, and reads `NO_PROXY` then
+///   `no_proxy`.
+/// - libproxy (so gio, libsoup and WebKit) reads both cases of the per-scheme
+///   names and of `no_proxy`, and never reads `all_proxy` at all — that one is
+///   libcurl's and reqwest's.
+///
+/// So no single reader wants all eight, and scrubbing one spelling leaves the
+/// other live for at least one of them. Per-scheme names SONE never speaks
+/// (`ftp_proxy`, `rsync_proxy`) are deliberately absent: no transport in this
+/// process reads them, and removing a variable that is not ours to remove is
+/// its own surprise.
+///
+/// Not covered, and not coverable here: libproxy 0.4.x also honours
+/// `_PX_DEBUG_PACURL`, which points the whole gio/libsoup/WebKit path at a PAC
+/// file regardless of everything above. It is an obscure debug hook rather
+/// than a configuration mechanism, and removing it would be mutating something
+/// that is plainly not ours; noted so nobody concludes this list is airtight.
 pub const PROXY_ENV_VARS: [&str; 8] = [
     "http_proxy",
     "HTTP_PROXY",
@@ -338,20 +356,108 @@ pub fn write_sidecar(config_dir: &Path, s: &crate::ProxySettings) {
         crate::ProxyType::Socks5 => "socks5",
     };
     let body = format!("{}\n{}\n", if s.enabled { "on" } else { "off" }, kind);
-    if let Err(e) = std::fs::write(sidecar_path(config_dir), body) {
+    if let Err(e) = write_sidecar_file(&sidecar_path(config_dir), &body) {
         log::warn!("[proxy] could not write mode sidecar: {e}");
     }
 }
 
-/// `None` whenever the file is absent or is not something `write_sidecar`
-/// produced. The caller treats that as "not proxying", so a partial read must
-/// never come back as a half-answer.
+/// Owner-only, 0600. The contents are not secret, but they do disclose *that*
+/// this user proxies and *with what* — beside a settings file that is
+/// encrypted precisely so a reader of the config directory learns neither.
+///
+/// The mode is set twice on purpose: `OpenOptions::mode` applies only when the
+/// file is created, so a sidecar written before this change — or by an older
+/// build under a loose umask — would keep its old permissions forever without
+/// the explicit `set_permissions`.
+fn write_sidecar_file(path: &Path, body: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(body.as_bytes())?;
+    f.set_permissions(std::fs::Permissions::from_mode(0o600))
+}
+
+/// `None` whenever the file is absent, truncated, or carries a proxy type this
+/// build does not know. The caller treats every `None` as "not proxying", so a
+/// partial or unrecognised read must never come back as a half-answer — and
+/// the type is validated rather than passed through because it is a value a
+/// later task is expected to act on.
 pub fn read_sidecar(config_dir: &Path) -> Option<(bool, String)> {
     let body = std::fs::read_to_string(sidecar_path(config_dir)).ok()?;
     let mut lines = body.lines();
     let enabled = lines.next()?.trim() == "on";
-    let kind = lines.next()?.trim().to_string();
+    let kind = match lines.next()?.trim() {
+        k @ ("http" | "socks5") => k.to_string(),
+        _ => return None,
+    };
     Some((enabled, kind))
+}
+
+/// The proxy environment as it stood before `main.rs` removed it, captured so
+/// the `Direct` path can hand it back.
+///
+/// Empty whenever no scrub happened, which is both the common case and the
+/// safe default: consumers then behave exactly as they did before this
+/// existed, letting their own auto-detection read a untouched environment.
+static SCRUBBED_ENV: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+
+/// Called once from `main.rs`, immediately before the variables are removed.
+/// Later calls are ignored: the first capture is the only true one, since by
+/// then the environment no longer holds what it is recording.
+pub fn remember_scrubbed_env(vars: Vec<(String, String)>) {
+    let _ = SCRUBBED_ENV.set(vars);
+}
+
+pub fn scrubbed_env() -> &'static [(String, String)] {
+    SCRUBBED_ENV.get().map(Vec::as_slice).unwrap_or(&[])
+}
+
+/// What the system's own configuration said, resolved from captured variables.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SystemProxyEnv {
+    pub http: Option<String>,
+    pub https: Option<String>,
+    pub no_proxy: Option<String>,
+}
+
+impl SystemProxyEnv {
+    pub fn is_empty(&self) -> bool {
+        self.http.is_none() && self.https.is_none() && self.no_proxy.is_none()
+    }
+}
+
+/// Resolve captured variables the way reqwest's own auto-detection would have,
+/// so restoring them reproduces what the user had rather than inventing a new
+/// policy: uppercase preferred over lowercase, `ALL_PROXY` supplying both
+/// schemes and the per-scheme names overriding it.
+///
+/// Pure, because the precedence is the whole of the risk. Getting it wrong
+/// sends a corporate user's traffic somewhere their configuration did not ask
+/// for, and that is not observable from the outside.
+pub fn system_proxy_from_env(vars: &[(String, String)]) -> SystemProxyEnv {
+    let get = |name: &str| {
+        vars.iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.trim())
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let all = get("ALL_PROXY").or_else(|| get("all_proxy"));
+    SystemProxyEnv {
+        http: get("HTTP_PROXY")
+            .or_else(|| get("http_proxy"))
+            .or_else(|| all.clone()),
+        https: get("HTTPS_PROXY")
+            .or_else(|| get("https_proxy"))
+            .or(all),
+        no_proxy: get("NO_PROXY").or_else(|| get("no_proxy")),
+    }
 }
 
 #[cfg(test)]
@@ -874,6 +980,108 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(sidecar_path(dir.path()), "on\n").unwrap();
         assert_eq!(read_sidecar(dir.path()), None);
+    }
+
+    /// A type this build does not know is not a half-answer to be passed
+    /// along: a later task is expected to act on that string.
+    #[test]
+    fn an_unknown_proxy_type_reads_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(sidecar_path(dir.path()), "off\nbanana\n").unwrap();
+        assert_eq!(read_sidecar(dir.path()), None);
+    }
+
+    /// Not secret, but it discloses that this user proxies and with what,
+    /// beside a settings file encrypted so that a reader of the config
+    /// directory learns neither.
+    #[test]
+    fn the_sidecar_is_owner_only_even_when_it_already_existed() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = sidecar_path(dir.path());
+
+        // A sidecar left by an older build under a loose umask.
+        std::fs::write(&path, "on\nhttp\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_sidecar(dir.path(), &settings("127.0.0.1", 8080));
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "sidecar is {mode:o}, not 0600");
+    }
+
+    /// Nothing was scrubbed, so nothing is restored and every consumer keeps
+    /// reading the untouched environment itself. The common case.
+    #[test]
+    fn an_unscrubbed_environment_resolves_to_nothing() {
+        assert!(system_proxy_from_env(&[]).is_empty());
+        assert_eq!(system_proxy_from_env(&[]), SystemProxyEnv::default());
+    }
+
+    /// reqwest's own precedence, reproduced: restoring has to give the user
+    /// back what they had, not a policy of our own invention.
+    #[test]
+    fn uppercase_wins_over_lowercase_for_every_name() {
+        let vars = [
+            ("http_proxy", "http://lower:1"),
+            ("HTTP_PROXY", "http://upper:1"),
+            ("https_proxy", "http://lower:2"),
+            ("HTTPS_PROXY", "http://upper:2"),
+            ("no_proxy", "lower.example"),
+            ("NO_PROXY", "upper.example"),
+        ]
+        .map(|(k, v)| (k.to_string(), v.to_string()));
+
+        let e = system_proxy_from_env(&vars);
+        assert_eq!(e.http.as_deref(), Some("http://upper:1"));
+        assert_eq!(e.https.as_deref(), Some("http://upper:2"));
+        assert_eq!(e.no_proxy.as_deref(), Some("upper.example"));
+    }
+
+    #[test]
+    fn lowercase_is_used_when_it_is_the_only_spelling() {
+        let vars = [
+            ("http_proxy", "http://lower:1"),
+            ("no_proxy", "lower.example"),
+        ]
+        .map(|(k, v)| (k.to_string(), v.to_string()));
+
+        let e = system_proxy_from_env(&vars);
+        assert_eq!(e.http.as_deref(), Some("http://lower:1"));
+        assert_eq!(e.no_proxy.as_deref(), Some("lower.example"));
+        assert_eq!(e.https, None);
+    }
+
+    /// `all_proxy` supplies both schemes, and a per-scheme name overrides it
+    /// for its own scheme only — the case a naive "first match wins" gets
+    /// backwards, silently sending https traffic to the wrong endpoint.
+    #[test]
+    fn all_proxy_fills_both_schemes_and_yields_to_the_per_scheme_names() {
+        let only_all = [("ALL_PROXY", "http://all:1")].map(|(k, v)| (k.to_string(), v.to_string()));
+        let e = system_proxy_from_env(&only_all);
+        assert_eq!(e.http.as_deref(), Some("http://all:1"));
+        assert_eq!(e.https.as_deref(), Some("http://all:1"));
+
+        let both = [("all_proxy", "http://all:1"), ("https_proxy", "http://s:2")]
+            .map(|(k, v)| (k.to_string(), v.to_string()));
+        let e = system_proxy_from_env(&both);
+        assert_eq!(e.http.as_deref(), Some("http://all:1"));
+        assert_eq!(e.https.as_deref(), Some("http://s:2"));
+    }
+
+    /// An exported-but-empty variable is how a shell profile disables one.
+    /// Treating it as a proxy endpoint would be worse than ignoring it.
+    #[test]
+    fn empty_and_whitespace_values_are_not_proxies() {
+        let vars = [("HTTP_PROXY", ""), ("https_proxy", "   ")]
+            .map(|(k, v)| (k.to_string(), v.to_string()));
+        assert!(system_proxy_from_env(&vars).is_empty());
+    }
+
+    /// Whatever `main.rs` captured must survive the round trip unchanged; the
+    /// default is empty, so a process that never scrubbed restores nothing.
+    #[test]
+    fn the_capture_defaults_to_empty_and_resolves_to_nothing() {
+        assert!(system_proxy_from_env(scrubbed_env()).is_empty());
     }
 
     /// Both spellings, because the consumers disagree about which they read:

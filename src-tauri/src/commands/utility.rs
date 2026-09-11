@@ -461,15 +461,29 @@ pub async fn set_proxy_settings(
             // succeeds: a sidecar saying "on" beside settings that never
             // reached disk would scrub for a proxy nobody configured.
             //
-            // Known hole, and it cannot be closed from here. Enabling the
-            // proxy mid-session on a host that had an ambient `no_proxy` at
-            // launch does not take full effect until restart: `curlhttpsrc`
-            // read that variable when its first element was constructed, and
-            // the environment is immutable once GTK/glib have threads, so
-            // neither this command nor anything else in the running process
-            // can take it back. reqwest and the webview reconfigure fine; the
-            // GStreamer audio path may still honour the stale `no_proxy` for
-            // matching hosts until SONE is restarted.
+            // Two known holes, both rooted in the same fact: the environment
+            // is immutable once GTK/glib have threads, so a mid-session change
+            // cannot undo what startup did or did not do.
+            //
+            // 1. Enabling the proxy mid-session on a host that had an ambient
+            //    `no_proxy` at launch. Startup did not scrub (the sidecar said
+            //    off), and `curlhttpsrc` read that variable when its first
+            //    element was constructed. reqwest and the webview reconfigure
+            //    fine; the GStreamer audio path may still honour the stale
+            //    `no_proxy` for matching hosts until SONE is restarted.
+            //
+            // 2. Disabling the proxy mid-session after startup scrubbed. The
+            //    system's own configuration is what `Direct` means, and we
+            //    deleted the variables carrying it. reqwest is covered:
+            //    `main.rs` captures the values before removing them and
+            //    `proxy_http::restore_system_proxy` hands them back on the
+            //    `Direct` route, so this command's own reconfiguration is
+            //    correct. The GStreamer and WebKit paths are not: gio and
+            //    libproxy read the process environment directly and there is
+            //    nowhere to inject a captured value, so for the rest of the
+            //    session those two egress direct rather than through the
+            //    user's system proxy. That needs a restart, plainly, and is
+            //    not fixable from here.
             if let Some(dir) = state.settings_path.parent() {
                 crate::proxy::write_sidecar(dir, s);
             }

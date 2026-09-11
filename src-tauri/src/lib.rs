@@ -385,6 +385,12 @@ impl AppState {
             .map(|s| s.max_quality.clone())
             .unwrap_or_else(defaults::max_quality);
 
+        // `saved` is `None` when the settings cannot be decrypted at all, and
+        // the default proxy is disabled — so a failed decrypt overwrites an
+        // existing `on` sidecar with `off`. That direction is the safe one: the
+        // next launch declines to scrub and every consumer reads the system's
+        // own configuration, which is what a user with no usable settings
+        // should get. It self-heals as soon as the settings are readable again.
         let proxy_settings = saved.as_ref().map(|s| s.proxy.clone()).unwrap_or_default();
         // Reconcile the launch sidecar with the encrypted truth on every start.
         // Saving the proxy settings writes it too, but that only covers people
@@ -545,9 +551,8 @@ pub fn run() {
     // calls from setup hooks are captured. Reads only the logging toggle
     // sidecar file — Settings struct is encrypted and loaded later via
     // AppState.
-    let sone_dir = dirs::config_dir()
-        .map(|d| d.join("sone"))
-        .unwrap_or_else(|| std::path::PathBuf::from("./.sone"));
+    let sone_dir =
+        config_dir_for_env().unwrap_or_else(|| std::path::PathBuf::from("./.sone"));
     let logging_toggle_path = sone_dir.join("logging.toggle");
     let logging_enabled = crate::logging::read_logging_preference(&logging_toggle_path);
     let _logger_handle = crate::logging::init_logging(

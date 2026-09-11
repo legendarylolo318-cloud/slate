@@ -60,6 +60,18 @@ fn main() {
         // proxy type and nothing else.
         if let Some(dir) = tauri_app_lib::config_dir_for_env() {
             if should_scrub_proxy_env(tauri_app_lib::proxy::read_sidecar(&dir)) {
+                // Capture before removing, never after. `Direct` means the
+                // system's own configuration applies, and if the user turns
+                // SONE's proxy off later in this session that configuration is
+                // the only thing routing them — but it lived in exactly the
+                // variables about to be deleted. reqwest reads them back from
+                // this capture instead of from an environment we emptied.
+                let captured: Vec<(String, String)> = tauri_app_lib::proxy::PROXY_ENV_VARS
+                    .into_iter()
+                    .filter_map(|v| std::env::var(v).ok().map(|value| (v.to_string(), value)))
+                    .collect();
+                tauri_app_lib::proxy::remember_scrubbed_env(captured);
+
                 for v in tauri_app_lib::proxy::PROXY_ENV_VARS {
                     std::env::remove_var(v);
                 }

@@ -223,3 +223,92 @@ fn environment_is_mutated_only_in_main() {
         }
     }
 }
+
+/// The scrub must stay *gated*. `environment_is_mutated_only_in_main` above
+/// asserts where the mutation may live, never that it is conditional — so
+/// inverting the `if`, deleting it, or pointing the loop at a different array
+/// leaves that guard, and every runtime test, green. `should_scrub_proxy_env`
+/// is pure and well covered, but nothing else ties it to the call site.
+///
+/// The failure this catches is the one the whole design exists to prevent:
+/// scrubbing while the user's proxy toggle is off deletes the system proxy
+/// configuration of someone behind a corporate proxy, and their traffic
+/// silently goes direct.
+///
+/// Lexical containment is checked by counting braces from the gate's own
+/// block, not by proximity, so a `remove_var` moved out of the `if` and left
+/// sitting next to it still fails.
+#[test]
+fn the_startup_proxy_scrub_stays_gated_on_the_launch_sidecar() {
+    let body = fs::read_to_string("src/main.rs").expect("src/main.rs");
+
+    let removals = body.match_indices("env::remove_var").count();
+    assert_eq!(
+        removals, 1,
+        "src/main.rs has {removals} `env::remove_var` calls; this guard reasons \
+         about exactly one, so a second would be unchecked"
+    );
+    let removal = body.find("env::remove_var").unwrap();
+
+    // A negated or renamed condition does not match, which is the point: the
+    // inverted gate fails here rather than silently passing containment.
+    let gate = body.find("if should_scrub_proxy_env(").unwrap_or_else(|| {
+        panic!(
+            "no `if should_scrub_proxy_env(` in src/main.rs: the startup scrub \
+             is ungated, negated, or renamed. It must run only when the launch \
+             sidecar says SONE is proxying — `Direct` means the system's own \
+             configuration applies and must be left alone."
+        )
+    });
+
+    let loop_at = body
+        .find("for v in tauri_app_lib::proxy::PROXY_ENV_VARS")
+        .unwrap_or_else(|| {
+            panic!(
+                "the scrub loop in src/main.rs does not iterate \
+                 `tauri_app_lib::proxy::PROXY_ENV_VARS`: that array is the \
+                 audited list, and a different one scrubs the wrong variables"
+            )
+        });
+
+    assert!(
+        block_of(&body, gate).contains(&removal),
+        "src/main.rs: `env::remove_var` is not inside the \
+         `if should_scrub_proxy_env(...)` block. Sitting beside the gate is not \
+         being gated — it scrubs on every launch."
+    );
+    assert!(
+        block_of(&body, loop_at).contains(&removal),
+        "src/main.rs: `env::remove_var` is not inside the `for v in \
+         PROXY_ENV_VARS` loop, so it is removing something other than the \
+         audited list"
+    );
+}
+
+/// The byte range of the `{ … }` block that opens after `from`, brace-counted.
+///
+/// Good enough for this file and no more: it does not know about braces inside
+/// strings, comments or char literals. `main.rs` has none between these gates
+/// and their bodies, and the guard is about raising the cost of an ungated
+/// scrub, not about parsing Rust.
+fn block_of(body: &str, from: usize) -> std::ops::Range<usize> {
+    let bytes = body.as_bytes();
+    let open = from
+        + body[from..]
+            .find('{')
+            .expect("a gate with no block in src/main.rs");
+    let mut depth = 0usize;
+    for (i, b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return open..i;
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("unbalanced braces from byte {from} in src/main.rs");
+}

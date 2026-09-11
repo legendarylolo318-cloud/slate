@@ -5,18 +5,42 @@
 //! direct one. reqwest auto-detects the system proxy, so a client "without a
 //! proxy" would egress.
 
-use crate::proxy::{BlockReason, Capability, HostCaps, ProxyPlan, Route};
+use crate::proxy::{BlockReason, Capability, HostCaps, ProxyPlan, Route, SystemProxyEnv};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 pub fn build_client(p: &ProxyPlan, env: &HostCaps) -> Result<reqwest::Client, BlockReason> {
+    build_client_with(
+        p,
+        env,
+        crate::proxy::system_proxy_from_env(crate::proxy::scrubbed_env()),
+    )
+}
+
+/// The system's configuration is a parameter rather than a global read so the
+/// `Direct` behaviour can be tested: the real one is a process-wide capture
+/// that can only be written once, before any test runs.
+fn build_client_with(
+    p: &ProxyPlan,
+    env: &HostCaps,
+    system: SystemProxyEnv,
+) -> Result<reqwest::Client, BlockReason> {
     let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(30));
 
     match p.route(Capability::Api, env)? {
-        // Direct means the system's own configuration applies: leave reqwest's
-        // auto-detection alone.
-        Route::NoProxy => {}
+        // Direct means the system's own configuration applies. Ordinarily
+        // reqwest auto-detects that from the environment and there is nothing
+        // to do — but if SONE scrubbed those variables at startup, which it
+        // does whenever the proxy was on at launch, that environment is now
+        // empty and auto-detection finds nothing.
+        //
+        // That is the mid-session *disable*: a user whose shell exports
+        // `http_proxy` launches with SONE's proxy on, we remove it, they turn
+        // SONE's proxy off — and without this their traffic would go direct
+        // instead of through the proxy their system is configured for. We
+        // destroyed the information `Direct` depends on, so we hand it back.
+        Route::NoProxy => builder = restore_system_proxy(builder, &system),
         Route::Via { uri, creds } => {
             // Credentials never travel in the URI: `Route::Via` keeps them
             // apart and `basic_auth` is the only thing that reunites them.
@@ -33,6 +57,45 @@ pub fn build_client(p: &ProxyPlan, env: &HostCaps) -> Result<reqwest::Client, Bl
     builder.build().map_err(|e| BlockReason {
         cause: format!("could not build HTTP client: {e}"),
     })
+}
+
+/// Re-attach the system proxy configuration SONE removed from the environment.
+///
+/// Only reached on the `Direct` route — while SONE is proxying, its own plan is
+/// the whole answer and the captured configuration must stay out of it.
+///
+/// A captured value that reqwest rejects is logged and skipped rather than
+/// blocking: it would have been ignored by auto-detection too, so refusing to
+/// build a client over it would turn a malformed shell variable into a dead
+/// app.
+fn restore_system_proxy(
+    mut builder: reqwest::ClientBuilder,
+    system: &SystemProxyEnv,
+) -> reqwest::ClientBuilder {
+    if system.is_empty() {
+        return builder;
+    }
+    let bypass = system
+        .no_proxy
+        .as_deref()
+        .and_then(reqwest::NoProxy::from_string);
+
+    // Spelled out rather than looped: `Proxy::http` and `Proxy::https` are
+    // generic over `IntoProxyScheme`, so they do not share a function pointer
+    // type and a table of them will not compile.
+    if let Some(uri) = system.http.as_deref() {
+        match reqwest::Proxy::http(uri) {
+            Ok(obj) => builder = builder.proxy(obj.no_proxy(bypass.clone())),
+            Err(e) => log::warn!("[proxy] captured http proxy unusable ({uri}): {e}"),
+        }
+    }
+    if let Some(uri) = system.https.as_deref() {
+        match reqwest::Proxy::https(uri) {
+            Ok(obj) => builder = builder.proxy(obj.no_proxy(bypass.clone())),
+            Err(e) => log::warn!("[proxy] captured https proxy unusable ({uri}): {e}"),
+        }
+    }
+    builder
 }
 
 #[derive(Clone)]
@@ -184,6 +247,84 @@ mod tests {
             proxy_type: ProxyType::Socks5,
             ..enabled(host, port)
         }
+    }
+
+
+    fn corporate() -> crate::proxy::SystemProxyEnv {
+        crate::proxy::SystemProxyEnv {
+            http: Some("http://corp:8080".into()),
+            https: Some("http://corp:8443".into()),
+            no_proxy: Some("intranet.example".into()),
+        }
+    }
+
+    /// The inverse of the startup scrub, and the regression it exists to
+    /// prevent. A corporate user launches with SONE's proxy on, so startup
+    /// removed their exported `http_proxy`; they then turn SONE's proxy off.
+    /// `Direct` means their system's configuration applies — but reqwest's
+    /// auto-detection now reads an environment we emptied, so without the
+    /// captured values this client would egress direct, past the proxy their
+    /// system requires.
+    #[test]
+    fn turning_the_proxy_off_restores_the_system_proxy_we_removed() {
+        let caps = HostCaps::assume_all_present();
+        let c = build_client_with(&ProxyPlan::Direct, &caps, corporate()).unwrap();
+        let d = format!("{c:?}");
+        assert!(d.contains("Http(http://corp:8080)"), "{d}");
+        assert!(d.contains("Https(http://corp:8443)"), "{d}");
+        // The bypass list travels with them, or every intranet host that was
+        // meant to go direct starts going through the proxy instead.
+        assert!(d.contains("intranet.example"), "{d}");
+    }
+
+    /// Nothing was scrubbed — the ordinary case, and every launch with the
+    /// proxy off. reqwest must be left to read the environment itself, so the
+    /// client carries no proxy of ours.
+    #[test]
+    fn an_unscrubbed_direct_client_carries_no_proxy_of_our_own() {
+        let caps = HostCaps::assume_all_present();
+        let c = build_client_with(
+            &ProxyPlan::Direct,
+            &caps,
+            crate::proxy::SystemProxyEnv::default(),
+        )
+        .unwrap();
+        // reqwest's own `System(...)` entry, still doing its own detection —
+        // and nothing we put there.
+        let d = format!("{c:?}");
+        assert!(d.contains("Proxy(System("), "{d}");
+        assert!(!d.contains("Proxy(Http("), "{d}");
+        assert!(!d.contains("Proxy(Https("), "{d}");
+    }
+
+    /// While SONE proxies, its own plan is the whole answer. Letting the
+    /// captured configuration through here would add a second proxy the user
+    /// did not ask this app to use, and reqwest matches proxies in order.
+    #[test]
+    fn a_proxied_client_never_also_carries_the_captured_system_proxy() {
+        let caps = HostCaps::assume_all_present();
+        let p = plan(&enabled("127.0.0.1", 3128), &caps).unwrap();
+        let d = format!("{:?}", build_client_with(&p, &caps, corporate()).unwrap());
+        assert!(d.contains("All(http://127.0.0.1:3128)"), "{d}");
+        assert!(!d.contains("corp"), "SONE's plan must be the only proxy: {d}");
+    }
+
+    /// A malformed shell variable must not take the app down. Auto-detection
+    /// would have ignored it, so skipping it is the faithful behaviour; the
+    /// usable half is still restored.
+    #[test]
+    fn an_unusable_captured_value_is_skipped_rather_than_blocking() {
+        let caps = HostCaps::assume_all_present();
+        let sys = crate::proxy::SystemProxyEnv {
+            http: Some("not a proxy uri".into()),
+            https: Some("http://corp:8443".into()),
+            no_proxy: None,
+        };
+        let c = build_client_with(&ProxyPlan::Direct, &caps, sys)
+            .expect("a malformed captured value must not block egress");
+        let d = format!("{c:?}");
+        assert!(d.contains("Https(http://corp:8443)"), "{d}");
+        assert!(!d.contains("not a proxy uri"), "{d}");
     }
 
     #[test]
