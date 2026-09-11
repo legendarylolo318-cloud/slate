@@ -16,9 +16,6 @@ dist-ssr
 src-tauri/target/
 target/
 
-# proptest failure seeds
-proptest-regressions/
-
 # Editor directories and files
 .vscode
 .cursor

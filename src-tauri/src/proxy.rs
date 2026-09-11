@@ -774,19 +774,33 @@ mod tests {
 
     #[test]
     fn plain_host_is_accepted() {
-        let p = plan(&settings("proxy.example", 3128), &HostCaps::assume_all_present()).unwrap();
-        assert!(matches!(p, ProxyPlan::Http { ref host, port: 3128, .. } if host == "proxy.example"));
+        let p = plan(
+            &settings("proxy.example", 3128),
+            &HostCaps::assume_all_present(),
+        )
+        .unwrap();
+        assert!(
+            matches!(p, ProxyPlan::Http { ref host, port: 3128, .. } if host == "proxy.example")
+        );
     }
 
     #[test]
     fn host_is_trimmed() {
-        let p = plan(&settings("  proxy.example  ", 3128), &HostCaps::assume_all_present()).unwrap();
+        let p = plan(
+            &settings("  proxy.example  ", 3128),
+            &HostCaps::assume_all_present(),
+        )
+        .unwrap();
         assert!(matches!(p, ProxyPlan::Http { ref host, .. } if host == "proxy.example"));
     }
 
     #[test]
     fn bare_ipv6_is_accepted_and_stored_unbracketed() {
-        let p = plan(&settings("2001:db8::1", 8080), &HostCaps::assume_all_present()).unwrap();
+        let p = plan(
+            &settings("2001:db8::1", 8080),
+            &HostCaps::assume_all_present(),
+        )
+        .unwrap();
         assert!(matches!(p, ProxyPlan::Http { ref host, .. } if host == "2001:db8::1"));
     }
 
@@ -813,7 +827,10 @@ mod tests {
     #[test]
     fn host_with_embedded_port_is_rejected() {
         assert!(matches!(
-            plan(&settings("1.2.3.4:9999", 8080), &HostCaps::assume_all_present()),
+            plan(
+                &settings("1.2.3.4:9999", 8080),
+                &HostCaps::assume_all_present()
+            ),
             Err(PlanError::EmbeddedPort)
         ));
     }
@@ -821,7 +838,10 @@ mod tests {
     #[test]
     fn ipv6_scope_id_is_rejected() {
         assert!(matches!(
-            plan(&settings("fe80::1%eth0", 8080), &HostCaps::assume_all_present()),
+            plan(
+                &settings("fe80::1%eth0", 8080),
+                &HostCaps::assume_all_present()
+            ),
             Err(PlanError::BadHost(_))
         ));
     }
@@ -829,14 +849,24 @@ mod tests {
     #[test]
     fn non_ascii_host_is_rejected() {
         assert!(matches!(
-            plan(&settings("пример.рф", 8080), &HostCaps::assume_all_present()),
+            plan(
+                &settings("пример.рф", 8080),
+                &HostCaps::assume_all_present()
+            ),
             Err(PlanError::NonAsciiHost)
         ));
     }
 
     #[test]
     fn url_ish_and_delimiter_hosts_are_rejected() {
-        for bad in ["http://proxy.example", "user@proxy", "pro?xy", "pro#xy", "", "   "] {
+        for bad in [
+            "http://proxy.example",
+            "user@proxy",
+            "pro?xy",
+            "pro#xy",
+            "",
+            "   ",
+        ] {
             assert!(
                 plan(&settings(bad, 8080), &HostCaps::assume_all_present()).is_err(),
                 "expected {bad:?} to be rejected"
@@ -990,7 +1020,11 @@ mod tests {
     }
 
     fn http_plan(port: u16) -> ProxyPlan {
-        plan(&settings("proxy.example", port), &HostCaps::assume_all_present()).unwrap()
+        plan(
+            &settings("proxy.example", port),
+            &HostCaps::assume_all_present(),
+        )
+        .unwrap()
     }
 
     fn socks_plan(with_creds: bool) -> ProxyPlan {
@@ -1020,7 +1054,12 @@ mod tests {
     #[test]
     fn direct_routes_to_noproxy_for_every_capability() {
         let caps = HostCaps::assume_all_present();
-        for c in [Capability::Api, Capability::Lossy, Capability::Dash, Capability::Webview] {
+        for c in [
+            Capability::Api,
+            Capability::Lossy,
+            Capability::Dash,
+            Capability::Webview,
+        ] {
             assert!(matches!(
                 ProxyPlan::Direct.route(c, &caps),
                 Ok(Route::NoProxy)
@@ -1034,7 +1073,12 @@ mod tests {
         // libcurl then silently dials 1080.
         let caps = HostCaps::assume_all_present();
         let p = http_plan(80);
-        for c in [Capability::Api, Capability::Lossy, Capability::Dash, Capability::Webview] {
+        for c in [
+            Capability::Api,
+            Capability::Lossy,
+            Capability::Dash,
+            Capability::Webview,
+        ] {
             let r = p.route(c, &caps).unwrap();
             assert_eq!(uri_of(&r), "http://proxy.example:80", "capability {c:?}");
         }
@@ -1071,7 +1115,11 @@ mod tests {
             (Capability::Lossy, "socks5://proxy.example:1080"),
             (Capability::Dash, "socks5://proxy.example:1080"),
         ] {
-            assert_eq!(uri_of(&p.route(c, &caps).unwrap()), want, "capability {c:?}");
+            assert_eq!(
+                uri_of(&p.route(c, &caps).unwrap()),
+                want,
+                "capability {c:?}"
+            );
         }
     }
 
@@ -1088,7 +1136,11 @@ mod tests {
             (Capability::Lossy, "socks5h://proxy.example:1080"),
             (Capability::Dash, "socks5h://proxy.example:1080"),
         ] {
-            assert_eq!(uri_of(&p.route(c, &caps).unwrap()), want, "capability {c:?}");
+            assert_eq!(
+                uri_of(&p.route(c, &caps).unwrap()),
+                want,
+                "capability {c:?}"
+            );
         }
     }
 
@@ -1115,7 +1167,12 @@ mod tests {
     fn no_route_uri_ever_contains_credentials() {
         let caps = HostCaps::assume_all_present();
         let p = authed_plan(3128);
-        for c in [Capability::Api, Capability::Lossy, Capability::Dash, Capability::Webview] {
+        for c in [
+            Capability::Api,
+            Capability::Lossy,
+            Capability::Dash,
+            Capability::Webview,
+        ] {
             let r = p.route(c, &caps).unwrap();
             let uri = uri_of(&r);
             assert!(!uri.contains('@'), "{uri}");
@@ -1173,7 +1230,10 @@ mod tests {
         for c in [Capability::Lossy, Capability::Dash] {
             let cause = block_cause(&p, c, &caps);
             assert!(!cause.contains("SOCKS5"), "capability {c:?}: {cause}");
-            assert!(cause.contains("curl source plugin"), "capability {c:?}: {cause}");
+            assert!(
+                cause.contains("curl source plugin"),
+                "capability {c:?}: {cause}"
+            );
         }
         assert!(p.route(Capability::Api, &caps).is_ok());
     }
@@ -1336,9 +1396,7 @@ mod tests {
     }
 
     fn resolve(vars: &[(&str, &str)]) -> SystemProxyEnv<String> {
-        system_proxy_from_env(&owned(vars), |_, uri| {
-            parses(uri).then(|| uri.to_string())
-        })
+        system_proxy_from_env(&owned(vars), |_, uri| parses(uri).then(|| uri.to_string()))
     }
 
     /// Nothing was scrubbed, so nothing is restored and every consumer keeps
@@ -1424,10 +1482,16 @@ mod tests {
     /// spelling tried only when the uppercase one is unusable.
     #[test]
     fn the_uppercase_catch_all_wins_and_an_unusable_one_falls_through() {
-        let e = resolve(&[("ALL_PROXY", "http://upper:1"), ("all_proxy", "http://lower:1")]);
+        let e = resolve(&[
+            ("ALL_PROXY", "http://upper:1"),
+            ("all_proxy", "http://lower:1"),
+        ]);
         assert_eq!(e.http.as_deref(), Some("http://upper:1"));
 
-        let e = resolve(&[("ALL_PROXY", "ftp://nope:1"), ("all_proxy", "http://lower:1")]);
+        let e = resolve(&[
+            ("ALL_PROXY", "ftp://nope:1"),
+            ("all_proxy", "http://lower:1"),
+        ]);
         assert_eq!(e.http.as_deref(), Some("http://lower:1"));
     }
 
@@ -1587,7 +1651,10 @@ mod tests {
             );
             assert!(!s.enabled);
             assert!(
-                matches!(plan(&s, &HostCaps::assume_all_present()), Ok(ProxyPlan::Direct)),
+                matches!(
+                    plan(&s, &HostCaps::assume_all_present()),
+                    Ok(ProxyPlan::Direct)
+                ),
                 "a migrated proxy must plan as Direct, not block the app"
             );
         }
@@ -1806,14 +1873,20 @@ mod props {
             proptest::option::of("[\\PC]{0,20}"),
             proptest::option::of("[\\PC]{0,20}"),
         )
-            .prop_map(|(enabled, socks, host, port, username, password)| ProxySettings {
-                enabled,
-                proxy_type: if socks { ProxyType::Socks5 } else { ProxyType::Http },
-                host,
-                port,
-                username,
-                password,
-            })
+            .prop_map(
+                |(enabled, socks, host, port, username, password)| ProxySettings {
+                    enabled,
+                    proxy_type: if socks {
+                        ProxyType::Socks5
+                    } else {
+                        ProxyType::Http
+                    },
+                    host,
+                    port,
+                    username,
+                    password,
+                },
+            )
     }
 
     proptest! {

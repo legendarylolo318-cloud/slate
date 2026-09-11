@@ -308,9 +308,7 @@ pub fn get_discord_rpc(state: State<'_, AppState>) -> bool {
 #[tauri::command]
 pub fn set_discord_rpc(state: State<'_, AppState>, enabled: bool) -> Result<(), SoneError> {
     if enabled {
-        state
-            .discord
-            .send(crate::discord::DiscordCommand::Connect);
+        state.discord.send(crate::discord::DiscordCommand::Connect);
     } else {
         state
             .discord
@@ -324,7 +322,10 @@ pub fn set_discord_rpc(state: State<'_, AppState>, enabled: bool) -> Result<(), 
 
 #[tauri::command]
 pub fn get_report_plays(state: State<'_, AppState>) -> bool {
-    state.load_settings().map(|s| s.report_plays).unwrap_or(true)
+    state
+        .load_settings()
+        .map(|s| s.report_plays)
+        .unwrap_or(true)
 }
 
 #[tauri::command]
@@ -371,10 +372,7 @@ pub fn set_discord_status_text(state: State<'_, AppState>, text: String) -> Resu
 
 #[tauri::command]
 pub fn get_proxy_settings(state: State<'_, AppState>) -> crate::ProxySettings {
-    state
-        .load_settings()
-        .map(|s| s.proxy)
-        .unwrap_or_default()
+    state.load_settings().map(|s| s.proxy).unwrap_or_default()
 }
 
 /// The standing report of what the proxy is doing, for the banner that has to
@@ -924,10 +922,7 @@ mod tests {
                 enabled(ProxyType::Http, "[::1]", 3128),
                 "enter an IPv6 address without brackets",
             ),
-            (
-                enabled(ProxyType::Http, "", 3128),
-                "invalid proxy host: ",
-            ),
+            (enabled(ProxyType::Http, "", 3128), "invalid proxy host: "),
             (
                 enabled(ProxyType::Http, "пример.рф", 3128),
                 "proxy host must be ASCII",
@@ -936,10 +931,7 @@ mod tests {
             let err = test_proxy_connection(bad.clone())
                 .await
                 .expect_err("unplannable settings must never reach the network");
-            assert_eq!(
-                err, expected,
-                "{bad:?} must be refused with its own reason"
-            );
+            assert_eq!(err, expected, "{bad:?} must be refused with its own reason");
             assert!(
                 proxy_test_client(&bad, &caps()).is_err(),
                 "unplannable settings {bad:?} must yield no client"
@@ -958,9 +950,9 @@ mod tests {
             crate::proxy::plan(&off, &caps()),
             Ok(crate::proxy::ProxyPlan::Direct)
         ));
-        let err = test_proxy_connection(off).await.expect_err(
-            "a direct connection must never be reported as a working proxy",
-        );
+        let err = test_proxy_connection(off)
+            .await
+            .expect_err("a direct connection must never be reported as a working proxy");
         assert!(err.contains("No proxy configured"), "got: {err}");
     }
 

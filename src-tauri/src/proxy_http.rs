@@ -5,7 +5,9 @@
 //! direct one. reqwest auto-detects the system proxy, so a client "without a
 //! proxy" would egress.
 
-use crate::proxy::{BlockReason, Capability, EnvScheme, HostCaps, ProxyPlan, Route, SystemProxyEnv};
+use crate::proxy::{
+    BlockReason, Capability, EnvScheme, HostCaps, ProxyPlan, Route, SystemProxyEnv,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -311,7 +313,6 @@ mod tests {
         }
     }
 
-
     /// The real parser, not the stand-in `proxy.rs` tests use: an unparseable
     /// uppercase value must fall through to the lowercase one, exactly as
     /// reqwest 0.11.27's own detection would have. Getting this wrong leaves
@@ -322,8 +323,11 @@ mod tests {
         // only http, https and socks5. A bare word would NOT do: reqwest
         // accepts `garbage` as `http://garbage`, so a test written with one
         // would pass while asserting something untrue about reqwest.
-        let vars = [("HTTP_PROXY", "ftp://nope:1"), ("http_proxy", "http://ok:1")]
-            .map(|(k, v)| (k.to_string(), v.to_string()));
+        let vars = [
+            ("HTTP_PROXY", "ftp://nope:1"),
+            ("http_proxy", "http://ok:1"),
+        ]
+        .map(|(k, v)| (k.to_string(), v.to_string()));
 
         let e = crate::proxy::system_proxy_from_env(&vars, |scheme, uri| match scheme {
             EnvScheme::Http => reqwest::Proxy::http(uri).ok(),
@@ -332,7 +336,10 @@ mod tests {
         assert!(e.http.is_some(), "the lowercase spelling must be used");
 
         let caps = HostCaps::assume_all_present();
-        let d = format!("{:?}", build_client_with(&ProxyPlan::Direct, &caps, || e).unwrap());
+        let d = format!(
+            "{:?}",
+            build_client_with(&ProxyPlan::Direct, &caps, || e).unwrap()
+        );
         assert!(d.contains("Http(http://ok:1)"), "{d}");
     }
 
@@ -433,7 +440,10 @@ mod tests {
         let p = plan(&enabled("127.0.0.1", 3128), &caps).unwrap();
         let d = format!("{:?}", build_client_with(&p, &caps, corporate).unwrap());
         assert!(d.contains("All(http://127.0.0.1:3128)"), "{d}");
-        assert!(!d.contains("corp"), "SONE's plan must be the only proxy: {d}");
+        assert!(
+            !d.contains("corp"),
+            "SONE's plan must be the only proxy: {d}"
+        );
     }
 
     /// A malformed shell variable must not take the app down. Auto-detection
@@ -442,8 +452,11 @@ mod tests {
     #[test]
     fn an_unusable_captured_value_is_skipped_rather_than_blocking() {
         let caps = HostCaps::assume_all_present();
-        let vars = [("http_proxy", "ftp://nope:1"), ("https_proxy", "http://corp:8443")]
-            .map(|(k, v)| (k.to_string(), v.to_string()));
+        let vars = [
+            ("http_proxy", "ftp://nope:1"),
+            ("https_proxy", "http://corp:8443"),
+        ]
+        .map(|(k, v)| (k.to_string(), v.to_string()));
         let sys = crate::proxy::system_proxy_from_env(&vars, |scheme, uri| match scheme {
             EnvScheme::Http => reqwest::Proxy::http(uri).ok(),
             EnvScheme::Https => reqwest::Proxy::https(uri).ok(),
@@ -805,7 +818,9 @@ mod tests {
         // And a subsequent good save recovers it, through the same entry point.
         h.apply(&enabled("127.0.0.1", 3128), &caps)
             .expect("a usable proxy must report success");
-        let c = observer.client().expect("a valid save must unblock the cell");
+        let c = observer
+            .client()
+            .expect("a valid save must unblock the cell");
         assert!(format!("{c:?}").contains("All(http://127.0.0.1:3128)"));
     }
 
