@@ -270,6 +270,15 @@ impl ProxyPlan {
                         "authenticated audio reached the scheme match without the curl source; \
                          the guard above must block this",
                     );
+                    // `debug_assert!` compiles out under `--release`, and the
+                    // degraded behaviour there is fail-open: socks5h handed to a
+                    // gio-backed source that implements only socks5 is a wrong
+                    // scheme, not a block. Fail closed in every profile.
+                    if !env.has_curlhttpsrc {
+                        return Err(BlockReason::new(
+                            "authenticated SOCKS5 audio requires the curl source plugin",
+                        ));
+                    }
                     "socks5h"
                 } else {
                     "socks5"
@@ -661,6 +670,24 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_socks5_audio_fails_closed_even_if_the_earlier_guard_is_bypassed() {
+        // Pins the release profile, where the `debug_assert!` in the scheme match
+        // is compiled out. Without the guard beside it this state would yield a
+        // socks5h URI for a gio-backed source instead of a block — a wrong scheme,
+        // which is a DNS leak rather than a clean failure.
+        let mut caps = HostCaps::assume_all_present();
+        caps.has_curlhttpsrc = false;
+        let p = socks_plan(true);
+        for c in [Capability::Lossy, Capability::Dash] {
+            assert_eq!(
+                block_cause(&p, c, &caps),
+                "authenticated SOCKS5 audio requires the curl source plugin",
+                "capability {c:?} must fail closed"
+            );
+        }
+    }
+
+    #[test]
     fn http_with_credentials_needs_curlhttpsrc_for_audio() {
         // Mirror of the SOCKS5 case: both branches must stay reachable and must
         // not share a message, or the SOCKS5 wording silently stops firing.
@@ -693,6 +720,9 @@ mod tests {
         assert!(p.route(Capability::Api, &caps).is_ok());
     }
 
+    // Load-bearing jointly with `curl_seek_version_boundary_is_exact`: the
+    // substring assertion below is also satisfied by a constant of (1, 26, 101),
+    // which only the boundary test rejects. Deleting either weakens the pair.
     #[test]
     fn old_gstreamer_blocks_lossy_only_when_credentials_are_present() {
         // curlhttpsrc progressive seek is broken below 1.26.10 and it is the only
@@ -710,6 +740,8 @@ mod tests {
         assert!(without.route(Capability::Lossy, &caps).is_ok());
     }
 
+    // The other half of that pair: this is what catches a (1, 26, 101) constant
+    // that the substring assertions above would happily accept.
     #[test]
     fn curl_seek_version_boundary_is_exact() {
         // Only the far-away (1,24,2) was covered, so mutating CURL_SEEK_FIXED to
