@@ -388,8 +388,15 @@ pub fn get_proxy_settings(state: State<'_, AppState>) -> crate::ProxySettings {
 /// the same screen that set it.
 ///
 /// Persisting first must not become swallowing, so the save succeeds *and* the
-/// error is returned: the UI reports what is wrong with settings it has
-/// already accepted.
+/// error is returned: a blocked plan yields `ProxyBlocked` carrying the cause,
+/// alongside settings that are already on disk.
+///
+/// That is the whole of what is guaranteed today. Nothing surfaces the reason
+/// yet — `NetworkTab.tsx` saves with `.catch(() => {})`, so the rejection is
+/// discarded and the user sees no explanation of why the proxy is not working.
+/// Recovery works regardless (the form keeps its own state and the value is
+/// persisted); reporting is owed by a later task that wires this error into the
+/// UI. Do not read this comment as a claim that the reason reaches anyone.
 ///
 /// Split out from the command so the ordering can be tested without an
 /// `AppState`; `persist` stands in for the encrypted read-modify-write.
@@ -412,6 +419,11 @@ async fn persist_then_reconfigure(
     // generation and writing the file under one lock, which would queue a save
     // behind another save's `getaddrinfo`; that is exactly the "turn it off"
     // path this ordering exists to keep responsive.
+    //
+    // Not a rare race, either: `NetworkTab.tsx` debounces a save on every
+    // keystroke, so typing a hostname fires several, and once one of them is a
+    // SOCKS5 host that takes seconds to resolve they overlap as a matter of
+    // course rather than by bad luck.
     persist(settings)?;
 
     // Swapping the one shared cell is the whole transport update: every reqwest
@@ -449,9 +461,15 @@ pub async fn set_proxy_settings(
     .await;
 
     // Applies to future GStreamer HTTP sources without disrupting the currently
-    // playing pipeline. Pushed even when the plan is unusable: the audio thread
-    // keeps its own copy, and leaving it on the settings the user just replaced
-    // is wrong under either outcome.
+    // playing pipeline. Pushed on every outcome: the audio thread keeps its own
+    // copy, and leaving it on the settings the user just replaced is wrong
+    // whether or not the shared cell could be rebuilt.
+    //
+    // "Every outcome" is wider than it used to be. This push previously sat
+    // above the save, so a `spawn_blocking` join failure `?`-returned before it
+    // and the audio thread kept the old settings; now it runs on that path too.
+    // Deliberate — a panicked build task says nothing about what the audio
+    // thread should use — but it is a difference, not a pure reordering.
     state.audio_player.set_proxy_settings(settings);
 
     outcome
