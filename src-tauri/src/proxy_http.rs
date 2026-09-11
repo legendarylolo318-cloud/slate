@@ -11,11 +11,20 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 pub fn build_client(p: &ProxyPlan, env: &HostCaps) -> Result<reqwest::Client, BlockReason> {
-    build_client_with(
-        p,
-        env,
-        crate::proxy::system_proxy_from_env(crate::proxy::scrubbed_env()),
-    )
+    build_client_with(p, env, captured_system_proxy())
+}
+
+/// The system's proxy configuration as it stood before startup scrubbed it.
+///
+/// `usable` is supplied here rather than inside `proxy.rs` because deciding
+/// whether a captured string parses as a proxy URI means building a
+/// `reqwest::Proxy`, and this is the only file allowed to. `Proxy::all` runs
+/// the same `into_proxy_scheme` that reqwest's own environment detection uses,
+/// so accepting a value here means reqwest would have accepted it too.
+fn captured_system_proxy() -> SystemProxyEnv {
+    crate::proxy::system_proxy_from_env(crate::proxy::scrubbed_env(), |uri| {
+        reqwest::Proxy::all(uri).is_ok()
+    })
 }
 
 /// The system's configuration is a parameter rather than a global read so the
@@ -249,6 +258,29 @@ mod tests {
         }
     }
 
+
+    /// The real parseability predicate, not the stand-in `proxy.rs` tests use:
+    /// an unparseable uppercase value must fall through to the lowercase one,
+    /// exactly as reqwest 0.11.27's own detection would have. Getting this
+    /// wrong leaves the user with no http proxy where they had a working one.
+    #[test]
+    fn the_real_predicate_falls_through_from_an_unparseable_uppercase_value() {
+        // `ftp://` is genuinely rejected by `into_proxy_scheme`, which knows
+        // only http, https and socks5. A bare word would NOT do: reqwest
+        // accepts `garbage` as `http://garbage`, so a test written with one
+        // would pass while asserting something untrue about reqwest.
+        let vars = [("HTTP_PROXY", "ftp://nope:1"), ("http_proxy", "http://ok:1")]
+            .map(|(k, v)| (k.to_string(), v.to_string()));
+
+        let e = crate::proxy::system_proxy_from_env(&vars, |uri| {
+            reqwest::Proxy::all(uri).is_ok()
+        });
+        assert_eq!(e.http.as_deref(), Some("http://ok:1"));
+
+        let caps = HostCaps::assume_all_present();
+        let d = format!("{:?}", build_client_with(&ProxyPlan::Direct, &caps, e).unwrap());
+        assert!(d.contains("Http(http://ok:1)"), "{d}");
+    }
 
     fn corporate() -> crate::proxy::SystemProxyEnv {
         crate::proxy::SystemProxyEnv {

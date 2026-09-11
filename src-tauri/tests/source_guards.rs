@@ -14,6 +14,16 @@
 //!   unguarded; a stray client built in a test helper would not be caught.
 //! - This is substring matching over source text, not parsing. It raises the
 //!   cost of a bypass; it does not make one impossible.
+//! - Specific to `the_startup_proxy_scrub_stays_gated_on_the_launch_sidecar`,
+//!   and accepted rather than chased: the guard matches the literal prefix
+//!   `if should_scrub_proxy_env(` without inspecting the argument, so a
+//!   hand-written `if should_scrub_proxy_env(Some((true, "http".into())))`
+//!   passes while scrubbing unconditionally; `PROXY_ENV_VARS.iter().take(1)`
+//!   passes; and renaming the loop's binding breaks the guard, though it fails
+//!   red rather than green. Every one of those takes deliberate effort, and a
+//!   substring guard is the wrong tool for stopping an author who is trying.
+//!   These guards exist to catch the accidental deletion and the innocent
+//!   refactor.
 //!
 //! Still owed, and deliberately not guarded here: no `window.open` fallbacks in
 //! the frontend. `src/components/Login.tsx` has five live ones, each a `catch`
@@ -283,6 +293,35 @@ fn the_startup_proxy_scrub_stays_gated_on_the_launch_sidecar() {
          PROXY_ENV_VARS` loop, so it is removing something other than the \
          audited list"
     );
+
+    // The capture is the same shape of hole one level down: deleting it, or
+    // moving it after the loop, leaves every runtime test green because the
+    // `proxy_http` tests supply the captured values explicitly. Losing it means
+    // a user who turns SONE's proxy off mid-session has their system proxy
+    // configuration simply gone for the rest of the session.
+    let capture = body
+        .find("proxy::remember_scrubbed_env(")
+        .unwrap_or_else(|| {
+            panic!(
+                "src/main.rs never calls `remember_scrubbed_env`: the values \
+                 about to be removed are the user's own proxy configuration, \
+                 and the `Direct` route hands them back. Without the capture \
+                 turning SONE's proxy off mid-session sends their traffic \
+                 direct instead of through their system's proxy."
+            )
+        });
+    assert!(
+        block_of(&body, gate).contains(&capture),
+        "src/main.rs: `remember_scrubbed_env` is outside the \
+         `if should_scrub_proxy_env(...)` block, so it records an environment \
+         nothing is about to remove"
+    );
+    assert!(
+        capture < removal,
+        "src/main.rs: `remember_scrubbed_env` runs at byte {capture}, after the \
+         `env::remove_var` at {removal}. Capturing after removal captures \
+         nothing — it must read the variables while they are still set."
+    );
 }
 
 /// The byte range of the `{ … }` block that opens after `from`, brace-counted.
@@ -311,4 +350,32 @@ fn block_of(body: &str, from: usize) -> std::ops::Range<usize> {
         }
     }
     panic!("unbalanced braces from byte {from} in src/main.rs");
+}
+
+/// `proxy::system_proxy_from_env` is a deliberate mirror of one reqwest
+/// release. 0.11.27 applies `ALL_PROXY` last and lets it overwrite
+/// `HTTP_PROXY`/`HTTPS_PROXY`; 0.12 reversed that. Our copy reproduces
+/// 0.11.27 on purpose — restoring a scrubbed environment has to send the
+/// user's traffic where their own configuration was already sending it, not
+/// where a better rule would.
+///
+/// So a major bump is a behaviour change in that function, not a dependency
+/// update, and must not land silently. This fails the suite when the pin moves,
+/// which is the prompt to re-read `get_from_environment` in the new release and
+/// update both the mirror and its doc comment.
+#[test]
+fn the_mirrored_reqwest_major_version_is_still_what_we_pin() {
+    let toml = fs::read_to_string("Cargo.toml").expect("src-tauri/Cargo.toml");
+    let line = toml
+        .lines()
+        .find(|l| l.trim_start().starts_with("reqwest"))
+        .expect("no reqwest dependency in Cargo.toml");
+    assert!(
+        line.contains("version = \"0.11\"") || line.contains("reqwest = \"0.11\""),
+        "reqwest is pinned as `{}`, but `proxy::system_proxy_from_env` mirrors \
+         0.11.27's `get_from_environment` — including the `ALL_PROXY` \
+         precedence 0.12 reversed. Re-read that function in the new release, \
+         update the mirror and its doc comment, then update this guard.",
+        line.trim()
+    );
 }

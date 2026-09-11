@@ -432,32 +432,71 @@ impl SystemProxyEnv {
     }
 }
 
-/// Resolve captured variables the way reqwest's own auto-detection would have,
-/// so restoring them reproduces what the user had rather than inventing a new
-/// policy: uppercase preferred over lowercase, `ALL_PROXY` supplying both
-/// schemes and the per-scheme names overriding it.
+/// Resolve captured variables exactly as **reqwest 0.11.27** would have, so
+/// restoring them reproduces the routing the user already had.
 ///
-/// Pure, because the precedence is the whole of the risk. Getting it wrong
-/// sends a corporate user's traffic somewhere their configuration did not ask
-/// for, and that is not observable from the outside.
-pub fn system_proxy_from_env(vars: &[(String, String)]) -> SystemProxyEnv {
-    let get = |name: &str| {
+/// This is a deliberate mirror of one release — `reqwest-0.11.27/src/proxy.rs`,
+/// `get_from_environment` and `NoProxy::from_env` — and not an attempt at a
+/// good rule:
+///
+/// - Per scheme, the uppercase spelling is tried first and the lowercase one
+///   is the fallback, where "tried" means set, non-empty after trimming, and
+///   parseable as a proxy URI. An unparseable `HTTP_PROXY` therefore falls
+///   through to `http_proxy` rather than winning and yielding nothing.
+/// - `ALL_PROXY` (then `all_proxy`) is applied **last and overwrites both
+///   schemes**, because 0.11.27 runs that block after the per-scheme ones and
+///   `insert_proxy` is an unconditional `HashMap::insert`.
+/// - `NO_PROXY` wins over `no_proxy` on *presence*, not on emptiness: 0.11.27
+///   takes `env::var("NO_PROXY").or_else(|_| env::var("no_proxy"))`, so an
+///   exported-but-empty `NO_PROXY` suppresses the lowercase one entirely.
+///
+/// The `ALL_PROXY` rule is the one worth defending, because it is the one a
+/// reviewer will want to "fix": per-scheme-wins is saner and is what reqwest
+/// 0.12+ does. It is still wrong here. With `ALL_PROXY=http://all:1` and
+/// `https_proxy=http://s:2` this user's traffic *was* going to `all:1`; a
+/// better precedence would silently send it somewhere their own configuration
+/// never chose. Restoration must be faithful, not improved. `source_guards.rs`
+/// pins the `reqwest = "0.11"` requirement so a major bump fails the suite
+/// instead of diverging quietly.
+///
+/// One documented non-mirror: 0.11.27 ignores `HTTP_PROXY` when `REQUEST_METHOD`
+/// is set, because under CGI that variable is attacker-controlled. SONE is a
+/// desktop application, never a CGI process, and `REQUEST_METHOD` is not among
+/// the variables `main.rs` captures, so there is nothing to reproduce.
+///
+/// `usable` is injected rather than called directly because deciding whether a
+/// string parses as a proxy URI means building a `reqwest::Proxy`, and those
+/// are confined to `proxy_http.rs`. Pure otherwise, because the precedence is
+/// the whole of the risk and is not observable from outside the process.
+pub fn system_proxy_from_env(
+    vars: &[(String, String)],
+    usable: impl Fn(&str) -> bool,
+) -> SystemProxyEnv {
+    let present = |name: &str| {
         vars.iter()
             .find(|(k, _)| k == name)
-            .map(|(_, v)| v.trim())
-            .filter(|v| !v.is_empty())
-            .map(str::to_string)
+            .map(|(_, v)| v.to_string())
     };
-    let all = get("ALL_PROXY").or_else(|| get("all_proxy"));
-    SystemProxyEnv {
-        http: get("HTTP_PROXY")
-            .or_else(|| get("http_proxy"))
-            .or_else(|| all.clone()),
-        https: get("HTTPS_PROXY")
-            .or_else(|| get("https_proxy"))
-            .or(all),
-        no_proxy: get("NO_PROXY").or_else(|| get("no_proxy")),
+    // `insert_proxy`: empty or whitespace is rejected before parsing, and an
+    // unparseable value is rejected too — both leave the lowercase fallback to
+    // be tried.
+    let get = |name: &str| present(name).filter(|v| !v.trim().is_empty() && usable(v));
+
+    let mut resolved = SystemProxyEnv {
+        http: get("HTTP_PROXY").or_else(|| get("http_proxy")),
+        https: get("HTTPS_PROXY").or_else(|| get("https_proxy")),
+        // Presence, not usability: `from_env` reads the variable and hands
+        // whatever it finds to `from_string`, which rejects an empty list on
+        // its own.
+        no_proxy: present("NO_PROXY").or_else(|| present("no_proxy")),
+    };
+
+    // Last, and overwriting. See the note above before changing this.
+    if let Some(all) = get("ALL_PROXY").or_else(|| get("all_proxy")) {
+        resolved.http = Some(all.clone());
+        resolved.https = Some(all);
     }
+    resolved
 }
 
 #[cfg(test)]
@@ -1009,29 +1048,45 @@ mod tests {
         assert_eq!(mode, 0o600, "sidecar is {mode:o}, not 0600");
     }
 
+    /// Stands in for reqwest's `into_proxy_scheme`, which is private and lives
+    /// behind a `reqwest::Proxy` this module is not allowed to build. Coarse on
+    /// purpose — these tests are about precedence, not about URI parsing — but
+    /// it agrees with the real one on every value used below: reqwest rejects
+    /// an `ftp://` proxy outright, while a bare word is *accepted* as
+    /// `http://<word>`, which is why no test here uses one. `proxy_http.rs`
+    /// exercises the real predicate end to end.
+    fn parses(uri: &str) -> bool {
+        uri.starts_with("http://") || uri.starts_with("https://")
+    }
+
+    fn resolve(vars: &[(&str, &str)]) -> SystemProxyEnv {
+        let owned: Vec<(String, String)> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        system_proxy_from_env(&owned, parses)
+    }
+
     /// Nothing was scrubbed, so nothing is restored and every consumer keeps
     /// reading the untouched environment itself. The common case.
     #[test]
     fn an_unscrubbed_environment_resolves_to_nothing() {
-        assert!(system_proxy_from_env(&[]).is_empty());
-        assert_eq!(system_proxy_from_env(&[]), SystemProxyEnv::default());
+        assert!(resolve(&[]).is_empty());
+        assert_eq!(resolve(&[]), SystemProxyEnv::default());
     }
 
-    /// reqwest's own precedence, reproduced: restoring has to give the user
-    /// back what they had, not a policy of our own invention.
+    /// reqwest 0.11.27's own precedence, reproduced: restoring has to give the
+    /// user back what they had, not a policy of our own invention.
     #[test]
     fn uppercase_wins_over_lowercase_for_every_name() {
-        let vars = [
+        let e = resolve(&[
             ("http_proxy", "http://lower:1"),
             ("HTTP_PROXY", "http://upper:1"),
             ("https_proxy", "http://lower:2"),
             ("HTTPS_PROXY", "http://upper:2"),
             ("no_proxy", "lower.example"),
             ("NO_PROXY", "upper.example"),
-        ]
-        .map(|(k, v)| (k.to_string(), v.to_string()));
-
-        let e = system_proxy_from_env(&vars);
+        ]);
         assert_eq!(e.http.as_deref(), Some("http://upper:1"));
         assert_eq!(e.https.as_deref(), Some("http://upper:2"));
         assert_eq!(e.no_proxy.as_deref(), Some("upper.example"));
@@ -1039,49 +1094,91 @@ mod tests {
 
     #[test]
     fn lowercase_is_used_when_it_is_the_only_spelling() {
-        let vars = [
+        let e = resolve(&[
             ("http_proxy", "http://lower:1"),
             ("no_proxy", "lower.example"),
-        ]
-        .map(|(k, v)| (k.to_string(), v.to_string()));
-
-        let e = system_proxy_from_env(&vars);
+        ]);
         assert_eq!(e.http.as_deref(), Some("http://lower:1"));
         assert_eq!(e.no_proxy.as_deref(), Some("lower.example"));
         assert_eq!(e.https, None);
     }
 
-    /// `all_proxy` supplies both schemes, and a per-scheme name overrides it
-    /// for its own scheme only — the case a naive "first match wins" gets
-    /// backwards, silently sending https traffic to the wrong endpoint.
+    /// An unparseable uppercase value is not a win, it is a miss: 0.11.27's
+    /// `insert_proxy` returns false for anything it cannot turn into a proxy
+    /// scheme, so the lowercase spelling is still tried. Getting this wrong
+    /// leaves the user with no http proxy at all where they had a working one.
     #[test]
-    fn all_proxy_fills_both_schemes_and_yields_to_the_per_scheme_names() {
-        let only_all = [("ALL_PROXY", "http://all:1")].map(|(k, v)| (k.to_string(), v.to_string()));
-        let e = system_proxy_from_env(&only_all);
+    fn an_unparseable_uppercase_value_falls_through_to_the_lowercase_one() {
+        let e = resolve(&[
+            ("HTTP_PROXY", "ftp://nope:1"),
+            ("http_proxy", "http://ok:1"),
+            ("HTTPS_PROXY", "gopher://nope:2"),
+            ("https_proxy", "http://ok:2"),
+        ]);
+        assert_eq!(e.http.as_deref(), Some("http://ok:1"));
+        assert_eq!(e.https.as_deref(), Some("http://ok:2"));
+    }
+
+    #[test]
+    fn an_unparseable_value_with_no_fallback_is_no_proxy() {
+        assert!(resolve(&[("HTTP_PROXY", "ftp://nope:1")]).is_empty());
+    }
+
+    /// The deliberate mirror of 0.11.27, and the assertion most likely to be
+    /// "corrected" by a future reader: `ALL_PROXY` is applied last and
+    /// **overwrites** the per-scheme names. reqwest 0.12+ reversed this and the
+    /// reversal is saner — but restoring has to reproduce where this user's
+    /// traffic was actually going, which with `all_proxy` set was `all:1`.
+    #[test]
+    fn all_proxy_is_applied_last_and_overwrites_the_per_scheme_names() {
+        let e = resolve(&[("ALL_PROXY", "http://all:1")]);
         assert_eq!(e.http.as_deref(), Some("http://all:1"));
         assert_eq!(e.https.as_deref(), Some("http://all:1"));
 
-        let both = [("all_proxy", "http://all:1"), ("https_proxy", "http://s:2")]
-            .map(|(k, v)| (k.to_string(), v.to_string()));
-        let e = system_proxy_from_env(&both);
+        let e = resolve(&[("all_proxy", "http://all:1"), ("https_proxy", "http://s:2")]);
         assert_eq!(e.http.as_deref(), Some("http://all:1"));
-        assert_eq!(e.https.as_deref(), Some("http://s:2"));
+        assert_eq!(
+            e.https.as_deref(),
+            Some("http://all:1"),
+            "0.11.27 overwrites https_proxy with all_proxy; a per-scheme-wins \
+             rule here would route this user somewhere their own configuration \
+             never chose"
+        );
+    }
+
+    /// And uppercase-first applies to the catch-all too, with the lowercase
+    /// spelling tried only when the uppercase one is unusable.
+    #[test]
+    fn the_uppercase_catch_all_wins_and_an_unusable_one_falls_through() {
+        let e = resolve(&[("ALL_PROXY", "http://upper:1"), ("all_proxy", "http://lower:1")]);
+        assert_eq!(e.http.as_deref(), Some("http://upper:1"));
+
+        let e = resolve(&[("ALL_PROXY", "ftp://nope:1"), ("all_proxy", "http://lower:1")]);
+        assert_eq!(e.http.as_deref(), Some("http://lower:1"));
     }
 
     /// An exported-but-empty variable is how a shell profile disables one.
     /// Treating it as a proxy endpoint would be worse than ignoring it.
     #[test]
     fn empty_and_whitespace_values_are_not_proxies() {
-        let vars = [("HTTP_PROXY", ""), ("https_proxy", "   ")]
-            .map(|(k, v)| (k.to_string(), v.to_string()));
-        assert!(system_proxy_from_env(&vars).is_empty());
+        assert!(resolve(&[("HTTP_PROXY", ""), ("https_proxy", "   ")]).is_empty());
+    }
+
+    /// `no_proxy` is chosen on presence, not on content: `NoProxy::from_env`
+    /// reads `NO_PROXY` and only falls back when that variable is *unset*, so
+    /// an exported-but-empty one suppresses the lowercase spelling. The list
+    /// itself is then rejected downstream by `from_string`.
+    #[test]
+    fn an_exported_but_empty_no_proxy_suppresses_the_lowercase_one() {
+        let e = resolve(&[("NO_PROXY", ""), ("no_proxy", "lower.example")]);
+        assert_eq!(e.no_proxy.as_deref(), Some(""));
     }
 
     /// Whatever `main.rs` captured must survive the round trip unchanged; the
     /// default is empty, so a process that never scrubbed restores nothing.
     #[test]
     fn the_capture_defaults_to_empty_and_resolves_to_nothing() {
-        assert!(system_proxy_from_env(scrubbed_env()).is_empty());
+        assert!(system_proxy_from_env(scrubbed_env(), parses).is_empty());
     }
 
     /// Both spellings, because the consumers disagree about which they read:
