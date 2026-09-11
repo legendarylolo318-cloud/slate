@@ -391,6 +391,10 @@ pub fn get_proxy_status(state: State<'_, AppState>) -> crate::proxy::ProxyStatus
     let block = state.proxied_http.client().err();
     crate::proxy::ProxyStatus::observed(
         &settings,
+        // STAGE 3: replace with the real probe. Assuming everything is present
+        // is fail-open — `gst_version` here is exactly `CURL_SEEK_FIXED`, so a
+        // site missed by that migration keeps claiming a new-enough GStreamer
+        // and reports `degraded: []` for a host that cannot serve the plan.
         &crate::proxy::HostCaps::assume_all_present(),
         block.as_ref().map(|e| e.cause.as_str()),
     )
@@ -532,6 +536,10 @@ pub async fn set_proxy_settings(
             Ok(())
         },
         state.proxied_http.clone(),
+        // STAGE 3: replace with the real probe. Assuming everything is present
+        // is fail-open — `gst_version` here is exactly `CURL_SEEK_FIXED`, so a
+        // site missed by that migration keeps claiming a new-enough GStreamer
+        // and applies a proxy this host cannot actually serve for audio.
         crate::proxy::HostCaps::assume_all_present(),
     )
     .await;
@@ -591,6 +599,10 @@ fn proxy_test_client(
 /// holds the saved proxy.
 #[tauri::command]
 pub async fn test_proxy_connection(settings: crate::ProxySettings) -> Result<String, String> {
+    // STAGE 3: replace with the real probe. Assuming everything is present is
+    // fail-open — `gst_version` here is exactly `CURL_SEEK_FIXED`, so a site
+    // missed by that migration keeps claiming a new-enough GStreamer and this
+    // probe reports success for a proxy audio will refuse.
     let caps = crate::proxy::HostCaps::assume_all_present();
     // `build_client` resolves the proxy host for SOCKS5; keep that off the
     // runtime worker.

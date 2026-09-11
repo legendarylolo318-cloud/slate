@@ -421,6 +421,11 @@ impl AppState {
         // because `main.rs` would keep reading "no sidecar" as "not proxying".
         // Takes effect on the *next* launch; this one already has threads.
         crate::proxy::write_sidecar(&config_dir, &proxy_settings);
+        // STAGE 3: replace with the real probe, run after `gst::init()` on the
+        // audio thread. Assuming everything is present is fail-open —
+        // `gst_version` here is exactly `CURL_SEEK_FIXED`, so a site missed by
+        // that migration keeps claiming a new-enough GStreamer rather than
+        // refusing the capability it cannot serve.
         let host_caps = crate::proxy::HostCaps::assume_all_present();
         // Settings that do not form a plan block egress rather than falling back
         // to Direct: "we could not read your proxy" must not become "so we went

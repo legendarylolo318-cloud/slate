@@ -1311,9 +1311,14 @@ impl TidalClient {
         self.gate.clone()
     }
 
-    /// The proxy-aware client, for non-API hosts (artwork, scrobble providers).
-    /// `Err` means the proxy plan is blocked and nothing may be sent — there is
-    /// deliberately no proxy-less client to fall back to.
+    /// The shared cell, unmapped, for the tests that assert what it holds.
+    ///
+    /// `#[cfg(test)]` because it has no production callers and `pub` would not
+    /// warn about that: artwork and the scrobble providers read
+    /// `AppState::proxied_http` directly. Leaving a public accessor here is a
+    /// second door onto the one cell, and a second door is how a consumer ends
+    /// up holding a client the plan never sanctioned.
+    #[cfg(test)]
     pub fn raw_client(&self) -> Result<reqwest::Client, crate::proxy::BlockReason> {
         self.http.client()
     }

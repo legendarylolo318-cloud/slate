@@ -34,6 +34,13 @@ pub struct HostCaps {
 impl HostCaps {
     /// Stage 1 default. Stage 3 replaces this with a real probe run after
     /// `gst::init()` on the audio thread.
+    ///
+    /// Every value here is the permissive one, and `gst_version` is exactly
+    /// `CURL_SEEK_FIXED` — the lowest version that passes the seek gate. So a
+    /// production call site the stage-3 migration misses does not fail loudly;
+    /// it keeps asserting a host that can serve everything, which is the
+    /// fail-open direction. Each production site carries a `// STAGE 3:`
+    /// marker so `grep -rn "STAGE 3:"` enumerates them.
     pub fn assume_all_present() -> Self {
         Self {
             has_dashdemux: true,
@@ -95,6 +102,15 @@ fn validate_host(raw: &str) -> Result<String, PlanError> {
     }
     if host.starts_with('[') || host.ends_with(']') {
         return Err(PlanError::BracketedHost);
+    }
+    // Before the colon branch, and the order is what makes the message right.
+    // A pasted `http://proxy.example` and a `user@proxy:1080` both contain a
+    // colon, and both used to come back as "enter the host without a port; use
+    // the port field" — advice that does not apply and does not fix either.
+    // These characters can never appear in a hostname, so seeing one means the
+    // field holds something other than a host, which is what to say.
+    if host.contains(['@', '/', '?', '#']) {
+        return Err(PlanError::BadHost(raw.to_string()));
     }
     // A bare IPv6 literal is the only legitimate reason for a colon here.
     if host.contains(':') {
@@ -824,6 +840,27 @@ mod tests {
             assert!(
                 plan(&settings(bad, 8080), &HostCaps::assume_all_present()).is_err(),
                 "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    /// Rejected, and rejected for the right reason. Both of these contain a
+    /// colon, so a URI delimiter check placed after the colon branch answers
+    /// them with "enter the host without a port; use the port field" — advice
+    /// that neither describes what is wrong nor fixes it. The two forms a user
+    /// actually produces are a pasted URL and a copied `user@host:port`.
+    #[test]
+    fn a_pasted_url_is_not_reported_as_a_host_with_a_port() {
+        for bad in [
+            "http://proxy.example",
+            "https://proxy.example:3128",
+            "user@proxy:1080",
+            "user:pass@proxy",
+        ] {
+            let err = plan(&settings(bad, 8080), &HostCaps::assume_all_present()).unwrap_err();
+            assert!(
+                matches!(err, PlanError::BadHost(_)),
+                "{bad:?} should read as a bad host, not as a port problem: {err}"
             );
         }
     }
