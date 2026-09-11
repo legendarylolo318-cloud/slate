@@ -1586,24 +1586,7 @@ impl AudioPlayer {
         let output_cell_thread = Arc::clone(&output_caps_cell);
 
         std::thread::spawn(move || {
-            // GStreamer plugin path setup
-            if std::env::var("GST_PLUGIN_PATH_1_0").is_ok() || std::env::var("APPDIR").is_ok() {
-                if let Ok(path) = std::env::var("GST_PLUGIN_PATH_1_0") {
-                    std::env::set_var("GST_PLUGIN_PATH", &path);
-                }
-            } else if std::env::var("GST_PLUGIN_PATH").is_err() {
-                for dir in [
-                    "/usr/lib/x86_64-linux-gnu/gstreamer-1.0",
-                    "/usr/lib64/gstreamer-1.0",
-                    "/usr/lib/gstreamer-1.0",
-                ] {
-                    if std::path::Path::new(dir).is_dir() {
-                        std::env::set_var("GST_PLUGIN_PATH", dir);
-                        break;
-                    }
-                }
-            }
-
+            // GST_PLUGIN_PATH is set in main(), before any thread exists.
             gst::init().expect("Failed to initialize GStreamer");
 
             let original_curl_rank =

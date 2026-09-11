@@ -40,6 +40,25 @@ fn main() {
                 std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
             }
         }
+
+        // Single-threaded here, which is the only sound place to mutate the
+        // environment: glib/GTK threads read it via g_getenv once they exist.
+        if std::env::var("GST_PLUGIN_PATH").is_err() {
+            if let Ok(p) = std::env::var("GST_PLUGIN_PATH_1_0") {
+                std::env::set_var("GST_PLUGIN_PATH", p);
+            } else {
+                for dir in [
+                    "/usr/lib/x86_64-linux-gnu/gstreamer-1.0",
+                    "/usr/lib64/gstreamer-1.0",
+                    "/usr/lib/gstreamer-1.0",
+                ] {
+                    if std::path::Path::new(dir).is_dir() {
+                        std::env::set_var("GST_PLUGIN_PATH", dir);
+                        break;
+                    }
+                }
+            }
+        }
     }
     tauri_app_lib::run()
 }
