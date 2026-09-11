@@ -776,7 +776,18 @@ mod tests {
 
     #[test]
     fn already_bracketed_ipv6_is_rejected() {
-        // Double-bracketing core-dumps souphttpsrc, so it must never reach an element.
+        // Not a crash guard, whatever the sibling cases suggest: `[::1]` was
+        // measured building a well-formed URI and exiting 0. `authority()`
+        // would even emit a correct `[::1]:8080` for it, since a bracketed
+        // literal does not parse as an `Ipv6Addr` and so skips the bracketing
+        // step.
+        //
+        // It is a normalization choice. The host field holds one spelling of
+        // an address — a bare literal — and `authority()` is the single place
+        // that brackets it. Two spellings mean every consumer decides for
+        // itself, and `[[::1]]` is what that produces when one decides twice;
+        // *that* one core-dumps souphttpsrc. `tests/proxy_host_abort.rs` keeps
+        // the measurement.
         assert!(matches!(
             plan(&settings("[::1]", 8080), &HostCaps::assume_all_present()),
             Err(PlanError::BracketedHost)
