@@ -415,17 +415,27 @@ async fn persist_then_reconfigure(
 ) -> Result<(), SoneError> {
     // Before any transport is touched. A failure to save is the one reason to
     // leave the transports alone: nothing changed, so nothing should move.
+    persist(settings)?;
+
+    // Claimed here, adjacent to the write above, and *not* inside the closure
+    // below — that placement is the entire point of this line.
     //
-    // Known hazard, not closed here: the client cell is generation-ordered
-    // (the newest caller wins no matter which build finishes last) but
-    // `save_settings` is not, so two overlapping saves can leave the older
-    // settings on disk while the cell holds the newer caller's. It is not
-    // fail-open — the cell is what egresses, it always matches the newest
-    // caller, and the next start re-derives from disk — but cell and disk can
-    // disagree for one session. Closing it means claiming the cell's
-    // generation and writing the file under one lock, which would queue a save
-    // behind another save's `getaddrinfo`; that is exactly the "turn it off"
-    // path this ordering exists to keep responsive.
+    // The cell is generation-ordered: the highest claim wins it, whichever
+    // build finishes last. Claiming inside `spawn_blocking` made "highest"
+    // mean "last to reach the blocking pool", which a scheduler decides, so
+    // two overlapping saves could persist A then B while the cell took B then
+    // A. Disk would say the proxy is enabled and the cell would hold the
+    // earlier `Direct` client — the user believes they are proxied and every
+    // request leaves from their real address. Fail-open, in the one direction
+    // that matters, and previously documented here as impossible.
+    //
+    // Claiming next to the persist makes the cell's order the persist's order.
+    // The two are adjacent synchronous statements with no `.await` between
+    // them, so nothing of this task's own runs in between; making them atomic
+    // against a preemption would need a lock spanning the save, and the
+    // version of that which also spanned the build would queue a save behind
+    // another save's `getaddrinfo` — exactly the "turn it off" path this
+    // ordering exists to keep responsive.
     //
     // Not a rare race, either: `NetworkTab.tsx` debounces a save on every
     // keystroke, so typing a hostname fires several, and once one of them is a
@@ -434,7 +444,7 @@ async fn persist_then_reconfigure(
     // now withholds an enabled proxy until both host and port are present, so
     // the half-typed prefixes no longer arrive — but every keystroke after the
     // port is set still sends one, so the overlap stands.
-    persist(settings)?;
+    let generation = http.claim();
 
     // Swapping the one shared cell is the whole transport update: every reqwest
     // consumer reads through it, so there is nothing left to push out to them.
@@ -443,7 +453,7 @@ async fn persist_then_reconfigure(
     // startup. It is blocking (`build_client` may resolve the proxy host),
     // hence the detour off the runtime worker.
     let candidate = settings.clone();
-    let applied = tokio::task::spawn_blocking(move || http.apply(&candidate, &caps))
+    let applied = tokio::task::spawn_blocking(move || http.apply_at(generation, &candidate, &caps))
         .await
         .map_err(|e| SoneError::Io(format!("proxy update task failed: {e}")))?;
 

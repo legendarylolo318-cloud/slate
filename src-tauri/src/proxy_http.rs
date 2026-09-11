@@ -85,9 +85,8 @@ fn build_client_with(
         Route::Via { uri, creds } => {
             // Credentials never travel in the URI: `Route::Via` keeps them
             // apart and `basic_auth` is the only thing that reunites them.
-            let mut obj = reqwest::Proxy::all(&uri).map_err(|e| BlockReason {
-                cause: format!("proxy unusable ({uri}): {e}"),
-            })?;
+            let mut obj = reqwest::Proxy::all(&uri)
+                .map_err(|e| BlockReason::new(format!("proxy unusable ({uri}): {e}")))?;
             if let Some(c) = creds {
                 obj = obj.basic_auth(&c.user, &c.pass);
             }
@@ -95,9 +94,9 @@ fn build_client_with(
         }
     }
 
-    builder.build().map_err(|e| BlockReason {
-        cause: format!("could not build HTTP client: {e}"),
-    })
+    builder
+        .build()
+        .map_err(|e| BlockReason::new(format!("could not build HTTP client: {e}")))
 }
 
 /// Re-attach the system proxy configuration SONE removed from the environment.
@@ -130,10 +129,18 @@ fn restore_system_proxy(
     builder
 }
 
+/// A claimed position in the cell's write order.
+///
+/// A newtype rather than a bare `u64` so the ordering cannot be handed a
+/// number that was never claimed — the whole value of the counter is that
+/// every writer's position came from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Generation(u64);
+
 #[derive(Clone)]
 pub struct ProxiedHttp {
     /// The generation that produced the current state, beside the state itself.
-    cell: Arc<RwLock<(u64, Result<reqwest::Client, BlockReason>)>>,
+    cell: Arc<RwLock<(Generation, Result<reqwest::Client, BlockReason>)>>,
     /// Dispenses a generation to each writer BEFORE it starts building, so
     /// "newest" means the newest caller rather than whichever build happened to
     /// finish last. A slow build must never resurrect the settings it replaced.
@@ -143,7 +150,7 @@ pub struct ProxiedHttp {
 impl ProxiedHttp {
     fn wrap(state: Result<reqwest::Client, BlockReason>) -> Self {
         Self {
-            cell: Arc::new(RwLock::new((0, state))),
+            cell: Arc::new(RwLock::new((Generation(0), state))),
             next: Arc::new(AtomicU64::new(1)),
         }
     }
@@ -156,9 +163,7 @@ impl ProxiedHttp {
     /// even form a plan: the alternative — treating an unplannable proxy as
     /// `Direct` — is the silent downgrade this module exists to prevent.
     pub fn blocked(cause: impl Into<String>) -> Self {
-        Self::wrap(Err(BlockReason {
-            cause: cause.into(),
-        }))
+        Self::wrap(Err(BlockReason::new(cause)))
     }
 
     /// The cell for a settings value. The single place that decides what an
@@ -192,7 +197,16 @@ impl ProxiedHttp {
     /// caller is told what its own settings did rather than what someone
     /// else's did — which is what reading the cell back would report.
     pub fn replace(&self, p: &ProxyPlan, env: &HostCaps) -> Result<(), BlockReason> {
-        let generation = self.claim();
+        self.replace_at(self.claim(), p, env)
+    }
+
+    /// `replace` with the position already claimed. See `claim`.
+    pub fn replace_at(
+        &self,
+        generation: Generation,
+        p: &ProxyPlan,
+        env: &HostCaps,
+    ) -> Result<(), BlockReason> {
         // Deliberately outside every lock: this can block on `getaddrinfo`, and
         // a reader or a concurrent `block` must never wait on that.
         let built = build_client(p, env);
@@ -206,13 +220,12 @@ impl ProxiedHttp {
 
     /// Block the cell outright, for settings that do not form a plan at all.
     pub fn block(&self, cause: impl Into<String>) {
-        let generation = self.claim();
-        self.store(
-            generation,
-            Err(BlockReason {
-                cause: cause.into(),
-            }),
-        );
+        self.block_at(self.claim(), cause);
+    }
+
+    /// `block` with the position already claimed. See `claim`.
+    fn block_at(&self, generation: Generation, cause: impl Into<String>) {
+        self.store(generation, Err(BlockReason::new(cause)));
     }
 
     /// Apply a settings value to the live cell. Blocking, for the same reason
@@ -223,23 +236,40 @@ impl ProxiedHttp {
     /// whose client cannot be built (SOCKS5 resolves the proxy host eagerly,
     /// so `plan` cannot see that one coming).
     pub fn apply(&self, s: &crate::ProxySettings, env: &HostCaps) -> Result<(), BlockReason> {
+        self.apply_at(self.claim(), s, env)
+    }
+
+    /// `apply` with the position already claimed.
+    ///
+    /// This is what lets a caller that also writes to disk put its claim next
+    /// to the write instead of next to the build — see
+    /// `commands::utility::persist_then_reconfigure`, where the build happens
+    /// on a blocking pool whose dispatch order is a scheduler decision.
+    pub fn apply_at(
+        &self,
+        generation: Generation,
+        s: &crate::ProxySettings,
+        env: &HostCaps,
+    ) -> Result<(), BlockReason> {
         match crate::proxy::plan(s, env) {
-            Ok(p) => self.replace(&p, env),
+            Ok(p) => self.replace_at(generation, &p, env),
             Err(e) => {
                 log::error!("proxy settings unusable, blocking all HTTP: {e}");
                 let cause = e.to_string();
-                self.block(cause.clone());
-                Err(BlockReason { cause })
+                self.block_at(generation, cause.clone());
+                Err(BlockReason::new(cause))
             }
         }
     }
 
-    /// Claim a generation. Must happen before the build, never after.
-    fn claim(&self) -> u64 {
-        self.next.fetch_add(1, Ordering::SeqCst)
+    /// Claim a position in the write order. Must happen before the build,
+    /// never after — and, for a caller that also persists, next to the persist
+    /// rather than next to the build.
+    pub fn claim(&self) -> Generation {
+        Generation(self.next.fetch_add(1, Ordering::SeqCst))
     }
 
-    fn store(&self, generation: u64, built: Result<reqwest::Client, BlockReason>) {
+    fn store(&self, generation: Generation, built: Result<reqwest::Client, BlockReason>) {
         let mut g = match self.cell.write() {
             Ok(g) => g,
             // A panic elsewhere must not strand the cell on stale settings.
@@ -645,6 +675,36 @@ mod tests {
         assert!(
             !format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
             "a late proxied build must not outlive the settings that asked for it"
+        );
+    }
+
+    /// The generation-taking entry points must honour the claim they are
+    /// handed rather than taking a fresh one.
+    ///
+    /// This is what lets `set_proxy_settings` claim beside its write to disk
+    /// instead of inside the `spawn_blocking` closure that builds the client.
+    /// If `apply_at` quietly re-claimed, the cell's order would go back to
+    /// being whichever build reached the blocking pool first — and a save that
+    /// persisted "enabled" could leave a `Direct` client egressing.
+    #[test]
+    fn apply_at_honours_the_claim_it_was_given() {
+        let caps = HostCaps::assume_all_present();
+        let h = ProxiedHttp::from_plan(&ProxyPlan::Direct, &caps);
+        let proxied = enabled("127.0.0.1", 3128);
+
+        // Claimed in save order: the disable first, the re-enable second.
+        let disable = h.claim();
+        let reenable = h.claim();
+        // Applied in the opposite order, as the blocking pool may well run them.
+        h.apply_at(reenable, &proxied, &caps).unwrap();
+        let mut off = proxied.clone();
+        off.enabled = false;
+        h.apply_at(disable, &off, &caps).unwrap();
+
+        let c = h.client().expect("a usable plan yields a client");
+        assert!(
+            format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
+            "apply_at took a fresh generation instead of the one it was given,              so the older save won the cell: {c:?}"
         );
     }
 

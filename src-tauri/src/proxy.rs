@@ -203,7 +203,7 @@ pub struct BlockReason {
 }
 
 impl BlockReason {
-    fn new(cause: impl Into<String>) -> Self {
+    pub(crate) fn new(cause: impl Into<String>) -> Self {
         Self {
             cause: cause.into(),
         }

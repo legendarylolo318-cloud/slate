@@ -363,6 +363,56 @@ fn block_of(body: &str, from: usize) -> std::ops::Range<usize> {
     panic!("unbalanced braces from byte {from} in src/main.rs");
 }
 
+/// The proxy save must claim its position in the client cell's write order
+/// beside the write to disk, not inside the closure that builds the client.
+///
+/// Both orderings type-check and both pass every runtime test, because the
+/// difference only shows under two overlapping saves. Claiming inside
+/// `spawn_blocking` makes the cell's order the order in which the blocking
+/// pool happened to run the closures, so a save that persisted an enabled
+/// proxy can be overwritten in the cell by an earlier save's `Direct` client —
+/// the user reads "proxy on" and egresses from their real address.
+///
+/// Lexical containment again: a `claim()` moved back inside the closure is
+/// what this catches, and proximity would not.
+#[test]
+fn the_proxy_save_claims_its_generation_beside_the_write_not_inside_the_build() {
+    let body = fs::read_to_string("src/commands/utility.rs").expect("src/commands/utility.rs");
+
+    let claims = body.match_indices(".claim()").count();
+    assert_eq!(
+        claims, 1,
+        "src/commands/utility.rs has {claims} `.claim()` calls; this guard          reasons about exactly one, so a second would be unchecked"
+    );
+    let claim = body.find(".claim()").unwrap_or_else(|| {
+        panic!(
+            "no `.claim()` in src/commands/utility.rs: the proxy save is back              to letting `apply` claim for itself, which puts the cell's write              order back in the hands of the blocking pool"
+        )
+    });
+
+    // The call, not the word: the comment above the claim explains the hazard
+    // in terms of `spawn_blocking`, and matching that would find the prose.
+    let spawn = body.find("tokio::task::spawn_blocking(").unwrap_or_else(|| {
+        panic!(
+            "no `tokio::task::spawn_blocking(` in src/commands/utility.rs: the              client build has moved, and this guard no longer knows where the              claim must sit relative to it"
+        )
+    });
+    assert!(
+        claim < spawn,
+        "src/commands/utility.rs: `.claim()` is inside or after the          `spawn_blocking` call, so the cell is ordered by whichever build          reached the pool first rather than by which save reached disk first"
+    );
+
+    let persist = body.find("persist(settings)?").unwrap_or_else(|| {
+        panic!(
+            "no `persist(settings)?` in src/commands/utility.rs: the save no              longer runs before the reconfigure"
+        )
+    });
+    assert!(
+        persist < claim,
+        "src/commands/utility.rs: the generation is claimed before the          settings are persisted, so the cell's order can still disagree with          the order the files were written in"
+    );
+}
+
 /// `proxy::system_proxy_from_env` is a deliberate mirror of one reqwest
 /// release. 0.11.27 applies `ALL_PROXY` last and lets it overwrite
 /// `HTTP_PROXY`/`HTTPS_PROXY`; 0.12 reversed that. Our copy reproduces
