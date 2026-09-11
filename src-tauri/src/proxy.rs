@@ -5,10 +5,20 @@
 
 use std::net::Ipv6Addr;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Creds {
     pub user: String,
     pub pass: String,
+}
+
+// Hand-written so a stray `{plan:?}` log never prints the proxy password.
+impl std::fmt::Debug for Creds {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Creds")
+            .field("user", &self.user)
+            .field("pass", &"***")
+            .finish()
+    }
 }
 
 /// Host facts that cannot be read without `gst::init()`, injected so `plan()`
@@ -85,11 +95,6 @@ fn validate_host(raw: &str) -> Result<String, PlanError> {
     if host.starts_with('[') || host.ends_with(']') {
         return Err(PlanError::BracketedHost);
     }
-    if host
-        .contains(|c: char| matches!(c, '@' | '/' | '?' | '#' | '\\') || c.is_whitespace())
-    {
-        return Err(PlanError::BadHost(raw.to_string()));
-    }
     // A bare IPv6 literal is the only legitimate reason for a colon here.
     if host.contains(':') {
         if host.parse::<Ipv6Addr>().is_ok() {
@@ -100,6 +105,18 @@ fn validate_host(raw: &str) -> Result<String, PlanError> {
         if host.matches(':').count() == 1 {
             return Err(PlanError::EmbeddedPort);
         }
+        return Err(PlanError::BadHost(raw.to_string()));
+    }
+    // Allowlist, not denylist: this string is later concatenated verbatim into
+    // a URI and handed to a GStreamer element property with no `Url` parsing
+    // in between, so anything that isn't plainly a hostname character is
+    // rejected outright. This is what actually closes NUL bytes, C0/DEL
+    // control characters, `%`-encoding, and stray URI delimiters — a denylist
+    // of "known-bad" characters always misses one.
+    if !host
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    {
         return Err(PlanError::BadHost(raw.to_string()));
     }
     Ok(host.to_string())
@@ -280,9 +297,84 @@ mod tests {
     fn socks5_type_is_preserved() {
         let mut s = settings("proxy.example", 1080);
         s.proxy_type = ProxyType::Socks5;
+        s.username = Some("bob".into());
+        s.password = Some("hunter2".into());
+        let p = plan(&s, &HostCaps::assume_all_present()).unwrap();
+        match p {
+            ProxyPlan::Socks5 { host, port, creds } => {
+                assert_eq!(host, "proxy.example");
+                assert_eq!(port, 1080);
+                let c = creds.expect("expected creds to survive on the Socks5 arm");
+                assert_eq!(c.user, "bob");
+                assert_eq!(c.pass, "hunter2");
+            }
+            other => panic!("expected Socks5, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nul_byte_host_is_rejected() {
+        // ToGlibPtr for str only checks interior NULs under debug_assertions;
+        // in release the host is silently truncated at the NUL, so the
+        // element ends up contacting a different host than was validated.
         assert!(matches!(
-            plan(&s, &HostCaps::assume_all_present()),
-            Ok(ProxyPlan::Socks5 { .. })
+            plan(
+                &settings("evil.com\0.good.proxy", 8080),
+                &HostCaps::assume_all_present()
+            ),
+            Err(PlanError::BadHost(_))
         ));
+    }
+
+    #[test]
+    fn control_character_host_is_rejected() {
+        for bad in ["pro\x07xy", "a\x1bb.com", "a\x7fb.com"] {
+            assert!(
+                matches!(
+                    plan(&settings(bad, 8080), &HostCaps::assume_all_present()),
+                    Err(PlanError::BadHost(_))
+                ),
+                "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn percent_encoded_host_is_rejected() {
+        // Unfiltered `%` lets a downstream percent-decoder reach a different
+        // host than the one validated here.
+        for bad in ["good.proxy%00.evil.com", "pro%40evil.com", "evil%2ecom"] {
+            assert!(
+                matches!(
+                    plan(&settings(bad, 8080), &HostCaps::assume_all_present()),
+                    Err(PlanError::BadHost(_))
+                ),
+                "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn delimiter_hosts_are_rejected() {
+        for bad in [
+            "a,b.com", "a;b.com", "a|b.com", "a<b>.com", "a\"b.com", "a`b.com", "a*b.com",
+            "a{b}.com", "a[b", "a]b.com",
+        ] {
+            assert!(
+                plan(&settings(bad, 8080), &HostCaps::assume_all_present()).is_err(),
+                "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn creds_debug_redacts_password() {
+        let c = Creds {
+            user: "bob".into(),
+            pass: "hunter2".into(),
+        };
+        let debug = format!("{c:?}");
+        assert!(debug.contains("bob"));
+        assert!(!debug.contains("hunter2"));
     }
 }
