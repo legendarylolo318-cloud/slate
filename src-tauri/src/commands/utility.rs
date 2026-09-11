@@ -57,7 +57,10 @@ pub async fn get_image_bytes(
             Ok(tauri::ipc::Response::new(bytes))
         }
         CacheResult::Miss => {
-            let http_client = state.tidal_client.lock().await.raw_client().clone();
+            let http_client = state
+                .proxied_http
+                .client()
+                .map_err(|e| SoneError::ProxyBlocked { reason: e.cause })?;
             let res = http_client.get(&url).send().await?;
             let bytes = res.bytes().await?.to_vec();
 
@@ -379,22 +382,23 @@ pub async fn set_proxy_settings(
     state: State<'_, AppState>,
     settings: crate::ProxySettings,
 ) -> Result<(), SoneError> {
-    // Rebuild the HTTP client with new proxy config
-    {
-        let mut client = state.tidal_client.lock().await;
-        client.rebuild_client(&settings);
-    }
+    let caps = crate::proxy::HostCaps::assume_all_present();
 
-    // Also rebuild scrobble provider HTTP clients
-    let new_client = {
-        let client = state.tidal_client.lock().await;
-        client.raw_client().clone()
-    };
-    state
-        .scrobble_manager
-        .update_http_client(new_client.clone())
-        .await;
-    state.tidal_reporter.update_http_client(new_client);
+    // Swapping the one shared cell is the whole update: every reqwest consumer
+    // reads through it, so there is nothing left to push out to them.
+    // Settings that do not form a plan block egress instead of reverting to a
+    // direct connection.
+    match crate::proxy::plan(&settings, &caps) {
+        Ok(plan) => {
+            let http = state.proxied_http.clone();
+            // `build_client` resolves the proxy host for SOCKS5, which would
+            // stall a runtime worker if it ran inline.
+            tokio::task::spawn_blocking(move || http.replace(&plan, &caps))
+                .await
+                .map_err(|e| SoneError::Io(format!("proxy update task failed: {e}")))?;
+        }
+        Err(e) => state.proxied_http.block(e.to_string()),
+    }
 
     // Apply proxy changes to future GStreamer HTTP sources without disrupting
     // the currently playing pipeline.
@@ -422,12 +426,37 @@ pub async fn uninhibit_idle(state: State<'_, AppState>) -> Result<(), SoneError>
     Ok(())
 }
 
+/// The client the "Test connection" button must use, or the reason there is
+/// none. Split out from the command so the refusals can be tested without
+/// touching the network.
+///
+/// Three things this must never do, because the banner reads any `Ok` as a
+/// green success: test the *saved* proxy instead of the candidate one, build a
+/// client by any path other than the one the app itself uses, or hand back a
+/// direct connection. `ProxyPlan::Direct` is a refusal here — a direct
+/// connection always "succeeds", and reporting that as a working proxy is the
+/// exact lie this function used to tell.
+fn proxy_test_client(
+    settings: &crate::ProxySettings,
+    caps: &crate::proxy::HostCaps,
+) -> Result<reqwest::Client, String> {
+    let plan = crate::proxy::plan(settings, caps).map_err(|e| e.to_string())?;
+    if plan == crate::proxy::ProxyPlan::Direct {
+        return Err("No proxy configured — enable one before testing".to_string());
+    }
+    crate::proxy_http::build_client(&plan, caps).map_err(|e| e.cause)
+}
+
+/// Probe the settings the user is editing — NOT the live cell, which still
+/// holds the saved proxy.
 #[tauri::command]
-pub async fn test_proxy_connection(
-    settings: crate::ProxySettings,
-) -> Result<String, String> {
-    let client = crate::tidal_api::build_http_client(&settings)
-        .map_err(|e| format!("Failed to create client: {e}"))?;
+pub async fn test_proxy_connection(settings: crate::ProxySettings) -> Result<String, String> {
+    let caps = crate::proxy::HostCaps::assume_all_present();
+    // `build_client` resolves the proxy host for SOCKS5; keep that off the
+    // runtime worker.
+    let client = tokio::task::spawn_blocking(move || proxy_test_client(&settings, &caps))
+        .await
+        .map_err(|e| format!("proxy test task failed: {e}"))??;
 
     match client
         .get("https://api.tidal.com/v1/ping")
@@ -478,4 +507,96 @@ pub fn set_enable_logging(enabled: bool) -> Result<(), SoneError> {
     std::fs::write(&path, body)
         .map_err(|e| SoneError::Io(format!("Failed to write logging toggle: {e}")))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ProxySettings, ProxyType};
+
+    fn caps() -> crate::proxy::HostCaps {
+        crate::proxy::HostCaps::assume_all_present()
+    }
+
+    fn enabled(proxy_type: ProxyType, host: &str, port: u16) -> ProxySettings {
+        ProxySettings {
+            enabled: true,
+            proxy_type,
+            host: host.to_string(),
+            port,
+            username: None,
+            password: None,
+        }
+    }
+
+    /// The banner paints any `Ok` green, so "cannot report success" means the
+    /// command must not return `Ok` at all for settings that would go direct.
+    #[tokio::test]
+    async fn a_blocked_plan_can_never_report_a_successful_connection() {
+        // SOCKS5 resolves the proxy host at build time, so this blocks before a
+        // single byte leaves the process — no network is touched by this test.
+        let blocked = enabled(ProxyType::Socks5, "no-such-host.invalid", 3128);
+        let err = test_proxy_connection(blocked)
+            .await
+            .expect_err("an unresolvable proxy must not report success");
+        assert!(
+            err.contains("no-such-host.invalid"),
+            "the block must name its cause, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn settings_that_do_not_form_a_plan_are_refused_not_tested_directly() {
+        // Each of these used to reach `build_http_client`, which silently
+        // returned a proxy-LESS client — so the request went out direct and the
+        // banner said "Connection successful".
+        for bad in [
+            enabled(ProxyType::Http, "127.0.0.1", 0),
+            enabled(ProxyType::Http, "proxy.local:3128", 3128),
+            enabled(ProxyType::Http, "ho st", 3128),
+            enabled(ProxyType::Http, "[::1]", 3128),
+            enabled(ProxyType::Http, "", 3128),
+        ] {
+            let err = test_proxy_connection(bad.clone())
+                .await
+                .unwrap_or_else(|e| e);
+            assert!(
+                !err.contains("successful"),
+                "unplannable settings {bad:?} reported: {err}"
+            );
+            assert!(
+                proxy_test_client(&bad, &caps()).is_err(),
+                "unplannable settings {bad:?} must yield no client"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_disabled_proxy_is_refused_rather_than_tested_as_a_direct_connection() {
+        // `plan()` maps a disabled proxy to `Direct`, whose client works fine.
+        // Sending through it would always succeed and paint the banner green
+        // for a connection that is not proxied at all.
+        let mut off = enabled(ProxyType::Http, "127.0.0.1", 3128);
+        off.enabled = false;
+        assert!(matches!(
+            crate::proxy::plan(&off, &caps()),
+            Ok(crate::proxy::ProxyPlan::Direct)
+        ));
+        let err = test_proxy_connection(off).await.expect_err(
+            "a direct connection must never be reported as a working proxy",
+        );
+        assert!(err.contains("No proxy configured"), "got: {err}");
+    }
+
+    #[test]
+    fn a_usable_proxy_still_yields_a_client_to_test_with() {
+        // The guard above must not have closed off the case the button exists
+        // for. Built only — never sent, so no network.
+        let good = enabled(ProxyType::Http, "127.0.0.1", 3128);
+        let c = proxy_test_client(&good, &caps()).expect("a valid proxy must be testable");
+        assert!(
+            format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
+            "the test must go through the proxy it is testing: {c:?}"
+        );
+    }
 }

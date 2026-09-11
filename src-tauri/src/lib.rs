@@ -24,7 +24,7 @@ pub mod mcp;
 pub mod overlay;
 mod http_util;
 pub mod proxy;
-pub mod proxy_http;
+mod proxy_http;
 
 pub use error::SoneError;
 pub use signal_path::{SignalPath, SignalPathTracker};
@@ -225,6 +225,9 @@ pub struct AppState {
     pub audio_player: Arc<AudioPlayer>,
     pub pipeline_probe: Arc<crate::pipeline_probe::PipelineProbe>,
     pub tidal_client: Mutex<TidalClient>,
+    /// The one reqwest client every consumer shares. Blocked plans hold an
+    /// `Err`, so no caller can fall back to an unproxied client.
+    pub proxied_http: crate::proxy_http::ProxiedHttp,
     pub settings_path: PathBuf,
     pub cache_dir: PathBuf,
     pub disk_cache: DiskCache,
@@ -372,18 +375,23 @@ impl AppState {
             .unwrap_or_else(defaults::max_quality);
 
         let proxy_settings = saved.as_ref().map(|s| s.proxy.clone()).unwrap_or_default();
-        let scrobble_http_client = crate::tidal_api::build_http_client(&proxy_settings)
-            .unwrap_or_else(|_| {
-                reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build()
-                    .unwrap()
-            });
+        let host_caps = crate::proxy::HostCaps::assume_all_present();
+        // Settings that do not form a plan block egress rather than falling back
+        // to Direct: "we could not read your proxy" must not become "so we went
+        // around it". The user fixes it in settings, which needs no network.
+        let proxied_http = match crate::proxy::plan(&proxy_settings, &host_caps) {
+            Ok(p) => crate::proxy_http::ProxiedHttp::from_plan(&p, &host_caps),
+            Err(e) => {
+                log::error!("proxy settings unusable, blocking all HTTP: {e}");
+                crate::proxy_http::ProxiedHttp::blocked(e.to_string())
+            }
+        };
+
         let scrobble_manager = scrobble::ScrobbleManager::new(
             app_handle.clone(),
             crypto.clone(),
             &config_dir,
-            scrobble_http_client.clone(),
+            proxied_http.clone(),
         );
 
         let report_plays = saved.as_ref().map(|s| s.report_plays).unwrap_or(true);
@@ -391,7 +399,7 @@ impl AppState {
             app_handle.clone(),
             crypto.clone(),
             &config_dir,
-            scrobble_http_client,
+            proxied_http.clone(),
             report_plays,
         );
 
@@ -422,7 +430,7 @@ impl AppState {
             Arc::clone(&audio_player),
         ));
 
-        let mut tidal_client = TidalClient::new(&proxy_settings);
+        let mut tidal_client = TidalClient::new(proxied_http.clone());
         tidal_client.set_token_persist({
             let settings_path = settings_path.clone();
             let crypto = Arc::clone(&crypto);
@@ -435,6 +443,7 @@ impl AppState {
             audio_player,
             pipeline_probe,
             tidal_client: Mutex::new(tidal_client),
+            proxied_http,
             settings_path,
             cache_dir,
             disk_cache,
@@ -618,14 +627,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     let state = handle.state::<AppState>();
                     if let Some(settings) = state.load_settings() {
-                        let http_client = crate::tidal_api::build_http_client(
-                            &settings.proxy
-                        ).unwrap_or_else(|_| {
-                            reqwest::Client::builder()
-                                .timeout(std::time::Duration::from_secs(30))
-                                .build()
-                                .unwrap()
-                        });
+                        let http_client = state.proxied_http.clone();
 
                         // Last.fm
                         if let Some(ref creds) = settings.scrobble.lastfm {

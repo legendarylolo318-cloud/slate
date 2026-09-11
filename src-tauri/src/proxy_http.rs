@@ -6,7 +6,7 @@
 //! proxy" would egress.
 
 use crate::proxy::{BlockReason, Capability, HostCaps, ProxyPlan, Route};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 pub fn build_client(p: &ProxyPlan, env: &HostCaps) -> Result<reqwest::Client, BlockReason> {
@@ -35,16 +35,39 @@ pub fn build_client(p: &ProxyPlan, env: &HostCaps) -> Result<reqwest::Client, Bl
 }
 
 #[derive(Clone)]
-pub struct ProxiedHttp(Arc<RwLock<Result<reqwest::Client, BlockReason>>>);
+pub struct ProxiedHttp {
+    cell: Arc<RwLock<Result<reqwest::Client, BlockReason>>>,
+    /// Held across build-and-store so two concurrent `replace` calls cannot
+    /// interleave and leave the older plan's client in the cell. `build_client`
+    /// resolves names, so the window between build and store is long enough to
+    /// lose that race in practice.
+    updating: Arc<Mutex<()>>,
+}
 
 impl ProxiedHttp {
+    fn wrap(state: Result<reqwest::Client, BlockReason>) -> Self {
+        Self {
+            cell: Arc::new(RwLock::new(state)),
+            updating: Arc::new(Mutex::new(())),
+        }
+    }
+
     pub fn from_plan(p: &ProxyPlan, env: &HostCaps) -> Self {
-        Self(Arc::new(RwLock::new(build_client(p, env))))
+        Self::wrap(build_client(p, env))
+    }
+
+    /// A cell that can never hand out a client. Used where the settings do not
+    /// even form a plan: the alternative — treating an unplannable proxy as
+    /// `Direct` — is the silent downgrade this module exists to prevent.
+    pub fn blocked(cause: impl Into<String>) -> Self {
+        Self::wrap(Err(BlockReason {
+            cause: cause.into(),
+        }))
     }
 
     /// Blocked plans return `Err`; there is no proxy-less fallback.
     pub fn client(&self) -> Result<reqwest::Client, BlockReason> {
-        match self.0.read() {
+        match self.cell.read() {
             Ok(g) => g.clone(),
             // A panic elsewhere must not downgrade egress: read through the
             // poison rather than substituting a fresh, unproxied client.
@@ -52,9 +75,30 @@ impl ProxiedHttp {
         }
     }
 
+    /// Swap in the client for a new plan. Blocking: `build_client` may resolve
+    /// the proxy host, so call it off the async runtime (`spawn_blocking`).
     pub fn replace(&self, p: &ProxyPlan, env: &HostCaps) {
+        let _serialized = self
+            .updating
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let next = build_client(p, env);
-        match self.0.write() {
+        match self.cell.write() {
+            Ok(mut g) => *g = next,
+            Err(poisoned) => *poisoned.into_inner() = next,
+        }
+    }
+
+    /// Block the cell outright, for settings that do not form a plan at all.
+    pub fn block(&self, cause: impl Into<String>) {
+        let _serialized = self
+            .updating
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let next = Err(BlockReason {
+            cause: cause.into(),
+        });
+        match self.cell.write() {
             Ok(mut g) => *g = next,
             Err(poisoned) => *poisoned.into_inner() = next,
         }
@@ -181,7 +225,7 @@ mod tests {
         std::panic::set_hook(Box::new(|_| {}));
         let poisoner = h.clone();
         let outcome = std::thread::spawn(move || {
-            let _held = poisoner.0.write().unwrap();
+            let _held = poisoner.cell.write().unwrap();
             panic!("deliberate: poisons the cell while the write lock is held");
         })
         .join();
@@ -191,7 +235,7 @@ mod tests {
             outcome.is_err(),
             "the staged panic must actually have happened"
         );
-        assert!(h.0.read().is_err(), "the cell must now be poisoned");
+        assert!(h.cell.read().is_err(), "the cell must now be poisoned");
 
         // Reading through the poison: an unrelated panic must not block egress,
         // and must not hand back a client that lost its proxy.
@@ -206,5 +250,67 @@ mod tests {
             observer.client().is_err(),
             "replace must land through the poison, not be dropped"
         );
+    }
+
+    #[test]
+    fn an_explicitly_blocked_cell_never_hands_out_a_client() {
+        // Settings that do not form a plan at all must land here, not on
+        // `ProxyPlan::Direct`: "we could not understand your proxy" must never
+        // resolve to "so we went around it".
+        let h = ProxiedHttp::blocked("invalid proxy host: ho st");
+        let err = h.client().unwrap_err();
+        assert_eq!(err.cause, "invalid proxy host: ho st");
+
+        // And the same for a cell that starts usable and is then blocked.
+        let caps = HostCaps::assume_all_present();
+        let live = ProxiedHttp::from_plan(&ProxyPlan::Direct, &caps);
+        let observer = live.clone();
+        assert!(live.client().is_ok());
+        live.block("proxy port must not be 0");
+        assert_eq!(
+            observer.client().unwrap_err().cause,
+            "proxy port must not be 0",
+            "block must land in the shared cell, not a private copy"
+        );
+    }
+
+    #[test]
+    fn concurrent_replaces_cannot_leave_the_older_plan_in_the_cell() {
+        // `build_client` is slow (it may resolve a name) and `replace` is called
+        // from a Tauri command, so two settings saves can overlap. Without the
+        // update lock, the slower build can store *after* the faster one and
+        // resurrect the plan the user just replaced.
+        let caps = HostCaps::assume_all_present();
+        let h = ProxiedHttp::from_plan(&ProxyPlan::Direct, &caps);
+
+        // The slow one blocks on DNS; the fast one is a literal address.
+        let slow = plan(&enabled_socks("no-such-host.invalid", 3128), &caps).unwrap();
+        let fast = plan(&enabled("127.0.0.1", 3128), &caps).unwrap();
+
+        for _ in 0..8 {
+            let a = h.clone();
+            let b = h.clone();
+            let (s, f) = (slow.clone(), fast.clone());
+            let t = std::thread::spawn(move || a.replace(&s, &caps));
+            b.replace(&f, &caps);
+            t.join().unwrap();
+
+            // Whichever finished last wins, but the winner must be one of the
+            // two plans in full — never a torn state, and never a client that
+            // lost its proxy.
+            match h.client() {
+                Ok(c) => assert!(
+                    format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
+                    "a surviving client must still carry its proxy: {c:?}"
+                ),
+                Err(e) => assert!(e.cause.contains("no-such-host.invalid")),
+            }
+        }
+
+        // The last word belongs to whoever wrote last: a final uncontended
+        // replace must be observable through every clone.
+        h.replace(&fast, &caps);
+        let c = h.clone().client().unwrap();
+        assert!(format!("{c:?}").contains("All(http://127.0.0.1:3128)"));
     }
 }
