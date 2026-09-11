@@ -225,7 +225,7 @@ impl ProxyPlan {
         if matches!(c, Capability::Lossy | Capability::Dash) {
             // souphttpsrc cannot authenticate over a CONNECT tunnel, so credentials
             // force curlhttpsrc; and it cannot do authenticated SOCKS5 at all.
-            if creds.is_some() && !env.has_curlhttpsrc {
+            if !socks && creds.is_some() && !env.has_curlhttpsrc {
                 return Err(BlockReason::new(
                     "audio cannot be proxied with credentials: the curl source plugin is missing",
                 ));
@@ -574,14 +574,41 @@ mod tests {
         }
     }
 
+    fn block_cause(p: &ProxyPlan, c: Capability, env: &HostCaps) -> String {
+        match p.route(c, env) {
+            Err(b) => b.cause,
+            Ok(r) => panic!("expected {c:?} to be blocked, got {r:?}"),
+        }
+    }
+
     #[test]
     fn socks5_with_credentials_needs_curlhttpsrc_for_audio() {
         let mut caps = HostCaps::assume_all_present();
         caps.has_curlhttpsrc = false;
         let p = socks_plan(true);
-        assert!(p.route(Capability::Lossy, &caps).is_err());
-        assert!(p.route(Capability::Dash, &caps).is_err());
+        for c in [Capability::Lossy, Capability::Dash] {
+            let cause = block_cause(&p, c, &caps);
+            assert!(cause.contains("SOCKS5"), "capability {c:?}: {cause}");
+        }
         // The API transport is unaffected by a missing GStreamer plugin.
+        assert!(p.route(Capability::Api, &caps).is_ok());
+    }
+
+    #[test]
+    fn http_with_credentials_needs_curlhttpsrc_for_audio() {
+        // Mirror of the SOCKS5 case: both branches must stay reachable and must
+        // not share a message, or the SOCKS5 wording silently stops firing.
+        let mut caps = HostCaps::assume_all_present();
+        caps.has_curlhttpsrc = false;
+        let mut s = settings("proxy.example", 3128);
+        s.username = Some("bob".into());
+        s.password = Some("hunter2".into());
+        let p = plan(&s, &caps).unwrap();
+        for c in [Capability::Lossy, Capability::Dash] {
+            let cause = block_cause(&p, c, &caps);
+            assert!(!cause.contains("SOCKS5"), "capability {c:?}: {cause}");
+            assert!(cause.contains("curl source plugin"), "capability {c:?}: {cause}");
+        }
         assert!(p.route(Capability::Api, &caps).is_ok());
     }
 
