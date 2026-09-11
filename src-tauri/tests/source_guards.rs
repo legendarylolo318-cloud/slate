@@ -132,7 +132,16 @@ fn proxy_objects_and_http_clients_are_built_only_in_proxy_http() {
             }
         }
 
-        for ident in ["Proxy::", "Client::builder", "Client::new", "ClientBuilder"] {
+        // `Client::default` is not padding: reqwest's Default impl is literally
+        // `Self::new()` for both the async and blocking clients, so it builds a
+        // fully functional unproxied client.
+        for ident in [
+            "Proxy::",
+            "Client::builder",
+            "Client::new",
+            "Client::default",
+            "ClientBuilder",
+        ] {
             assert!(
                 !mentions_path_segment(&body, ident),
                 "{}: `{ident}` here bypasses the proxy plan and silently \

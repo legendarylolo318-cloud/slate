@@ -157,6 +157,37 @@ mod tests {
         );
     }
 
+    /// Row `(_1_0 set, APPDIR set, GST_PLUGIN_PATH set)`: the bundle still wins.
+    #[test]
+    fn a_bundle_plugin_path_overwrites_an_inherited_one_with_appdir_present() {
+        assert_eq!(
+            gst_plugin_path_choice(
+                Some("/app/lib/gstreamer-1.0"),
+                Some("/tmp/.mount_sone"),
+                Some("/usr/lib/gstreamer-1.0"),
+                &DIRS,
+            ),
+            Some("/app/lib/gstreamer-1.0".to_string())
+        );
+    }
+
+    /// Row `(_1_0 unset, APPDIR set, GST_PLUGIN_PATH set)`: still a bundle, so
+    /// still no probe. Without this, a mutant that falls through to the system
+    /// directories on this row points an AppImage at host plugins undetected.
+    #[test]
+    fn appdir_with_an_inherited_path_probes_nothing_either() {
+        assert_eq!(
+            gst_plugin_path_choice(
+                None,
+                Some("/tmp/.mount_sone"),
+                Some("/usr/lib/gstreamer-1.0"),
+                &DIRS,
+            ),
+            None,
+            "a bundle must never be pointed at the host's system plugin dirs"
+        );
+    }
+
     #[test]
     fn appdir_without_a_bundle_plugin_path_probes_nothing() {
         assert_eq!(
