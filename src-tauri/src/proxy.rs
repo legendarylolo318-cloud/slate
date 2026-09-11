@@ -250,12 +250,25 @@ impl ProxyPlan {
             )));
         }
 
+        // The spelling keys on which library resolves the name, not on the
+        // capability: gio has a socks5 impl and none for socks5h, while libcurl
+        // and reqwest resolve locally unless told socks5h.
         let scheme = match (socks, c) {
             (false, _) => "http",
-            // gio implements socks5 only, and its socks5 already resolves at the
-            // proxy; libcurl and reqwest need socks5h for the same behaviour.
-            (true, Capability::Lossy) => "socks5",
-            (true, _) => "socks5h",
+            // reqwest: socks5h is what defers resolution to the proxy.
+            (true, Capability::Api) => "socks5h",
+            // WebKit resolves via gio, which implements socks5 only — and gio's socks5
+            // already sends the hostname, so it carries socks5h semantics.
+            (true, Capability::Webview) => "socks5",
+            // Audio flips element on credentials: curl source (libcurl, needs socks5h)
+            // when authenticating, soup source (gio, needs socks5) otherwise.
+            (true, Capability::Lossy) | (true, Capability::Dash) => {
+                if creds.is_some() {
+                    "socks5h"
+                } else {
+                    "socks5"
+                }
+            }
         };
 
         Ok(Route::Via {
@@ -499,6 +512,13 @@ mod tests {
         plan(&s, &HostCaps::assume_all_present()).unwrap()
     }
 
+    fn authed_plan(port: u16) -> ProxyPlan {
+        let mut s = settings("proxy.example", port);
+        s.username = Some("bob".into());
+        s.password = Some("hunter2".into());
+        plan(&s, &HostCaps::assume_all_present()).unwrap()
+    }
+
     fn uri_of(r: &Route) -> &str {
         match r {
             Route::Via { uri, .. } => uri,
@@ -547,23 +567,63 @@ mod tests {
     }
 
     #[test]
-    fn socks5_spellings_are_inverted_between_the_two_audio_elements() {
-        // reqwest and curlhttpsrc need socks5h (proxy-side DNS); gio has no
-        // socks5h impl and its socks5 already sends the hostname.
+    fn socks5_spellings_without_credentials_cover_every_capability() {
+        // The spelling keys on the resolving library, never on the capability
+        // alone. Unauthenticated audio goes through the soup source (gio), and
+        // gio implements socks5 only — its socks5 already sends the hostname.
+        // reqwest resolves locally unless told socks5h.
         let caps = HostCaps::assume_all_present();
         let p = socks_plan(false);
-        assert_eq!(uri_of(&p.route(Capability::Api, &caps).unwrap()), "socks5h://proxy.example:1080");
-        assert_eq!(uri_of(&p.route(Capability::Dash, &caps).unwrap()), "socks5h://proxy.example:1080");
-        assert_eq!(uri_of(&p.route(Capability::Lossy, &caps).unwrap()), "socks5://proxy.example:1080");
+        for (c, want) in [
+            (Capability::Api, "socks5h://proxy.example:1080"),
+            (Capability::Webview, "socks5://proxy.example:1080"),
+            (Capability::Lossy, "socks5://proxy.example:1080"),
+            (Capability::Dash, "socks5://proxy.example:1080"),
+        ] {
+            assert_eq!(uri_of(&p.route(c, &caps).unwrap()), want, "capability {c:?}");
+        }
+    }
+
+    #[test]
+    fn socks5_spellings_with_credentials_cover_every_capability() {
+        // Credentials flip both audio capabilities onto the curl source, which
+        // is libcurl and so resolves locally unless told socks5h. Webview still
+        // goes through gio and must stay socks5, or it reaches NO GProxy IMPL.
+        let caps = HostCaps::assume_all_present();
+        let p = socks_plan(true);
+        for (c, want) in [
+            (Capability::Api, "socks5h://proxy.example:1080"),
+            (Capability::Webview, "socks5://proxy.example:1080"),
+            (Capability::Lossy, "socks5h://proxy.example:1080"),
+            (Capability::Dash, "socks5h://proxy.example:1080"),
+        ] {
+            assert_eq!(uri_of(&p.route(c, &caps).unwrap()), want, "capability {c:?}");
+        }
+    }
+
+    #[test]
+    fn http_plans_are_http_for_every_capability_regardless_of_credentials() {
+        let caps = HostCaps::assume_all_present();
+        for p in [http_plan(3128), authed_plan(3128)] {
+            for c in [
+                Capability::Api,
+                Capability::Webview,
+                Capability::Lossy,
+                Capability::Dash,
+            ] {
+                assert_eq!(
+                    uri_of(&p.route(c, &caps).unwrap()),
+                    "http://proxy.example:3128",
+                    "capability {c:?}"
+                );
+            }
+        }
     }
 
     #[test]
     fn no_route_uri_ever_contains_credentials() {
         let caps = HostCaps::assume_all_present();
-        let mut s = settings("proxy.example", 3128);
-        s.username = Some("bob".into());
-        s.password = Some("hunter2".into());
-        let p = plan(&s, &caps).unwrap();
+        let p = authed_plan(3128);
         for c in [Capability::Api, Capability::Lossy, Capability::Dash, Capability::Webview] {
             let r = p.route(c, &caps).unwrap();
             let uri = uri_of(&r);
@@ -600,10 +660,7 @@ mod tests {
         // not share a message, or the SOCKS5 wording silently stops firing.
         let mut caps = HostCaps::assume_all_present();
         caps.has_curlhttpsrc = false;
-        let mut s = settings("proxy.example", 3128);
-        s.username = Some("bob".into());
-        s.password = Some("hunter2".into());
-        let p = plan(&s, &caps).unwrap();
+        let p = authed_plan(3128);
         for c in [Capability::Lossy, Capability::Dash] {
             let cause = block_cause(&p, c, &caps);
             assert!(!cause.contains("SOCKS5"), "capability {c:?}: {cause}");
@@ -624,7 +681,8 @@ mod tests {
         let mut caps = HostCaps::assume_all_present();
         caps.has_dashdemux = false;
         let p = http_plan(3128);
-        assert!(p.route(Capability::Dash, &caps).is_err());
+        let cause = block_cause(&p, Capability::Dash, &caps);
+        assert!(cause.contains("adaptive demuxer"), "{cause}");
         assert!(p.route(Capability::Lossy, &caps).is_ok());
         assert!(p.route(Capability::Api, &caps).is_ok());
     }
@@ -636,14 +694,29 @@ mod tests {
         let mut caps = HostCaps::assume_all_present();
         caps.gst_version = (1, 24, 2);
 
-        let mut s = settings("proxy.example", 3128);
-        s.username = Some("bob".into());
-        s.password = Some("hunter2".into());
-        let with_creds = plan(&s, &caps).unwrap();
-        assert!(with_creds.route(Capability::Lossy, &caps).is_err());
+        let with_creds = authed_plan(3128);
+        let cause = block_cause(&with_creds, Capability::Lossy, &caps);
+        assert!(cause.contains("1.26.10"), "{cause}");
+        assert!(cause.contains("1.24.2"), "{cause}");
         assert!(with_creds.route(Capability::Dash, &caps).is_ok());
 
         let without = http_plan(3128);
         assert!(without.route(Capability::Lossy, &caps).is_ok());
+    }
+
+    #[test]
+    fn curl_seek_version_boundary_is_exact() {
+        // Only the far-away (1,24,2) was covered, so mutating CURL_SEEK_FIXED to
+        // (1,26,0) left the suite green. Pin both sides of the real boundary.
+        let p = authed_plan(3128);
+
+        let mut just_below = HostCaps::assume_all_present();
+        just_below.gst_version = (1, 26, 9);
+        let cause = block_cause(&p, Capability::Lossy, &just_below);
+        assert!(cause.contains("1.26.9"), "{cause}");
+
+        let mut exactly_fixed = HostCaps::assume_all_present();
+        exactly_fixed.gst_version = (1, 26, 10);
+        assert!(p.route(Capability::Lossy, &exactly_fixed).is_ok());
     }
 }
