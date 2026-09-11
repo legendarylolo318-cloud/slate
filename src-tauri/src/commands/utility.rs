@@ -453,7 +453,27 @@ pub async fn set_proxy_settings(
         |s| {
             let mut app_settings = state.load_settings().unwrap_or_default();
             app_settings.proxy = s.clone();
-            state.save_settings(&app_settings)
+            state.save_settings(&app_settings)?;
+
+            // Mirror the two non-secret fields next to the encrypted file so
+            // the next launch can decide whether to scrub the proxy
+            // environment before any thread exists. Only after the save
+            // succeeds: a sidecar saying "on" beside settings that never
+            // reached disk would scrub for a proxy nobody configured.
+            //
+            // Known hole, and it cannot be closed from here. Enabling the
+            // proxy mid-session on a host that had an ambient `no_proxy` at
+            // launch does not take full effect until restart: `curlhttpsrc`
+            // read that variable when its first element was constructed, and
+            // the environment is immutable once GTK/glib have threads, so
+            // neither this command nor anything else in the running process
+            // can take it back. reqwest and the webview reconfigure fine; the
+            // GStreamer audio path may still honour the stale `no_proxy` for
+            // matching hosts until SONE is restarted.
+            if let Some(dir) = state.settings_path.parent() {
+                crate::proxy::write_sidecar(dir, s);
+            }
+            Ok(())
         },
         state.proxied_http.clone(),
         crate::proxy::HostCaps::assume_all_present(),

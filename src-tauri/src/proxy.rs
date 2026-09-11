@@ -4,6 +4,7 @@
 //! system's own configuration applies; a `PlanError` blocks every capability.
 
 use std::net::Ipv6Addr;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Creds {
@@ -291,6 +292,66 @@ impl ProxyPlan {
             creds: creds.clone(),
         })
     }
+}
+
+/// Every variable libcurl, libsoup or gio may read to find a proxy, in both
+/// spellings. `curlhttpsrc` reads `no_proxy` at construction and there is no
+/// property to override it, so an ambient value must be gone before any
+/// element exists.
+///
+/// Both cases of all four, because the readers disagree: libcurl honours
+/// lowercase `http_proxy` only (an uppercase one would be attacker-controlled
+/// under CGI) but reads either case of the other three, while reqwest and
+/// libproxy read both cases throughout. Scrubbing one spelling leaves the
+/// other live. Per-scheme names SONE never speaks (`ftp_proxy`, `rsync_proxy`)
+/// are deliberately absent: no transport in this process reads them, and
+/// removing a variable that is not ours to remove is its own surprise.
+pub const PROXY_ENV_VARS: [&str; 8] = [
+    "http_proxy",
+    "HTTP_PROXY",
+    "https_proxy",
+    "HTTPS_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+    "no_proxy",
+    "NO_PROXY",
+];
+
+/// A plaintext companion to the encrypted settings, holding only what `main.rs`
+/// needs before `AppState` (and therefore the decryption key) exists.
+pub fn sidecar_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("proxy.mode")
+}
+
+/// Mirror the two non-secret fields to the sidecar. Host, port and credentials
+/// stay in the encrypted file: `main.rs` decides only *whether* it is proxying,
+/// never *where to*, so nothing else belongs in a plaintext file.
+///
+/// Best effort by design. A sidecar that cannot be written leaves the next
+/// launch believing SONE is not proxying, which is the same state as today and
+/// degrades to a leak of the ambient configuration, not to a broken app —
+/// whereas failing the save would strand the user on the one screen that can
+/// undo a bad proxy.
+pub fn write_sidecar(config_dir: &Path, s: &crate::ProxySettings) {
+    let kind = match s.proxy_type {
+        crate::ProxyType::Http => "http",
+        crate::ProxyType::Socks5 => "socks5",
+    };
+    let body = format!("{}\n{}\n", if s.enabled { "on" } else { "off" }, kind);
+    if let Err(e) = std::fs::write(sidecar_path(config_dir), body) {
+        log::warn!("[proxy] could not write mode sidecar: {e}");
+    }
+}
+
+/// `None` whenever the file is absent or is not something `write_sidecar`
+/// produced. The caller treats that as "not proxying", so a partial read must
+/// never come back as a half-answer.
+pub fn read_sidecar(config_dir: &Path) -> Option<(bool, String)> {
+    let body = std::fs::read_to_string(sidecar_path(config_dir)).ok()?;
+    let mut lines = body.lines();
+    let enabled = lines.next()?.trim() == "on";
+    let kind = lines.next()?.trim().to_string();
+    Some((enabled, kind))
 }
 
 #[cfg(test)]
@@ -756,6 +817,76 @@ mod tests {
         let mut exactly_fixed = HostCaps::assume_all_present();
         exactly_fixed.gst_version = (1, 26, 10);
         assert!(p.route(Capability::Lossy, &exactly_fixed).is_ok());
+    }
+
+    /// The sidecar exists so `main.rs` can decide whether to scrub before
+    /// `AppState` — and therefore the decryption key — exists. Everything it
+    /// does not strictly need stays in the encrypted file.
+    #[test]
+    fn sidecar_round_trips_only_enabled_and_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = settings("secret-proxy.internal", 3128);
+        s.username = Some("bob".into());
+        s.password = Some("hunter2".into());
+        s.proxy_type = ProxyType::Socks5;
+
+        write_sidecar(dir.path(), &s);
+        let raw = std::fs::read_to_string(sidecar_path(dir.path())).unwrap();
+
+        // Nothing secret may leave the encrypted settings file.
+        assert!(!raw.contains("secret-proxy.internal"), "{raw}");
+        assert!(!raw.contains("bob"), "{raw}");
+        assert!(!raw.contains("hunter2"), "{raw}");
+        assert!(!raw.contains("3128"), "{raw}");
+
+        assert_eq!(read_sidecar(dir.path()), Some((true, "socks5".to_string())));
+    }
+
+    /// Disabled must round-trip as `false`, not merely as "absent". A sidecar
+    /// that only ever recorded the enabled case would leave a stale `on` on
+    /// disk after the user turns the proxy off, and the next launch would scrub
+    /// a host whose own configuration is now the only thing routing it.
+    #[test]
+    fn turning_the_proxy_off_is_recorded_as_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = settings("127.0.0.1", 8080);
+
+        write_sidecar(dir.path(), &s);
+        assert_eq!(read_sidecar(dir.path()), Some((true, "http".to_string())));
+
+        s.enabled = false;
+        write_sidecar(dir.path(), &s);
+        assert_eq!(read_sidecar(dir.path()), Some((false, "http".to_string())));
+    }
+
+    /// A first launch, and the common case: no sidecar means nothing is known,
+    /// which must read as "not proxying" rather than as a default.
+    #[test]
+    fn missing_sidecar_reads_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_sidecar(dir.path()), None);
+    }
+
+    /// A truncated or hand-edited file must not read as a half-answer. Anything
+    /// the writer would not have produced is no answer at all.
+    #[test]
+    fn a_truncated_sidecar_reads_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(sidecar_path(dir.path()), "on\n").unwrap();
+        assert_eq!(read_sidecar(dir.path()), None);
+    }
+
+    /// Both spellings, because the consumers disagree about which they read:
+    /// libcurl takes lowercase `http_proxy` only but uppercase for the rest,
+    /// while reqwest and libproxy read either. Scrubbing one case leaves the
+    /// other live.
+    #[test]
+    fn env_var_list_covers_both_cases_of_all_four_names() {
+        for name in ["http_proxy", "https_proxy", "all_proxy", "no_proxy"] {
+            assert!(PROXY_ENV_VARS.contains(&name), "missing {name}");
+            let upper = name.to_uppercase();
+            assert!(PROXY_ENV_VARS.contains(&upper.as_str()), "missing {upper}");
+        }
     }
 }
 

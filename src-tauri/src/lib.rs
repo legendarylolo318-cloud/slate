@@ -260,6 +260,17 @@ pub struct AppState {
     pub signal_path: Arc<SignalPathTracker>,
 }
 
+/// The config directory, resolvable before `AppState` exists — `main.rs` needs
+/// it while the process is still single-threaded, long before the keyring and
+/// the decryption key are available.
+///
+/// `AppState::new` falls back to `./sone` when there is no user config dir at
+/// all; this returns `None` there instead, so the startup scrub simply does
+/// nothing rather than reading a sidecar from the working directory.
+pub fn config_dir_for_env() -> Option<std::path::PathBuf> {
+    dirs::config_dir().map(|d| d.join("sone"))
+}
+
 pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -375,6 +386,14 @@ impl AppState {
             .unwrap_or_else(defaults::max_quality);
 
         let proxy_settings = saved.as_ref().map(|s| s.proxy.clone()).unwrap_or_default();
+        // Reconcile the launch sidecar with the encrypted truth on every start.
+        // Saving the proxy settings writes it too, but that only covers people
+        // who touch the proxy screen again: without this, anyone who configured
+        // a proxy before the sidecar existed — or whose sidecar was deleted
+        // with the rest of a stale config — would never get the startup scrub,
+        // because `main.rs` would keep reading "no sidecar" as "not proxying".
+        // Takes effect on the *next* launch; this one already has threads.
+        crate::proxy::write_sidecar(&config_dir, &proxy_settings);
         let host_caps = crate::proxy::HostCaps::assume_all_present();
         // Settings that do not form a plan block egress rather than falling back
         // to Direct: "we could not read your proxy" must not become "so we went

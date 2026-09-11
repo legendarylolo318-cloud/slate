@@ -41,6 +41,31 @@ fn main() {
             }
         }
 
+        // Own the proxy environment before anything can read it — but only
+        // while SONE is actually proxying. `curlhttpsrc` reads `no_proxy` at
+        // element construction and honours it over an explicitly-set proxy
+        // property, with no property to override it, so an ambient value has
+        // to be gone before any element exists; clearing it later is too late,
+        // and `set_var` is unsound once GTK/glib have threads.
+        //
+        // Conditional, and that is the point. `Direct` means the system's own
+        // configuration applies: a user behind a corporate proxy with
+        // `http_proxy` exported works today, and scrubbing unconditionally
+        // would silently route them direct — the exact silent-degradation
+        // regression this whole design exists to prevent.
+        //
+        // The settings file is encrypted and its key needs a keyring and an
+        // AppHandle, neither of which exists this early, so the decision comes
+        // from the plaintext sidecar, which carries the enabled flag and the
+        // proxy type and nothing else.
+        if let Some(dir) = tauri_app_lib::config_dir_for_env() {
+            if should_scrub_proxy_env(tauri_app_lib::proxy::read_sidecar(&dir)) {
+                for v in tauri_app_lib::proxy::PROXY_ENV_VARS {
+                    std::env::remove_var(v);
+                }
+            }
+        }
+
         // Must happen here, while the process is still single-threaded: this is
         // the only sound place to mutate the environment, because glib/GTK
         // threads read it back via g_getenv once they exist. The audio worker
@@ -65,6 +90,17 @@ fn main() {
         }
     }
     tauri_app_lib::run()
+}
+
+/// Whether the startup scrub runs, given whatever the launch sidecar said.
+///
+/// Pure so the one rule that matters can be asserted without touching the
+/// environment: anything other than a recorded, enabled proxy leaves the
+/// variables exactly as the user's shell set them. A missing sidecar (first
+/// launch, or a write that failed) is *not* a default — it is "not proxying".
+#[cfg(target_os = "linux")]
+fn should_scrub_proxy_env(sidecar: Option<(bool, String)>) -> bool {
+    matches!(sidecar, Some((true, _)))
 }
 
 /// System GStreamer plugin directories, probed in order, and only when the
@@ -111,7 +147,29 @@ fn gst_plugin_path_choice(
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
-    use super::gst_plugin_path_choice;
+    use super::{gst_plugin_path_choice, should_scrub_proxy_env};
+
+    #[test]
+    fn a_recorded_enabled_proxy_scrubs_whatever_its_type() {
+        assert!(should_scrub_proxy_env(Some((true, "http".into()))));
+        assert!(should_scrub_proxy_env(Some((true, "socks5".into()))));
+    }
+
+    /// The regression this task must not introduce: the proxy toggle off means
+    /// the system's own configuration applies, so an exported `http_proxy` has
+    /// to survive startup untouched.
+    #[test]
+    fn the_proxy_toggle_off_leaves_the_environment_alone() {
+        assert!(!should_scrub_proxy_env(Some((false, "http".into()))));
+        assert!(!should_scrub_proxy_env(Some((false, "socks5".into()))));
+    }
+
+    /// No sidecar at all — every launch before this feature shipped, and every
+    /// first launch after it.
+    #[test]
+    fn an_unknown_mode_leaves_the_environment_alone() {
+        assert!(!should_scrub_proxy_env(None));
+    }
 
     const DIRS: [&str; 2] = ["/usr/lib64/gstreamer-1.0", "/usr/lib/gstreamer-1.0"];
 
