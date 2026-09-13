@@ -228,6 +228,7 @@ pub struct AppState {
     /// The one reqwest client every consumer shares. Blocked plans hold an
     /// `Err`, so no caller can fall back to an unproxied client.
     pub proxied_http: crate::proxy_http::ProxiedHttp,
+    pub host_caps: crate::proxy::HostCaps,
     pub settings_path: PathBuf,
     pub cache_dir: PathBuf,
     pub disk_cache: DiskCache,
@@ -421,12 +422,15 @@ impl AppState {
         // because `main.rs` would keep reading "no sidecar" as "not proxying".
         // Takes effect on the *next* launch; this one already has threads.
         crate::proxy::write_sidecar(&config_dir, &proxy_settings);
-        // STAGE 3: replace with the real probe, run after `gst::init()` on the
-        // audio thread. Assuming everything is present is fail-open —
-        // `gst_version` here is exactly `CURL_SEEK_FIXED`, so a site missed by
-        // that migration keeps claiming a new-enough GStreamer rather than
-        // refusing the capability it cannot serve.
-        let host_caps = crate::proxy::HostCaps::assume_all_present();
+        let host_caps = crate::audio::probe_host_caps();
+        log::info!(
+            "[proxy] GStreamer {}.{}.{}, dashdemux={}, curlhttpsrc={}",
+            host_caps.gst_version.0,
+            host_caps.gst_version.1,
+            host_caps.gst_version.2,
+            host_caps.has_dashdemux,
+            host_caps.has_curlhttpsrc
+        );
         // Settings that do not form a plan block egress rather than falling back
         // to Direct: "we could not read your proxy" must not become "so we went
         // around it". The user fixes it in settings, which needs no network.
@@ -489,6 +493,7 @@ impl AppState {
             pipeline_probe,
             tidal_client: Mutex::new(tidal_client),
             proxied_http,
+            host_caps,
             settings_path,
             cache_dir,
             disk_cache,

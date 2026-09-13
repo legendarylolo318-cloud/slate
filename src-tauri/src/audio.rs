@@ -8,6 +8,32 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use tauri::Emitter;
 
+/// Read the real GStreamer registry.
+///
+/// `gst::init()` is idempotent, and `main.rs` sets `GST_PLUGIN_PATH` before
+/// `run()`, so calling this from `AppState::new` sees the same registry the
+/// audio thread will. Note this adds a registry scan to the startup path,
+/// where today `gst::init()` runs only on the audio thread.
+pub fn probe_host_caps() -> crate::proxy::HostCaps {
+    if let Err(e) = gst::init() {
+        // A registry that cannot be read is not a reason to assume the best.
+        // Reporting nothing present makes `route()` refuse the audio
+        // capabilities, so the user is told rather than played unproxied.
+        log::error!("[audio] GStreamer init failed; reporting no audio capability: {e}");
+        return crate::proxy::HostCaps {
+            has_dashdemux: false,
+            has_curlhttpsrc: false,
+            gst_version: (0, 0, 0),
+        };
+    }
+    let (major, minor, micro, _nano) = gst::version();
+    crate::proxy::HostCaps {
+        has_dashdemux: gst::ElementFactory::find("dashdemux").is_some(),
+        has_curlhttpsrc: gst::ElementFactory::find("curlhttpsrc").is_some(),
+        gst_version: (major, minor, micro),
+    }
+}
+
 type Reply<T> = mpsc::Sender<T>;
 
 #[derive(Debug, Clone, Serialize)]
@@ -3469,4 +3495,31 @@ fn list_alsa_devices_inner() -> Result<Vec<AudioDevice>, String> {
 /// coreelements, so this is effectively always true.
 pub fn gapless_supported() -> bool {
     gst::ElementFactory::find("concat").is_some()
+}
+
+#[cfg(test)]
+mod proxy_source_tests {
+    use super::*;
+
+    #[test]
+    fn the_probe_reports_the_registry_not_the_stand_in() {
+        let probed = probe_host_caps();
+        let (major, minor, micro, _nano) = gst::version();
+
+        // The stand-in claims exactly the version floor, so asserting a
+        // plausible version would pass against it. Assert the real one.
+        assert_eq!(
+            probed.gst_version,
+            (major, minor, micro),
+            "probe must report the linked GStreamer, not an assumption"
+        );
+        assert_eq!(
+            probed.has_dashdemux,
+            gst::ElementFactory::find("dashdemux").is_some()
+        );
+        assert_eq!(
+            probed.has_curlhttpsrc,
+            gst::ElementFactory::find("curlhttpsrc").is_some()
+        );
+    }
 }

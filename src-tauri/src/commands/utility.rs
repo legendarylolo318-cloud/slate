@@ -382,8 +382,7 @@ pub fn get_proxy_settings(state: State<'_, AppState>) -> crate::ProxySettings {
 /// state that strands a user is visible in the settings alone: a plan that is
 /// fine and a client that could not be built (`Blocked`), and a plan and client
 /// that are both fine while every request dies in transit (`Unreachable`). See
-/// `ProxyStatus::observed`. `degraded` stays empty until stage 3 supplies a
-/// real `HostCaps` probe.
+/// `ProxyStatus::observed`. `degraded` reflects the probed host capabilities.
 ///
 /// Cheap enough to poll, which the banner does: a settings decrypt, a lock read
 /// and an atomic load. It sends nothing — the reachability answer is the record
@@ -395,11 +394,7 @@ pub fn get_proxy_status(state: State<'_, AppState>) -> crate::proxy::ProxyStatus
     let block = state.proxied_http.client().err();
     crate::proxy::ProxyStatus::observed(
         &settings,
-        // STAGE 3: replace with the real probe. Assuming everything is present
-        // is fail-open — `gst_version` here is exactly `CURL_SEEK_FIXED`, so a
-        // site missed by that migration keeps claiming a new-enough GStreamer
-        // and reports `degraded: []` for a host that cannot serve the plan.
-        &crate::proxy::HostCaps::assume_all_present(),
+        &state.host_caps,
         block.as_ref().map(|e| e.cause.as_str()),
         state.proxied_http.unreachable(),
     )
@@ -541,11 +536,7 @@ pub async fn set_proxy_settings(
             Ok(())
         },
         state.proxied_http.clone(),
-        // STAGE 3: replace with the real probe. Assuming everything is present
-        // is fail-open — `gst_version` here is exactly `CURL_SEEK_FIXED`, so a
-        // site missed by that migration keeps claiming a new-enough GStreamer
-        // and applies a proxy this host cannot actually serve for audio.
-        crate::proxy::HostCaps::assume_all_present(),
+        state.host_caps,
     )
     .await;
 
@@ -603,12 +594,18 @@ fn proxy_test_client(
 /// Probe the settings the user is editing — NOT the live cell, which still
 /// holds the saved proxy.
 #[tauri::command]
-pub async fn test_proxy_connection(settings: crate::ProxySettings) -> Result<String, String> {
-    // STAGE 3: replace with the real probe. Assuming everything is present is
-    // fail-open — `gst_version` here is exactly `CURL_SEEK_FIXED`, so a site
-    // missed by that migration keeps claiming a new-enough GStreamer and this
-    // probe reports success for a proxy audio will refuse.
-    let caps = crate::proxy::HostCaps::assume_all_present();
+pub async fn test_proxy_connection(
+    settings: crate::ProxySettings,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let caps = state.host_caps;
+    test_proxy_connection_inner(settings, caps).await
+}
+
+async fn test_proxy_connection_inner(
+    settings: crate::ProxySettings,
+    caps: crate::proxy::HostCaps,
+) -> Result<String, String> {
     // `build_client` resolves the proxy host for SOCKS5; keep that off the
     // runtime worker.
     let client = tokio::task::spawn_blocking(move || proxy_test_client(&settings, &caps))
@@ -893,9 +890,10 @@ mod tests {
         // SOCKS5 resolves the proxy host at build time, so this blocks before a
         // single byte leaves the process — no network is touched by this test.
         let blocked = enabled(ProxyType::Socks5, "no-such-host.invalid", 3128);
-        let err = test_proxy_connection(blocked)
-            .await
-            .expect_err("an unresolvable proxy must not report success");
+        let err =
+            test_proxy_connection_inner(blocked, crate::proxy::HostCaps::assume_all_present())
+                .await
+                .expect_err("an unresolvable proxy must not report success");
         assert!(
             err.contains("no-such-host.invalid"),
             "the block must name its cause, got: {err}"
@@ -935,9 +933,12 @@ mod tests {
                 "proxy host must be ASCII",
             ),
         ] {
-            let err = test_proxy_connection(bad.clone())
-                .await
-                .expect_err("unplannable settings must never reach the network");
+            let err = test_proxy_connection_inner(
+                bad.clone(),
+                crate::proxy::HostCaps::assume_all_present(),
+            )
+            .await
+            .expect_err("unplannable settings must never reach the network");
             assert_eq!(err, expected, "{bad:?} must be refused with its own reason");
             assert!(
                 proxy_test_client(&bad, &caps()).is_err(),
@@ -957,7 +958,7 @@ mod tests {
             crate::proxy::plan(&off, &caps()),
             Ok(crate::proxy::ProxyPlan::Direct)
         ));
-        let err = test_proxy_connection(off)
+        let err = test_proxy_connection_inner(off, crate::proxy::HostCaps::assume_all_present())
             .await
             .expect_err("a direct connection must never be reported as a working proxy");
         assert!(err.contains("No proxy configured"), "got: {err}");
