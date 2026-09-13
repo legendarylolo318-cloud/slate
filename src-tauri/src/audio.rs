@@ -75,6 +75,108 @@ impl AudioProxy {
     }
 }
 
+/// The HTTP source elements this application can configure. Anything else the
+/// hook sees — the `data:` URI source for a manifest, decoders, queues — is
+/// left alone, because `set_property` panics on a property an element lacks.
+const HTTP_SOURCE_FACTORIES: [&str; 2] = ["curlhttpsrc", "souphttpsrc"];
+
+/// Apply one `Route` to one HTTP source element.
+#[allow(dead_code)]
+fn apply_route_to_source(source: &gst::Element, route: &crate::proxy::Route) {
+    let Some(factory) = source.factory().map(|f| f.name().to_string()) else {
+        return;
+    };
+    if !HTTP_SOURCE_FACTORIES.contains(&factory.as_str()) {
+        return;
+    }
+
+    // `NoProxy` means the system's own configuration applies; these elements
+    // read the environment themselves, so setting nothing is correct here.
+    let crate::proxy::Route::Via { uri, creds } = route else {
+        return;
+    };
+
+    source.set_property("proxy", uri);
+
+    if let Some(c) = creds {
+        source.set_property("proxy-id", &c.user);
+        source.set_property("proxy-pw", &c.pass);
+    }
+
+    if factory == "curlhttpsrc" {
+        // Both are `gint` on this element — a `u32` panics. Its defaults of 0
+        // and -1 mean a dead-but-reachable proxy never produces a bus error.
+        source.set_property("timeout", 15i32);
+        source.set_property("retries", 3i32);
+    }
+}
+
+/// Watch a whole pipeline for HTTP sources and configure each as it appears.
+///
+/// Pipeline-level rather than per-`uridecodebin`: the gapless path adds a second
+/// branch later, and a per-element hook was measured leaving that branch's
+/// source direct. One track also yields more than one source — a manifest
+/// source and a per-stream segment source — so this must not be one-shot.
+///
+/// Takes the `Route` by value: the route is decided once, before the pipeline
+/// exists, so the handler never locks on the streaming thread (the spec measured
+/// a 13x preroll cost for a mutex here).
+///
+/// The captured value is therefore a snapshot. A pipeline that outlives a
+/// settings change keeps it until Task 5's teardown rebuilds the pipeline — this
+/// hook does not re-point a live source, and nothing here should be read as
+/// claiming it does.
+#[allow(dead_code)]
+fn watch_pipeline_sources(pipeline: &gst::Pipeline, route: crate::proxy::Route) {
+    pipeline.connect_deep_element_added(move |_pipeline, _bin, element| {
+        // Check the factory first: this fires for every element in the graph.
+        let is_source = element
+            .factory()
+            .map(|f| HTTP_SOURCE_FACTORIES.contains(&f.name().as_str()))
+            .unwrap_or(false);
+        if is_source {
+            apply_route_to_source(element, &route);
+        }
+    });
+}
+
+/// Whether the element GStreamer would autoplug for an https URI is one this
+/// application knows how to point at a proxy.
+///
+/// `apply_route_to_source` skips any factory outside `HTTP_SOURCE_FACTORIES`,
+/// and for a *source* "skipped" means "unproxied". The allowlist is exhaustive
+/// on a stock system, but which factory wins is decided by process-global rank,
+/// which this very module mutates. Rather than trust that, ask — and let the
+/// build sites refuse when the answer is no.
+#[allow(dead_code)]
+fn http_source_is_configurable() -> bool {
+    let Ok(element) =
+        gst::Element::make_from_uri(gst::URIType::Src, "https://example.invalid/probe", None)
+    else {
+        return false;
+    };
+    element
+        .factory()
+        .map(|f| HTTP_SOURCE_FACTORIES.contains(&f.name().as_str()))
+        .unwrap_or(false)
+}
+
+/// Prefer the curl source only while credentials are in play.
+///
+/// Not optional: the soup source never answers a proxy's authentication
+/// challenge on a CONNECT tunnel, and every streamed segment is HTTPS.
+#[allow(dead_code)]
+fn promote_curl_source(route: &crate::proxy::Route, original: Option<gst::Rank>) {
+    let Some(factory) = gst::ElementFactory::find("curlhttpsrc") else {
+        return;
+    };
+    if matches!(route, crate::proxy::Route::Via { creds: Some(_), .. }) {
+        factory.set_rank(gst::Rank::PRIMARY + 100);
+    } else if let Some(rank) = original {
+        factory.set_rank(rank);
+    }
+}
+
 type Reply<T> = mpsc::Sender<T>;
 
 #[derive(Debug, Clone, Serialize)]
@@ -3620,5 +3722,146 @@ mod proxy_source_tests {
         for c in [Capability::Lossy, Capability::Dash] {
             assert_eq!(p.route_for(c).expect("direct is not a refusal"), Route::NoProxy);
         }
+    }
+
+    use crate::proxy::Creds;
+
+    fn make(name: &str) -> Option<gst::Element> {
+        let _ = gst::init();
+        gst::ElementFactory::make(name).build().ok()
+    }
+
+    fn via(creds: Option<Creds>) -> Route {
+        Route::Via {
+            uri: "http://proxy.example:3128".into(),
+            creds,
+        }
+    }
+
+    #[test]
+    fn both_credential_properties_are_set_together() {
+        let src = make("souphttpsrc").expect("souphttpsrc is a base dependency");
+        apply_route_to_source(
+            &src,
+            &via(Some(Creds {
+                user: "bob".into(),
+                pass: String::new(),
+            })),
+        );
+        // This element normalizes the URI through GstUri on write, so the
+        // readback gains a trailing slash. Measured, not assumed.
+        assert_eq!(
+            src.property::<Option<String>>("proxy").as_deref(),
+            Some("http://proxy.example:3128/")
+        );
+        // It authenticates only when it has both properties, so an empty
+        // password must still produce a pair rather than half of one.
+        assert_eq!(
+            src.property::<Option<String>>("proxy-id").as_deref(),
+            Some("bob")
+        );
+        assert_eq!(
+            src.property::<Option<String>>("proxy-pw").as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn the_curl_source_receives_the_uri_byte_exact() {
+        let Some(src) = make("curlhttpsrc") else {
+            panic!("curlhttpsrc missing: it is a declared dependency of this app");
+        };
+        // Unlike souphttpsrc this one does not rewrite the value, so it is the
+        // element that proves the port survives. Port 80 reaching libcurl
+        // without its port is the original defect: libcurl then dials 1080.
+        apply_route_to_source(
+            &src,
+            &Route::Via {
+                uri: "http://127.0.0.1:80".into(),
+                creds: None,
+            },
+        );
+        assert_eq!(
+            src.property::<Option<String>>("proxy").as_deref(),
+            Some("http://127.0.0.1:80")
+        );
+    }
+
+    #[test]
+    fn a_noproxy_route_leaves_the_source_alone() {
+        let src = make("souphttpsrc").expect("souphttpsrc is a base dependency");
+        apply_route_to_source(&src, &Route::NoProxy);
+        // This element's `proxy` defaults to an empty string, not NULL.
+        assert!(src
+            .property::<Option<String>>("proxy")
+            .unwrap_or_default()
+            .is_empty());
+    }
+
+    #[test]
+    fn the_curl_source_gets_a_bounded_timeout_and_retry_count() {
+        let Some(src) = make("curlhttpsrc") else {
+            panic!("curlhttpsrc missing: it is a declared dependency of this app");
+        };
+        // Left at 0 and -1 a dead-but-reachable proxy produces no bus error at
+        // all: playback stalls and nothing can be reported. Both are `gint` on
+        // 1.24 and 1.26 alike — a `u32` panics on the streaming thread.
+        apply_route_to_source(&src, &via(None));
+        assert_eq!(src.property::<i32>("timeout"), 15);
+        assert_eq!(src.property::<i32>("retries"), 3);
+    }
+
+    #[test]
+    fn a_source_without_proxy_properties_is_left_untouched() {
+        let src = make("dataurisrc").expect("dataurisrc is a base dependency");
+        // The manifest for high-resolution audio arrives as a `data:` URI, and
+        // the hook does see this element. `set_property` panics on a property
+        // an element lacks, so the factory filter is load-bearing.
+        apply_route_to_source(&src, &via(None));
+    }
+
+    #[test]
+    fn the_autoplugged_https_source_is_one_we_can_configure() {
+        let _ = gst::init();
+        // If this is ever false on a supported host, the build sites refuse and
+        // the user is told -- rather than streaming direct through a source
+        // whose `proxy` property was never set because we did not recognise it.
+        assert!(
+            http_source_is_configurable(),
+            "the winning https source is outside HTTP_SOURCE_FACTORIES"
+        );
+    }
+
+    #[test]
+    fn the_curl_source_is_promoted_only_while_credentials_are_in_use() {
+        let _ = gst::init();
+        let Some(curl) = gst::ElementFactory::find("curlhttpsrc") else {
+            panic!("curlhttpsrc missing: it is a declared dependency of this app");
+        };
+        let original = curl.rank();
+
+        promote_curl_source(
+            &via(Some(Creds {
+                user: "bob".into(),
+                pass: "hunter2".into(),
+            })),
+            Some(original),
+        );
+        assert!(gst::ElementFactory::find("curlhttpsrc").unwrap().rank() > original);
+
+        // Without credentials the soup source is correct: it handles more
+        // authentication schemes and ignores an ambient `no_proxy`.
+        promote_curl_source(&via(None), Some(original));
+        assert_eq!(
+            gst::ElementFactory::find("curlhttpsrc").unwrap().rank(),
+            original,
+            "rank must return to its pristine value, not merely go down"
+        );
+
+        promote_curl_source(&Route::NoProxy, Some(original));
+        assert_eq!(
+            gst::ElementFactory::find("curlhttpsrc").unwrap().rank(),
+            original
+        );
     }
 }
