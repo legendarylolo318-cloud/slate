@@ -78,7 +78,18 @@ impl std::fmt::Display for PlanError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::PortZero => write!(f, "proxy port must not be 0"),
-            Self::BadHost(h) => write!(f, "invalid proxy host: {h}"),
+            // The raw value is never echoed. `validate_host` rejects `@` and
+            // `/` precisely because people paste whole URIs into the host
+            // field, and `socks5://user:secret@proxy.example` is one of the
+            // shapes that lands here — echoing it renders the password in a
+            // toast and writes it to the log (`from_settings` logs this
+            // Display). The user can still see what they typed; the advice is
+            // what they cannot work out, so say that instead.
+            Self::BadHost(_) => write!(
+                f,
+                "invalid proxy host: enter only a hostname or IP address, with \
+                 no scheme, credentials, port or path"
+            ),
             Self::NonAsciiHost => write!(f, "proxy host must be ASCII"),
             Self::BracketedHost => {
                 write!(f, "enter an IPv6 address without brackets")
@@ -967,6 +978,34 @@ mod tests {
             assert!(
                 matches!(err, PlanError::BadHost(_)),
                 "{bad:?} should read as a bad host, not as a port problem: {err}"
+            );
+        }
+    }
+
+    /// The message is rendered in a toast, in the settings banner
+    /// (`ProxyStatus::Blocked`) and in the log (`ProxiedHttp::from_settings`
+    /// logs this Display). A pasted `scheme://user:pass@host` is one of the
+    /// shapes `validate_host` rejects — the `@` branch is there because people
+    /// paste whole URIs — so echoing the field publishes the password.
+    #[test]
+    fn a_rejected_host_is_not_echoed_back_with_whatever_was_in_it() {
+        for raw in [
+            "socks5://user:hunter2@proxy.example",
+            "user:hunter2@proxy.example",
+            "hunter2@proxy",
+        ] {
+            let err = plan(&settings(raw, 3128), &HostCaps::assume_all_present()).unwrap_err();
+            let shown = err.to_string();
+            assert!(
+                !shown.contains("hunter2"),
+                "{raw:?} put its password in a user-visible message: {shown}"
+            );
+            assert!(!shown.contains(raw), "{raw:?} is echoed verbatim: {shown}");
+            // Still worth reading: a bare "invalid proxy host" leaves a user
+            // who pasted a URI with nothing to do about it.
+            assert!(
+                shown.contains("hostname") && shown.contains("credentials"),
+                "the refusal must still say what to enter instead: {shown}"
             );
         }
     }

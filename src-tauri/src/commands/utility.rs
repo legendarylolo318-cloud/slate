@@ -902,6 +902,12 @@ mod tests {
         );
     }
 
+    /// `PlanError::BadHost`'s whole message, spelled out rather than derived
+    /// from the enum: a test that asked the type what it says would pass
+    /// whatever it started saying, including the raw host again.
+    const BAD_HOST: &str = "invalid proxy host: enter only a hostname or IP address, \
+                            with no scheme, credentials, port or path";
+
     #[tokio::test]
     async fn settings_that_do_not_form_a_plan_are_refused_not_tested_directly() {
         // Each of these used to reach `build_http_client`, which silently
@@ -921,15 +927,20 @@ mod tests {
                 enabled(ProxyType::Http, "proxy.local:3128", 3128),
                 "enter the host without a port; use the port field",
             ),
-            (
-                enabled(ProxyType::Http, "ho st", 3128),
-                "invalid proxy host: ho st",
-            ),
+            (enabled(ProxyType::Http, "ho st", 3128), BAD_HOST),
             (
                 enabled(ProxyType::Http, "[::1]", 3128),
                 "enter an IPv6 address without brackets",
             ),
-            (enabled(ProxyType::Http, "", 3128), "invalid proxy host: "),
+            (enabled(ProxyType::Http, "", 3128), BAD_HOST),
+            // The whole reason `BAD_HOST` says nothing about what was typed:
+            // this is a pasted SOCKS5 URI with a password in it, which is a
+            // shape users really do paste into a host field, and the refusal
+            // is rendered in a toast and written to the log.
+            (
+                enabled(ProxyType::Http, "socks5://user:secret@proxy.example", 3128),
+                BAD_HOST,
+            ),
             (
                 enabled(ProxyType::Http, "пример.рф", 3128),
                 "proxy host must be ASCII",
@@ -942,6 +953,13 @@ mod tests {
             .await
             .expect_err("unplannable settings must never reach the network");
             assert_eq!(err, expected, "{bad:?} must be refused with its own reason");
+            // No refusal echoes the host field back. It reaches a toast and the
+            // log, and the field is where a pasted `scheme://user:pass@host`
+            // lands, so echoing it publishes the password.
+            assert!(
+                bad.host.is_empty() || !err.contains(&bad.host),
+                "the refusal for {bad:?} echoes the host field verbatim: {err}"
+            );
             assert!(
                 proxy_test_client(&bad, &caps()).is_err(),
                 "unplannable settings {bad:?} must yield no client"

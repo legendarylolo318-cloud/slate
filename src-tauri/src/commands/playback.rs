@@ -672,10 +672,18 @@ mod proxy_message_tests {
         ));
     }
 
+    /// `port = 0` is what makes this test able to fail. Every other field here
+    /// routes `Ok` with the flag *on* as well, so without it the assertion
+    /// holds whether or not `enabled` is honoured at all. `plan()` returns
+    /// `Ok(Direct)` on the `!enabled` early return, which sits above the
+    /// `port == 0` check — so these settings pass only while the flag is
+    /// genuinely read, and `settings_that_form_no_plan_are_refused_not_waved_through`
+    /// above proves the same port reds once it is on.
     #[test]
     fn the_check_is_inert_when_the_proxy_is_off() {
         let mut off = enabled();
         off.enabled = false;
+        off.port = 0;
         for is_dash in [true, false] {
             assert!(explain_block(&off, &HostCaps::assume_all_present(), is_dash).is_ok());
         }
