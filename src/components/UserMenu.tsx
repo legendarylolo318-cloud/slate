@@ -47,7 +47,10 @@ export default function UserMenu() {
   const avatarUrl = useAtomValue(currentUserAvatarAtom);
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<TabId>("playback");
+  // Set only by a deep link, and cleared when that sheet closes: undefined
+  // means "whatever the sheet's own default is", so opening Settings from this
+  // menu behaves exactly as it did before deep-linking existed.
+  const [settingsTab, setSettingsTab] = useState<TabId | undefined>(undefined);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [bindings, setBindings] = useAtom(shortcutsAtom);
@@ -371,7 +374,10 @@ export default function UserMenu() {
 
       <SettingsSheet
         open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => {
+          setSettingsOpen(false);
+          setSettingsTab(undefined);
+        }}
         initialTab={settingsTab}
       />
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />

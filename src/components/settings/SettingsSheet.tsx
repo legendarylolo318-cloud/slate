@@ -86,8 +86,11 @@ export default function SettingsSheet({
 }: {
   open: boolean;
   onClose: () => void;
-  /** Which tab to land on. Re-applied on every open, so a caller that sends
-   *  the user here to fix one thing does not have to reset it afterwards. */
+  /** Which tab this open lands on. Omitted, it is the default tab — which is
+   *  what every open that did not deliberately deep-link must get. A caller
+   *  that passes one is describing a single open and has to stop passing it
+   *  when that open ends; see `UserMenu`, which clears it in `onClose`.
+   *  Anything else turns one deep link into a changed default. */
   initialTab?: TabId;
 }) {
   const [active, setActive] = useState<TabId>(initialTab);
