@@ -236,20 +236,12 @@ fn the_api_clients_requests_are_sent_in_exactly_one_place() {
 /// string comparison — libcurl was measured dialling 1080 — so the lint is the
 /// guard, not a test of the output.
 ///
-/// `audio.rs` is the sole exemption, and only because its `gstreamer_proxy_uri`
-/// helper *is* that defect, awaiting deletion with the rest of the GStreamer
-/// proxy helpers. The exemption asserts its own reason for existing: when
-/// `audio.rs` stops matching, this test fails and tells you to delete it.
-///
-/// Both conditions are collected before anything is asserted. Failing on the
-/// first would hide the obsolescence signal in the case where `audio.rs` is
-/// cleaned up and a new offender appears in the same change.
+/// The ban is global. `audio.rs` used to be exempt while its
+/// `gstreamer_proxy_uri` helper *was* that defect; the helper is gone, so
+/// there is no allowlist left to re-read.
 #[test]
-fn the_url_port_manglers_are_confined_to_the_one_helper_slated_for_deletion() {
-    const EXEMPT: &str = "audio.rs";
-
+fn the_url_port_manglers_are_banned_outright() {
     let mut offenders = Vec::new();
-    let mut exemption_still_needed = false;
 
     for f in rust_sources() {
         let body = fs::read_to_string(&f).unwrap();
@@ -258,29 +250,14 @@ fn the_url_port_manglers_are_confined_to_the_one_helper_slated_for_deletion() {
         if !body.contains(".set_port(") && !mentions_path_segment(&body, "Url::parse") {
             continue;
         }
-        if file_name(&f) == EXEMPT {
-            exemption_still_needed = true;
-        } else {
-            offenders.push(f.display().to_string());
-        }
+        offenders.push(f.display().to_string());
     }
 
-    let mut problems = Vec::new();
-    if !offenders.is_empty() {
-        problems.push(format!(
-            "{offenders:?}: Url::set_port and Url::parse both drop a port equal \
-             to the scheme default; build URIs by concatenation in proxy.rs. \
-             {EXEMPT} is the only permitted exemption."
-        ));
-    }
-    if !exemption_still_needed {
-        problems.push(format!(
-            "{EXEMPT} no longer calls .set_port() or Url::parse: the exemption in this test is \
-             obsolete, so delete the exemption (or this whole test) rather than \
-             leaving an allowlist nobody re-reads."
-        ));
-    }
-    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    assert!(
+        offenders.is_empty(),
+        "{offenders:?}: Url::set_port and Url::parse both drop a port equal \
+         to the scheme default; build URIs by concatenation in proxy.rs."
+    );
 }
 
 /// Mutating the environment is unsound once GTK/glib have threads, and glib

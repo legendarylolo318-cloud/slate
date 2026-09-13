@@ -36,7 +36,6 @@ pub fn probe_host_caps() -> crate::proxy::HostCaps {
 
 /// Which audio tier a pipeline is playing. Both build sites already carry
 /// `is_dash`, so nothing re-sniffs the URI — one source of truth.
-#[allow(dead_code)]
 fn capability_of(is_dash: bool) -> crate::proxy::Capability {
     if is_dash {
         crate::proxy::Capability::Dash
@@ -52,14 +51,12 @@ fn capability_of(is_dash: bool) -> crate::proxy::Capability {
 /// has three: proxied, direct, and refused. Collapsing the third into
 /// `Route::NoProxy` is the defect the spec's stage 1a calls out by name, and
 /// it would let a blocked tier stream on the user's own address.
-#[allow(dead_code)]
 #[derive(Clone)]
 struct AudioProxy {
     settings: crate::ProxySettings,
     caps: crate::proxy::HostCaps,
 }
 
-#[allow(dead_code)]
 impl AudioProxy {
     fn new(settings: crate::ProxySettings, caps: crate::proxy::HostCaps) -> Self {
         Self { settings, caps }
@@ -81,7 +78,6 @@ impl AudioProxy {
 const HTTP_SOURCE_FACTORIES: [&str; 2] = ["curlhttpsrc", "souphttpsrc"];
 
 /// Apply one `Route` to one HTTP source element.
-#[allow(dead_code)]
 fn apply_route_to_source(source: &gst::Element, route: &crate::proxy::Route) {
     let Some(factory) = source.factory().map(|f| f.name().to_string()) else {
         return;
@@ -126,7 +122,6 @@ fn apply_route_to_source(source: &gst::Element, route: &crate::proxy::Route) {
 /// settings change keeps it until Task 5's teardown rebuilds the pipeline — this
 /// hook does not re-point a live source, and nothing here should be read as
 /// claiming it does.
-#[allow(dead_code)]
 fn watch_pipeline_sources(pipeline: &gst::Pipeline, route: crate::proxy::Route) {
     pipeline.connect_deep_element_added(move |_pipeline, _bin, element| {
         // Check the factory first: this fires for every element in the graph.
@@ -148,7 +143,6 @@ fn watch_pipeline_sources(pipeline: &gst::Pipeline, route: crate::proxy::Route) 
 /// on a stock system, but which factory wins is decided by process-global rank,
 /// which this very module mutates. Rather than trust that, ask — and let the
 /// build sites refuse when the answer is no.
-#[allow(dead_code)]
 fn http_source_is_configurable() -> bool {
     let Ok(element) =
         gst::Element::make_from_uri(gst::URIType::Src, "https://example.invalid/probe", None)
@@ -165,7 +159,6 @@ fn http_source_is_configurable() -> bool {
 ///
 /// Not optional: the soup source never answers a proxy's authentication
 /// challenge on a CONNECT tunnel, and every streamed segment is HTTPS.
-#[allow(dead_code)]
 fn promote_curl_source(route: &crate::proxy::Route, original: Option<gst::Rank>) {
     let Some(factory) = gst::ElementFactory::find("curlhttpsrc") else {
         return;
@@ -330,127 +323,6 @@ impl PlaybackBackend {
 
 // ── Helper functions ───────────────────────────────────────────────────
 
-/// Whether the configured proxy can be used for GStreamer HTTP playback.
-fn http_proxy_enabled(settings: &crate::ProxySettings) -> bool {
-    settings.enabled
-        && settings.proxy_type == crate::ProxyType::Http
-        && !settings.host.trim().is_empty()
-        && settings.port != 0
-}
-
-/// Build the non-secret proxy URI passed to curlhttpsrc. Authentication is set
-/// through the separate proxy-id/proxy-pw properties so credentials never need
-/// to be placed in a process-wide environment variable.
-fn gstreamer_proxy_uri(settings: &crate::ProxySettings) -> Option<String> {
-    let mut proxy_url = reqwest::Url::parse("http://localhost").ok()?;
-    proxy_url.set_host(Some(settings.host.trim())).ok()?;
-    proxy_url.set_port(Some(settings.port)).ok()?;
-    Some(proxy_url.to_string())
-}
-
-/// Configure one curlhttpsrc instance from the latest SONE proxy settings.
-///
-/// This is called both for the source created directly by uridecodebin and for
-/// nested sources created later by adaptive demuxers such as dashdemux.
-fn apply_proxy_to_source(
-    source: &gst::Element,
-    proxy_settings: &Arc<Mutex<crate::ProxySettings>>,
-) {
-    let settings = match proxy_settings.lock() {
-        Ok(settings) => settings.clone(),
-        Err(_) => return,
-    };
-
-    if !http_proxy_enabled(&settings) {
-        return;
-    }
-
-    let is_curlhttpsrc = source
-        .factory()
-        .map(|factory| factory.name() == "curlhttpsrc")
-        .unwrap_or(false);
-    if !is_curlhttpsrc {
-        return;
-    }
-
-    let Some(proxy_uri) = gstreamer_proxy_uri(&settings) else {
-        log::warn!("[audio] invalid HTTP proxy host or port");
-        return;
-    };
-
-    source.set_property("proxy", &proxy_uri);
-
-    if let Some(username) = settings
-        .username
-        .as_deref()
-        .filter(|username| !username.is_empty())
-    {
-        source.set_property("proxy-id", username);
-    }
-
-    if let Some(password) = settings.password.as_deref() {
-        source.set_property("proxy-pw", password);
-    }
-
-    log::debug!(
-        "[audio] configured curlhttpsrc proxy {}:{} on {}",
-        settings.host,
-        settings.port,
-        source.name()
-    );
-}
-
-/// Attach proxy configuration hooks to an uridecodebin.
-///
-/// `source-setup` covers the uridecodebin's own URI source. `deep-element-added`
-/// also catches HTTP sources created inside adaptive demuxers for DASH/HLS
-/// fragments, before those sources begin downloading.
-fn configure_proxy(
-    uridecodebin: &gst::Element,
-    proxy_settings: Arc<Mutex<crate::ProxySettings>>,
-) {
-    let source_settings = Arc::clone(&proxy_settings);
-    uridecodebin.connect("source-setup", false, move |values| {
-        let Some(source) = values.get(1).and_then(|value| value.get::<gst::Element>().ok()) else {
-            return None;
-        };
-
-        apply_proxy_to_source(&source, &source_settings);
-        None
-    });
-
-    if let Ok(bin) = uridecodebin.clone().downcast::<gst::Bin>() {
-        bin.connect_deep_element_added(move |_bin, _sub_bin, element| {
-            apply_proxy_to_source(element, &proxy_settings);
-        });
-    }
-}
-
-/// Prefer curlhttpsrc only while SONE's HTTP proxy is enabled, and restore the
-/// factory's original rank when proxying is disabled or another proxy type is
-/// selected.
-fn configure_http_source_rank(
-    settings: &crate::ProxySettings,
-    original_curl_rank: Option<gst::Rank>,
-) {
-    let Some(factory) = gst::ElementFactory::find("curlhttpsrc") else {
-        if http_proxy_enabled(settings) {
-            log::warn!(
-                "[audio] HTTP proxy is enabled but curlhttpsrc is unavailable; \
-                 proxied audio playback may not work"
-            );
-        }
-        return;
-    };
-
-    if http_proxy_enabled(settings) {
-        factory.set_rank(gst::Rank::PRIMARY + 100);
-        log::info!("[audio] curlhttpsrc preferred for HTTP proxy playback");
-    } else if let Some(rank) = original_curl_rank {
-        factory.set_rank(rank);
-    }
-}
-
 fn parse_pcm_format(caps: &gst::CapsRef) -> Option<PcmFormat> {
     let s = caps.structure(0)?;
     if !s.name().as_str().starts_with("audio/") {
@@ -547,7 +419,6 @@ fn attach_next_bin(
     concat: &gst::Element,
     uri: &str,
     is_dash: bool,
-    proxy_settings: Arc<Mutex<crate::ProxySettings>>,
 ) -> Result<(gst::Element, gst::Element), String> {
     let udb = gst::ElementFactory::make("uridecodebin")
         .property("uri", uri)
@@ -558,7 +429,8 @@ fn attach_next_bin(
         .property("use-buffering", true)
         .build()
         .map_err(|e| format!("Failed to create next uridecodebin: {e}"))?;
-    configure_proxy(&udb, proxy_settings);
+    // No route here: this bin joins a pipeline whose `watch_pipeline_sources`
+    // hook already configures every HTTP source that appears under it.
     // Same props as the first branch's queue: 15s of decoded reservoir ahead of
     // concat — comfortable cushion against slow-internet rebuffering.
     let branch_queue = gst::ElementFactory::make("queue")
@@ -719,7 +591,7 @@ fn detach_bin(
 fn run_attach_executor(
     job_rx: mpsc::Receiver<AttachJob>,
     next_bin: Arc<Mutex<Option<NextBinState>>>,
-    proxy_settings: Arc<Mutex<crate::ProxySettings>>,
+    audio_proxy: Arc<Mutex<AudioProxy>>,
 ) {
     for job in job_rx {
         match job {
@@ -734,13 +606,20 @@ fn run_attach_executor(
                 replay_gain,
                 peak_amplitude,
             } => {
-                match attach_next_bin(
-                    &pipeline,
-                    &concat,
-                    &uri,
-                    is_dash,
-                    Arc::clone(&proxy_settings),
-                ) {
+                let route = {
+                    let ap = audio_proxy.lock().unwrap_or_else(|p| p.into_inner());
+                    ap.route_for(capability_of(is_dash))
+                };
+                if let Err(blocked) = route {
+                    // A branch we may not proxy is a branch we must not preroll.
+                    log::warn!("[proxy] refusing to preroll next track: {}", blocked.cause);
+                    if let Ok(mut guard) = next_bin.lock() {
+                        *guard = None;
+                    }
+                    continue;
+                }
+
+                match attach_next_bin(&pipeline, &concat, &uri, is_dash) {
                     Ok((bin, branch_queue)) => {
                         if let Ok(mut guard) = next_bin.lock() {
                             *guard = Some(NextBinState {
@@ -1758,13 +1637,34 @@ impl AudioPlayer {
             // GST_PLUGIN_PATH is set in main(), before any thread exists.
             gst::init().expect("Failed to initialize GStreamer");
 
+            // Captured once, before anything promotes it. Re-reading this at a
+            // later call site would bake the promoted rank in as "original" and
+            // the rank would never come back down.
             let original_curl_rank =
                 gst::ElementFactory::find("curlhttpsrc").map(|factory| factory.rank());
-            let initial_proxy_settings = proxy_settings_thread
+            let probed = probe_host_caps();
+
+            // Seed from the settings the constructor already received. Without
+            // this, nothing pushes a route until the user next presses Save, and
+            // a launch with a saved proxy would play every track direct.
+            let initial_settings = proxy_settings_thread
                 .lock()
-                .map(|settings| settings.clone())
-                .unwrap_or_default();
-            configure_http_source_rank(&initial_proxy_settings, original_curl_rank.clone());
+                .map(|s| s.clone())
+                .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
+            let audio_proxy = Arc::new(Mutex::new(AudioProxy::new(initial_settings, probed)));
+
+            // Promotion follows whichever tier is routable; when both are, the
+            // routes are identical, so either answers the credentials question.
+            {
+                let ap = audio_proxy
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let probe_route = ap
+                    .route_for(crate::proxy::Capability::Lossy)
+                    .or_else(|_| ap.route_for(crate::proxy::Capability::Dash))
+                    .unwrap_or(crate::proxy::Route::NoProxy);
+                promote_curl_source(&probe_route, original_curl_rank);
+            }
 
             let mut backend: Option<PlaybackBackend> = None;
             // ALSA writer state — lives outside PlaybackBackend so it persists across track changes
@@ -1831,9 +1731,9 @@ impl AudioPlayer {
             let (attach_tx, attach_rx) = mpsc::channel::<AttachJob>();
             {
                 let next_bin_exec = Arc::clone(&next_bin);
-                let proxy_settings_exec = Arc::clone(&proxy_settings_thread);
+                let audio_proxy_exec = Arc::clone(&audio_proxy);
                 std::thread::spawn(move || {
-                    run_attach_executor(attach_rx, next_bin_exec, proxy_settings_exec)
+                    run_attach_executor(attach_rx, next_bin_exec, audio_proxy_exec)
                 });
             }
 
@@ -1917,6 +1817,33 @@ impl AudioPlayer {
                             }
                             signal_path.set_audio_modes(exclusive, bit_perfect);
 
+                            // One decision for both arms below. Each used to
+                            // sniff the URI for itself, and neither could see
+                            // the other's answer.
+                            let is_dash = uri.starts_with("data:application/dash");
+                            let route = {
+                                let ap = audio_proxy.lock().unwrap_or_else(|p| p.into_inner());
+                                ap.route_for(capability_of(is_dash))
+                            };
+                            let route = match route {
+                                Ok(r) => r,
+                                Err(blocked) => {
+                                    // Refuse rather than play direct. This is the
+                                    // containment boundary: the gapless advance
+                                    // path reaches no Tauri command, so a
+                                    // command-layer check cannot cover it.
+                                    log::warn!("[proxy] refusing playback: {}", blocked.cause);
+                                    return Err(format!("proxy blocked: {}", blocked.cause));
+                                }
+                            };
+                            if matches!(route, crate::proxy::Route::Via { .. })
+                                && !http_source_is_configurable()
+                            {
+                                return Err("proxy blocked: this system's https source \
+                                            cannot be pointed at a proxy"
+                                    .to_string());
+                            }
+
                             if exclusive || bit_perfect {
                                 // ── DirectAlsa path ──
                                 #[cfg(not(target_os = "linux"))]
@@ -1992,7 +1919,8 @@ impl AudioPlayer {
                                     let supported_rates_for_pipeline = writer_supported_rates.as_deref().unwrap_or(&[44100, 48000]);
                                     let (pipe, u_vol, n_vol) = build_appsink_pipeline(
                                         &uri,
-                                        Arc::clone(&proxy_settings_thread),
+                                        is_dash,
+                                        route,
                                         exclusive,
                                         bit_perfect,
                                         wtx.clone(),
@@ -2091,7 +2019,7 @@ impl AudioPlayer {
                                 }
 
                                 let pipe = gst::Pipeline::new();
-                                let is_dash = uri.starts_with("data:application/dash");
+                                watch_pipeline_sources(&pipe, route);
                                 // 2b: legacy `uridecodebin` per branch. `concat` does the
                                 // gapless switching, so we no longer need uridecodebin3 /
                                 // about-to-finish. Legacy uridecodebin handles Tidal
@@ -2111,10 +2039,6 @@ impl AudioPlayer {
                                 let uridecodebin = udb
                                     .build()
                                     .map_err(|e| format!("Failed to create uridecodebin: {e}"))?;
-                                configure_proxy(
-                                    &uridecodebin,
-                                    Arc::clone(&proxy_settings_thread),
-                                );
                                 // Per-branch upstream queue (C1): decouples the decoder from
                                 // concat's gate so the next branch can pre-buffer ahead while
                                 // the current track plays. With one branch it's a passthrough.
@@ -2768,20 +2692,57 @@ impl AudioPlayer {
                     }
 
                     AudioCommand::SetProxySettings { settings, reply } => {
-                        // Apply new proxy settings to every HTTP source created from now on.
-                        //
-                        // Deliberately do NOT tear down/rebuild the active playback pipeline
-                        // here. Doing so makes a settings change audibly destructive and races
-                        // DASH preroll/seeking: the replacement pipeline starts at 0:00 and may
-                        // retry a bad proxy several times before reporting an error.
-                        //
-                        // Existing sources are allowed to continue with the proxy configuration
-                        // they already own. Any HTTP source created after this point uses the new
-                        // settings, so an application restart is not required.
                         if let Ok(mut current) = proxy_settings_thread.lock() {
                             *current = settings.clone();
                         }
-                        configure_http_source_rank(&settings, original_curl_rank.clone());
+                        let probed = probe_host_caps();
+                        match audio_proxy.lock() {
+                            Ok(mut ap) => *ap = AudioProxy::new(settings.clone(), probed),
+                            Err(poisoned) => {
+                                *poisoned.into_inner() = AudioProxy::new(settings.clone(), probed)
+                            }
+                        }
+
+                        {
+                            // Promotion follows whichever tier is routable. On 1.24
+                            // with credentials that is Dash, so curlhttpsrc is
+                            // promoted process-wide on a host where its progressive
+                            // seek is broken -- harmless only because Lossy refuses
+                            // separately at the build site. The promotion and the
+                            // refusal are load-bearing for each other.
+                            let ap = audio_proxy.lock().unwrap_or_else(|p| p.into_inner());
+                            let probe_route = ap
+                                .route_for(crate::proxy::Capability::Lossy)
+                                .or_else(|_| ap.route_for(crate::proxy::Capability::Dash))
+                                .unwrap_or(crate::proxy::Route::NoProxy);
+                            promote_curl_source(&probe_route, original_curl_rank);
+                        }
+
+                        // Detach unconditionally. A branch prerolled under the
+                        // previous settings already holds an open source with up
+                        // to fifteen seconds buffered; left alone it becomes the
+                        // next playing track, still routed the old way.
+                        //
+                        // Deliberately not conditional on "did the route change".
+                        // Comparing routes cannot see off -> blocked (both would
+                        // have to be spelled the same), and a spurious detach
+                        // costs one re-preroll and nothing else.
+                        if !next_active.load(Ordering::Acquire) {
+                            if let (
+                                Some(stale),
+                                Some(PlaybackBackend::Normal { pipeline, concat, .. }),
+                            ) = (
+                                next_bin.lock().ok().and_then(|mut g| g.take()),
+                                backend.as_ref(),
+                            ) {
+                                let _ = attach_tx.send(AttachJob::Detach {
+                                    pipeline: pipeline.clone(),
+                                    concat: concat.clone(),
+                                    bin: stale.bin,
+                                    branch_queue: stale.branch_queue,
+                                });
+                            }
+                        }
 
                         reply.send(()).ok();
                     }
@@ -3173,7 +3134,10 @@ fn stereo_pad_mix_matrix(out_channels: u32) -> gst::Array {
 #[cfg(target_os = "linux")]
 fn build_appsink_pipeline(
     uri: &str,
-    proxy_settings: Arc<Mutex<crate::ProxySettings>>,
+    // Both decided by the caller: one tier decision serves this arm and the
+    // normal one, so nothing here re-sniffs the URI.
+    is_dash: bool,
+    route: crate::proxy::Route,
     exclusive: bool,
     bit_perfect: bool,
     writer_tx: crossbeam_channel::Sender<WriterCommand>,
@@ -3190,7 +3154,7 @@ fn build_appsink_pipeline(
     use gst_app::prelude::*;
 
     let pipe = gst::Pipeline::new();
-    let is_dash = uri.starts_with("data:application/dash");
+    watch_pipeline_sources(&pipe, route);
     let mut udb = gst::ElementFactory::make("uridecodebin").property("uri", uri);
     if is_dash {
         udb = udb
@@ -3204,7 +3168,6 @@ fn build_appsink_pipeline(
     let uridecodebin = udb
         .build()
         .map_err(|e| format!("Failed to create uridecodebin: {e}"))?;
-    configure_proxy(&uridecodebin, proxy_settings);
     let device_channels = negotiated_fmt.channels;
     let audioconvert = gst::ElementFactory::make("audioconvert")
         .build()
@@ -3862,6 +3825,79 @@ mod proxy_source_tests {
         assert_eq!(
             gst::ElementFactory::find("curlhttpsrc").unwrap().rank(),
             original
+        );
+    }
+
+    #[test]
+    fn a_blocked_tier_yields_no_route_to_hand_a_pipeline() {
+        // The contract the build sites rely on: when a tier is refused there is
+        // no `Route` value at all, so there is nothing to accidentally apply.
+        let mut caps = HostCaps::assume_all_present();
+        caps.has_dashdemux = false;
+        let p = AudioProxy::new(http_proxy(), caps);
+
+        let err = p
+            .route_for(capability_of(true))
+            .expect_err("dash must be refused without the legacy demuxer");
+        assert!(!err.cause.is_empty(), "a refusal must carry a reason to show");
+
+        p.route_for(capability_of(false))
+            .expect("lossy must still play");
+    }
+
+    #[test]
+    fn the_dash_flag_is_not_inverted_on_the_way_to_a_capability() {
+        // Both build sites derive the flag from this one prefix and hand the
+        // result to `capability_of`. Inverting it there is silent: the refusals
+        // still fire, just for the wrong tier, so hi-res would stream direct on
+        // a host where only lossy is routable.
+        let dash_uri = "data:application/dash+xml;base64,PE1QRD4=";
+        let lossy_uri = "https://audio.example/track.flac";
+
+        assert!(dash_uri.starts_with("data:application/dash"));
+        assert!(!lossy_uri.starts_with("data:application/dash"));
+
+        assert_eq!(
+            capability_of(dash_uri.starts_with("data:application/dash")),
+            Capability::Dash
+        );
+        assert_eq!(
+            capability_of(lossy_uri.starts_with("data:application/dash")),
+            Capability::Lossy
+        );
+    }
+
+    #[test]
+    fn the_pipeline_hook_configures_a_source_added_after_it_was_installed() {
+        let _ = gst::init();
+        // The hook is the whole containment mechanism for both build sites, and
+        // it runs on the streaming thread where a failure is invisible. Adding
+        // the source *after* the connect is the case that matters: every real
+        // source appears long after the pipeline is built.
+        let pipe = gst::Pipeline::new();
+        watch_pipeline_sources(
+            &pipe,
+            via(Some(Creds {
+                user: "bob".into(),
+                pass: "hunter2".into(),
+            })),
+        );
+
+        let src = make("souphttpsrc").expect("souphttpsrc is a base dependency");
+        let bin = gst::Bin::new();
+        bin.add(&src).expect("bin accepts the source");
+        // Nested, so this also proves the signal reaches through a sub-bin --
+        // which is how an adaptive demuxer's segment source actually arrives.
+        pipe.add(&bin).expect("pipeline accepts the bin");
+
+        assert_eq!(
+            src.property::<Option<String>>("proxy").as_deref(),
+            Some("http://proxy.example:3128/"),
+            "a source added after the hook was installed must still be routed"
+        );
+        assert_eq!(
+            src.property::<Option<String>>("proxy-id").as_deref(),
+            Some("bob")
         );
     }
 }
