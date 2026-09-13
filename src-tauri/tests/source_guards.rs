@@ -170,6 +170,60 @@ fn proxy_objects_and_http_clients_are_built_only_in_proxy_http() {
     }
 }
 
+/// Every request the API client makes must go through `TidalClient::dispatch`.
+///
+/// `dispatch` is where a transport failure is recorded against the proxy that
+/// carried it, so a `.send()` added anywhere else in that file is not a bug you
+/// would see: the request works, the failure surfaces as it always did, and the
+/// only thing lost is the observation — silently, for exactly the requests the
+/// pre-login banner exists to explain.
+///
+/// Substring matching over source text, with the same limits as its siblings.
+/// Comment lines are stripped, so the doc comment on `dispatch` (which names
+/// `.send()` deliberately) does not count itself; a `.send()` hidden inside a
+/// macro or spelled `send ()` would pass.
+///
+/// Falsified on both halves, because a guard that counts to one is vacuous if
+/// its anchor has been renamed out from under it: the `dispatch` signature must
+/// still be there, and the one surviving call must still be the one that hands
+/// its outcome to `observe_at`.
+#[test]
+fn the_api_clients_requests_are_sent_in_exactly_one_place() {
+    let f = rust_sources()
+        .into_iter()
+        .find(|p| file_name(p) == "tidal_api.rs")
+        .expect("tidal_api.rs must be in the walk, or this guard is vacuous");
+    let body = fs::read_to_string(&f).unwrap();
+
+    assert!(
+        body.contains("async fn dispatch("),
+        "{}: `dispatch` is gone or renamed; this guard now proves nothing",
+        f.display()
+    );
+
+    let sends: Vec<&str> = body
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .filter(|l| l.contains(".send()"))
+        .collect();
+
+    assert_eq!(
+        sends.len(),
+        1,
+        "{}: {} `.send()` sites, expected exactly one (inside `dispatch`). \
+         A request sent anywhere else loses the proxy observation: {:?}",
+        f.display(),
+        sends.len(),
+        sends
+    );
+    assert!(
+        sends[0].contains("observe_at("),
+        "{}: the one `.send()` no longer reports to the cell: `{}`",
+        f.display(),
+        sends[0].trim()
+    );
+}
+
 /// `Url::set_port` is a trap for proxy URIs: it drops the port from the
 /// serialized string whenever it equals the scheme default, so an HTTP proxy on
 /// port 80 turns into `http://host/` and the port is lost. URIs are built by

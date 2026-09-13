@@ -8,7 +8,7 @@
 use crate::proxy::{
     BlockReason, Capability, EnvScheme, HostCaps, ProxyPlan, Route, SystemProxyEnv,
 };
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -161,27 +161,55 @@ pub fn is_transport_failure(e: &reqwest::Error) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Generation(u64);
 
+/// How many *consecutive* unanswered requests it takes before the status flips.
+///
+/// One is not enough, and the asymmetry is deliberate. The recovery action this
+/// state offers is "turn the proxy off", which removes containment — the one
+/// thing this whole design exists to prevent — so it must not be put in front
+/// of a user by a two-second wifi drop. Nothing clears the count but an
+/// answered request, and `get_proxy_status` deliberately sends nothing, so a
+/// single blip would otherwise leave a standing invitation to disable the proxy
+/// long after the network came back.
+///
+/// Two is the smallest number that requires the failure to still be there when
+/// the app next tries, which is the weakest form of "this is not transient"
+/// that costs the user nothing.
+const UNANSWERED_THRESHOLD: u32 = 2;
+
+/// The cell's contents, read and written as one.
+///
+/// `unanswered` lives in here rather than beside it because it is only
+/// meaningful *about* a particular client: pairing them under one lock is what
+/// lets `client_at` hand out a client and the generation it belongs to with no
+/// window in between, and `observe_at` discard an observation whose client the
+/// cell has already replaced.
+struct Cell {
+    /// The generation that produced the current state.
+    generation: Generation,
+    state: Result<reqwest::Client, BlockReason>,
+    /// Consecutive requests through `state` that got no answer. Reset by any
+    /// answered request, and by replacing `state` at all.
+    unanswered: u32,
+}
+
 #[derive(Clone)]
 pub struct ProxiedHttp {
-    /// The generation that produced the current state, beside the state itself.
-    cell: Arc<RwLock<(Generation, Result<reqwest::Client, BlockReason>)>>,
+    cell: Arc<RwLock<Cell>>,
     /// Dispenses a generation to each writer BEFORE it starts building, so
     /// "newest" means the newest caller rather than whichever build happened to
     /// finish last. A slow build must never resurrect the settings it replaced.
     next: Arc<AtomicU64>,
-    /// True when the last request anyone made with a client from this cell got
-    /// no answer at all. Evidence from traffic the app was already sending —
-    /// never a health check, never a probe, and never a reason to send
-    /// anything extra.
-    unanswered: Arc<AtomicBool>,
 }
 
 impl ProxiedHttp {
     fn wrap(state: Result<reqwest::Client, BlockReason>) -> Self {
         Self {
-            cell: Arc::new(RwLock::new((Generation(0), state))),
+            cell: Arc::new(RwLock::new(Cell {
+                generation: Generation(0),
+                state,
+                unanswered: 0,
+            })),
             next: Arc::new(AtomicU64::new(1)),
-            unanswered: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -211,12 +239,7 @@ impl ProxiedHttp {
 
     /// Blocked plans return `Err`; there is no proxy-less fallback.
     pub fn client(&self) -> Result<reqwest::Client, BlockReason> {
-        match self.cell.read() {
-            Ok(g) => g.1.clone(),
-            // A panic elsewhere must not downgrade egress: read through the
-            // poison rather than substituting a fresh, unproxied client.
-            Err(poisoned) => poisoned.into_inner().1.clone(),
-        }
+        self.read().state.clone()
     }
 
     /// Swap in the client for a new plan. Blocking: `build_client` may resolve
@@ -292,30 +315,56 @@ impl ProxiedHttp {
         }
     }
 
-    /// Record what a request made with a client from this cell did, and hand
-    /// the outcome straight back.
+    /// The client and the generation it belongs to, read together.
     ///
-    /// Every call is a store, not just the failing ones, so the mark is the
-    /// *last* outcome rather than a latch that needs clearing: one answered
-    /// request — a 200, a 404, a 401, anything with a response head — puts the
-    /// cell back to normal with no restart and no timer.
+    /// Callers that will report what the request did must take both from here,
+    /// never a bare `client()` plus a separate generation read: the pair is
+    /// what makes `observe_at` able to tell "this request used the client the
+    /// cell still holds" from "this request used the one it replaced".
+    pub fn client_at(&self) -> (Generation, Result<reqwest::Client, BlockReason>) {
+        let c = self.read();
+        (c.generation, c.state.clone())
+    }
+
+    /// Record what a request did, and hand the outcome straight back.
+    ///
+    /// `generation` must be the one `client_at` returned beside the client that
+    /// made the request. An observation about a client the cell has since
+    /// replaced is dropped, because the two failure modes it could otherwise
+    /// produce are both lies: a slow failure through the *old* proxy landing
+    /// after a reconfiguration would be counted against the new one, and — the
+    /// worse direction — a new client's success followed by an old client's
+    /// failure would leave a freshly saved, working proxy reported as
+    /// unreachable under its own name.
+    ///
+    /// An answered request zeroes the count outright, so recovery needs one
+    /// request and no restart, while raising the state needs
+    /// `UNANSWERED_THRESHOLD` in a row.
     ///
     /// Nothing here changes what the caller gets. It cannot retry, cannot
     /// unwrap a block, and cannot reach the client; a request that failed
     /// through the proxy stays failed.
-    pub fn observe<T>(&self, outcome: Result<T, reqwest::Error>) -> Result<T, reqwest::Error> {
-        self.unanswered.store(
-            outcome.as_ref().err().is_some_and(is_transport_failure),
-            Ordering::SeqCst,
-        );
+    pub fn observe_at<T>(
+        &self,
+        generation: Generation,
+        outcome: Result<T, reqwest::Error>,
+    ) -> Result<T, reqwest::Error> {
+        let mut c = self.write();
+        if c.generation == generation {
+            c.unanswered = match outcome.as_ref().err() {
+                Some(e) if is_transport_failure(e) => c.unanswered.saturating_add(1),
+                _ => 0,
+            };
+        }
+        drop(c);
         outcome
     }
 
-    /// Whether the most recent observed request got no answer. Meaningless on
-    /// its own — only `ProxyStatus::observed` may read it, and only after it
-    /// has established that a proxy is actually in the path.
+    /// Whether enough consecutive requests got no answer to say so out loud.
+    /// Meaningless on its own — only `ProxyStatus::observed` may read it, and
+    /// only after it has established that a proxy is actually in the path.
     pub fn unreachable(&self) -> bool {
-        self.unanswered.load(Ordering::SeqCst)
+        self.read().unanswered >= UNANSWERED_THRESHOLD
     }
 
     /// Claim a position in the write order. Must happen before the build,
@@ -325,22 +374,32 @@ impl ProxiedHttp {
         Generation(self.next.fetch_add(1, Ordering::SeqCst))
     }
 
+    /// Read through a poisoned lock rather than around it: a panic elsewhere
+    /// must not downgrade egress by substituting a fresh, unproxied client, and
+    /// must not strand the cell on stale settings either.
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, Cell> {
+        self.cell.read().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn write(&self) -> std::sync::RwLockWriteGuard<'_, Cell> {
+        self.cell.write().unwrap_or_else(|p| p.into_inner())
+    }
+
     fn store(&self, generation: Generation, built: Result<reqwest::Client, BlockReason>) {
-        let mut g = match self.cell.write() {
-            Ok(g) => g,
-            // A panic elsewhere must not strand the cell on stale settings.
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut c = self.write();
         // The whole point. Without this comparison a slow build started under
         // the OLD settings lands last and wins, so the cell disagrees with what
         // the user saved — including the enable -> disable -> enable case, where
         // the loser's client carries no proxy at all.
-        if generation >= g.0 {
-            *g = (generation, built);
+        if generation >= c.generation {
             // A client that has sent nothing has produced no evidence. Carrying
-            // the old mark across would report the previous proxy's silence
+            // the old count across would report the previous proxy's silence
             // against the one the user just saved.
-            self.unanswered.store(false, Ordering::SeqCst);
+            *c = Cell {
+                generation,
+                state: built,
+                unanswered: 0,
+            };
         }
     }
 }
@@ -676,26 +735,47 @@ mod tests {
         assert_eq!(resp.status(), 404);
     }
 
-    /// The mark is the last outcome, not a latch: setting it takes a request
-    /// that died in transit, and clearing it takes one answered request and
-    /// nothing else — no restart, no timer, no probe.
+    /// One unanswered request, tagged with the generation its client came from.
+    async fn one_unanswered(cell: &ProxiedHttp, c: &reqwest::Client) {
+        let dead = nothing_is_listening_here();
+        let (generation, _) = cell.client_at();
+        assert!(
+            cell.observe_at(generation, c.get(format!("http://{dead}/")).send().await)
+                .is_err(),
+            "a closed port must not answer"
+        );
+    }
+
+    /// The asymmetry, which is the whole of the safety argument: raising the
+    /// state takes two unanswered requests in a row, lowering it takes one
+    /// answered request.
+    ///
+    /// One failure is not enough because the action this state offers removes
+    /// containment. A two-second wifi drop mid-login would otherwise leave a
+    /// standing "turn off your proxy" bar in front of a user whose proxy is
+    /// fine — nothing clears the count but a request, and reading the status
+    /// deliberately sends none.
     #[tokio::test]
-    async fn the_mark_follows_the_last_outcome_in_both_directions() {
+    async fn two_in_a_row_raise_it_and_one_answer_undoes_it() {
         let (cell, c) = direct_cell();
         assert!(
             !cell.unreachable(),
             "a cell that has sent nothing has observed nothing"
         );
 
-        let dead = nothing_is_listening_here();
-        assert!(cell
-            .observe(c.get(format!("http://{dead}/")).send().await)
-            .is_err());
-        assert!(cell.unreachable());
+        one_unanswered(&cell, &c).await;
+        assert!(
+            !cell.unreachable(),
+            "one blip must never put a disable-the-proxy button on screen"
+        );
+
+        one_unanswered(&cell, &c).await;
+        assert!(cell.unreachable(), "still failing on the next attempt");
 
         let addr = origin_that_refuses_us().await;
+        let (generation, _) = cell.client_at();
         let resp = cell
-            .observe(c.get(format!("http://{addr}/")).send().await)
+            .observe_at(generation, c.get(format!("http://{addr}/")).send().await)
             .expect("observe must hand the outcome straight back");
         assert_eq!(resp.status(), 404, "a refusal from the origin, not silence");
         assert!(
@@ -712,13 +792,55 @@ mod tests {
     async fn a_reconfigured_cell_starts_with_no_verdict() {
         let caps = HostCaps::assume_all_present();
         let (cell, c) = direct_cell();
-        let dead = nothing_is_listening_here();
-        let _ = cell.observe(c.get(format!("http://{dead}/")).send().await);
+        one_unanswered(&cell, &c).await;
+        one_unanswered(&cell, &c).await;
         assert!(cell.unreachable());
 
         cell.replace(&plan(&enabled("127.0.0.1", 3128), &caps).unwrap(), &caps)
             .expect("a valid plan builds");
         assert!(!cell.unreachable());
+    }
+
+    /// The race the generation tag exists to close, in both directions.
+    ///
+    /// A request in flight when the user saves new settings belongs to the
+    /// client it started on. Counting its failure against the replacement
+    /// would report a freshly saved, working proxy as unreachable *under its
+    /// own name* — and the inverse, an old client's success clearing a count
+    /// the new one earned, would hide a real outage.
+    #[tokio::test]
+    async fn an_observation_about_a_client_the_cell_has_replaced_is_dropped() {
+        let caps = HostCaps::assume_all_present();
+        let (cell, c) = direct_cell();
+        let stale = cell.client_at().0;
+
+        cell.replace(&plan(&enabled("127.0.0.1", 3128), &caps).unwrap(), &caps)
+            .expect("a valid plan builds");
+
+        let dead = nothing_is_listening_here();
+        for _ in 0..2 {
+            let _ = cell.observe_at(stale, c.get(format!("http://{dead}/")).send().await);
+        }
+        assert!(
+            !cell.unreachable(),
+            "the replaced client's silence must not be charged to its replacement"
+        );
+
+        let live = cell.client_at().0;
+        for _ in 0..2 {
+            let _ = cell.observe_at(live, c.get(format!("http://{dead}/")).send().await);
+        }
+        assert!(
+            cell.unreachable(),
+            "the live client's own silence does count"
+        );
+
+        let addr = origin_that_refuses_us().await;
+        let _ = cell.observe_at(stale, c.get(format!("http://{addr}/")).send().await);
+        assert!(
+            cell.unreachable(),
+            "and a stale success must not clear a live count"
+        );
     }
 
     #[test]

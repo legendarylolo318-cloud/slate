@@ -15,6 +15,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import ProxyNoticeBanner, {
   proxyNotice,
   PROXY_STATUS_EVENT,
+  OPEN_SETTINGS_EVENT,
 } from "./ProxyNoticeBanner";
 
 beforeEach(() => {
@@ -46,22 +47,27 @@ describe("proxyNotice", () => {
     expect(proxyNotice("blocked")).toBeNull();
   });
 
-  /// The wording is the requirement, not decoration. An unplugged cable
-  /// produces exactly the same evidence as a dead proxy, so the sentence has
-  /// to survive being true in both worlds.
+  /// The wording is the requirement, not decoration. reqwest reports a 407 on
+  /// the CONNECT tunnel — a mistyped proxy password — with the same kind as a
+  /// failed DNS lookup, and an unplugged cable produces the same evidence
+  /// again, so the sentence has to survive being true in all three worlds.
   it("says what was observed and never diagnoses a cause it cannot see", () => {
     const notice = proxyNotice({
       state: "unreachable",
       endpoint: "nope.invalid:8080",
     });
     expect(notice?.headline).toBe(
-      "SONE can't reach the proxy at nope.invalid:8080.",
+      "SONE isn't getting a reply through the proxy at nope.invalid:8080.",
     );
     // Names the proxy, because that is what the user can act on from here.
     expect(notice?.headline).toContain("nope.invalid:8080");
-    // And offers both explanations rather than picking the flattering one.
-    expect(notice?.detail).toMatch(/either the proxy or this machine/i);
-    for (const guess of ["is down", "is offline", "has stopped"]) {
+    // Every cause that produces this evidence, including the one a bare
+    // "can't reach it" would misdirect: the proxy answering and refusing.
+    expect(notice?.detail).toMatch(/unreachable/i);
+    expect(notice?.detail).toMatch(/refusing the connection/i);
+    expect(notice?.detail).toMatch(/password/i);
+    expect(notice?.detail).toMatch(/offline/i);
+    for (const guess of ["is down", "has stopped"]) {
       expect(notice?.headline.toLowerCase()).not.toContain(guess);
       expect(notice?.detail?.toLowerCase()).not.toContain(guess);
     }
@@ -69,11 +75,11 @@ describe("proxyNotice", () => {
 
   it("still says something useful without an endpoint", () => {
     expect(proxyNotice({ state: "unreachable" })?.headline).toBe(
-      "SONE can't reach the proxy.",
+      "SONE isn't getting a reply through the proxy.",
     );
     expect(
       proxyNotice({ state: "unreachable", endpoint: "  " })?.headline,
-    ).toBe("SONE can't reach the proxy.");
+    ).toBe("SONE isn't getting a reply through the proxy.");
   });
 });
 
@@ -117,6 +123,33 @@ describe("the banner", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("nope.invalid:8080");
     expect(screen.getByRole("button").textContent).toContain("Turn off proxy");
+  });
+
+  /// Turning the proxy off removes containment. Where a settings screen is
+  /// reachable it must not be the only thing offered — and where it is not
+  /// (the login screen), the offer must not appear at all.
+  it("offers the non-destructive action only where settings exist", async () => {
+    invoke.mockResolvedValue({
+      state: "unreachable",
+      endpoint: "nope.invalid:8080",
+    });
+    const { unmount } = render(<ProxyNoticeBanner />);
+    await screen.findByRole("alert");
+    expect(screen.queryByText("Open network settings")).toBeNull();
+    unmount();
+
+    const opened: unknown[] = [];
+    const onOpen = (e: Event) => opened.push((e as CustomEvent).detail);
+    window.addEventListener(OPEN_SETTINGS_EVENT, onOpen);
+    try {
+      render(<ProxyNoticeBanner offerSettings />);
+      fireEvent.click(await screen.findByText("Open network settings"));
+      expect(opened).toEqual(["network"]);
+      // And the way out is still there beside it.
+      expect(screen.getByText("Turn off proxy")).toBeTruthy();
+    } finally {
+      window.removeEventListener(OPEN_SETTINGS_EVENT, onOpen);
+    }
   });
 
   it("carries a way out that keeps the rest of the settings", async () => {
@@ -208,7 +241,7 @@ describe("the banner", () => {
       );
 
       unreachable = false;
-      await vi.advanceTimersByTimeAsync(6000);
+      await vi.advanceTimersByTimeAsync(16000);
       await vi.waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     } finally {
       vi.useRealTimers();
@@ -221,7 +254,7 @@ describe("the banner", () => {
       invoke.mockResolvedValue({ state: "off" });
       render(<ProxyNoticeBanner />);
       await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
-      await vi.advanceTimersByTimeAsync(30000);
+      await vi.advanceTimersByTimeAsync(60000);
       expect(invoke).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

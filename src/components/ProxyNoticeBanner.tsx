@@ -20,9 +20,17 @@ export const PROXY_STATUS_EVENT = "sone:proxy-status";
  *  `unreachable` is discovered by requests the app was already making, so
  *  nothing tells the banner when one fails — it has to look. Only while a
  *  proxy is configured, though: with the proxy off there is no state this
- *  banner can ever report, so it does not poll at all. The call itself sends
- *  nothing; it reads a decrypted settings file, a lock and an atomic. */
-const POLL_MS = 5000;
+ *  banner can ever report, so it does not poll at all.
+ *
+ *  Long, because nothing here is latency-critical and the call is not free:
+ *  `get_proxy_status` decrypts the settings file each time. The state it
+ *  reports cannot change without a request happening anyway, and by then the
+ *  user is already looking at a failure. */
+const POLL_MS = 15000;
+
+/** Asked of the authenticated shell, which owns the settings sheet. The detail
+ *  is the tab to land on. */
+export const OPEN_SETTINGS_EVENT = "sone:open-settings";
 
 export interface ProxyNotice {
   /** Red for "nothing was sent", amber for "something was sent and vanished". */
@@ -41,13 +49,21 @@ export interface ProxyNotice {
  *   field is at fault, so its reason is shown verbatim.
  * - `unreachable` — requests went out through the proxy and nothing came back.
  *
- * The wording of the second one is the part to leave alone. The same evidence
- * is produced by a proxy that is down, a proxy that is up but firewalled, and
- * an unplugged network cable; SONE observed none of those, it observed silence.
- * So the headline says what was seen — no answer from `host:port` — and the
- * detail names both possibilities instead of picking one. "Your proxy is down"
- * would be a guess dressed as a diagnosis, and it would send a user with a
- * dropped VPN off to debug a proxy that is fine.
+ * The wording of the second one is the part to leave alone, and it is wider
+ * than it first looks it needs to be. reqwest cannot distinguish "the proxy is
+ * not there" from "the proxy answered and refused": a 407 on the CONNECT tunnel
+ * — which is what a mistyped proxy password produces, and every origin here is
+ * HTTPS so every request tunnels — comes back as the same `Kind::Request` +
+ * `is_connect()` as a failed DNS lookup. A 502 or 403 on CONNECT, which is how
+ * a proxy says the destination is blocked, arrives the same way. So does an
+ * unplugged network cable.
+ *
+ * Naming only unreachability would therefore actively misdirect the single most
+ * likely user in this state — someone who typo'd a password — while offering
+ * them one action, turning the proxy off, that does not address it. The
+ * headline says what was observed (no reply came back through `host:port`) and
+ * the detail lists every cause that produces that evidence, refusal included.
+ * "Your proxy is down" would be a guess dressed as a diagnosis.
  *
  * `off` and `active` are the normal states and must not put a bar across the
  * window. `degraded` is a per-feature notice and is empty until the
@@ -73,10 +89,10 @@ export function proxyNotice(status: unknown): ProxyNotice | null {
       tone: "unreachable",
       headline:
         endpoint.length > 0
-          ? `SONE can't reach the proxy at ${endpoint}.`
-          : "SONE can't reach the proxy.",
+          ? `SONE isn't getting a reply through the proxy at ${endpoint}.`
+          : "SONE isn't getting a reply through the proxy.",
       detail:
-        "Requests are going out and nothing is coming back. That is either the proxy or this machine's own connection — SONE cannot tell which from here.",
+        "Requests are going out and nothing is coming back. The proxy may be unreachable, it may be refusing the connection — a rejected password or a blocked destination look the same from here — or this machine may be offline.",
     };
   }
 
@@ -118,7 +134,15 @@ const TONE = {
  * `set_proxy_settings` persists before it reconfigures: the disabled settings
  * reach disk whether or not anything else succeeds.
  */
-export default function ProxyNoticeBanner() {
+export default function ProxyNoticeBanner({
+  offerSettings = false,
+}: {
+  /** Whether a settings screen is reachable from here. False on the login
+   *  screen, where it is not — which is why the disable button exists at all.
+   *  True inside the app, where turning containment off must not be the only
+   *  thing on offer. */
+  offerSettings?: boolean;
+} = {}) {
   const [status, setStatus] = useState<ProxyStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -209,13 +233,27 @@ export default function ProxyNoticeBanner() {
           {actionError}
         </span>
       )}
-      <button
-        onClick={() => void disableProxy()}
-        disabled={busy}
-        className={`ml-auto flex-shrink-0 px-2.5 py-1 rounded-md text-[11.5px] font-semibold border text-th-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${tone.button}`}
-      >
-        {busy ? "Turning off…" : "Turn off proxy"}
-      </button>
+      <div className="ml-auto flex flex-shrink-0 items-center gap-2">
+        {offerSettings && (
+          <button
+            onClick={() =>
+              window.dispatchEvent(
+                new CustomEvent(OPEN_SETTINGS_EVENT, { detail: "network" }),
+              )
+            }
+            className={`px-2.5 py-1 rounded-md text-[11.5px] font-semibold border text-th-text-primary transition-colors ${tone.button}`}
+          >
+            Open network settings
+          </button>
+        )}
+        <button
+          onClick={() => void disableProxy()}
+          disabled={busy}
+          className={`px-2.5 py-1 rounded-md text-[11.5px] font-semibold border text-th-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${tone.button}`}
+        >
+          {busy ? "Turning off…" : "Turn off proxy"}
+        </button>
+      </div>
     </div>
   );
 }

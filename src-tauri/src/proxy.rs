@@ -688,10 +688,16 @@ pub fn system_proxy_from_env<T>(
 ///   fine and, over `http://`, builds fine too, because reqwest defers the
 ///   proxy's name lookup to the first request. It carries the proxy's
 ///   `host:port` and nothing else, because `host:port` is the whole of what is
-///   known. An unplugged cable produces the same evidence, so the wording this
-///   feeds must stay at "SONE can't reach the proxy at X" and must never
-///   become "your proxy is down" — that second claim is not observed, it is
-///   guessed.
+///   known. Note how little that is: reqwest cannot tell an unreachable proxy
+///   from one that answered and refused — a 407 on the CONNECT tunnel, which
+///   is what a mistyped proxy password produces, arrives as the same kind as a
+///   failed DNS lookup — and an unplugged cable produces the same evidence
+///   again. So the wording this feeds says a reply is not coming back through
+///   `host:port` and lists every cause that fits. It must never become "your
+///   proxy is down": that claim is not observed, it is guessed, and it is
+///   wrong for the most likely user in this state.
+///   Raising it takes `UNANSWERED_THRESHOLD` unanswered requests in a row, not
+///   one, because the action it offers removes containment.
 /// - `Active { degraded }` — the plan is usable, but some capabilities cannot
 ///   be served on this host (a missing GStreamer element, a GStreamer too old
 ///   to seek through an authenticated proxy). That is a per-feature notice,

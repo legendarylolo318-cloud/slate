@@ -35,7 +35,8 @@ import {
   type ActionId,
   type KeyCombo,
 } from "../lib/shortcuts";
-import SettingsSheet from "./settings/SettingsSheet";
+import SettingsSheet, { type TabId } from "./settings/SettingsSheet";
+import { OPEN_SETTINGS_EVENT } from "./ProxyNoticeBanner";
 import AboutModal from "./AboutModal";
 import Toggle from "./Toggle";
 import TidalImage from "./TidalImage";
@@ -46,6 +47,7 @@ export default function UserMenu() {
   const avatarUrl = useAtomValue(currentUserAvatarAtom);
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<TabId>("playback");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [bindings, setBindings] = useAtom(shortcutsAtom);
@@ -58,6 +60,20 @@ export default function UserMenu() {
   const [audioDevices, setAudioDevices] = useState<
     Array<{ id: string; name: string }>
   >([]);
+
+  // The proxy banner renders above this menu and cannot reach the sheet's
+  // state, so it asks. Only meaningful inside the authenticated shell — the
+  // pre-login banner has no settings screen to send anyone to, which is the
+  // whole reason it carries a disable button.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const tab = (e as CustomEvent<TabId | undefined>).detail;
+      if (tab) setSettingsTab(tab);
+      setSettingsOpen(true);
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpen);
+  }, []);
   const [deviceDropdownOpen, setDeviceDropdownOpen] = useState(false);
   const { showToast } = useToast();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -356,6 +372,7 @@ export default function UserMenu() {
       <SettingsSheet
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+        initialTab={settingsTab}
       />
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
 

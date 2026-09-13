@@ -24,7 +24,7 @@ import UtilitiesTab from "./UtilitiesTab";
 import McpTab from "./McpTab";
 import OverlayTab from "./OverlayTab";
 
-type TabId =
+export type TabId =
   | "playback"
   | "themes"
   | "scrobble"
@@ -82,16 +82,20 @@ function DiscordGlyph({ size = 16 }: { size?: number }) {
 export default function SettingsSheet({
   open,
   onClose,
+  initialTab = "playback",
 }: {
   open: boolean;
   onClose: () => void;
+  /** Which tab to land on. Re-applied on every open, so a caller that sends
+   *  the user here to fix one thing does not have to reset it afterwards. */
+  initialTab?: TabId;
 }) {
-  const [active, setActive] = useState<TabId>("playback");
+  const [active, setActive] = useState<TabId>(initialTab);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (open) setActive("playback");
-  }, [open]);
+    if (open) setActive(initialTab);
+  }, [open, initialTab]);
 
   useEffect(() => {
     if (!open) return;
