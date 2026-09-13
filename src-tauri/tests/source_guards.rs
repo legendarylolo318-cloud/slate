@@ -32,6 +32,25 @@
 //!   literal `0.11`, so pinning the dependency exactly (`version = "0.11.27"`)
 //!   fails it spuriously. Red rather than green, so it is safe — just noisy,
 //!   and the fix is to widen the match when someone actually pins that way.
+//! - The `audio.rs` pair (`audio_does_not_decide_proxy_policy_for_itself`,
+//!   `the_proxy_hook_is_attached_once_per_pipeline`) reads only the half of the
+//!   file above its `#[cfg(test)]`, so the boundary is load-bearing. Moving it
+//!   up silently unguards everything below, which is why
+//!   `audio_rs_production_source` asserts there is exactly one such attribute
+//!   rather than trusting the `find`. Adding a second one fails loudly there.
+//! - `the_proxy_hook_is_attached_once_per_pipeline` strips `//` lines before
+//!   counting, because the same commented-decoy hole documented above for
+//!   `remember_scrubbed_env` was live here: a refactor note naming
+//!   `watch_pipeline_sources(&pipe, route);` stood in for the deleted call and
+//!   the suite stayed green. The stripping is line-granular, so a needle in a
+//!   trailing `// …` after live code, or inside a `/* … */` block, still counts.
+//!   The guard also matches the literal binding `&pipe`: a pipeline built with
+//!   `gst::Pipeline::builder()`, or hooked through a differently-named
+//!   variable, is invisible to both of its counts.
+//! - `the_unproxied_http_source_selection_still_prefers_soup_over_curl` reads
+//!   the host's plugin registry, not our source. It cannot observe SONE's audio
+//!   path — no line of it runs in this binary — and is a statement about the
+//!   default `promote_curl_source` restores to, nothing more.
 //!
 //! Still owed, and deliberately not guarded here: no `window.open` fallbacks in
 //! the frontend. `src/components/Login.tsx` has five live ones, each a `catch`
@@ -486,15 +505,49 @@ fn the_mirrored_reqwest_major_version_is_still_what_we_pin() {
 /// The production half of `audio.rs`: everything above `#[cfg(test)]`.
 ///
 /// Split deliberately — the module's own tests construct `ProxyType::Http`
-/// settings, which is exactly the needle this guard bans in production code.
+/// settings, which is exactly the needle its guard bans in production code.
+///
+/// The split is only as good as its anchor, so every caller asserts there is
+/// exactly one `#[cfg(test)]` first. A second one added partway up the file
+/// would move this boundary upwards and silently stop guarding everything
+/// below it — a `#[cfg(test)] fn` helper at the top of the file, with live
+/// production code under it, was demonstrated leaving both guards green.
 fn audio_rs_production_source() -> String {
     let body = fs::read_to_string("src/audio.rs").expect("read audio.rs");
+    assert_eq!(
+        body.matches("#[cfg(test)]").count(),
+        1,
+        "audio.rs has more than one #[cfg(test)]; this split now silently \
+         unguards everything below the first one — re-anchor before adding \
+         another"
+    );
     match body.find("#[cfg(test)]") {
         Some(i) => body[..i].to_string(),
         None => body,
     }
 }
 
+/// `body` with its `//` comment lines dropped.
+///
+/// Counting needles in raw source counts them in prose too, which is how a
+/// guard gets defeated by a plausible refactor note rather than by a bypass.
+/// Line-granular and no more: a trailing `// …` after live code keeps the
+/// whole line, and a needle inside a `/* … */` block still counts.
+fn without_comment_lines(body: &str) -> String {
+    body.lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Proxy policy is decided in `proxy.rs` and handed to the audio thread as a
+/// `Route`. `audio.rs` reading the settings types back out means it is deciding
+/// for itself, and the decision it reaches is not the one the rest of the app
+/// is using.
+///
+/// `reqwest::Url` here is belt-and-braces — `the_url_port_manglers_are_banned_outright`
+/// already bans `Url::parse` across all of `src/`, so the two `ProxyType::`
+/// needles are this guard's only unique contribution.
 #[test]
 fn audio_does_not_decide_proxy_policy_for_itself() {
     let body = audio_rs_production_source();
@@ -506,9 +559,18 @@ fn audio_does_not_decide_proxy_policy_for_itself() {
     }
 }
 
+/// Every pipeline gets the proxy hook, or the sources inside the one that
+/// missed it egress from the user's real address while the UI says the proxy
+/// is on.
+///
+/// Comments are stripped before counting, and that is not tidiness: deleting
+/// the hook from `build_appsink_pipeline` and leaving a refactor note that
+/// mentions `watch_pipeline_sources(&pipe, route);` was measured passing this
+/// guard, with `cargo check` clean, while the appsink/DirectAlsa pipeline
+/// attached no hook at all.
 #[test]
 fn the_proxy_hook_is_attached_once_per_pipeline() {
-    let body = audio_rs_production_source();
+    let body = without_comment_lines(&audio_rs_production_source());
     let pipelines = body.matches("gst::Pipeline::new()").count();
     let hooks = body.matches("watch_pipeline_sources(&pipe").count();
     assert_eq!(
@@ -522,27 +584,36 @@ fn the_proxy_hook_is_attached_once_per_pipeline() {
     );
 }
 
+/// With no proxy, `souphttpsrc` must win HTTP source selection over
+/// `curlhttpsrc`, which is true only while soup outranks curl in the registry.
+///
+/// This asserts the *relation*, not four absolute ranks. An earlier version
+/// pinned the measured integers (soup 256, curl 128), which could only ever
+/// fail on a distro that re-ranked its own plugins — a red that says nothing
+/// about SONE and teaches people to ignore the suite. `promote_curl_source`
+/// inverts this relation deliberately when an authenticated route needs curl,
+/// and restores it afterwards; that restore is unit-tested in `audio.rs`.
+/// What is left for here is the default the restore returns to.
 #[test]
-fn the_audio_path_is_untouched_while_the_proxy_is_off() {
-    // The spec's regression guard: with no proxy configured, element selection
-    // must be exactly what it was before this work. These four numbers were
-    // measured identical on the host (1.24.2) and the runtime (1.26.11).
+fn the_unproxied_http_source_selection_still_prefers_soup_over_curl() {
     use gstreamer::glib::translate::IntoGlib;
     use gstreamer::prelude::PluginFeatureExtManual;
 
     let _ = gstreamer::init();
-    for (name, expected) in [
-        ("souphttpsrc", 256),
-        ("curlhttpsrc", 128),
-        ("dashdemux", 256),
-        ("dashdemux2", 257),
-    ] {
-        if let Some(f) = gstreamer::ElementFactory::find(name) {
-            assert_eq!(
-                f.rank().into_glib(),
-                expected,
-                "{name} rank drifted; the proxy-off path must be byte-identical"
-            );
-        }
-    }
+
+    let soup = gstreamer::ElementFactory::find("souphttpsrc")
+        .expect("souphttpsrc is the unproxied HTTP source; without it this guard is vacuous");
+    let Some(curl) = gstreamer::ElementFactory::find("curlhttpsrc") else {
+        // No curl means nothing can outrank soup, and the proxied path has
+        // bigger problems that `HostCaps` reports at runtime.
+        return;
+    };
+
+    let (soup_rank, curl_rank) = (soup.rank().into_glib(), curl.rank().into_glib());
+    assert!(
+        curl_rank < soup_rank,
+        "curlhttpsrc ranks {curl_rank} and souphttpsrc {soup_rank}: with the \
+         proxy off curl would win source selection, which is not the path this \
+         work promised to leave untouched"
+    );
 }

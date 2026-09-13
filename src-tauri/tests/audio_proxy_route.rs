@@ -54,7 +54,6 @@ fn a_proxy_on_port_80_keeps_its_port() {
     match route {
         Route::Via { uri, .. } => {
             assert_eq!(uri, "http://127.0.0.1:80");
-            assert!(!uri.contains("1080"));
         }
         Route::NoProxy => panic!("expected a proxied route"),
     }
@@ -73,10 +72,10 @@ fn socks5_audio_is_proxied_rather_than_silently_direct() {
         .route(Capability::Lossy, &caps)
         .expect("unauthenticated socks5 audio is routable");
     match route {
-        Route::Via { uri, .. } => assert!(
-            uri.starts_with("socks5"),
-            "expected a socks scheme, got {uri}"
-        ),
+        // `assert_eq!`, not `starts_with("socks5")`: that also accepts
+        // `socks5h`, which is the wrong scheme here — gio implements socks5
+        // only, and socks5h reaches "NO GProxy IMPL" at runtime.
+        Route::Via { uri, .. } => assert_eq!(uri, "socks5://127.0.0.1:1080"),
         Route::NoProxy => panic!("socks5 audio must not fall back to direct"),
     }
 }
