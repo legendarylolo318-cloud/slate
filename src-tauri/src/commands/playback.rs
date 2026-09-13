@@ -190,7 +190,7 @@ pub async fn play_tidal_track(
     let player = state.audio_player.clone();
     tokio::task::spawn_blocking(move || {
         player.set_normalization_gain(norm_gain)?;
-        player.play_url(&uri)
+        player.play_url(&uri, None)
     })
         .await
         .map_err(|e| SoneError::Audio(e.to_string()))?

@@ -72,6 +72,32 @@ impl AudioProxy {
     }
 }
 
+/// Whether a settings change alters what the audio thread may do.
+///
+/// Compares the `Result` across **both** capabilities. Three reasons, each of
+/// which broke an earlier draft:
+///
+/// 1. "no proxy" and "blocked" are different answers that a bare `Route` cannot
+///    tell apart, and the transition between them must force a teardown.
+/// 2. Below GStreamer 1.26.10 every credentialed proxy leaves `Lossy` permanently
+///    `Err`, and `BlockReason` carries no host — so two different proxies produce
+///    byte-identical refusals there. Comparing only `Lossy` would report "no
+///    change" when the user switches proxies mid-track; the `Dash` arm is what
+///    catches it.
+/// 3. Checking both removes the need to know which tier is playing — the worker
+///    does not retain one, and inventing it was how the draft went wrong.
+///
+/// Strictly conservative: a spurious teardown costs one rebuild at the saved
+/// position, and nothing else.
+fn audio_route_differs(before: &AudioProxy, after: &AudioProxy) -> bool {
+    [
+        crate::proxy::Capability::Lossy,
+        crate::proxy::Capability::Dash,
+    ]
+    .into_iter()
+    .any(|c| before.route_for(c) != after.route_for(c))
+}
+
 /// The HTTP source elements this application can configure. Anything else the
 /// hook sees — the `data:` URI source for a manifest, decoders, queues — is
 /// left alone, because `set_property` panics on a property an element lacks.
@@ -209,6 +235,10 @@ struct NextBinState {
     /// The per-branch upstream queue (C1) decoupling this decoder from concat's
     /// gate so it pre-buffers while the current track plays.
     branch_queue: gst::Element,
+    /// The URI this branch is decoding. Read on promotion so the worker's
+    /// `current_uri` follows a gapless advance — without it a route change after
+    /// an advance would re-issue the previous track.
+    uri: String,
     track_id: u64,
     qid: String,
     // Read by HandleGaplessAdvance to apply gain + emit `track-advanced` on the switch.
@@ -592,6 +622,7 @@ fn run_attach_executor(
     job_rx: mpsc::Receiver<AttachJob>,
     next_bin: Arc<Mutex<Option<NextBinState>>>,
     audio_proxy: Arc<Mutex<AudioProxy>>,
+    route_generation: Arc<AtomicU64>,
 ) {
     for job in job_rx {
         match job {
@@ -606,6 +637,10 @@ fn run_attach_executor(
                 replay_gain,
                 peak_amplitude,
             } => {
+                // Snapshot before the route is even read: if a settings change
+                // lands from here on, this branch is built under a route that is
+                // no longer current and must not be armed.
+                let generation_at_start = route_generation.load(Ordering::Acquire);
                 let route = {
                     let ap = audio_proxy.lock().unwrap_or_else(|p| p.into_inner());
                     ap.route_for(capability_of(is_dash))
@@ -621,17 +656,38 @@ fn run_attach_executor(
 
                 match attach_next_bin(&pipeline, &concat, &uri, is_dash) {
                     Ok((bin, branch_queue)) => {
-                        if let Ok(mut guard) = next_bin.lock() {
-                            *guard = Some(NextBinState {
-                                bin,
-                                branch_queue,
-                                track_id,
-                                qid,
-                                norm_gain,
-                                replay_gain,
-                                peak_amplitude,
-                            });
+                        // Re-read the generation and store under ONE hold of the
+                        // `next_bin` mutex, the same one `SetProxySettings` bumps
+                        // and takes under. Two independent synchronisation points
+                        // leave this legal interleaving: the settings change takes
+                        // an empty slot (detaching nothing) and this thread then
+                        // stores a branch built under the route it just replaced.
+                        let mut guard = match next_bin.lock() {
+                            Ok(g) => g,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        if route_generation.load(Ordering::Acquire) != generation_at_start {
+                            // The branch is already in the pipeline and linked to
+                            // concat's sink_1, so concat would switch to it at the
+                            // boundary whether or not this slot names it. Dropping
+                            // the reference is not enough — it has to be detached.
+                            drop(guard);
+                            log::warn!(
+                                "[proxy] discarding a next branch prerolled under the previous route"
+                            );
+                            detach_bin(&pipeline, &concat, &bin, &branch_queue);
+                            continue;
                         }
+                        *guard = Some(NextBinState {
+                            bin,
+                            branch_queue,
+                            uri,
+                            track_id,
+                            qid,
+                            norm_gain,
+                            replay_gain,
+                            peak_amplitude,
+                        });
                     }
                     Err(e) => {
                         // Preload failure is non-fatal: leave the slot empty so
@@ -1526,6 +1582,10 @@ fn spawn_alsa_writer(
 enum AudioCommand {
     PlayUrl {
         uri: String,
+        /// Where the new pipeline should start. `None` is a normal track start;
+        /// `Some` is a rebuild that has to resume where the torn-down pipeline
+        /// was, which is how a mid-track route change stays inaudible.
+        start_secs: Option<f32>,
         reply: Reply<Result<(), String>>,
     },
     Pause {
@@ -1618,8 +1678,6 @@ impl AudioPlayer {
         proxy_settings: crate::ProxySettings,
     ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<AudioCommand>();
-        let proxy_settings = Arc::new(Mutex::new(proxy_settings));
-        let proxy_settings_thread = Arc::clone(&proxy_settings);
         // Clone a self-sender into the worker so the Normal bus thread can send
         // HandleGaplessAdvance back to this loop (Task 3). `cmd_tx` itself is
         // owned by AudioPlayer, not the worker closure.
@@ -1646,12 +1704,11 @@ impl AudioPlayer {
 
             // Seed from the settings the constructor already received. Without
             // this, nothing pushes a route until the user next presses Save, and
-            // a launch with a saved proxy would play every track direct.
-            let initial_settings = proxy_settings_thread
-                .lock()
-                .map(|s| s.clone())
-                .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
-            let audio_proxy = Arc::new(Mutex::new(AudioProxy::new(initial_settings, probed)));
+            // a launch with a saved proxy would play every track direct. Moved in
+            // by value: `audio_proxy` below is the one live copy the worker reads,
+            // and `SetProxySettings` replaces it, so a second shared cell would
+            // only be written and never read.
+            let audio_proxy = Arc::new(Mutex::new(AudioProxy::new(proxy_settings, probed)));
 
             // Promotion follows whichever tier is routable; when both are, the
             // routes are identical, so either answers the credentials question.
@@ -1725,6 +1782,16 @@ impl AudioPlayer {
             // this finished branch is detached and replaced by the promoted next
             // branch. None when no Normal pipeline is live (or DirectAlsa).
             let mut current_branch: Option<(gst::Element, gst::Element)> = None;
+            // The URI of whatever is playing now. The worker otherwise retains
+            // none: `uri` is local to the `PlayUrl` arm, and the only surviving
+            // state is `has_uri`. Without it a route change mid-track has nothing
+            // to re-issue, and this whole path is a no-op.
+            let mut current_uri: Option<String> = None;
+            // Bumped by every `SetProxySettings`. The executor snapshots it before
+            // it starts prerolling and re-reads it under the `next_bin` mutex
+            // before storing, so a branch built under the previous route is
+            // discarded instead of being armed as the next playing track.
+            let route_generation = Arc::new(AtomicU64::new(0));
 
             // Serialized attach/detach executor thread (C3). The worker dispatches
             // jobs here and returns immediately — it never blocks on pad-slot ops.
@@ -1732,14 +1799,24 @@ impl AudioPlayer {
             {
                 let next_bin_exec = Arc::clone(&next_bin);
                 let audio_proxy_exec = Arc::clone(&audio_proxy);
+                let route_generation_exec = Arc::clone(&route_generation);
                 std::thread::spawn(move || {
-                    run_attach_executor(attach_rx, next_bin_exec, audio_proxy_exec)
+                    run_attach_executor(
+                        attach_rx,
+                        next_bin_exec,
+                        audio_proxy_exec,
+                        route_generation_exec,
+                    )
                 });
             }
 
             for cmd in cmd_rx {
                 match cmd {
-                    AudioCommand::PlayUrl { uri, reply } => {
+                    AudioCommand::PlayUrl {
+                        uri,
+                        start_secs,
+                        reply,
+                    } => {
                         let result = (|| -> Result<(), String> {
                             // ── Teardown old backend (GStreamer pipeline only) ──
                             if let Some(old_backend) = backend.take() {
@@ -2404,8 +2481,85 @@ impl AudioPlayer {
                                 // and replaced by the promoted next branch.
                                 current_branch = Some((uridecodebin, branch_queue));
                             }
+
+                            // Resume where the torn-down pipeline was. Only a
+                            // rebuild passes `Some`, so an ordinary track start
+                            // pays nothing for the wait below.
+                            //
+                            // The wait is the load-bearing half. Both paths above
+                            // call `set_state(Playing)` and fall straight through,
+                            // and a seek issued against a pipeline that has not
+                            // prerolled is silently dropped — which looks exactly
+                            // like this feature working while every track restarts
+                            // at 0:00. `state()` returns once the asynchronous
+                            // state change has settled, and that is the first
+                            // moment a seek is accepted. Bounded, so a stalled
+                            // network source cannot hang the worker.
+                            if let Some(position_secs) = start_secs {
+                                let pos = gst::ClockTime::from_nseconds(
+                                    (position_secs as f64 * 1_000_000_000.0) as u64,
+                                );
+                                match backend.as_ref() {
+                                    Some(PlaybackBackend::Normal { pipeline, .. }) => {
+                                        let (ret, cur, pend) =
+                                            pipeline.state(gst::ClockTime::from_seconds(10));
+                                        log::debug!(
+                                            "[audio] resume-at: preroll ret={ret:?} cur={cur:?} pend={pend:?}"
+                                        );
+                                        if let Err(e) = pipeline.seek_simple(
+                                            gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
+                                            pos,
+                                        ) {
+                                            log::warn!(
+                                                "[audio] resume at {position_secs}s failed: {e}"
+                                            );
+                                        }
+                                    }
+                                    Some(PlaybackBackend::DirectAlsa { pipeline, .. }) => {
+                                        let (ret, cur, pend) =
+                                            pipeline.state(gst::ClockTime::from_seconds(10));
+                                        log::debug!(
+                                            "[audio] resume-at: preroll ret={ret:?} cur={cur:?} pend={pend:?}"
+                                        );
+                                        // Same idiom as the `Seek` arm: the writer
+                                        // generation bump is what makes the writer
+                                        // discard the pre-seek chunks already in
+                                        // flight, and `frames_written` is the only
+                                        // position this backend reports.
+                                        let was_paused = paused.load(Ordering::Acquire);
+                                        paused.store(false, Ordering::Release);
+                                        track_generation += 1;
+                                        writer_gen.store(track_generation, Ordering::Release);
+                                        if let Some(ref tx) = writer_tx {
+                                            let _ = tx.send(WriterCommand::Flush);
+                                        }
+                                        let seek_frames = (position_secs as f64
+                                            * current_sample_rate.load(Ordering::Relaxed) as f64)
+                                            as u64;
+                                        frames_written.store(seek_frames, Ordering::Relaxed);
+                                        if let Err(e) = pipeline.seek_simple(
+                                            gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
+                                            pos,
+                                        ) {
+                                            log::warn!(
+                                                "[audio] resume at {position_secs}s failed: {e}"
+                                            );
+                                        }
+                                        if was_paused {
+                                            paused.store(true, Ordering::Release);
+                                        }
+                                    }
+                                    None => {}
+                                }
+                            }
                             Ok(())
                         })();
+                        // Retained only on success: a failed build leaves no
+                        // pipeline, and re-issuing a URI that never played would
+                        // resume something that was never torn down.
+                        if result.is_ok() {
+                            current_uri = Some(uri);
+                        }
                         reply.send(result).ok();
                     }
 
@@ -2455,6 +2609,9 @@ impl AudioPlayer {
                         }
                         next_active.store(false, Ordering::Release);
                         current_branch = None;
+                        // Cleared with `has_uri` below: nothing is playing, so a
+                        // later route change has nothing to resume.
+                        current_uri = None;
                         let result = match backend.take() {
                             Some(PlaybackBackend::Normal { pipeline, .. }) => {
                                 if let Some(bus) = pipeline.bus() {
@@ -2692,16 +2849,16 @@ impl AudioPlayer {
                     }
 
                     AudioCommand::SetProxySettings { settings, reply } => {
-                        if let Ok(mut current) = proxy_settings_thread.lock() {
-                            *current = settings.clone();
-                        }
                         let probed = probe_host_caps();
-                        match audio_proxy.lock() {
-                            Ok(mut ap) => *ap = AudioProxy::new(settings.clone(), probed),
-                            Err(poisoned) => {
-                                *poisoned.into_inner() = AudioProxy::new(settings.clone(), probed)
-                            }
-                        }
+                        // Kept to answer one question below: does this change alter
+                        // what the audio thread may do? Taken by replacement so the
+                        // cell is never briefly empty.
+                        let previous = {
+                            let mut ap = audio_proxy
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            std::mem::replace(&mut *ap, AudioProxy::new(settings, probed))
+                        };
 
                         {
                             // Promotion follows whichever tier is routable. On 1.24
@@ -2727,20 +2884,134 @@ impl AudioPlayer {
                         // Comparing routes cannot see off -> blocked (both would
                         // have to be spelled the same), and a spurious detach
                         // costs one re-preroll and nothing else.
-                        if !next_active.load(Ordering::Acquire) {
-                            if let (
-                                Some(stale),
-                                Some(PlaybackBackend::Normal { pipeline, concat, .. }),
-                            ) = (
-                                next_bin.lock().ok().and_then(|mut g| g.take()),
-                                backend.as_ref(),
-                            ) {
-                                let _ = attach_tx.send(AttachJob::Detach {
-                                    pipeline: pipeline.clone(),
-                                    concat: concat.clone(),
-                                    bin: stale.bin,
-                                    branch_queue: stale.branch_queue,
+                        //
+                        // The bump and the take are one critical section on the
+                        // `next_bin` mutex, and the executor reads that generation
+                        // and stores under the same one. Split apart, the executor
+                        // can store a branch built under the old route immediately
+                        // after this take found the slot empty — and nothing
+                        // downstream would ever refuse it: the gapless advance that
+                        // promotes it reaches no Tauri command, and `SetNextTrack`'s
+                        // dedup makes it sticky once it is armed.
+                        let stale = {
+                            let mut guard = match next_bin.lock() {
+                                Ok(g) => g,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            route_generation.fetch_add(1, Ordering::AcqRel);
+                            // Mid-advance the slot belongs to HandleGaplessAdvance
+                            // (C5) — the generation still has to move, so the bump
+                            // sits outside this gate.
+                            if next_active.load(Ordering::Acquire) {
+                                None
+                            } else {
+                                guard.take()
+                            }
+                        };
+                        if let (
+                            Some(stale),
+                            Some(PlaybackBackend::Normal { pipeline, concat, .. }),
+                        ) = (stale, backend.as_ref())
+                        {
+                            let _ = attach_tx.send(AttachJob::Detach {
+                                pipeline: pipeline.clone(),
+                                concat: concat.clone(),
+                                bin: stale.bin,
+                                branch_queue: stale.branch_queue,
+                            });
+                        }
+
+                        // The playing pipeline carries the route it was built with:
+                        // `watch_pipeline_sources` snapshotted it by value, and no
+                        // later command re-applies one. So the only way to stop a
+                        // track streaming on the previous route is to rebuild it —
+                        // which is also what replaces the stale hook, and with it
+                        // every branch that would have been attached under it.
+                        //
+                        // Gated on `backend.is_some()`, not on a play/pause flag: a
+                        // paused pipeline still holds an open source.
+                        let current = audio_proxy
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let route_changed = audio_route_differs(&previous, &current);
+                        drop(current);
+                        if route_changed && backend.is_some() {
+                            if let Some(uri) = current_uri.clone() {
+                                // `get_position` cannot be called here — it is an
+                                // `AudioPlayer` method, and this thread is the one
+                                // its reply would have to come back through. This is
+                                // the body of the `GetPosition` arm.
+                                let position_secs = match backend.as_ref() {
+                                    Some(PlaybackBackend::Normal { pipeline, .. }) => pipeline
+                                        .query_position::<gst::ClockTime>()
+                                        .map(|pos| pos.nseconds() as f32 / 1_000_000_000.0)
+                                        .unwrap_or(0.0),
+                                    Some(PlaybackBackend::DirectAlsa { .. }) => {
+                                        let frames = frames_written.load(Ordering::Relaxed);
+                                        let rate = current_sample_rate.load(Ordering::Relaxed);
+                                        if rate > 0 {
+                                            frames as f32 / rate as f32
+                                        } else {
+                                            0.0
+                                        }
+                                    }
+                                    None => 0.0,
+                                };
+                                log::info!(
+                                    "[proxy] route changed mid-track: rebuilding at {position_secs:.1}s"
+                                );
+                                // There is no `PlayUrl` function to call — the arm
+                                // is an inline closure — so re-issue it as a command
+                                // on the self-sender. The reply is watched off-thread
+                                // purely so a refusal under the new settings reaches
+                                // the user rather than stopping playback in silence.
+                                let (rebuilt_tx, rebuilt_rx) =
+                                    mpsc::channel::<Result<(), String>>();
+                                let app_handle_rebuild = app_handle.clone();
+                                std::thread::spawn(move || {
+                                    if let Ok(Err(e)) = rebuilt_rx.recv() {
+                                        log::warn!("[proxy] rebuild after route change: {e}");
+                                        app_handle_rebuild
+                                            .emit(
+                                                "audio-error",
+                                                serde_json::json!({
+                                                    "kind": "playback_error",
+                                                    "message": e,
+                                                }),
+                                            )
+                                            .ok();
+                                    }
                                 });
+                                // A paused track is torn down like any other (it
+                                // holds an open source), but it must not come back
+                                // playing: the frontend still says paused, and the
+                                // two would disagree out loud. Queued behind the
+                                // rebuild, so it pauses the pipeline that replaces
+                                // this one.
+                                let resume_paused = match backend.as_ref() {
+                                    Some(PlaybackBackend::Normal { pipeline, .. }) => {
+                                        // `current_state` alone would read a pipeline
+                                        // still prerolling toward PLAYING as paused.
+                                        let (_, cur, pending) =
+                                            pipeline.state(gst::ClockTime::ZERO);
+                                        cur == gst::State::Paused
+                                            && pending == gst::State::VoidPending
+                                    }
+                                    Some(PlaybackBackend::DirectAlsa { .. }) => {
+                                        paused.load(Ordering::Acquire)
+                                    }
+                                    None => false,
+                                };
+                                let _ = cmd_tx_worker.send(AudioCommand::PlayUrl {
+                                    uri,
+                                    start_secs: Some(position_secs),
+                                    reply: rebuilt_tx,
+                                });
+                                if resume_paused {
+                                    let (paused_tx, _paused_rx) = mpsc::channel();
+                                    let _ = cmd_tx_worker
+                                        .send(AudioCommand::Pause { reply: paused_tx });
+                                }
                             }
                         }
 
@@ -2940,8 +3211,11 @@ impl AudioPlayer {
                             });
                         }
 
-                        // Promote the next branch to current.
+                        // Promote the next branch to current. The URI moves with
+                        // it: this branch is the playing track now, and a route
+                        // change from here must rebuild *this* one.
                         current_branch = Some((promoted.bin, promoted.branch_queue));
+                        current_uri = Some(promoted.uri);
 
                         // Apply the promoted track's normalization gain across the
                         // shared volume chain (concat is upstream of norm_vol, so the
@@ -3022,9 +3296,10 @@ impl AudioPlayer {
         rx.recv().expect("Audio thread dead")
     }
 
-    pub fn play_url(&self, uri: &str) -> Result<(), String> {
+    pub fn play_url(&self, uri: &str, start_secs: Option<f32>) -> Result<(), String> {
         self.send_cmd(|reply| AudioCommand::PlayUrl {
             uri: uri.to_string(),
+            start_secs,
             reply,
         })
     }
@@ -3898,6 +4173,79 @@ mod proxy_source_tests {
         assert_eq!(
             src.property::<Option<String>>("proxy-id").as_deref(),
             Some("bob")
+        );
+    }
+
+    #[test]
+    fn a_settings_change_that_alters_the_route_requires_a_rebuild() {
+        let caps = HostCaps::assume_all_present();
+        let off = AudioProxy::new(
+            crate::ProxySettings {
+                enabled: false,
+                ..http_proxy()
+            },
+            caps,
+        );
+        let on = AudioProxy::new(http_proxy(), caps);
+        assert!(
+            audio_route_differs(&off, &on),
+            "off -> proxied must force a rebuild"
+        );
+    }
+
+    #[test]
+    fn off_to_blocked_is_detected_as_a_change() {
+        // The comparison a bare `Route` cannot make: both sides would spell
+        // themselves `NoProxy`, so a route-equality test reports "no change"
+        // and the direct stream continues.
+        let caps = HostCaps::assume_all_present();
+        let off = AudioProxy::new(
+            crate::ProxySettings {
+                enabled: false,
+                ..http_proxy()
+            },
+            caps,
+        );
+        let blocked = AudioProxy::new(
+            crate::ProxySettings {
+                port: 0,
+                ..http_proxy()
+            },
+            caps,
+        );
+        assert!(
+            audio_route_differs(&off, &blocked),
+            "off -> blocked must force a teardown, not be mistaken for no change"
+        );
+    }
+
+    #[test]
+    fn one_blocked_configuration_to_a_different_one_is_still_a_change() {
+        // On any host below GStreamer 1.26.10 -- every non-Flatpak target in the
+        // spec's table -- `route(Lossy)` is permanently Err for every credentialed
+        // proxy. A comparison that treats two refusals as equal would let a user
+        // switch from proxy A to proxy B mid-track and keep streaming through A.
+        let mut caps = HostCaps::assume_all_present();
+        caps.gst_version = (1, 24, 2);
+        let with_creds = |host: &str| crate::ProxySettings {
+            username: Some("bob".into()),
+            password: Some("hunter2".into()),
+            host: host.into(),
+            ..http_proxy()
+        };
+        let a = AudioProxy::new(with_creds("proxy-a.example"), caps);
+        let b = AudioProxy::new(with_creds("proxy-b.example"), caps);
+        assert!(
+            a.route_for(Capability::Lossy).is_err(),
+            "precondition: lossy is gated below 1.26.10 when credentials are present"
+        );
+        // `BlockReason` carries no host, so the two Lossy refusals are byte
+        // identical -- it is the `Dash` arm that catches this, which is exactly
+        // why both capabilities have to be compared. A single-capability check
+        // on `Lossy` would report "no change" and keep streaming through A.
+        assert!(
+            audio_route_differs(&a, &b),
+            "a different blocked configuration is still a change"
         );
     }
 }
