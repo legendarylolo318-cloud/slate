@@ -38,15 +38,26 @@
 //!   up silently unguards everything below, which is why
 //!   `audio_rs_production_source` asserts there is exactly one such attribute
 //!   rather than trusting the `find`. Adding a second one fails loudly there.
-//! - `the_proxy_hook_is_attached_once_per_pipeline` strips `//` lines before
+//! - `the_proxy_hook_is_attached_once_per_pipeline` strips comments before
 //!   counting, because the same commented-decoy hole documented above for
 //!   `remember_scrubbed_env` was live here: a refactor note naming
 //!   `watch_pipeline_sources(&pipe, route);` stood in for the deleted call and
-//!   the suite stayed green. The stripping is line-granular, so a needle in a
-//!   trailing `// …` after live code, or inside a `/* … */` block, still counts.
-//!   The guard also matches the literal binding `&pipe`: a pipeline built with
-//!   `gst::Pipeline::builder()`, or hooked through a differently-named
-//!   variable, is invisible to both of its counts.
+//!   the suite stayed green. `without_comments` removes `//` to end of line and
+//!   `/* … */` blocks entire — line-granular stripping left both the trailing
+//!   `// …` and the block form working, each measured green with a clean
+//!   `cargo check` while `build_appsink_pipeline` attached no hook at all.
+//! - Its sibling `audio_does_not_decide_proxy_policy_for_itself` is **not**
+//!   comment-stripped, and that is a choice rather than an oversight. It is the
+//!   only guard covering where proxy policy is decided, so a decoy there would
+//!   have nothing behind it; a production doc comment naming `ProxyType::Http`
+//!   therefore fails it — red, and fixed by rewording the comment. Red-not-green
+//!   was preferred to permitting a decoy in the one guard nothing else backs up.
+//! - `the_proxy_hook_is_attached_once_per_pipeline` matches the literal binding
+//!   `&pipe`, so a hook threaded through a differently-named variable stops
+//!   being counted — but that moves the hooks count alone, so it fails red
+//!   against an unchanged `pipelines`. The spelling that moves *both* counts is
+//!   `gst::Pipeline::builder()`, and the `pipelines == 2` backstop is what
+//!   catches it.
 //! - `the_unproxied_http_source_selection_still_prefers_soup_over_curl` reads
 //!   the host's plugin registry, not our source. It cannot observe SONE's audio
 //!   path — no line of it runs in this binary — and is a statement about the
@@ -331,6 +342,20 @@ fn the_startup_proxy_scrub_stays_gated_on_the_launch_sidecar() {
 
     // A negated or renamed condition does not match, which is the point: the
     // inverted gate fails here rather than silently passing containment.
+    //
+    // Counted before it is located, because everything below reasons about the
+    // *first* occurrence. `should_record_launch_bypass` spells its own use
+    // `!should_scrub_proxy_env(`, which does not match — but anyone who later
+    // rewrites that as an `if` above this point silently moves the anchor, and
+    // the containment assertions start proving things about the wrong block
+    // while staying green.
+    let gates = body.match_indices("if should_scrub_proxy_env(").count();
+    assert_eq!(
+        gates, 1,
+        "src/main.rs has {gates} `if should_scrub_proxy_env(` sites; everything \
+         below anchors on the first, so a second one moves this guard onto a \
+         block it was never written about"
+    );
     let gate = body.find("if should_scrub_proxy_env(").unwrap_or_else(|| {
         panic!(
             "no `if should_scrub_proxy_env(` in src/main.rs: the startup scrub \
@@ -422,6 +447,63 @@ fn block_of(body: &str, from: usize) -> std::ops::Range<usize> {
         }
     }
     panic!("unbalanced braces from byte {from} in src/main.rs");
+}
+
+/// `remember_launch_bypass` is `pub`, and its one-caller rule lives only in a
+/// doc comment. Nothing stops a second call, and a second call is not a merge
+/// conflict — it is a `OnceLock` whose FIRST write wins for the whole process.
+///
+/// The damage lands in the test suite before it lands in the app. `proxy.rs`'s
+/// tests and `audio.rs`'s tests run in one process, and `AudioProxy::new`
+/// snapshots `launch_bypass_was_set()` at construction — so one call from
+/// anywhere, a test helper included, turns roughly ten `AudioProxy` tests red
+/// depending on the order the harness happened to run them in, which is the
+/// worst possible failure to hand somebody.
+///
+/// Scanning `src/` only, like every guard here, so a call added under
+/// `src-tauri/tests/` is still unguarded.
+#[test]
+fn the_launch_bypass_is_recorded_from_exactly_one_place() {
+    const DEF: &str = "pub fn remember_launch_bypass(";
+    const USE: &str = "remember_launch_bypass(";
+
+    let mut defined = 0usize;
+    let mut callers: Vec<String> = Vec::new();
+    for f in rust_sources() {
+        // Comments stripped, or `audio.rs`'s doc comment explaining this very
+        // rule counts as a violation of it.
+        let body = without_comments(&fs::read_to_string(&f).unwrap());
+        let defs = body.matches(DEF).count();
+        defined += defs;
+        for _ in 0..(body.matches(USE).count() - defs) {
+            callers.push(f.display().to_string().replace('\\', "/"));
+        }
+    }
+
+    assert_eq!(
+        defined, 1,
+        "expected exactly one `remember_launch_bypass` definition under src/, \
+         found {defined}; this guard subtracts the definition from its call \
+         count and now has the wrong anchor"
+    );
+    assert_eq!(
+        callers.len(),
+        1,
+        "`remember_launch_bypass` is called {} times under src/: {callers:?}. \
+         It writes a `OnceLock` whose first write wins for the process, and \
+         `AudioProxy::new` reads it at construction — a second caller silently \
+         decides the answer for every `AudioProxy` built afterwards, tests \
+         included.",
+        callers.len()
+    );
+    assert!(
+        callers[0].ends_with("src/main.rs"),
+        "`remember_launch_bypass` is called from {}, not src/main.rs. It has to \
+         run before any thread exists and while the environment it is reading \
+         is still the one the user's shell set — `main()` before \
+         `tauri_app_lib::run()` is the only place that is true.",
+        callers[0]
+    );
 }
 
 /// The proxy save must claim its position in the client cell's write order
@@ -527,15 +609,47 @@ fn audio_rs_production_source() -> String {
     }
 }
 
-/// `body` with its `//` comment lines dropped.
+/// `body` with its comments removed — `//` to end of line, and `/* … */`
+/// blocks entire.
 ///
 /// Counting needles in raw source counts them in prose too, which is how a
 /// guard gets defeated by a plausible refactor note rather than by a bypass.
-/// Line-granular and no more: a trailing `// …` after live code keeps the
-/// whole line, and a needle inside a `/* … */` block still counts.
-fn without_comment_lines(body: &str) -> String {
-    body.lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
+/// Dropping whole `//` *lines* was not enough: the same decoy still worked as
+/// a trailing `// …` after a live statement, or inside a `/* … */` block, and
+/// both were measured green with a clean `cargo check` while
+/// `build_appsink_pipeline` attached no proxy hook at all.
+///
+/// Still not a lexer, and deliberately not one: a `//` inside a string literal
+/// (`"https://…"`) truncates that line here. That direction is safe — it can
+/// only *remove* text, so a guard that counts needles can only fail red — and
+/// `audio.rs`'s production half has no needle sharing a line with a URL.
+fn without_comments(body: &str) -> String {
+    let no_blocks = {
+        let mut out = String::with_capacity(body.len());
+        let mut rest = body;
+        while let Some(open) = rest.find("/*") {
+            out.push_str(&rest[..open]);
+            match rest[open + 2..].find("*/") {
+                // Keep the newlines, so line-oriented reading downstream is
+                // not silently re-flowed by a multi-line comment.
+                Some(close) => {
+                    let block = &rest[open..open + 2 + close + 2];
+                    out.extend(block.chars().filter(|c| *c == '\n'));
+                    rest = &rest[open + 2 + close + 2..];
+                }
+                // Unterminated: everything after it is comment.
+                None => return out,
+            }
+        }
+        out.push_str(rest);
+        out
+    };
+    no_blocks
+        .lines()
+        .map(|l| match l.find("//") {
+            Some(at) => &l[..at],
+            None => l,
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -567,10 +681,12 @@ fn audio_does_not_decide_proxy_policy_for_itself() {
 /// the hook from `build_appsink_pipeline` and leaving a refactor note that
 /// mentions `watch_pipeline_sources(&pipe, route);` was measured passing this
 /// guard, with `cargo check` clean, while the appsink/DirectAlsa pipeline
-/// attached no hook at all.
+/// attached no hook at all. The same decoy written as a trailing `// …` on a
+/// live line, or inside a `/* … */` block, was measured passing the
+/// line-granular version of the stripper; `without_comments` removes both.
 #[test]
 fn the_proxy_hook_is_attached_once_per_pipeline() {
-    let body = without_comment_lines(&audio_rs_production_source());
+    let body = without_comments(&audio_rs_production_source());
     let pipelines = body.matches("gst::Pipeline::new()").count();
     let hooks = body.matches("watch_pipeline_sources(&pipe").count();
     assert_eq!(

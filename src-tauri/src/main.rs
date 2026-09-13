@@ -41,15 +41,16 @@ fn main() {
             }
         }
 
+        // Read once, used by both the bypass record and the scrub below, so
+        // the two reason about the same sidecar structurally rather than
+        // because two reads microseconds apart happened to agree.
+        let sidecar = tauri_app_lib::config_dir_for_env()
+            .and_then(|d| tauri_app_lib::proxy::read_sidecar(&d));
+
         // Record whether an ambient bypass list will still be in the
         // environment once this function is done — read here, at the only
         // moment the answer is knowable, because nothing may mutate the
         // environment after `run()` starts GTK's threads.
-        //
-        // Gated on the scrub, and that gate is the whole point. A launch that
-        // DID scrub has no ambient bypass list left, so recording `true` there
-        // would refuse every proxied tier for a session that is perfectly
-        // fine — and restarting would reproduce it exactly.
         //
         // Outside the `if let` below on purpose: with neither `$XDG_CONFIG_HOME`
         // nor `$HOME` set there is no sidecar to read, no scrub, and therefore
@@ -57,14 +58,13 @@ fn main() {
         // the call and read back `false` — fail-open, the direction this is
         // here to close.
         {
-            let sidecar = tauri_app_lib::config_dir_for_env()
-                .and_then(|d| tauri_app_lib::proxy::read_sidecar(&d));
             let present = tauri_app_lib::proxy::SCRUBBED_PROXY_ENV_VARS
                 .into_iter()
                 .any(|v| std::env::var_os(v).is_some_and(|s| !s.is_empty()));
-            tauri_app_lib::proxy::remember_launch_bypass(
-                present && !should_scrub_proxy_env(sidecar),
-            );
+            tauri_app_lib::proxy::remember_launch_bypass(should_record_launch_bypass(
+                present,
+                sidecar.clone(),
+            ));
         }
 
         // Own the proxy environment before anything can read it — but only
@@ -84,28 +84,26 @@ fn main() {
         // AppHandle, neither of which exists this early, so the decision comes
         // from the plaintext sidecar, which carries the enabled flag and the
         // proxy type and nothing else.
-        if let Some(dir) = tauri_app_lib::config_dir_for_env() {
-            if should_scrub_proxy_env(tauri_app_lib::proxy::read_sidecar(&dir)) {
-                // Capture before removing, never after. `Direct` means the
-                // system's own configuration applies, and if the user turns
-                // SONE's proxy off later in this session that configuration is
-                // the only thing routing them — but it lived in exactly the
-                // variables about to be deleted. reqwest reads them back from
-                // this capture instead of from an environment we emptied.
-                //
-                // The capture is the full list and the removal is only the
-                // bypass pair. That is not an oversight: this is the sole
-                // sound moment to read these values, and stage 4a needs the
-                // per-scheme ones when it starts scrubbing them.
-                let captured: Vec<(String, String)> = tauri_app_lib::proxy::PROXY_ENV_VARS
-                    .into_iter()
-                    .filter_map(|v| std::env::var(v).ok().map(|value| (v.to_string(), value)))
-                    .collect();
-                tauri_app_lib::proxy::remember_scrubbed_env(captured);
+        if should_scrub_proxy_env(sidecar) {
+            // Capture before removing, never after. `Direct` means the
+            // system's own configuration applies, and if the user turns
+            // SONE's proxy off later in this session that configuration is
+            // the only thing routing them — but it lived in exactly the
+            // variables about to be deleted. reqwest reads them back from
+            // this capture instead of from an environment we emptied.
+            //
+            // The capture is the full list and the removal is only the
+            // bypass pair. That is not an oversight: this is the sole
+            // sound moment to read these values, and stage 4a needs the
+            // per-scheme ones when it starts scrubbing them.
+            let captured: Vec<(String, String)> = tauri_app_lib::proxy::PROXY_ENV_VARS
+                .into_iter()
+                .filter_map(|v| std::env::var(v).ok().map(|value| (v.to_string(), value)))
+                .collect();
+            tauri_app_lib::proxy::remember_scrubbed_env(captured);
 
-                for v in tauri_app_lib::proxy::SCRUBBED_PROXY_ENV_VARS {
-                    std::env::remove_var(v);
-                }
+            for v in tauri_app_lib::proxy::SCRUBBED_PROXY_ENV_VARS {
+                std::env::remove_var(v);
             }
         }
 
@@ -144,6 +142,24 @@ fn main() {
 #[cfg(target_os = "linux")]
 fn should_scrub_proxy_env(sidecar: Option<(bool, String)>) -> bool {
     matches!(sidecar, Some((true, _)))
+}
+
+/// Whether the launch-time bypass list is recorded as still in force, given
+/// whether one was present in the environment and whatever the launch sidecar
+/// said.
+///
+/// Pure for the same reason as `should_scrub_proxy_env`, and needed more: the
+/// gate is load-bearing in *both* directions and is one token from either
+/// failure. Dropping the scrub term refuses every proxied tier, for the whole
+/// session, for a user who launched with the proxy on and `no_proxy` exported —
+/// a launch that scrubbed has no ambient bypass list left to defeat anything.
+/// Dropping the whole call reopens the containment hole: `curlhttpsrc` reads
+/// `no_proxy` when the element is constructed and forwards it as
+/// `CURLOPT_NOPROXY`, which beats the `proxy` property, so a bypass list that
+/// survived startup silently sends audio out on the user's real address.
+#[cfg(target_os = "linux")]
+fn should_record_launch_bypass(present: bool, sidecar: Option<(bool, String)>) -> bool {
+    present && !should_scrub_proxy_env(sidecar)
 }
 
 /// System GStreamer plugin directories, probed in order, and only when the
@@ -190,7 +206,7 @@ fn gst_plugin_path_choice(
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
-    use super::{gst_plugin_path_choice, should_scrub_proxy_env};
+    use super::{gst_plugin_path_choice, should_record_launch_bypass, should_scrub_proxy_env};
 
     #[test]
     fn a_recorded_enabled_proxy_scrubs_whatever_its_type() {
@@ -212,6 +228,54 @@ mod tests {
     #[test]
     fn an_unknown_mode_leaves_the_environment_alone() {
         assert!(!should_scrub_proxy_env(None));
+    }
+
+    /// The whole truth table, because each row fails a different way and the
+    /// two `false` rows fail in opposite directions.
+    ///
+    /// Row `(present, proxying)`: the launch scrubbed the bypass list, so
+    /// nothing is left to defeat the proxy. Recording `true` here refuses
+    /// every proxied tier for a session that is perfectly fine, and restarting
+    /// reproduces it exactly — the failure that pins the `!should_scrub` term.
+    #[test]
+    fn a_launch_that_scrubbed_has_no_surviving_bypass_list() {
+        assert!(!should_record_launch_bypass(
+            true,
+            Some((true, "http".into()))
+        ));
+        assert!(!should_record_launch_bypass(
+            true,
+            Some((true, "socks5".into()))
+        ));
+    }
+
+    /// Row `(present, not proxying)`: nothing scrubbed, so the bypass list is
+    /// still in the environment and will beat the `proxy` property the moment
+    /// the user turns the proxy on. This is the containment hole, and the row
+    /// that pins the call existing at all.
+    #[test]
+    fn a_bypass_list_that_survived_an_unscrubbed_launch_is_recorded() {
+        assert!(should_record_launch_bypass(true, None));
+        assert!(should_record_launch_bypass(
+            true,
+            Some((false, "http".into()))
+        ));
+    }
+
+    /// Row `(absent, _)`: no bypass list at launch, nothing to record, whatever
+    /// the sidecar said. Recording `true` on either of these refuses proxied
+    /// playback for every user who never exported `no_proxy` at all.
+    #[test]
+    fn no_bypass_list_at_launch_records_nothing_either_way() {
+        assert!(!should_record_launch_bypass(false, None));
+        assert!(!should_record_launch_bypass(
+            false,
+            Some((false, "http".into()))
+        ));
+        assert!(!should_record_launch_bypass(
+            false,
+            Some((true, "http".into()))
+        ));
     }
 
     const DIRS: [&str; 2] = ["/usr/lib64/gstreamer-1.0", "/usr/lib/gstreamer-1.0"];
