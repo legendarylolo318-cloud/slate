@@ -3008,22 +3008,41 @@ impl AudioPlayer {
                         // paused pipeline still holds an open source.
                         //
                         // `eos` is the one exception, and it is not a play/pause
-                        // flag: it is set only by the two terminal bus handlers and
-                        // cleared only by `PlayUrl` / `HandleGaplessAdvance`, so it
-                        // means the source read its body to completion — there is no
-                        // egress left to contain. The frontend never calls
-                        // `stop_track` at the end of a queue, so the backend outlives
-                        // playback with `eos` set; rebuilding there would re-open the
-                        // stream, seek to the duration, EOS again, and emit a second
-                        // `track-finished` — which the frontend turns into `playNext`,
-                        // i.e. autoplay radio starting while the UI reads stopped.
+                        // flag. FOUR bus handlers set it — the terminal EOS arm and
+                        // the Error arm of each mode's watcher — and only `PlayUrl`
+                        // / `HandleGaplessAdvance` clear it. So it means playback
+                        // ended, by completion or by failure; it does NOT mean the
+                        // source drained. An Error arm sets it, emits `audio-error`
+                        // and breaks without tearing anything down, so the pipeline
+                        // is left standing in PLAYING with `backend = Some`.
+                        //
+                        // A rebuild is still wrong here, in both shapes. The
+                        // frontend never calls `stop_track` at the end of a queue,
+                        // so the backend outlives playback with `eos` set, and
+                        // rebuilding there would re-open the stream, seek to the
+                        // duration, EOS again and emit a second `track-finished` —
+                        // which the frontend turns into `playNext`, i.e. autoplay
+                        // radio starting while the UI reads stopped.
+                        //
+                        // So stop it rather than leave it. `Stop` drives the
+                        // pipeline to NULL, which is what actually releases the
+                        // source the error path left holding the previous route,
+                        // and it resumes nothing. After a clean EOS it costs only
+                        // the teardown the frontend never asked for.
                         let current = audio_proxy
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
                         let route_changed = audio_route_differs(&previous, &current);
                         drop(current);
-                        if route_changed && backend.is_some() && !eos.load(Ordering::SeqCst) {
-                            if let Some(uri) = current_uri.clone() {
+                        if route_changed && backend.is_some() {
+                            if eos.load(Ordering::SeqCst) {
+                                // Queued on the self-sender for the same reason the
+                                // rebuild below is re-issued that way: this arm is
+                                // an inline closure, and `Stop` is another arm of
+                                // the same match rather than a function.
+                                let (stop_tx, _stop_rx) = mpsc::channel();
+                                let _ = cmd_tx_worker.send(AudioCommand::Stop { reply: stop_tx });
+                            } else if let Some(uri) = current_uri.clone() {
                                 // `get_position` cannot be called here — it is an
                                 // `AudioPlayer` method, and this thread is the one
                                 // its reply would have to come back through. This is
