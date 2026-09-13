@@ -34,6 +34,47 @@ pub fn probe_host_caps() -> crate::proxy::HostCaps {
     }
 }
 
+/// Which audio tier a pipeline is playing. Both build sites already carry
+/// `is_dash`, so nothing re-sniffs the URI — one source of truth.
+#[allow(dead_code)]
+fn capability_of(is_dash: bool) -> crate::proxy::Capability {
+    if is_dash {
+        crate::proxy::Capability::Dash
+    } else {
+        crate::proxy::Capability::Lossy
+    }
+}
+
+/// The audio thread's proxy decision, held as settings plus capabilities so a
+/// refusal stays a refusal.
+///
+/// Deliberately NOT a stored `Route`. A `Route` has two states and the answer
+/// has three: proxied, direct, and refused. Collapsing the third into
+/// `Route::NoProxy` is the defect the spec's stage 1a calls out by name, and
+/// it would let a blocked tier stream on the user's own address.
+#[allow(dead_code)]
+#[derive(Clone)]
+struct AudioProxy {
+    settings: crate::ProxySettings,
+    caps: crate::proxy::HostCaps,
+}
+
+#[allow(dead_code)]
+impl AudioProxy {
+    fn new(settings: crate::ProxySettings, caps: crate::proxy::HostCaps) -> Self {
+        Self { settings, caps }
+    }
+
+    fn route_for(
+        &self,
+        c: crate::proxy::Capability,
+    ) -> Result<crate::proxy::Route, crate::proxy::BlockReason> {
+        let plan = crate::proxy::plan(&self.settings, &self.caps)
+            .map_err(|e| crate::proxy::BlockReason::new(&e.to_string()))?;
+        plan.route(c, &self.caps)
+    }
+}
+
 type Reply<T> = mpsc::Sender<T>;
 
 #[derive(Debug, Clone, Serialize)]
@@ -3500,6 +3541,7 @@ pub fn gapless_supported() -> bool {
 #[cfg(test)]
 mod proxy_source_tests {
     use super::*;
+    use crate::proxy::{BlockReason, Capability, HostCaps, Route};
 
     #[test]
     fn the_probe_reports_the_registry_not_the_stand_in() {
@@ -3521,5 +3563,62 @@ mod proxy_source_tests {
             probed.has_curlhttpsrc,
             gst::ElementFactory::find("curlhttpsrc").is_some()
         );
+    }
+
+    fn http_proxy() -> crate::ProxySettings {
+        crate::ProxySettings {
+            enabled: true,
+            proxy_type: crate::ProxyType::Http,
+            host: "proxy.example".into(),
+            port: 3128,
+            username: None,
+            password: None,
+        }
+    }
+
+    #[test]
+    fn a_usable_proxy_routes_both_tiers_identically() {
+        let p = AudioProxy::new(http_proxy(), HostCaps::assume_all_present());
+        let lossy = p.route_for(Capability::Lossy).expect("lossy is routable here");
+        let dash = p.route_for(Capability::Dash).expect("dash is routable here");
+        // They share one scheme arm, so when both succeed they are the same
+        // value. This test exists to catch the day that stops being true.
+        assert_eq!(lossy, dash);
+        assert!(matches!(lossy, Route::Via { .. }));
+    }
+
+    #[test]
+    fn a_tier_that_cannot_be_proxied_is_an_error_not_a_direct_route() {
+        // The defect this type exists to prevent: collapsing "blocked" into
+        // "no proxy" lets a refused tier stream on the user's own address.
+        let mut caps = HostCaps::assume_all_present();
+        caps.has_dashdemux = false;
+        let p = AudioProxy::new(http_proxy(), caps);
+
+        assert!(matches!(p.route_for(Capability::Dash), Err(BlockReason { .. })));
+        assert!(
+            p.route_for(Capability::Lossy).is_ok(),
+            "lossy proxies fine here and must keep playing"
+        );
+    }
+
+    #[test]
+    fn settings_that_form_no_plan_are_an_error_not_a_direct_route() {
+        let mut bad = http_proxy();
+        bad.port = 0;
+        let p = AudioProxy::new(bad, HostCaps::assume_all_present());
+        for c in [Capability::Lossy, Capability::Dash] {
+            assert!(matches!(p.route_for(c), Err(BlockReason { .. })));
+        }
+    }
+
+    #[test]
+    fn a_disabled_proxy_routes_directly_and_is_never_an_error() {
+        let mut off = http_proxy();
+        off.enabled = false;
+        let p = AudioProxy::new(off, HostCaps::assume_all_present());
+        for c in [Capability::Lossy, Capability::Dash] {
+            assert_eq!(p.route_for(c).expect("direct is not a refusal"), Route::NoProxy);
+        }
     }
 }
