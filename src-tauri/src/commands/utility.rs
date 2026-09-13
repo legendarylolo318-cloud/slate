@@ -540,8 +540,10 @@ pub async fn set_proxy_settings(
     )
     .await;
 
-    // Applies to future GStreamer HTTP sources without disrupting the currently
-    // playing pipeline. Pushed on every outcome: the audio thread keeps its own
+    // Applies to future GStreamer HTTP sources, and — since a live pipeline
+    // carries the route it was built with and nothing re-applies one — tears the
+    // playing one down and rebuilds it at its current position when the route
+    // actually changes. Pushed on every outcome: the audio thread keeps its own
     // copy, and leaving it on the settings the user just replaced is wrong
     // whether or not the shared cell could be rebuilt.
     //

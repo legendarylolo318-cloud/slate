@@ -2484,70 +2484,106 @@ impl AudioPlayer {
 
                             // Resume where the torn-down pipeline was. Only a
                             // rebuild passes `Some`, so an ordinary track start
-                            // pays nothing for the wait below.
+                            // reaches none of this.
                             //
                             // The wait is the load-bearing half. Both paths above
                             // call `set_state(Playing)` and fall straight through,
                             // and a seek issued against a pipeline that has not
-                            // prerolled is silently dropped — which looks exactly
-                            // like this feature working while every track restarts
-                            // at 0:00. `state()` returns once the asynchronous
-                            // state change has settled, and that is the first
-                            // moment a seek is accepted. Bounded, so a stalled
-                            // network source cannot hang the worker.
+                            // prerolled is silently dropped — measured, not
+                            // assumed — which looks exactly like this feature
+                            // working while every track restarts at 0:00.
+                            // `state()` returns once the asynchronous state change
+                            // has settled, and that is the first moment a seek is
+                            // accepted.
+                            //
+                            // It waits on a thread of its own because the worker is
+                            // the sole receiver of its own command channel: waiting
+                            // here froze play/pause, next/prev, seek, position
+                            // polling and MPRIS for the whole bound — and against an
+                            // unreachable proxy, which is precisely what enabling a
+                            // proxy invites, it ran the bound out in full and the
+                            // seek was refused anyway. Off-thread the bound costs
+                            // the UI nothing, so it stays generous enough for a slow
+                            // link to finish prerolling.
                             if let Some(position_secs) = start_secs {
                                 let pos = gst::ClockTime::from_nseconds(
                                     (position_secs as f64 * 1_000_000_000.0) as u64,
                                 );
+                                let seek_to = move |pipeline: &gst::Pipeline| {
+                                    let (ret, cur, pend) =
+                                        pipeline.state(gst::ClockTime::from_seconds(10));
+                                    log::debug!("[audio] resume: preroll {ret:?} {cur:?} {pend:?}");
+                                    if let Err(e) = pipeline.seek_simple(
+                                        gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
+                                        pos,
+                                    ) {
+                                        log::warn!(
+                                            "[audio] resume at {position_secs}s failed: {e}"
+                                        );
+                                    }
+                                };
                                 match backend.as_ref() {
                                     Some(PlaybackBackend::Normal { pipeline, .. }) => {
-                                        let (ret, cur, pend) =
-                                            pipeline.state(gst::ClockTime::from_seconds(10));
-                                        log::debug!(
-                                            "[audio] resume-at: preroll ret={ret:?} cur={cur:?} pend={pend:?}"
-                                        );
-                                        if let Err(e) = pipeline.seek_simple(
-                                            gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
-                                            pos,
-                                        ) {
-                                            log::warn!(
-                                                "[audio] resume at {position_secs}s failed: {e}"
-                                            );
-                                        }
+                                        // A strong ref, so a teardown that beats the
+                                        // preroll only delays the final unref past
+                                        // the NULL the worker already drove it to —
+                                        // where the seek is a refused no-op.
+                                        let pipeline = pipeline.clone();
+                                        std::thread::spawn(move || seek_to(&pipeline));
                                     }
                                     Some(PlaybackBackend::DirectAlsa { pipeline, .. }) => {
-                                        let (ret, cur, pend) =
-                                            pipeline.state(gst::ClockTime::from_seconds(10));
-                                        log::debug!(
-                                            "[audio] resume-at: preroll ret={ret:?} cur={cur:?} pend={pend:?}"
-                                        );
-                                        // Same idiom as the `Seek` arm: the writer
-                                        // generation bump is what makes the writer
-                                        // discard the pre-seek chunks already in
-                                        // flight, and `frames_written` is the only
-                                        // position this backend reports.
-                                        let was_paused = paused.load(Ordering::Acquire);
-                                        paused.store(false, Ordering::Release);
+                                        // The generation is bumped here, on the
+                                        // worker, because it is worker-local state;
+                                        // only the *publishing* of it waits for the
+                                        // preroll, which is what makes the writer
+                                        // discard the pre-seek chunks in flight.
                                         track_generation += 1;
-                                        writer_gen.store(track_generation, Ordering::Release);
-                                        if let Some(ref tx) = writer_tx {
-                                            let _ = tx.send(WriterCommand::Flush);
-                                        }
-                                        let seek_frames = (position_secs as f64
-                                            * current_sample_rate.load(Ordering::Relaxed) as f64)
-                                            as u64;
-                                        frames_written.store(seek_frames, Ordering::Relaxed);
-                                        if let Err(e) = pipeline.seek_simple(
-                                            gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
-                                            pos,
-                                        ) {
-                                            log::warn!(
-                                                "[audio] resume at {position_secs}s failed: {e}"
+                                        let resume_gen = track_generation;
+                                        let pipeline = pipeline.clone();
+                                        let writer_gen = Arc::clone(&writer_gen);
+                                        let frames_written = Arc::clone(&frames_written);
+                                        let sample_rate = Arc::clone(&current_sample_rate);
+                                        let paused = Arc::clone(&paused);
+                                        let writer_tx = writer_tx.clone();
+                                        std::thread::spawn(move || {
+                                            let (ret, cur, pend) =
+                                                pipeline.state(gst::ClockTime::from_seconds(10));
+                                            log::debug!(
+                                                "[audio] resume: preroll {ret:?} {cur:?} {pend:?}"
                                             );
-                                        }
-                                        if was_paused {
-                                            paused.store(true, Ordering::Release);
-                                        }
+                                            // `fetch_max` never walks the generation
+                                            // backwards: if a newer track claimed the
+                                            // writer while this one prerolled, it owns
+                                            // the position and the seek is abandoned.
+                                            if writer_gen.fetch_max(resume_gen, Ordering::AcqRel)
+                                                > resume_gen
+                                            {
+                                                return;
+                                            }
+                                            // `frames_written` is the only position
+                                            // this backend reports, and the writer
+                                            // has to be unblocked to take the Flush.
+                                            let was_paused = paused.load(Ordering::Acquire);
+                                            paused.store(false, Ordering::Release);
+                                            if let Some(ref tx) = writer_tx {
+                                                let _ = tx.send(WriterCommand::Flush);
+                                            }
+                                            let seek_frames = (position_secs as f64
+                                                * sample_rate.load(Ordering::Relaxed) as f64)
+                                                as u64;
+                                            frames_written.store(seek_frames, Ordering::Relaxed);
+                                            if let Err(e) = pipeline.seek_simple(
+                                                gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
+                                                pos,
+                                            ) {
+                                                log::warn!(
+                                                    "[audio] resume at {position_secs}s failed: {e}"
+                                                );
+                                            }
+                                            if was_paused {
+                                                paused.store(true, Ordering::Release);
+                                            }
+                                        });
                                     }
                                     None => {}
                                 }
@@ -2930,12 +2966,23 @@ impl AudioPlayer {
                         //
                         // Gated on `backend.is_some()`, not on a play/pause flag: a
                         // paused pipeline still holds an open source.
+                        //
+                        // `eos` is the one exception, and it is not a play/pause
+                        // flag: it is set only by the two terminal bus handlers and
+                        // cleared only by `PlayUrl` / `HandleGaplessAdvance`, so it
+                        // means the source read its body to completion — there is no
+                        // egress left to contain. The frontend never calls
+                        // `stop_track` at the end of a queue, so the backend outlives
+                        // playback with `eos` set; rebuilding there would re-open the
+                        // stream, seek to the duration, EOS again, and emit a second
+                        // `track-finished` — which the frontend turns into `playNext`,
+                        // i.e. autoplay radio starting while the UI reads stopped.
                         let current = audio_proxy
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
                         let route_changed = audio_route_differs(&previous, &current);
                         drop(current);
-                        if route_changed && backend.is_some() {
+                        if route_changed && backend.is_some() && !eos.load(Ordering::SeqCst) {
                             if let Some(uri) = current_uri.clone() {
                                 // `get_position` cannot be called here — it is an
                                 // `AudioPlayer` method, and this thread is the one
