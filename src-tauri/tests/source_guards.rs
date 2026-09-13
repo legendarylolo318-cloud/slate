@@ -25,9 +25,12 @@
 //!   substring guard is the wrong tool for stopping an author who is trying.
 //!   These guards exist to catch the accidental deletion and the innocent
 //!   refactor.
-//! - Same test, same acceptance: the capture assertions count no occurrences,
-//!   so a commented-out decoy `remember_scrubbed_env(` inside the gate would
-//!   satisfy both of them while the live call sat below the removal loop.
+//! - Same test: it reads `without_comments(&body)`, so the commented-out decoy
+//!   `remember_scrubbed_env(` inside the gate — which used to satisfy both
+//!   capture assertions while the live call sat below the removal loop — no
+//!   longer counts. What is still accepted is that those assertions locate a
+//!   *first* occurrence rather than counting them, so a second live capture
+//!   call would go unchecked.
 //! - `the_mirrored_reqwest_major_version_is_still_what_we_pin` matches the
 //!   literal `0.11`, so pinning the dependency exactly (`version = "0.11.27"`)
 //!   fails it spuriously. Red rather than green, so it is safe — just noisy,
@@ -330,7 +333,13 @@ fn environment_is_mutated_only_in_main() {
 /// sitting next to it still fails.
 #[test]
 fn the_startup_proxy_scrub_stays_gated_on_the_launch_sidecar() {
-    let body = fs::read_to_string("src/main.rs").expect("src/main.rs");
+    // Comments stripped, so a plausible refactor note cannot stand in for a
+    // deleted call — the hole that was live here for `remember_scrubbed_env(`,
+    // and the same one `the_proxy_hook_is_attached_once_per_pipeline` was
+    // defeated through. It also removes the only text `block_of` could have
+    // miscounted braces in.
+    let body = without_comments(&fs::read_to_string("src/main.rs").expect("src/main.rs"));
+    let body = body.as_str();
 
     let removals = body.match_indices("env::remove_var").count();
     assert_eq!(
