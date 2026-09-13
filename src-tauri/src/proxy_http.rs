@@ -902,9 +902,9 @@ mod tests {
         // Settings that do not form a plan at all must land here, not on
         // `ProxyPlan::Direct`: "we could not understand your proxy" must never
         // resolve to "so we went around it".
-        let h = ProxiedHttp::blocked("invalid proxy host: ho st");
+        let h = ProxiedHttp::blocked("proxy host must be ASCII");
         let err = h.client().unwrap_err();
-        assert_eq!(err.cause, "invalid proxy host: ho st");
+        assert_eq!(err.cause, "proxy host must be ASCII");
 
         // And the same for a cell that starts usable and is then blocked.
         let caps = HostCaps::assume_all_present();

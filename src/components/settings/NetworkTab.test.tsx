@@ -83,7 +83,7 @@ describe("submitProxy surfaces the refusal instead of swallowing it", () => {
   });
 
   it("never hands the caller a stringified object", async () => {
-    invoke.mockRejectedValueOnce(proxyBlocked("invalid proxy host: bad host!"));
+    invoke.mockRejectedValueOnce(proxyBlocked("proxy host must be ASCII"));
     const onError = vi.fn();
     await submitProxy(settings, onError);
     const reason = onError.mock.calls[0][0];
@@ -114,8 +114,8 @@ describe("proxyTestError keeps the cause the backend reported", () => {
     expect(proxyTestError("proxy port must not be 0")).toBe(
       "proxy port must not be 0",
     );
-    expect(proxyTestError("invalid proxy host: bad host!")).toBe(
-      "invalid proxy host: bad host!",
+    expect(proxyTestError("proxy host must be ASCII")).toBe(
+      "proxy host must be ASCII",
     );
     expect(
       proxyTestError(
@@ -296,7 +296,7 @@ describe("NetworkTab reports a blocked proxy to the user", () => {
   it("shows the failing test's own reason, not a fixed sentence", async () => {
     invoke.mockImplementation((cmd: string) => {
       if (cmd === "test_proxy_connection") {
-        return Promise.reject("invalid proxy host: bad host!");
+        return Promise.reject("proxy host must be ASCII");
       }
       return Promise.resolve(undefined);
     });
@@ -305,7 +305,7 @@ describe("NetworkTab reports a blocked proxy to the user", () => {
     fireEvent.click(screen.getByText("Test connection"));
 
     expect(
-      await screen.findByText("invalid proxy host: bad host!"),
+      await screen.findByText("proxy host must be ASCII"),
     ).toBeTruthy();
   });
 });

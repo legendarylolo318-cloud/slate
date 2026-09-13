@@ -65,13 +65,32 @@ pub enum ProxyPlan {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum PlanError {
     PortZero,
     BadHost(String),
     NonAsciiHost,
     BracketedHost,
     EmbeddedPort,
+}
+
+// Hand-written for the same reason `Creds` above is, and about the same secret.
+// `BadHost` carries the host field verbatim — `validate_host` rejects `@` and
+// `/` precisely because people paste whole URIs in, so
+// `socks5://user:secret@proxy.example` is one of the values it holds — and a
+// derived `Debug` prints it the first time anyone writes `{e:?}`. Redacting the
+// payload costs nothing: every `assert_eq!`/`matches!` on the enum still works,
+// and a test that prints the error prints its own input alongside.
+impl std::fmt::Debug for PlanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PortZero => f.write_str("PortZero"),
+            Self::BadHost(_) => f.write_str("BadHost(***)"),
+            Self::NonAsciiHost => f.write_str("NonAsciiHost"),
+            Self::BracketedHost => f.write_str("BracketedHost"),
+            Self::EmbeddedPort => f.write_str("EmbeddedPort"),
+        }
+    }
 }
 
 impl std::fmt::Display for PlanError {
@@ -1001,6 +1020,13 @@ mod tests {
                 "{raw:?} put its password in a user-visible message: {shown}"
             );
             assert!(!shown.contains(raw), "{raw:?} is echoed verbatim: {shown}");
+            // Debug too, and for the same reason `Creds` hand-writes one: the
+            // Display fix is undone by the first `{e:?}` anyone adds.
+            let dbg = format!("{err:?}");
+            assert!(
+                !dbg.contains("hunter2") && !dbg.contains(raw),
+                "{raw:?} survives a `{{:?}}` log: {dbg}"
+            );
             // Still worth reading: a bare "invalid proxy host" leaves a user
             // who pasted a URI with nothing to do about it.
             assert!(
