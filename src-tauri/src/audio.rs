@@ -3012,23 +3012,31 @@ impl AudioPlayer {
                         // the Error arm of each mode's watcher — and only `PlayUrl`
                         // / `HandleGaplessAdvance` clear it. So it means playback
                         // ended, by completion or by failure; it does NOT mean the
-                        // source drained. An Error arm sets it, emits `audio-error`
-                        // and breaks without tearing anything down, so the pipeline
-                        // is left standing in PLAYING with `backend = Some`.
+                        // source drained.
                         //
-                        // A rebuild is still wrong here, in both shapes. The
-                        // frontend never calls `stop_track` at the end of a queue,
-                        // so the backend outlives playback with `eos` set, and
-                        // rebuilding there would re-open the stream, seek to the
-                        // duration, EOS again and emit a second `track-finished` —
-                        // which the frontend turns into `playNext`, i.e. autoplay
-                        // radio starting while the UI reads stopped.
+                        // The failure shape is the one that reaches here, and it is
+                        // the containment hole. An Error arm sets `eos`, emits
+                        // `audio-error` and breaks WITHOUT tearing anything down, so
+                        // the pipeline is left standing in PLAYING with
+                        // `backend = Some` and a source still open on the route it
+                        // was built with; the user gets a toast and nothing else
+                        // moves. Change the route now and that source keeps its old
+                        // one for as long as the backend lives.
                         //
-                        // So stop it rather than leave it. `Stop` drives the
-                        // pipeline to NULL, which is what actually releases the
-                        // source the error path left holding the previous route,
-                        // and it resumes nothing. After a clean EOS it costs only
-                        // the teardown the frontend never asked for.
+                        // The clean-EOS shape barely exists by comparison: the bus
+                        // emits `track-finished`, the frontend's listener calls
+                        // `playNext`, and `playNext` invokes `stop_track` before it
+                        // inspects the queue at all, so that backend is gone within
+                        // milliseconds. (Repeat-one returns above that call, and it
+                        // re-plays immediately, which clears `eos`.)
+                        //
+                        // Rebuilding is the wrong answer in either shape: it would
+                        // re-open the stream, seek to the duration, EOS again and
+                        // emit a second `track-finished` — which the frontend turns
+                        // into `playNext`, i.e. autoplay radio starting while the UI
+                        // reads stopped. Driving the pipeline to NULL is what
+                        // actually releases the stale-route source, and it resumes
+                        // nothing.
                         let current = audio_proxy
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3040,6 +3048,14 @@ impl AudioPlayer {
                                 // rebuild below is re-issued that way: this arm is
                                 // an inline closure, and `Stop` is another arm of
                                 // the same match rather than a function.
+                                //
+                                // It lands at the BACK of the worker queue, so a
+                                // user-initiated `PlayUrl` enqueued while this arm
+                                // was running is processed first and this `Stop`
+                                // then tears down the track it just started, with
+                                // the UI reading playing. Milliseconds wide, and
+                                // the same class of window the rebuild path below
+                                // already carries — named here, not guarded.
                                 let (stop_tx, _stop_rx) = mpsc::channel();
                                 let _ = cmd_tx_worker.send(AudioCommand::Stop { reply: stop_tx });
                             } else if let Some(uri) = current_uri.clone() {
