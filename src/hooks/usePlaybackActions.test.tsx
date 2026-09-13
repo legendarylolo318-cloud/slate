@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { renderHook, act, screen } from "@testing-library/react";
+import { renderHook, act, screen, cleanup } from "@testing-library/react";
 import { Provider, createStore } from "jotai";
 import type { PropsWithChildren } from "react";
 import { usePlaybackActions } from "./usePlaybackActions";
@@ -16,6 +16,7 @@ import {
   manualQueueAtom,
   consecutiveFailCountAtom,
 } from "../atoms/playback";
+import { getProxyBlockedReason } from "../lib/errorUtils";
 import type { Track } from "../types";
 
 // playNext drives the audio backend through invoke(); stub it so play_tidal_track
@@ -206,5 +207,52 @@ describe("a blocked proxy never enters the skip drain", () => {
     expect(calls).toBe(2);
     expect(store.get(currentTrackAtom)?.id).toBe(2);
     expect(store.get(queueAtom).map((t) => t.id)).toEqual([3]);
+  });
+});
+
+describe("repeat-one says why when a track is refused", () => {
+  beforeEach(() => {
+    // No vitest globals, so @testing-library's auto-cleanup never registers and
+    // earlier cases' toasts linger in the document — unmount them explicitly
+    // before asserting on what is NOT shown.
+    cleanup();
+    localStorage.clear();
+    playResult = () => Promise.resolve({});
+  });
+
+  const proxyBlocked = {
+    kind: "ProxyBlocked",
+    message: { reason: "high-resolution audio cannot be proxied here" },
+  };
+
+  it("does not fail silently when repeat-one hits a blocked proxy", async () => {
+    // Precondition: the helper already reads ProxyBlocked's object `message`.
+    expect(getProxyBlockedReason(proxyBlocked)).toContain("cannot be proxied");
+
+    const { store, result } = setup();
+    store.set(repeatAtom, 2);
+    store.set(currentTrackAtom, track({ id: 7, title: "Looped" }));
+    playResult = () => Promise.reject(proxyBlocked);
+
+    const seen: string[] = [];
+    const onError = (e: Event) =>
+      seen.push(String((e as CustomEvent).detail ?? ""));
+    window.addEventListener("playback-error", onError);
+    try {
+      await act(async () => {
+        await result.current.playNext();
+      });
+    } finally {
+      window.removeEventListener("playback-error", onError);
+    }
+
+    // The real bug: the repeat-one chain ended at `isUnplayableError` with no
+    // final `else`, so a refusal produced no toast and no event — the song just
+    // stopped and nothing said why.
+    expect(seen).toEqual(["high-resolution audio cannot be proxied here"]);
+    // Repeat-one replays in place; the refusal must not be mistaken for a dead
+    // track, and must not drop the track that is still loaded.
+    expect(screen.queryByText(/Track unavailable/)).toBeNull();
+    expect(store.get(currentTrackAtom)?.id).toBe(7);
   });
 });

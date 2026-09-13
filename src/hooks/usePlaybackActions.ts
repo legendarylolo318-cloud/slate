@@ -902,6 +902,15 @@ export function usePlaybackActions() {
                 scheduleRateLimitResume(error);
               } else if (isUnplayableError(error)) {
                 showToast("Track unavailable", "info");
+              } else {
+                // Without this the chain simply ended: a refusal the other
+                // classifiers do not recognise — a blocked proxy above all —
+                // stopped the song and said nothing at all.
+                window.dispatchEvent(
+                  new CustomEvent("playback-error", {
+                    detail: extractPlaybackError(error),
+                  }),
+                );
               }
             }
             return;
