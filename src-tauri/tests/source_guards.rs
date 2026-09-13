@@ -482,3 +482,67 @@ fn the_mirrored_reqwest_major_version_is_still_what_we_pin() {
         line.trim()
     );
 }
+
+/// The production half of `audio.rs`: everything above `#[cfg(test)]`.
+///
+/// Split deliberately — the module's own tests construct `ProxyType::Http`
+/// settings, which is exactly the needle this guard bans in production code.
+fn audio_rs_production_source() -> String {
+    let body = fs::read_to_string("src/audio.rs").expect("read audio.rs");
+    match body.find("#[cfg(test)]") {
+        Some(i) => body[..i].to_string(),
+        None => body,
+    }
+}
+
+#[test]
+fn audio_does_not_decide_proxy_policy_for_itself() {
+    let body = audio_rs_production_source();
+    for needle in ["reqwest::Url", "ProxyType::Http", "ProxyType::Socks5"] {
+        assert!(
+            !body.contains(needle),
+            "audio.rs contains `{needle}` outside its tests: proxy decisions belong in proxy.rs"
+        );
+    }
+}
+
+#[test]
+fn the_proxy_hook_is_attached_once_per_pipeline() {
+    let body = audio_rs_production_source();
+    let pipelines = body.matches("gst::Pipeline::new()").count();
+    let hooks = body.matches("watch_pipeline_sources(&pipe").count();
+    assert_eq!(
+        hooks, pipelines,
+        "every pipeline needs the hook: a per-element hook was measured \
+         leaving the gapless second branch unproxied"
+    );
+    assert_eq!(
+        pipelines, 2,
+        "audio.rs is expected to build exactly two pipelines"
+    );
+}
+
+#[test]
+fn the_audio_path_is_untouched_while_the_proxy_is_off() {
+    // The spec's regression guard: with no proxy configured, element selection
+    // must be exactly what it was before this work. These four numbers were
+    // measured identical on the host (1.24.2) and the runtime (1.26.11).
+    use gstreamer::glib::translate::IntoGlib;
+    use gstreamer::prelude::PluginFeatureExtManual;
+
+    let _ = gstreamer::init();
+    for (name, expected) in [
+        ("souphttpsrc", 256),
+        ("curlhttpsrc", 128),
+        ("dashdemux", 256),
+        ("dashdemux2", 257),
+    ] {
+        if let Some(f) = gstreamer::ElementFactory::find(name) {
+            assert_eq!(
+                f.rank().into_glib(),
+                expected,
+                "{name} rank drifted; the proxy-off path must be byte-identical"
+            );
+        }
+    }
+}
