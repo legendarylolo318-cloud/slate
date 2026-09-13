@@ -527,6 +527,26 @@ pub fn scrubbed_env() -> &'static [(String, String)] {
     SCRUBBED_ENV.get().map(Vec::as_slice).unwrap_or(&[])
 }
 
+/// Whether a proxy bypass list survived startup — set in the environment when
+/// the process began *and* left there, because the scrub did not run.
+///
+/// Deliberately not folded into `SCRUBBED_ENV`. That capture feeds
+/// `system_proxy_from_env` and means "what the user's shell configured"; this
+/// means "what is still in the environment and will defeat an explicit proxy".
+/// The two coincide only when the scrub did not run, which is precisely the
+/// case this exists for.
+static LAUNCH_BYPASS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Record whether a proxy bypass list was present in the environment when the
+/// process started. Call once, from `main.rs`, before any thread exists.
+pub fn remember_launch_bypass(present: bool) {
+    let _ = LAUNCH_BYPASS.set(present);
+}
+
+pub fn launch_bypass_was_set() -> bool {
+    *LAUNCH_BYPASS.get().unwrap_or(&false)
+}
+
 /// Which slot a captured value is being resolved for.
 ///
 /// reqwest builds a *different* proxy object per scheme from the same string,

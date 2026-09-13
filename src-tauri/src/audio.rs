@@ -55,11 +55,35 @@ fn capability_of(is_dash: bool) -> crate::proxy::Capability {
 struct AudioProxy {
     settings: crate::ProxySettings,
     caps: crate::proxy::HostCaps,
+    /// A bypass list that was in the environment at launch and stayed there.
+    /// Read once from the process-global recorded in `main.rs`, then carried
+    /// per-instance so the tests can set it without touching a `OnceLock`.
+    launch_bypass: bool,
 }
 
 impl AudioProxy {
     fn new(settings: crate::ProxySettings, caps: crate::proxy::HostCaps) -> Self {
-        Self { settings, caps }
+        Self {
+            settings,
+            caps,
+            launch_bypass: crate::proxy::launch_bypass_was_set(),
+        }
+    }
+
+    /// Test-only override. Production always takes the launch-time value;
+    /// nothing may call `remember_launch_bypass` from a test, because it is a
+    /// `OnceLock` shared by every test in the process and the first call wins
+    /// for all of them.
+    ///
+    /// Compiled unconditionally rather than gated on the test cfg: that
+    /// attribute is the anchor `audio_rs_production_source` splits this file
+    /// on, and a second one partway up would move the boundary here and
+    /// silently stop guarding every line below it. The attribute below keeps
+    /// the dead-code check live in test builds, where the method is used.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn with_launch_bypass(mut self, v: bool) -> Self {
+        self.launch_bypass = v;
+        self
     }
 
     fn route_for(
@@ -68,6 +92,22 @@ impl AudioProxy {
     ) -> Result<crate::proxy::Route, crate::proxy::BlockReason> {
         let plan = crate::proxy::plan(&self.settings, &self.caps)
             .map_err(|e| crate::proxy::BlockReason::new(&e.to_string()))?;
+
+        // After the `Direct` check, never before it. `Direct` hands routing
+        // back to the system, bypass list included, so a user with no proxy
+        // configured and an ambient `no_proxy` must keep playing.
+        //
+        // Only a restart can clear this: `curlhttpsrc` reads `no_proxy` when
+        // the element is constructed and forwards it as CURLOPT_NOPROXY, which
+        // beats the `proxy` property we set, and the variable cannot be removed
+        // once GTK's threads exist.
+        if self.launch_bypass && !matches!(plan, crate::proxy::ProxyPlan::Direct) {
+            return Err(crate::proxy::BlockReason::new(
+                "a proxy bypass list was set in the environment when SONE \
+                 started; restart SONE to route audio through the proxy",
+            ));
+        }
+
         plan.route(c, &self.caps)
     }
 }
@@ -4294,5 +4334,38 @@ mod proxy_source_tests {
             audio_route_differs(&a, &b),
             "a different blocked configuration is still a change"
         );
+    }
+
+    #[test]
+    fn an_ambient_bypass_list_at_launch_blocks_audio_until_restart() {
+        // `curlhttpsrc` reads `no_proxy` when the element is constructed and
+        // forwards it as CURLOPT_NOPROXY, which overrides the `proxy` property
+        // we set -- measured going direct. The variable can only be removed
+        // before GTK threads exist, so within this session the honest answer
+        // is to refuse and say why.
+        let caps = HostCaps::assume_all_present();
+        let p = AudioProxy::new(http_proxy(), caps).with_launch_bypass(true);
+
+        for c in [Capability::Lossy, Capability::Dash] {
+            let err = p.route_for(c).expect_err("a bypass list must block audio");
+            assert!(
+                err.cause.contains("restart"),
+                "the reason must tell the user what to do, got: {}",
+                err.cause
+            );
+        }
+    }
+
+    #[test]
+    fn a_bypass_list_is_irrelevant_when_the_proxy_is_off() {
+        // Direct means the system's own configuration applies -- including its
+        // bypass list. Refusing here would break playback for a user who is not
+        // proxying at all.
+        let mut off = http_proxy();
+        off.enabled = false;
+        let p = AudioProxy::new(off, HostCaps::assume_all_present()).with_launch_bypass(true);
+        for c in [Capability::Lossy, Capability::Dash] {
+            assert_eq!(p.route_for(c).expect("direct is unaffected"), Route::NoProxy);
+        }
     }
 }

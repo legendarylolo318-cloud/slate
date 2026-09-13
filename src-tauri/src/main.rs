@@ -41,6 +41,32 @@ fn main() {
             }
         }
 
+        // Record whether an ambient bypass list will still be in the
+        // environment once this function is done — read here, at the only
+        // moment the answer is knowable, because nothing may mutate the
+        // environment after `run()` starts GTK's threads.
+        //
+        // Gated on the scrub, and that gate is the whole point. A launch that
+        // DID scrub has no ambient bypass list left, so recording `true` there
+        // would refuse every proxied tier for a session that is perfectly
+        // fine — and restarting would reproduce it exactly.
+        //
+        // Outside the `if let` below on purpose: with neither `$XDG_CONFIG_HOME`
+        // nor `$HOME` set there is no sidecar to read, no scrub, and therefore
+        // an ambient bypass list that survives. Recording inside would skip
+        // the call and read back `false` — fail-open, the direction this is
+        // here to close.
+        {
+            let sidecar = tauri_app_lib::config_dir_for_env()
+                .and_then(|d| tauri_app_lib::proxy::read_sidecar(&d));
+            let present = tauri_app_lib::proxy::SCRUBBED_PROXY_ENV_VARS
+                .into_iter()
+                .any(|v| std::env::var_os(v).is_some_and(|s| !s.is_empty()));
+            tauri_app_lib::proxy::remember_launch_bypass(
+                present && !should_scrub_proxy_env(sidecar),
+            );
+        }
+
         // Own the proxy environment before anything can read it — but only
         // while SONE is actually proxying. `curlhttpsrc` reads `no_proxy` at
         // element construction and honours it over an explicitly-set proxy
