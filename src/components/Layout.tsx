@@ -4,7 +4,7 @@ import PlayerBar from "./PlayerBar";
 import NowPlayingDrawer from "./NowPlayingDrawer";
 import TitleBar from "./TitleBar";
 import ResizeEdges from "./ResizeEdges";
-import ProxyBlockedBanner from "./ProxyBlockedBanner";
+import ProxyNoticeBanner from "./ProxyNoticeBanner";
 import { ReactNode, useRef, useState, useEffect, useCallback } from "react";
 import { useAtomValue } from "jotai";
 import { currentViewAtom } from "../atoms/navigation";
@@ -119,10 +119,11 @@ export default function Layout({ children }: LayoutProps) {
   return (
     <div className="relative flex flex-col h-full w-full bg-th-overlay text-th-text-primary overflow-hidden">
       {!nativeChrome && !hideTitleBar && <TitleBar />}
-      {/* The same bar `AppChrome` puts above the login screen. A block refuses
-          every request, so it has to be reachable from inside the app too —
-          and the authenticated tree does not go through `AppChrome`. */}
-      <ProxyBlockedBanner />
+      {/* The same bar `AppChrome` puts above the login screen. A proxy that
+          blocks or that nothing comes back through refuses every request, so it
+          has to be reachable from inside the app too — and the authenticated
+          tree does not go through `AppChrome`. */}
+      <ProxyNoticeBanner />
       {/* Hide the audio chrome (sidebar + heavy library grids + player bar) while a
           fullscreen video overlay is open. An opaque overlay does NOT stop WebKit from
           compositing the layer tree beneath it every video frame — at 4K that throttles

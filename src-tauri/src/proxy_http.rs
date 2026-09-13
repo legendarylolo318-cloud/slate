@@ -8,7 +8,7 @@
 use crate::proxy::{
     BlockReason, Capability, EnvScheme, HostCaps, ProxyPlan, Route, SystemProxyEnv,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -131,6 +131,28 @@ fn restore_system_proxy(
     builder
 }
 
+/// Did this request fail before any answer came back?
+///
+/// reqwest's own kinds decide it, never the message text. `Kind::Request` —
+/// what `is_request()` reports — is precisely "something went wrong while
+/// sending": the proxy's own DNS lookup, the TCP connect to it, the CONNECT
+/// tunnel, or a timeout before the response head arrived. `is_connect()` and a
+/// pre-head `is_timeout()` are refinements of it and are named here for the
+/// reader, not because they add cases.
+///
+/// The excluded kinds are the ones that *prove* the far side answered, and
+/// they are excluded explicitly so a future reqwest that widens a flag cannot
+/// quietly pull them in. A body or decode failure — including a timeout partway
+/// through the body — happened after the response head arrived. A status error
+/// is not here at all: reqwest hands a 401 or a 404 back as `Ok`, which is why
+/// an origin refusing SONE can never be read as a proxy that is not answering.
+pub fn is_transport_failure(e: &reqwest::Error) -> bool {
+    if e.is_body() || e.is_decode() || e.is_status() || e.is_redirect() {
+        return false;
+    }
+    e.is_request() || e.is_connect() || e.is_timeout()
+}
+
 /// A claimed position in the cell's write order.
 ///
 /// A newtype rather than a bare `u64` so the ordering cannot be handed a
@@ -147,6 +169,11 @@ pub struct ProxiedHttp {
     /// "newest" means the newest caller rather than whichever build happened to
     /// finish last. A slow build must never resurrect the settings it replaced.
     next: Arc<AtomicU64>,
+    /// True when the last request anyone made with a client from this cell got
+    /// no answer at all. Evidence from traffic the app was already sending —
+    /// never a health check, never a probe, and never a reason to send
+    /// anything extra.
+    unanswered: Arc<AtomicBool>,
 }
 
 impl ProxiedHttp {
@@ -154,6 +181,7 @@ impl ProxiedHttp {
         Self {
             cell: Arc::new(RwLock::new((Generation(0), state))),
             next: Arc::new(AtomicU64::new(1)),
+            unanswered: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -264,6 +292,32 @@ impl ProxiedHttp {
         }
     }
 
+    /// Record what a request made with a client from this cell did, and hand
+    /// the outcome straight back.
+    ///
+    /// Every call is a store, not just the failing ones, so the mark is the
+    /// *last* outcome rather than a latch that needs clearing: one answered
+    /// request — a 200, a 404, a 401, anything with a response head — puts the
+    /// cell back to normal with no restart and no timer.
+    ///
+    /// Nothing here changes what the caller gets. It cannot retry, cannot
+    /// unwrap a block, and cannot reach the client; a request that failed
+    /// through the proxy stays failed.
+    pub fn observe<T>(&self, outcome: Result<T, reqwest::Error>) -> Result<T, reqwest::Error> {
+        self.unanswered.store(
+            outcome.as_ref().err().is_some_and(is_transport_failure),
+            Ordering::SeqCst,
+        );
+        outcome
+    }
+
+    /// Whether the most recent observed request got no answer. Meaningless on
+    /// its own — only `ProxyStatus::observed` may read it, and only after it
+    /// has established that a proxy is actually in the path.
+    pub fn unreachable(&self) -> bool {
+        self.unanswered.load(Ordering::SeqCst)
+    }
+
     /// Claim a position in the write order. Must happen before the build,
     /// never after — and, for a caller that also persists, next to the persist
     /// rather than next to the build.
@@ -283,6 +337,10 @@ impl ProxiedHttp {
         // the loser's client carries no proxy at all.
         if generation >= g.0 {
             *g = (generation, built);
+            // A client that has sent nothing has produced no evidence. Carrying
+            // the old mark across would report the previous proxy's silence
+            // against the one the user just saved.
+            self.unanswered.store(false, Ordering::SeqCst);
         }
     }
 }
@@ -536,6 +594,131 @@ mod tests {
         let p = plan(&enabled("no-such-host.invalid", 3128), &caps).unwrap();
         let c = ProxiedHttp::from_plan(&p, &caps).client().unwrap();
         assert!(format!("{c:?}").contains("All(http://no-such-host.invalid:3128)"));
+    }
+
+    /// A client that is guaranteed unproxied, whatever the developer's shell
+    /// exported. `ProxiedHttp::from_plan(Direct, ..)` would consult the
+    /// captured environment, and a machine with `http_proxy` set would send
+    /// these loopback requests somewhere else entirely.
+    fn direct_cell() -> (ProxiedHttp, reqwest::Client) {
+        let c = build_client_with(
+            &ProxyPlan::Direct,
+            &HostCaps::assume_all_present(),
+            CapturedProxies::default,
+        )
+        .unwrap();
+        (ProxiedHttp::wrap(Ok(c.clone())), c)
+    }
+
+    /// One connection, one 404, then gone. Enough to prove an origin answered.
+    async fn origin_that_refuses_us() -> std::net::SocketAddr {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            if let Ok((mut sock, _)) = l.accept().await {
+                let _ = sock.read(&mut [0u8; 2048]).await;
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                    )
+                    .await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        addr
+    }
+
+    /// A port with nothing behind it, so the connect is refused rather than
+    /// hanging until a timeout the test would have to wait out.
+    fn nothing_is_listening_here() -> std::net::SocketAddr {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap()
+        // `l` drops here; the port is closed before anyone dials it.
+    }
+
+    /// The distinction the whole attribution rests on, measured against real
+    /// reqwest errors rather than asserted from its documentation.
+    ///
+    /// A proxy whose name never resolves and a port with nothing behind it are
+    /// both "no answer came back". A 404 is an answer, and reqwest hands it
+    /// back as `Ok` — which is why an origin refusing SONE can never be read
+    /// as a proxy that is not there.
+    #[tokio::test]
+    async fn only_a_request_that_got_no_answer_counts_as_a_transport_failure() {
+        let caps = HostCaps::assume_all_present();
+        let p = plan(&enabled("no-such-host.invalid", 3128), &caps).unwrap();
+        let proxied = ProxiedHttp::from_plan(&p, &caps).client().unwrap();
+        let e = proxied
+            .get("https://auth.example.com/oauth2/device_authorization")
+            .send()
+            .await
+            .unwrap_err();
+        assert!(
+            is_transport_failure(&e),
+            "an http proxy that does not resolve must read as a transport failure: {e}"
+        );
+
+        let (_, direct) = direct_cell();
+        let e = direct
+            .get(format!("http://{}/", nothing_is_listening_here()))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(is_transport_failure(&e), "a refused connect too: {e}");
+
+        let addr = origin_that_refuses_us().await;
+        let resp = direct
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .expect("a 404 is an answer, not an error");
+        assert_eq!(resp.status(), 404);
+    }
+
+    /// The mark is the last outcome, not a latch: setting it takes a request
+    /// that died in transit, and clearing it takes one answered request and
+    /// nothing else — no restart, no timer, no probe.
+    #[tokio::test]
+    async fn the_mark_follows_the_last_outcome_in_both_directions() {
+        let (cell, c) = direct_cell();
+        assert!(
+            !cell.unreachable(),
+            "a cell that has sent nothing has observed nothing"
+        );
+
+        let dead = nothing_is_listening_here();
+        assert!(cell
+            .observe(c.get(format!("http://{dead}/")).send().await)
+            .is_err());
+        assert!(cell.unreachable());
+
+        let addr = origin_that_refuses_us().await;
+        let resp = cell
+            .observe(c.get(format!("http://{addr}/")).send().await)
+            .expect("observe must hand the outcome straight back");
+        assert_eq!(resp.status(), 404, "a refusal from the origin, not silence");
+        assert!(
+            !cell.unreachable(),
+            "one answered request is the whole of the recovery"
+        );
+    }
+
+    /// Reconfiguring drops the verdict with the client it was about. Without
+    /// this the proxy a user just switched to would inherit the silence of the
+    /// one they switched away from, and the banner would name the new host for
+    /// the old host's failure.
+    #[tokio::test]
+    async fn a_reconfigured_cell_starts_with_no_verdict() {
+        let caps = HostCaps::assume_all_present();
+        let (cell, c) = direct_cell();
+        let dead = nothing_is_listening_here();
+        let _ = cell.observe(c.get(format!("http://{dead}/")).send().await);
+        assert!(cell.unreachable());
+
+        cell.replace(&plan(&enabled("127.0.0.1", 3128), &caps).unwrap(), &caps)
+            .expect("a valid plan builds");
+        assert!(!cell.unreachable());
     }
 
     #[test]

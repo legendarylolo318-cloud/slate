@@ -378,11 +378,17 @@ pub fn get_proxy_settings(state: State<'_, AppState>) -> crate::ProxySettings {
 /// The standing report of what the proxy is doing, for the banner that has to
 /// be visible before anyone is logged in.
 ///
-/// Reads the live cell rather than only the saved settings, because the state
-/// that strands a user is a plan that is fine and a client that could not be
-/// built — see `ProxyStatus::observed`. `degraded` stays empty until stage 3
-/// supplies a real `HostCaps` probe; `Blocked` is fully determined today, and
-/// it is the one the user cannot otherwise escape.
+/// Reads the live cell rather than only the saved settings, because neither
+/// state that strands a user is visible in the settings alone: a plan that is
+/// fine and a client that could not be built (`Blocked`), and a plan and client
+/// that are both fine while every request dies in transit (`Unreachable`). See
+/// `ProxyStatus::observed`. `degraded` stays empty until stage 3 supplies a
+/// real `HostCaps` probe.
+///
+/// Cheap enough to poll, which the banner does: a settings decrypt, a lock read
+/// and an atomic load. It sends nothing — the reachability answer is the record
+/// of requests the app already made, so asking for the status never puts a
+/// packet on the wire.
 #[tauri::command]
 pub fn get_proxy_status(state: State<'_, AppState>) -> crate::proxy::ProxyStatus {
     let settings = state.load_settings().map(|s| s.proxy).unwrap_or_default();
@@ -395,6 +401,7 @@ pub fn get_proxy_status(state: State<'_, AppState>) -> crate::proxy::ProxyStatus
         // and reports `degraded: []` for a host that cannot serve the plan.
         &crate::proxy::HostCaps::assume_all_present(),
         block.as_ref().map(|e| e.cause.as_str()),
+        state.proxied_http.unreachable(),
     )
 }
 

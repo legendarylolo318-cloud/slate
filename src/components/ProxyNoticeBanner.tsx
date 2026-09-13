@@ -1,0 +1,221 @@
+import { useCallback, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { safeErrorMessage } from "../lib/errorUtils";
+import type { ProxySettings } from "../atoms/proxy";
+
+/** The serialized `proxy::ProxyStatus`, `#[serde(tag = "state")]`. */
+export type ProxyStatus =
+  | { state: "off" }
+  | { state: "active"; degraded: string[] }
+  | { state: "unreachable"; endpoint: string }
+  | { state: "blocked"; reason: string };
+
+/** Dispatched on `window` whenever a save may have changed the status. The
+ *  banner re-reads the status rather than guessing from the settings it sent:
+ *  the backend, not the form, decides whether a proxy is usable. */
+export const PROXY_STATUS_EVENT = "sone:proxy-status";
+
+/** How often the status is re-read while a proxy is configured.
+ *
+ *  `unreachable` is discovered by requests the app was already making, so
+ *  nothing tells the banner when one fails — it has to look. Only while a
+ *  proxy is configured, though: with the proxy off there is no state this
+ *  banner can ever report, so it does not poll at all. The call itself sends
+ *  nothing; it reads a decrypted settings file, a lock and an atomic. */
+const POLL_MS = 5000;
+
+export interface ProxyNotice {
+  /** Red for "nothing was sent", amber for "something was sent and vanished". */
+  tone: "blocked" | "unreachable";
+  headline: string;
+  detail: string | null;
+}
+
+/**
+ * What to say about the proxy right now, or null when there is nothing to say.
+ *
+ * Two states render, and they are different claims:
+ *
+ * - `blocked` — the settings could not be turned into a plan, or the client
+ *   could not be built. Nothing was sent at all, and the backend knows which
+ *   field is at fault, so its reason is shown verbatim.
+ * - `unreachable` — requests went out through the proxy and nothing came back.
+ *
+ * The wording of the second one is the part to leave alone. The same evidence
+ * is produced by a proxy that is down, a proxy that is up but firewalled, and
+ * an unplugged network cable; SONE observed none of those, it observed silence.
+ * So the headline says what was seen — no answer from `host:port` — and the
+ * detail names both possibilities instead of picking one. "Your proxy is down"
+ * would be a guess dressed as a diagnosis, and it would send a user with a
+ * dropped VPN off to debug a proxy that is fine.
+ *
+ * `off` and `active` are the normal states and must not put a bar across the
+ * window. `degraded` is a per-feature notice and is empty until the
+ * host-capability probe exists.
+ */
+export function proxyNotice(status: unknown): ProxyNotice | null {
+  if (typeof status !== "object" || status === null) return null;
+  const s = status as { state?: unknown; reason?: unknown; endpoint?: unknown };
+
+  if (s.state === "blocked") {
+    const reason = typeof s.reason === "string" ? s.reason.trim() : "";
+    return {
+      tone: "blocked",
+      headline: "Proxy blocked — nothing can connect.",
+      // A red bar that says nothing is worse than a generic sentence.
+      detail: reason.length > 0 ? reason : "The proxy settings are unusable",
+    };
+  }
+
+  if (s.state === "unreachable") {
+    const endpoint = typeof s.endpoint === "string" ? s.endpoint.trim() : "";
+    return {
+      tone: "unreachable",
+      headline:
+        endpoint.length > 0
+          ? `SONE can't reach the proxy at ${endpoint}.`
+          : "SONE can't reach the proxy.",
+      detail:
+        "Requests are going out and nothing is coming back. That is either the proxy or this machine's own connection — SONE cannot tell which from here.",
+    };
+  }
+
+  return null;
+}
+
+const TONE = {
+  blocked: {
+    accent: "#ff6666",
+    box: "border-[#ff6666]/25 bg-[#ff6666]/10",
+    dot: "bg-[#ff6666]",
+    text: "text-[#ff6666]",
+    button: "border-[#ff6666]/40 hover:bg-[#ff6666]/15",
+  },
+  unreachable: {
+    accent: "#e8a33d",
+    box: "border-[#e8a33d]/25 bg-[#e8a33d]/10",
+    dot: "bg-[#e8a33d]",
+    text: "text-[#e8a33d]",
+    button: "border-[#e8a33d]/40 hover:bg-[#e8a33d]/15",
+  },
+} as const;
+
+/**
+ * Both states this renders refuse the login request itself, so this bar has to
+ * live outside the authenticated shell.
+ *
+ * The trap it exists to close: a proxy that persists but cannot connect. Two
+ * ways in. It can fail to build — a SOCKS5 host that does not resolve plans
+ * fine and dies while reqwest builds the client — which blocks the cell. Or,
+ * far more commonly, it builds perfectly and every request dies in transit,
+ * because reqwest defers an `http://` proxy's name lookup to the first request:
+ * `nope.invalid:8080` is a valid plan and a valid client right up to the moment
+ * it is used. Either way, log out and the login is refused while Settings →
+ * Network sits behind the login screen. Without a way out here, the only
+ * recovery is editing an AES-GCM encrypted file by hand.
+ *
+ * The way out is a button, and it works while failing because
+ * `set_proxy_settings` persists before it reconfigures: the disabled settings
+ * reach disk whether or not anything else succeeds.
+ */
+export default function ProxyNoticeBanner() {
+  const [status, setStatus] = useState<ProxyStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await invoke<ProxyStatus>("get_proxy_status"));
+    } catch (e) {
+      // A status call that fails says nothing about the proxy, and a banner
+      // invented from an IPC error would be its own false alarm.
+      console.error("Failed to read proxy status:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const onChange = () => void refresh();
+    window.addEventListener(PROXY_STATUS_EVENT, onChange);
+    return () => window.removeEventListener(PROXY_STATUS_EVENT, onChange);
+  }, [refresh]);
+
+  // Depends on whether a proxy is configured, not on the status object, so a
+  // poll that returns an equal-but-new object does not restart the timer.
+  const configured = status !== null && status.state !== "off";
+  useEffect(() => {
+    if (!configured) return;
+    const id = window.setInterval(() => void refresh(), POLL_MS);
+    return () => window.clearInterval(id);
+  }, [configured, refresh]);
+
+  const disableProxy = async () => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      // Read the saved settings so host, port and credentials survive — the
+      // user is turning the proxy off, not throwing their configuration away.
+      // A settings read that fails still disables: a default with
+      // `enabled: false` is `Direct`, which is the whole point of the button.
+      let settings: ProxySettings = {
+        enabled: false,
+        proxy_type: "http",
+        host: "",
+        port: 0,
+        username: null,
+        password: null,
+      };
+      try {
+        settings = { ...(await invoke<ProxySettings>("get_proxy_settings")) };
+      } catch (e) {
+        console.error("Failed to read proxy settings:", e);
+      }
+      settings.enabled = false;
+      await invoke("set_proxy_settings", { settings });
+    } catch (e) {
+      console.error("Failed to disable the proxy:", e);
+      setActionError(safeErrorMessage(e, "Could not turn the proxy off"));
+    } finally {
+      setBusy(false);
+      await refresh();
+    }
+  };
+
+  const notice = proxyNotice(status);
+  if (!notice) return null;
+  const tone = TONE[notice.tone];
+
+  return (
+    <div
+      role="alert"
+      className={`flex flex-wrap items-center gap-2.5 px-4 py-2.5 border-b ${tone.box}`}
+    >
+      <span
+        className={`w-2 h-2 rounded-full flex-shrink-0 ${tone.dot}`}
+        aria-hidden="true"
+      />
+      <span
+        className={`min-w-0 text-[11.5px] font-semibold break-words ${tone.text}`}
+      >
+        {notice.headline}
+      </span>
+      {notice.detail && (
+        <span className="min-w-0 text-[11.5px] text-th-text-muted break-words">
+          {notice.detail}
+        </span>
+      )}
+      {actionError && (
+        <span className="min-w-0 text-[11.5px] text-th-text-muted break-words">
+          {actionError}
+        </span>
+      )}
+      <button
+        onClick={() => void disableProxy()}
+        disabled={busy}
+        className={`ml-auto flex-shrink-0 px-2.5 py-1 rounded-md text-[11.5px] font-semibold border text-th-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${tone.button}`}
+      >
+        {busy ? "Turning off…" : "Turn off proxy"}
+      </button>
+    </div>
+  );
+}

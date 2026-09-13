@@ -244,6 +244,21 @@ fn authority(host: &str, port: u16) -> String {
 }
 
 impl ProxyPlan {
+    /// The proxy as a user would recognise it — `host:port`, IPv6 bracketed —
+    /// or `None` for `Direct`, which names no proxy because there is none.
+    ///
+    /// Credentials are structurally absent: they live beside the host in
+    /// `Creds`, never in this string, so a value from here is safe to put in
+    /// front of a user or into a log.
+    pub fn endpoint(&self) -> Option<String> {
+        match self {
+            Self::Direct => None,
+            Self::Http { host, port, .. } | Self::Socks5 { host, port, .. } => {
+                Some(authority(host, *port))
+            }
+        }
+    }
+
     pub fn route(&self, c: Capability, env: &HostCaps) -> Result<Route, BlockReason> {
         let (host, port, creds, socks) = match self {
             ProxyPlan::Direct => return Ok(Route::NoProxy),
@@ -659,7 +674,7 @@ pub fn system_proxy_from_env<T>(
 
 /// What the settings screen shows for the proxy as a whole.
 ///
-/// The three states are not interchangeable, and the distinction is the point:
+/// The four states are not interchangeable, and the distinction is the point:
 ///
 /// - `Off` — the user has no proxy enabled. `ProxyPlan::Direct`, the system's
 ///   own configuration applies, and there is nothing to report.
@@ -667,6 +682,16 @@ pub fn system_proxy_from_env<T>(
 ///   capability is refused and nothing egresses through the proxy. Per the
 ///   spec this is exactly the `PlanError` case; it carries the reason so the
 ///   banner can say which field is wrong instead of "connection failed".
+/// - `Unreachable` — the plan is usable, the client built, and requests are
+///   going out and getting nothing back. This is the *common* failure and the
+///   one `Blocked` does not cover: a host that is merely unresolvable plans
+///   fine and, over `http://`, builds fine too, because reqwest defers the
+///   proxy's name lookup to the first request. It carries the proxy's
+///   `host:port` and nothing else, because `host:port` is the whole of what is
+///   known. An unplugged cable produces the same evidence, so the wording this
+///   feeds must stay at "SONE can't reach the proxy at X" and must never
+///   become "your proxy is down" — that second claim is not observed, it is
+///   guessed.
 /// - `Active { degraded }` — the plan is usable, but some capabilities cannot
 ///   be served on this host (a missing GStreamer element, a GStreamer too old
 ///   to seek through an authenticated proxy). That is a per-feature notice,
@@ -681,6 +706,7 @@ pub fn system_proxy_from_env<T>(
 pub enum ProxyStatus {
     Off,
     Active { degraded: Vec<Capability> },
+    Unreachable { endpoint: String },
     Blocked { reason: String },
 }
 
@@ -690,16 +716,18 @@ impl ProxyStatus {
     /// replaces it with a real probe — until then `degraded` is always empty,
     /// which is honest rather than useful.
     pub fn evaluate(s: &crate::ProxySettings, caps: &HostCaps) -> Self {
-        let plan = match plan(s, caps) {
-            Ok(p) => p,
+        match plan(s, caps) {
+            Ok(p) => Self::for_plan(&p, caps),
             // Unplannable settings block every capability, not some of them.
-            Err(e) => {
-                return Self::Blocked {
-                    reason: e.to_string(),
-                }
-            }
-        };
-        if plan == ProxyPlan::Direct {
+            Err(e) => Self::Blocked {
+                reason: e.to_string(),
+            },
+        }
+    }
+
+    /// The settings-only verdict for a plan that already parsed.
+    fn for_plan(plan: &ProxyPlan, caps: &HostCaps) -> Self {
+        if *plan == ProxyPlan::Direct {
             return Self::Off;
         }
         // Deliberately not "if everything is degraded, call it Blocked".
@@ -727,12 +755,34 @@ impl ProxyStatus {
     /// The cell wins whenever it is blocked, including over `Off`: it is what
     /// egresses, so if it cannot hand out a client then nothing is getting out
     /// regardless of what the settings say.
-    pub fn observed(s: &crate::ProxySettings, caps: &HostCaps, cell_block: Option<&str>) -> Self {
-        match cell_block {
-            Some(reason) => Self::Blocked {
+    ///
+    /// `unanswered` is the cell's record of whether the last request it served
+    /// got a reply, and it is consulted **last and only for a plan that routes
+    /// through a proxy**. That ordering is the honesty rule in code: under
+    /// `Direct` the same failure is an ordinary network error and must read as
+    /// one, because no proxy was in the path to blame.
+    pub fn observed(
+        s: &crate::ProxySettings,
+        caps: &HostCaps,
+        cell_block: Option<&str>,
+        unanswered: bool,
+    ) -> Self {
+        if let Some(reason) = cell_block {
+            return Self::Blocked {
                 reason: reason.to_string(),
-            },
-            None => Self::evaluate(s, caps),
+            };
+        }
+        let plan = match plan(s, caps) {
+            Ok(p) => p,
+            Err(e) => {
+                return Self::Blocked {
+                    reason: e.to_string(),
+                }
+            }
+        };
+        match (unanswered, plan.endpoint()) {
+            (true, Some(endpoint)) => Self::Unreachable { endpoint },
+            _ => Self::for_plan(&plan, caps),
         }
     }
 }
@@ -1758,11 +1808,16 @@ mod tests {
         let caps = HostCaps::assume_all_present();
         let s = settings("proxy.example", 3128);
         assert!(matches!(
-            ProxyStatus::observed(&s, &caps, None),
+            ProxyStatus::observed(&s, &caps, None, false),
             ProxyStatus::Active { .. }
         ));
 
-        let st = ProxyStatus::observed(&s, &caps, Some("proxy unusable (socks5h://x:1): oops"));
+        let st = ProxyStatus::observed(
+            &s,
+            &caps,
+            Some("proxy unusable (socks5h://x:1): oops"),
+            false,
+        );
         assert_eq!(
             serde_json::to_value(&st).unwrap(),
             serde_json::json!({
@@ -1779,13 +1834,127 @@ mod tests {
     fn a_blocked_cell_outranks_a_disabled_proxy() {
         let mut s = settings("127.0.0.1", 8080);
         s.enabled = false;
-        let st = ProxyStatus::observed(&s, &HostCaps::assume_all_present(), Some("no client"));
+        let st = ProxyStatus::observed(
+            &s,
+            &HostCaps::assume_all_present(),
+            Some("no client"),
+            false,
+        );
         assert_eq!(
             st,
             ProxyStatus::Blocked {
                 reason: "no client".into()
             }
         );
+    }
+
+    /// The failure the `Blocked` variant does not cover, and the one manual
+    /// testing actually hit.
+    ///
+    /// `nope.invalid:8080` over `http://` plans fine and builds fine — reqwest
+    /// defers an http proxy's name lookup to the first request — so the cell
+    /// hands out a client and every request dies in transit. Before this
+    /// variant existed the status said `active`, no banner rendered, and the
+    /// user saw a raw DNS error that named the origin they were trying to
+    /// reach rather than the proxy that never carried them there.
+    #[test]
+    fn a_proxied_request_that_got_no_answer_is_unreachable_and_names_the_proxy() {
+        let caps = HostCaps::assume_all_present();
+        let s = settings("nope.invalid", 8080);
+        let st = ProxyStatus::observed(&s, &caps, None, true);
+        assert_eq!(
+            serde_json::to_value(&st).unwrap(),
+            // `host:port` and nothing else. It is the whole of what is known,
+            // and it is what the user typed, so it is what they can act on.
+            serde_json::json!({ "state": "unreachable", "endpoint": "nope.invalid:8080" })
+        );
+    }
+
+    /// The honesty rule, in the one place it can be broken.
+    ///
+    /// An offline machine fails every request exactly the same way. With no
+    /// proxy in the path there is nothing to attribute the failure to, so the
+    /// status must stay `Off` and the failure must surface as the ordinary
+    /// network error it is.
+    #[test]
+    fn the_same_failure_with_the_proxy_off_is_not_the_proxys_fault() {
+        let caps = HostCaps::assume_all_present();
+        let mut s = settings("127.0.0.1", 8080);
+        s.enabled = false;
+        assert_eq!(
+            ProxyStatus::observed(&s, &caps, None, true),
+            ProxyStatus::Off
+        );
+    }
+
+    /// Ordering, because the two states answer different questions. `Blocked`
+    /// means nothing was ever sent; `Unreachable` means something was sent and
+    /// died on the way. A cell that cannot hand out a client cannot have sent
+    /// the request whose silence is being reported, so the block is the truth.
+    #[test]
+    fn a_blocked_cell_outranks_an_unanswered_request() {
+        let caps = HostCaps::assume_all_present();
+        let st = ProxyStatus::observed(
+            &settings("proxy.example", 3128),
+            &caps,
+            Some("no client"),
+            true,
+        );
+        assert_eq!(
+            st,
+            ProxyStatus::Blocked {
+                reason: "no client".into()
+            }
+        );
+    }
+
+    /// Unplannable settings too: `plan()` is consulted before the mark, so a
+    /// bad field still reports the field rather than a silent proxy.
+    #[test]
+    fn unplannable_settings_outrank_an_unanswered_request() {
+        let st = ProxyStatus::observed(
+            &settings("127.0.0.1", 0),
+            &HostCaps::assume_all_present(),
+            None,
+            true,
+        );
+        assert_eq!(
+            serde_json::to_value(&st).unwrap(),
+            serde_json::json!({ "state": "blocked", "reason": "proxy port must not be 0" })
+        );
+    }
+
+    /// One answered request is enough, and no restart is involved: the cell
+    /// stores the last outcome, so `false` here is the whole of the recovery.
+    #[test]
+    fn an_answered_request_puts_the_status_back_to_active() {
+        let caps = HostCaps::assume_all_present();
+        let s = settings("nope.invalid", 8080);
+        assert!(matches!(
+            ProxyStatus::observed(&s, &caps, None, true),
+            ProxyStatus::Unreachable { .. }
+        ));
+        assert!(matches!(
+            ProxyStatus::observed(&s, &caps, None, false),
+            ProxyStatus::Active { .. }
+        ));
+    }
+
+    /// The endpoint is built by `authority()`, so an IPv6 proxy reads back as
+    /// something a user can paste, not as `2001:db8::1:8080`.
+    #[test]
+    fn the_reported_endpoint_brackets_an_ipv6_proxy() {
+        let caps = HostCaps::assume_all_present();
+        let st = ProxyStatus::observed(&settings("2001:db8::1", 8080), &caps, None, true);
+        assert_eq!(
+            st,
+            ProxyStatus::Unreachable {
+                endpoint: "[2001:db8::1]:8080".into()
+            }
+        );
+        // And `Direct` names no endpoint at all, which is what keeps the
+        // variant unreachable from the `Off` path.
+        assert_eq!(ProxyPlan::Direct.endpoint(), None);
     }
 
     #[test]

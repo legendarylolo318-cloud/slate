@@ -1284,6 +1284,24 @@ impl TidalClient {
         self.client_secret = client_secret.to_string();
     }
 
+    /// The one place a request this client makes is actually sent.
+    ///
+    /// Every `.send()` in this file goes through here, including the auth
+    /// endpoints that bypass the rate gate, because the state it records is
+    /// most needed exactly where the gate is not involved: a login that cannot
+    /// reach the proxy is the failure a user has no way to diagnose and no
+    /// screen to fix.
+    ///
+    /// It only watches. `observe` hands the outcome straight back, so a request
+    /// that failed through the proxy stays failed and is never retried without
+    /// it — there is no unproxied second attempt to be had here or anywhere.
+    async fn dispatch(
+        &self,
+        req: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, SoneError> {
+        Ok(self.http.observe(req.send().await)?)
+    }
+
     /// Single egress point for API traffic. Consults the cooldown before
     /// sending and records a new one from any 429. Never sleeps — callers that
     /// want to wait must do so with the client mutex released.
@@ -1291,7 +1309,7 @@ impl TidalClient {
         if let Some(secs) = self.gate.cooling_down() {
             return Err(rate_limited_error(secs));
         }
-        let resp = req.send().await?;
+        let resp = self.dispatch(req).await?;
         if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let secs = crate::rate_gate::retry_after_or_default(resp.headers());
             self.gate.trip(secs);
@@ -1350,12 +1368,11 @@ impl TidalClient {
             form_params.push(("client_secret", self.client_secret.as_str()));
         }
 
-        let response = self
+        let request = self
             .client()?
             .post(format!("{}/token", TIDAL_AUTH_URL))
-            .form(&form_params)
-            .send()
-            .await?;
+            .form(&form_params);
+        let response = self.dispatch(request).await?;
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
@@ -1530,12 +1547,11 @@ impl TidalClient {
             form_params.push(("client_secret", self.client_secret.as_str()));
         }
 
-        let response = self
+        let request = self
             .client()?
             .post(format!("{}/device_authorization", TIDAL_AUTH_URL))
-            .form(&form_params)
-            .send()
-            .await?;
+            .form(&form_params);
+        let response = self.dispatch(request).await?;
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
@@ -1581,12 +1597,11 @@ impl TidalClient {
             form_params.push(("client_secret", self.client_secret.as_str()));
         }
 
-        let response = self
+        let request = self
             .client()?
             .post(format!("{}/token", TIDAL_AUTH_URL))
-            .form(&form_params)
-            .send()
-            .await?;
+            .form(&form_params);
+        let response = self.dispatch(request).await?;
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
@@ -1623,7 +1638,7 @@ impl TidalClient {
             return Err(SoneError::NotConfigured("Client ID".into()));
         }
 
-        let response = self
+        let request = self
             .client()?
             .post(format!("{}/token", TIDAL_AUTH_URL))
             .form(&[
@@ -1634,9 +1649,8 @@ impl TidalClient {
                 ("scope", "r_usr+w_usr+w_sub"),
                 ("code_verifier", code_verifier),
                 ("client_unique_key", client_unique_key),
-            ])
-            .send()
-            .await?;
+            ]);
+        let response = self.dispatch(request).await?;
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
@@ -1824,14 +1838,13 @@ impl TidalClient {
             body
         );
 
-        let response = self
+        let request = self
             .client()?
             .post(format!("{}/playlists", TIDAL_OPENAPI_URL))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())])
-            .json(&body)
-            .send()
-            .await?;
+            .json(&body);
+        let response = self.dispatch(request).await?;
 
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
@@ -1883,15 +1896,14 @@ impl TidalClient {
             body
         );
 
-        let response = self
+        let request = self
             .client()?
             .patch(format!("{}/playlists/{}", TIDAL_OPENAPI_URL, playlist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("Content-Type", "application/vnd.api+json")
             .query(&[("countryCode", self.country_code.as_str())])
-            .json(&body)
-            .send()
-            .await?;
+            .json(&body);
+        let response = self.dispatch(request).await?;
 
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
@@ -5567,16 +5579,15 @@ impl TidalClient {
     ) -> Result<(), SoneError> {
         let tokens = self.tokens.as_ref().ok_or(SoneError::NotAuthenticated)?;
         let body = build_artist_meta_body(artist_id, name, handle, dry_run);
-        let response = self
+        let request = self
             .client()?
             .patch(format!("{}/artists/{}", TIDAL_OPENAPI_URL, artist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("Content-Type", "application/vnd.api+json")
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[("countryCode", self.country_code.as_str())])
-            .json(&body)
-            .send()
-            .await?;
+            .json(&body);
+        let response = self.dispatch(request).await?;
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -5593,16 +5604,15 @@ impl TidalClient {
         let body = serde_json::json!({
             "data": { "type": "artistBiographies", "id": bio_id, "attributes": { "text": text } }
         });
-        let response = self
+        let request = self
             .client()?
             .patch(format!("{}/artistBiographies/{}", TIDAL_OPENAPI_URL, bio_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("Content-Type", "application/vnd.api+json")
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[("countryCode", self.country_code.as_str())])
-            .json(&body)
-            .send()
-            .await?;
+            .json(&body);
+        let response = self.dispatch(request).await?;
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -5621,16 +5631,15 @@ impl TidalClient {
     ) -> Result<(), SoneError> {
         let tokens = self.tokens.as_ref().ok_or(SoneError::NotAuthenticated)?;
         let body = build_external_links_body(artist_id, &links);
-        let response = self
+        let request = self
             .client()?
             .patch(format!("{}/artists/{}", TIDAL_OPENAPI_URL, artist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("Content-Type", "application/vnd.api+json")
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[("countryCode", self.country_code.as_str())])
-            .json(&body)
-            .send()
-            .await?;
+            .json(&body);
+        let response = self.dispatch(request).await?;
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -5668,16 +5677,15 @@ impl TidalClient {
                 }
             }
         });
-        let resp = self
+        let request = self
             .client()?
             .post(format!("{}/artworks", TIDAL_OPENAPI_URL))
             .header("Authorization", &bearer)
             .header("Content-Type", "application/vnd.api+json")
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[("countryCode", self.country_code.as_str())])
-            .json(&create_body)
-            .send()
-            .await?;
+            .json(&create_body);
+        let resp = self.dispatch(request).await?;
         let status = resp.status();
         let create_text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -5701,14 +5709,13 @@ impl TidalClient {
             .to_string();
 
         // (2) S3 PUT — NO Authorization; Content-Type: image/jpeg is REQUIRED.
-        let put = self
+        let request = self
             .client()?
             .put(&upload_href)
             .header("content-md5", &content_md5)
             .header("Content-Type", "image/jpeg")
-            .body(bytes)
-            .send()
-            .await?;
+            .body(bytes);
+        let put = self.dispatch(request).await?;
         let put_status = put.status();
         if !put_status.is_success() {
             let body = put.text().await.unwrap_or_default();
@@ -5725,7 +5732,7 @@ impl TidalClient {
         let link_body = serde_json::json!({
             "data": [ { "type": "artworks", "id": artwork_id } ]
         });
-        let patch = self
+        let request = self
             .client()?
             .patch(format!(
                 "{}/artists/{}/relationships/profileArt",
@@ -5735,9 +5742,8 @@ impl TidalClient {
             .header("Content-Type", "application/vnd.api+json")
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[("countryCode", self.country_code.as_str())])
-            .json(&link_body)
-            .send()
-            .await?;
+            .json(&link_body);
+        let patch = self.dispatch(request).await?;
         let patch_status = patch.status();
         let patch_text = patch.text().await.unwrap_or_default();
         if !patch_status.is_success() {
@@ -5753,14 +5759,13 @@ impl TidalClient {
         let tokens = self.tokens.as_ref().ok_or(SoneError::NotAuthenticated)?;
         let bearer = format!("Bearer {}", tokens.access_token);
         for _ in 0..20 {
-            let resp = self
+            let request = self
                 .client()?
                 .get(format!("{}/artworks/{}", TIDAL_OPENAPI_URL, artwork_id))
                 .header("Authorization", &bearer)
                 .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
-                .query(&[("countryCode", self.country_code.as_str())])
-                .send()
-                .await?;
+                .query(&[("countryCode", self.country_code.as_str())]);
+            let resp = self.dispatch(request).await?;
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             if !status.is_success() {
@@ -5788,7 +5793,7 @@ impl TidalClient {
     pub async fn delete_profile_picture(&self, artist_id: u64) -> Result<(), SoneError> {
         let tokens = self.tokens.as_ref().ok_or(SoneError::NotAuthenticated)?;
         let body = serde_json::json!({ "data": [] });
-        let response = self
+        let request = self
             .client()?
             .patch(format!(
                 "{}/artists/{}/relationships/profileArt",
@@ -5798,9 +5803,8 @@ impl TidalClient {
             .header("Content-Type", "application/vnd.api+json")
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[("countryCode", self.country_code.as_str())])
-            .json(&body)
-            .send()
-            .await?;
+            .json(&body);
+        let response = self.dispatch(request).await?;
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
         if !status.is_success() {

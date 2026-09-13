@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getProxyBlockedReason, safeErrorMessage } from "../../lib/errorUtils";
 import type { ProxySettings } from "../../atoms/proxy";
-import { PROXY_STATUS_EVENT } from "../ProxyBlockedBanner";
+import { PROXY_STATUS_EVENT } from "../ProxyNoticeBanner";
 
 /**
  * Whether these settings are complete enough to send to the backend.
