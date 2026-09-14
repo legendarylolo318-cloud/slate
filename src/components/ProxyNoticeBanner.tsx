@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { safeErrorMessage } from "../lib/errorUtils";
-import type { ProxySettings } from "../atoms/proxy";
+import { PROXY_SAVED_EVENT, type ProxySettings } from "../atoms/proxy";
 
 /** The serialized `proxy::ProxyStatus`, `#[serde(tag = "state")]`. */
 export type ProxyStatus =
@@ -66,8 +66,9 @@ export interface ProxyNotice {
  * "Your proxy is down" would be a guess dressed as a diagnosis.
  *
  * `off` and `active` are the normal states and must not put a bar across the
- * window. `degraded` is a per-feature notice and is empty until the
- * host-capability probe exists.
+ * window. `degraded` is a per-feature notice, filled from the backend's probe
+ * of this host — a tier the proxy cannot serve here is named without waiting
+ * for the user to play one.
  */
 export function proxyNotice(status: unknown): ProxyNotice | null {
   if (typeof status !== "object" || status === null) return null;
@@ -201,6 +202,9 @@ export default function ProxyNoticeBanner({
       setActionError(safeErrorMessage(e, "Could not turn the proxy off"));
     } finally {
       setBusy(false);
+      // Same save, same detached gapless branch as the settings screen's — this
+      // button is reachable inside the app, where a track may be playing.
+      window.dispatchEvent(new Event(PROXY_SAVED_EVENT));
       await refresh();
     }
   };

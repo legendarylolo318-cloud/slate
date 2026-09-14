@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getProxyBlockedReason, safeErrorMessage } from "../../lib/errorUtils";
-import type { ProxySettings } from "../../atoms/proxy";
+import { PROXY_SAVED_EVENT, type ProxySettings } from "../../atoms/proxy";
 import { PROXY_STATUS_EVENT } from "../ProxyNoticeBanner";
 
 /**
@@ -49,6 +49,10 @@ export async function submitProxy(
     // that was refused may have created one — the global banner re-reads the
     // status either way rather than inferring it from what was sent.
     window.dispatchEvent(new Event(PROXY_STATUS_EVENT));
+    // Also on both paths, and for the same reason: the backend detaches the
+    // prerolled gapless branch when it takes the settings, before anything can
+    // refuse them.
+    window.dispatchEvent(new Event(PROXY_SAVED_EVENT));
   }
 }
 
