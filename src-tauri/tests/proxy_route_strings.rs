@@ -1,7 +1,16 @@
-//! Proves the route SONE computes is the string a source will receive. An
-//! earlier draft built its own element and set `proxy` by hand, which proved
-//! only that GStreamer honours a property — already known. This runs the real
-//! `plan()` -> `route()`.
+//! The URI strings the real `plan()` -> `route()` produces, asserted from
+//! outside the crate.
+//!
+//! Strings only: nothing here builds a GStreamer element or moves a byte, so it
+//! cannot show what a source does with these values — `audio.rs`'s own tests
+//! cover the hook that applies them, and the port-80 case is settled by manual
+//! test 1's strace rather than by any assertion. (An earlier draft did build an
+//! element and set `proxy` by hand, which proved only that GStreamer honours a
+//! property.)
+//!
+//! What it adds over the unit tests beside `route()` is the boundary it runs
+//! at: `plan`, `route`, `Capability`, `HostCaps` and `Route` have to stay
+//! reachable, and the right shape, to a consumer outside the crate.
 
 use tauri_app_lib::proxy::{plan, Capability, HostCaps, Route};
 use tauri_app_lib::{ProxySettings, ProxyType};
