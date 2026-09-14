@@ -17,16 +17,30 @@ export const PROXY_STATUS_EVENT = "sone:proxy-status";
 
 /** How often the status is re-read while a proxy is configured.
  *
- *  `unreachable` is discovered by requests the app was already making, so
+ *  `unreachable` is *entered* by requests the app was already making, so
  *  nothing tells the banner when one fails — it has to look. Only while a
  *  proxy is configured, though: with the proxy off there is no state this
  *  banner can ever report, so it does not poll at all.
  *
+ *  Leaving that state is the half that ordinary requests cannot supply, and
+ *  the reason `PROBE_CMD` exists. The count behind `unreachable` is cleared
+ *  only by an answered request, and by the time the bar is up the app is
+ *  making none — every one of them is the thing that is failing. A user who
+ *  repairs the proxy outside SONE, by restarting it or plugging the cable back
+ *  in, saves no settings and so rebuilds no client: without a request of our
+ *  own the count would sit at its threshold forever.
+ *
  *  Long, because nothing here is latency-critical and the call is not free:
- *  `get_proxy_status` decrypts the settings file each time. The state it
- *  reports cannot change without a request happening anyway, and by then the
- *  user is already looking at a failure. */
+ *  `get_proxy_status` decrypts the settings file each time. */
 const POLL_MS = 15000;
+
+/** One request through the live client, sent only while the status is already
+ *  `unreachable`.
+ *
+ *  Every other state keeps the property that asking about the proxy puts
+ *  nothing on the wire — `off` and `active` have nothing to find out, and
+ *  `blocked` has no client to send through. */
+const PROBE_CMD = "probe_proxy_reachability";
 
 /** Asked of the authenticated shell, which owns the settings sheet. The detail
  *  is the tab to land on. */
@@ -100,6 +114,34 @@ export function proxyNotice(status: unknown): ProxyNotice | null {
   return null;
 }
 
+/**
+ * What a dismissal is pinned to.
+ *
+ * A dismissal that outlived the thing it dismissed would be a lie: the bar is
+ * the only report of a state that stops the app working, and a user who hid
+ * one in January must still be told when the proxy fails again in March. So it
+ * is keyed to the notice in front of them, not to the component and not to the
+ * session — the identity that distinguishes one occurrence from the next.
+ *
+ * Identity is the state plus what it named, because those are the parts a user
+ * read before deciding it was not worth a bar: a different block reason, or the
+ * same failure against a different endpoint, is news again.
+ *
+ * The rule that falls out: the banner stays hidden for exactly as long as the
+ * condition it described remains continuously true. Anything else — recovery
+ * to `active`, the proxy being turned off, a new reason, and therefore any
+ * later relapse into `unreachable` — produces a key the dismissal does not
+ * match, and the bar comes back. Nothing here is remembered across a restart,
+ * which is the same rule stated once more.
+ */
+export function noticeKey(status: unknown): string | null {
+  const notice = proxyNotice(status);
+  if (!notice) return null;
+  const s = status as { state?: unknown; reason?: unknown; endpoint?: unknown };
+  const named = typeof s.endpoint === "string" ? s.endpoint : s.reason;
+  return `${notice.tone}:${typeof named === "string" ? named.trim() : ""}`;
+}
+
 const TONE = {
   blocked: {
     accent: "#ff6666",
@@ -147,6 +189,7 @@ export default function ProxyNoticeBanner({
   const [status, setStatus] = useState<ProxyStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [dismissed, setDismissed] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -158,6 +201,18 @@ export default function ProxyNoticeBanner({
     }
   }, []);
 
+  /** Ask the backend to send one request through the live client, so a proxy
+   *  that started working again has something to answer. A probe that fails is
+   *  not an error here — failing is the outcome it was sent to measure, and
+   *  the count it fed is what the next `refresh` reads. */
+  const probe = useCallback(async () => {
+    try {
+      await invoke(PROBE_CMD);
+    } catch (e) {
+      console.error("Proxy reachability probe failed:", e);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
     const onChange = () => void refresh();
@@ -165,14 +220,33 @@ export default function ProxyNoticeBanner({
     return () => window.removeEventListener(PROXY_STATUS_EVENT, onChange);
   }, [refresh]);
 
-  // Depends on whether a proxy is configured, not on the status object, so a
-  // poll that returns an equal-but-new object does not restart the timer.
+  const key = noticeKey(status);
+  // A dismissal outlives only the poll that carried the same condition. The
+  // moment the key changes — recovery, a different reason, the proxy turned
+  // off — it is forgotten, so a later relapse is reported rather than swallowed
+  // by a click the user made about an earlier failure.
+  useEffect(() => {
+    setDismissed((d) => (d === key ? d : null));
+  }, [key]);
+
+  // Both flags are booleans rather than the status object, so a poll that
+  // returns an equal-but-new object does not restart the timer.
   const configured = status !== null && status.state !== "off";
+  const unreachable = status?.state === "unreachable";
   useEffect(() => {
     if (!configured) return;
-    const id = window.setInterval(() => void refresh(), POLL_MS);
+    const id = window.setInterval(() => {
+      void (async () => {
+        // Before the read, not after: the probe is what gives the next status
+        // something new to say. It runs even while the bar is dismissed —
+        // dismissal hides a report, it does not make the proxy work, and the
+        // probe is the only thing that can retire the dismissal honestly.
+        if (unreachable) await probe();
+        await refresh();
+      })();
+    }, POLL_MS);
     return () => window.clearInterval(id);
-  }, [configured, refresh]);
+  }, [configured, unreachable, probe, refresh]);
 
   const disableProxy = async () => {
     setBusy(true);
@@ -210,7 +284,7 @@ export default function ProxyNoticeBanner({
   };
 
   const notice = proxyNotice(status);
-  if (!notice) return null;
+  if (!notice || dismissed === key) return null;
   const tone = TONE[notice.tone];
 
   return (
@@ -256,6 +330,14 @@ export default function ProxyNoticeBanner({
           className={`px-2.5 py-1 rounded-md text-[11.5px] font-semibold border text-th-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${tone.button}`}
         >
           {busy ? "Turning off…" : "Turn off proxy"}
+        </button>
+        <button
+          onClick={() => setDismissed(key)}
+          aria-label="Dismiss"
+          title="Dismiss until this happens again"
+          className={`px-2 py-1 rounded-md text-[13px] leading-none font-semibold border text-th-text-primary transition-colors ${tone.button}`}
+        >
+          ×
         </button>
       </div>
     </div>

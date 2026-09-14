@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import ProxyNoticeBanner, {
   proxyNotice,
+  noticeKey,
   PROXY_STATUS_EVENT,
   OPEN_SETTINGS_EVENT,
 } from "./ProxyNoticeBanner";
@@ -73,6 +74,32 @@ describe("proxyNotice", () => {
     }
   });
 
+  /// The dismissal key. Nothing to dismiss where there is no notice, and two
+  /// occurrences of the same state against different endpoints are different
+  /// claims — which is what makes a dismissal expire on recovery rather than
+  /// on a timer nobody chose.
+  it("keys a dismissal to the claim being made, not to the state alone", () => {
+    expect(noticeKey({ state: "off" })).toBeNull();
+    expect(noticeKey({ state: "active", degraded: [] })).toBeNull();
+    expect(noticeKey(null)).toBeNull();
+
+    const one = noticeKey({ state: "unreachable", endpoint: "one.invalid:80" });
+    expect(one).toBe(
+      noticeKey({ state: "unreachable", endpoint: "one.invalid:80" }),
+    );
+    expect(one).not.toBe(
+      noticeKey({ state: "unreachable", endpoint: "two.invalid:80" }),
+    );
+    expect(one).not.toBe(
+      noticeKey({ state: "blocked", reason: "one.invalid:80" }),
+    );
+    expect(
+      noticeKey({ state: "blocked", reason: "port must not be 0" }),
+    ).not.toBe(
+      noticeKey({ state: "blocked", reason: "host must not be empty" }),
+    );
+  });
+
   it("still says something useful without an endpoint", () => {
     expect(proxyNotice({ state: "unreachable" })?.headline).toBe(
       "SONE isn't getting a reply through the proxy.",
@@ -122,7 +149,7 @@ describe("the banner", () => {
     render(<ProxyNoticeBanner />);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("nope.invalid:8080");
-    expect(screen.getByRole("button").textContent).toContain("Turn off proxy");
+    expect(screen.getByText("Turn off proxy")).toBeTruthy();
   });
 
   /// Turning the proxy off removes containment. Where a settings screen is
@@ -171,7 +198,7 @@ describe("the banner", () => {
       return Promise.resolve(undefined);
     });
     render(<ProxyNoticeBanner />);
-    fireEvent.click(await screen.findByRole("button"));
+    fireEvent.click(await screen.findByText("Turn off proxy"));
 
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("set_proxy_settings", {
@@ -190,7 +217,7 @@ describe("the banner", () => {
       return Promise.resolve(undefined);
     });
     render(<ProxyNoticeBanner />);
-    fireEvent.click(await screen.findByRole("button"));
+    fireEvent.click(await screen.findByText("Turn off proxy"));
 
     await waitFor(() => {
       const call = invoke.mock.calls.find((c) => c[0] === "set_proxy_settings");
@@ -259,6 +286,164 @@ describe("the banner", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /// The bug the probe closes. The count behind `unreachable` is cleared only
+  /// by an answered request, and once the bar is up the app is making none —
+  /// so a proxy repaired outside SONE, with no settings saved and no client
+  /// rebuilt, left the bar standing forever. The poll has to send the request
+  /// that was missing, and send it *before* it reads the status back.
+  it("sends a probe while unreachable so a repaired proxy can clear the bar", async () => {
+    vi.useFakeTimers();
+    try {
+      let recovered = false;
+      const order: string[] = [];
+      invoke.mockImplementation((cmd: string) => {
+        order.push(cmd);
+        if (cmd === "probe_proxy_reachability") {
+          recovered = true;
+          return Promise.resolve(undefined);
+        }
+        if (cmd === "get_proxy_status")
+          return Promise.resolve(
+            recovered
+              ? { state: "active", degraded: [] }
+              : { state: "unreachable", endpoint: "nope.invalid:8080" },
+          );
+        return Promise.resolve(undefined);
+      });
+      render(<ProxyNoticeBanner />);
+      await vi.waitFor(() =>
+        expect(screen.queryByRole("alert")).not.toBeNull(),
+      );
+
+      await vi.advanceTimersByTimeAsync(16000);
+      await vi.waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+
+      // The probe is worthless after the read: the status it fed would not be
+      // seen for another fifteen seconds.
+      const probed = order.indexOf("probe_proxy_reachability");
+      expect(probed).toBeGreaterThan(-1);
+      expect(order[probed + 1]).toBe("get_proxy_status");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /// Polling has to stay free everywhere else. `off` and `active` have nothing
+  /// to find out, and `blocked` has no client to send through — a probe in any
+  /// of them would put a packet on the wire to answer a question that was
+  /// already answered.
+  it("probes in no other state", async () => {
+    vi.useFakeTimers();
+    try {
+      for (const settled of [
+        { state: "active", degraded: [] },
+        { state: "blocked", reason: "port must not be 0" },
+      ]) {
+        invoke.mockReset();
+        // Start unreachable so the banner's own text can witness the status
+        // actually landing — a poll asserted before the first read has flushed
+        // proves nothing, because the interval is not installed yet.
+        let state: unknown = {
+          state: "unreachable",
+          endpoint: "nope.invalid:8080",
+        };
+        invoke.mockImplementation((cmd: string) =>
+          cmd === "get_proxy_status"
+            ? Promise.resolve(state)
+            : Promise.resolve(undefined),
+        );
+        const { unmount } = render(<ProxyNoticeBanner />);
+        await vi.waitFor(() =>
+          expect(screen.queryByText(/nope\.invalid/)).not.toBeNull(),
+        );
+
+        state = settled;
+        await vi.advanceTimersByTimeAsync(16000);
+        await vi.waitFor(() =>
+          expect(screen.queryByText(/nope\.invalid/)).toBeNull(),
+        );
+
+        const mark = invoke.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(60000);
+        expect(invoke.mock.calls.length).toBeGreaterThan(mark);
+        expect(
+          invoke.mock.calls
+            .slice(mark)
+            .filter((c) => c[0] === "probe_proxy_reachability"),
+        ).toEqual([]);
+        unmount();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /// A bar the user cannot put away is its own problem — both states here sit
+  /// across the top of the window, including the login screen.
+  it("can be dismissed by hand", async () => {
+    invoke.mockResolvedValue({
+      state: "unreachable",
+      endpoint: "nope.invalid:8080",
+    });
+    render(<ProxyNoticeBanner />);
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByLabelText("Dismiss"));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  /// And the rule that keeps dismissal honest: it is pinned to the condition
+  /// in front of the user, so it lasts exactly as long as that condition stays
+  /// continuously true. The proxy recovering retires the dismissal with it —
+  /// the next failure is news again, not something the user already waved off.
+  it("comes back when the same failure happens again later", async () => {
+    let state: unknown = {
+      state: "unreachable",
+      endpoint: "nope.invalid:8080",
+    };
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "get_proxy_status"
+        ? Promise.resolve(state)
+        : Promise.resolve(undefined),
+    );
+    render(<ProxyNoticeBanner />);
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByLabelText("Dismiss"));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+
+    // Still failing, still dismissed: the user said "not now" about this.
+    fireEvent(window, new Event(PROXY_STATUS_EVENT));
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    state = { state: "active", degraded: [] };
+    fireEvent(window, new Event(PROXY_STATUS_EVENT));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+
+    state = { state: "unreachable", endpoint: "nope.invalid:8080" };
+    fireEvent(window, new Event(PROXY_STATUS_EVENT));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeNull());
+  });
+
+  /// A dismissal must not carry across to a different claim. Same state, new
+  /// endpoint — or a new block reason — is a sentence the user has not read.
+  it("does not let a dismissal cover a different failure", async () => {
+    let state: unknown = { state: "unreachable", endpoint: "one.invalid:8080" };
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "get_proxy_status"
+        ? Promise.resolve(state)
+        : Promise.resolve(undefined),
+    );
+    render(<ProxyNoticeBanner />);
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByLabelText("Dismiss"));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+
+    state = { state: "unreachable", endpoint: "two.invalid:9090" };
+    fireEvent(window, new Event(PROXY_STATUS_EVENT));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("two.invalid:9090");
   });
 
   it("does not invent a notice out of a failed status call", async () => {

@@ -400,6 +400,54 @@ pub fn get_proxy_status(state: State<'_, AppState>) -> crate::proxy::ProxyStatus
     )
 }
 
+/// The origin both proxy probes aim at. A real API host, so a proxy that
+/// allow-lists destinations is exercised the way the app will actually use it,
+/// and the cheapest thing it serves.
+const PROXY_PROBE_URL: &str = "https://api.tidal.com/v1/ping";
+
+/// One request through the **live** client, so a proxy that started working
+/// again can say so.
+///
+/// The count behind `unreachable` is cleared only by an answered request, and
+/// the state it describes is precisely the one in which the app makes none —
+/// the user is looking at a window whose every request is failing. Nothing else
+/// clears it: `get_proxy_status` sends nothing by design, and
+/// `test_proxy_connection` probes the settings being edited rather than the
+/// cell. Fix the proxy externally — restart it, plug the cable back in — and
+/// without this the banner stands forever.
+///
+/// So the banner calls this, and only while it is already reporting
+/// `unreachable`. Every other state keeps the property that asking about the
+/// proxy puts nothing on the wire.
+///
+/// The generation comes from `client_at` beside the client that sends, never a
+/// separate read: an answer that lands after a settings save must be discarded
+/// rather than credited to the proxy that replaced the one it used.
+///
+/// A blocked cell is left alone. Nothing can be sent through it, `unanswered`
+/// says nothing about it, and the banner reports that state separately.
+#[tauri::command]
+pub async fn probe_proxy_reachability(state: State<'_, AppState>) -> Result<(), ()> {
+    probe_proxy_reachability_inner(state.proxied_http.clone(), PROXY_PROBE_URL).await;
+    Ok(())
+}
+
+/// The origin is a parameter only so a test can point it at a loopback
+/// stand-in; the command has exactly one destination.
+async fn probe_proxy_reachability_inner(cell: crate::proxy_http::ProxiedHttp, url: &str) {
+    let (generation, client) = cell.client_at();
+    let Ok(client) = client else { return };
+    // Short on purpose: this runs on a 15s poll, and a dead proxy that holds
+    // the connection open must not still be pending when the next one fires.
+    let outcome = client
+        .get(url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await;
+    // The count is the whole product; the response body is of no interest.
+    let _ = cell.observe_at(generation, outcome);
+}
+
 /// Persist the proxy settings, then reconfigure the transports — in that
 /// order, and the order is the whole point.
 ///
@@ -620,7 +668,7 @@ async fn test_proxy_connection_inner(
         .map_err(|e| format!("proxy test task failed: {e}"))??;
 
     match client
-        .get("https://api.tidal.com/v1/ping")
+        .get(PROXY_PROBE_URL)
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
@@ -998,6 +1046,119 @@ mod tests {
         assert!(
             format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
             "the test must go through the proxy it is testing: {c:?}"
+        );
+    }
+
+    /// A proxy on loopback whose health a test can flip mid-life.
+    ///
+    /// Unhealthy means "accepts and says nothing", which is what a proxy that
+    /// is not answering looks like to reqwest. The point is that the same
+    /// address recovers without the settings being touched — the scenario the
+    /// probe exists for, where the user fixes the proxy outside SONE and
+    /// nothing in the app would otherwise ever notice.
+    async fn controllable_proxy() -> (
+        std::net::SocketAddr,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let healthy = Arc::new(AtomicBool::new(false));
+        let flag = healthy.clone();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = l.accept().await {
+                let answer = flag.load(Ordering::SeqCst);
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let _ = sock.read(&mut [0u8; 4096]).await;
+                    if answer {
+                        let _ = sock
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                            )
+                            .await;
+                    }
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        (addr, healthy)
+    }
+
+    /// The bug this command exists to close, end to end.
+    ///
+    /// The count behind `unreachable` is cleared only by an answered request,
+    /// and once the banner is up the app is making none — so a proxy repaired
+    /// externally left the bar standing forever. The probe is the request that
+    /// was missing, and it has to work in both directions: raise the state
+    /// when the proxy is silent, clear it the moment one answer comes back,
+    /// with nothing saved and no client rebuilt in between.
+    ///
+    /// `http://` rather than `https://` so the stand-in sees a proxied request
+    /// in absolute form instead of a CONNECT tunnel it would have to terminate
+    /// with TLS. The host never resolves (RFC 6761) — the proxy is the only
+    /// thing that could carry this.
+    #[tokio::test]
+    async fn the_probe_raises_the_unreachable_state_and_then_clears_it() {
+        let (addr, healthy) = controllable_proxy().await;
+        let settings = enabled(ProxyType::Http, "127.0.0.1", addr.port());
+        let plan = crate::proxy::plan(&settings, &caps()).unwrap();
+        let cell = crate::proxy_http::ProxiedHttp::from_plan(&plan, &caps());
+        let url = "http://api.example.invalid/v1/ping";
+
+        probe_proxy_reachability_inner(cell.clone(), url).await;
+        assert!(
+            !cell.unreachable(),
+            "one unanswered request is a blip, not a verdict"
+        );
+        probe_proxy_reachability_inner(cell.clone(), url).await;
+        assert!(
+            cell.unreachable(),
+            "two in a row is what the banner is allowed to report"
+        );
+
+        // The proxy comes back. Nothing is saved, nothing is rebuilt, and no
+        // other request is made — this probe is the only thing that can notice.
+        healthy.store(true, Ordering::SeqCst);
+        probe_proxy_reachability_inner(cell.clone(), url).await;
+        assert!(
+            !cell.unreachable(),
+            "an answered request must clear the count, or the banner is stuck"
+        );
+    }
+
+    /// A blocked cell has no client, so there is nothing to send through and
+    /// nothing `unanswered` could mean. The banner reports that state from the
+    /// block reason instead, and probing it would put a packet on the wire for
+    /// a question already answered.
+    #[tokio::test]
+    async fn a_blocked_cell_is_never_probed() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let dialed = Arc::new(AtomicBool::new(false));
+        let witness = dialed.clone();
+        tokio::spawn(async move {
+            if l.accept().await.is_ok() {
+                witness.store(true, Ordering::SeqCst);
+            }
+        });
+
+        let cell = crate::proxy_http::ProxiedHttp::blocked("the settings form no plan");
+        probe_proxy_reachability_inner(cell.clone(), &format!("http://{addr}/v1/ping")).await;
+        tokio::task::yield_now().await;
+
+        assert!(
+            !dialed.load(Ordering::SeqCst),
+            "a blocked cell must not reach the network"
+        );
+        assert!(
+            !cell.unreachable(),
+            "and a cell that sent nothing has observed nothing"
         );
     }
 }
