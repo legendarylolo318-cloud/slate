@@ -128,11 +128,16 @@ export function proxyNotice(status: unknown): ProxyNotice | null {
  * same failure against a different endpoint, is news again.
  *
  * The rule that falls out: the banner stays hidden for exactly as long as the
- * condition it described remains continuously true. Anything else — recovery
- * to `active`, the proxy being turned off, a new reason, and therefore any
- * later relapse into `unreachable` — produces a key the dismissal does not
- * match, and the bar comes back. Nothing here is remembered across a restart,
- * which is the same rule stated once more.
+ * condition it described remains continuously *observed*. Anything else —
+ * recovery to `active`, the proxy being turned off, a new reason, and
+ * therefore any later relapse into `unreachable` — produces a key the
+ * dismissal does not match, and the bar comes back. Nothing here is remembered
+ * across a restart, which is the same rule stated once more.
+ *
+ * "Observed" rather than "true" is the precise word, and the difference is
+ * real: a proxy that recovers and fails again between two polls is never seen
+ * to have recovered, so the dismissal survives it. That is the behaviour to
+ * want — the user dismissed a proxy that is failing, and it is still failing.
  */
 export function noticeKey(status: unknown): string | null {
   const notice = proxyNotice(status);
@@ -141,6 +146,19 @@ export function noticeKey(status: unknown): string | null {
   const named = typeof s.endpoint === "string" ? s.endpoint : s.reason;
   return `${notice.tone}:${typeof named === "string" ? named.trim() : ""}`;
 }
+
+/** Why the bar will come back, said per tone, because the answers differ.
+ *
+ *  `unreachable` clears itself: the poll probes the live client while it is
+ *  showing, so the next time the proxy answers the notice is gone and the
+ *  dismissal with it. `blocked` never clears itself — nothing is sent through
+ *  a cell that has no client — so the only thing that retires a dismissal
+ *  there is the settings changing, which is the one promise this tooltip can
+ *  honestly make. */
+const DISMISS_TITLE = {
+  blocked: "Dismiss — shown again if the reason changes",
+  unreachable: "Dismiss — shown again the next time this happens",
+} as const;
 
 const TONE = {
   blocked: {
@@ -176,6 +194,16 @@ const TONE = {
  * The way out is a button, and it works while failing because
  * `set_proxy_settings` persists before it reconfigures: the disabled settings
  * reach disk whether or not anything else succeeds.
+ *
+ * Which is why the dismiss control is tied to `offerSettings` rather than
+ * offered everywhere. Dismissing hides the bar, and the bar is carrying the
+ * only escape a logged-out user has; a `blocked` cell makes that permanent for
+ * the session, because nothing is ever sent through it and so nothing can
+ * change what the status says. Even `unreachable`, whose probe does clear
+ * itself, only clears when the proxy actually comes back — which is not
+ * something a user with a dead proxy can count on. Where Settings → Network is
+ * reachable the bar is a report and can be put away; where it is the way out,
+ * it stays.
  */
 export default function ProxyNoticeBanner({
   offerSettings = false,
@@ -331,14 +359,16 @@ export default function ProxyNoticeBanner({
         >
           {busy ? "Turning off…" : "Turn off proxy"}
         </button>
-        <button
-          onClick={() => setDismissed(key)}
-          aria-label="Dismiss"
-          title="Dismiss until this happens again"
-          className={`px-2 py-1 rounded-md text-[13px] leading-none font-semibold border text-th-text-primary transition-colors ${tone.button}`}
-        >
-          ×
-        </button>
+        {offerSettings && (
+          <button
+            onClick={() => setDismissed(key)}
+            aria-label="Dismiss"
+            title={DISMISS_TITLE[notice.tone]}
+            className={`px-2 py-1 rounded-md text-[13px] leading-none font-semibold border text-th-text-primary transition-colors ${tone.button}`}
+          >
+            ×
+          </button>
+        )}
       </div>
     </div>
   );

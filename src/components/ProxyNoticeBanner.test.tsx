@@ -380,14 +380,68 @@ describe("the banner", () => {
     }
   });
 
-  /// A bar the user cannot put away is its own problem — both states here sit
-  /// across the top of the window, including the login screen.
+  /// The bar is not always just a report. On the login screen Settings →
+  /// Network is behind the login the proxy is refusing, so the bar *is* the
+  /// escape hatch — and dismissing it would take the escape with it. `blocked`
+  /// makes that permanent for the session: nothing is sent through a cell with
+  /// no client, so no probe and no request can ever change what the status
+  /// says. `unreachable` only recovers if the proxy does. Neither is a bet to
+  /// put behind a close button.
+  it("keeps the last way out where there is no other", async () => {
+    for (const state of [
+      { state: "blocked", reason: "proxy unusable" },
+      { state: "unreachable", endpoint: "nope.invalid:8080" },
+    ]) {
+      invoke.mockReset();
+      invoke.mockResolvedValue(state);
+
+      const { unmount } = render(<ProxyNoticeBanner />);
+      await screen.findByRole("alert");
+      expect(screen.queryByLabelText("Dismiss")).toBeNull();
+      expect(screen.getByText("Turn off proxy")).toBeTruthy();
+      unmount();
+
+      // And where a settings screen is reachable it is a report again, so it
+      // can be put away.
+      render(<ProxyNoticeBanner offerSettings />);
+      await screen.findByRole("alert");
+      expect(screen.getByLabelText("Dismiss")).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  /// The tooltip has to be true of the tone it is on. `unreachable` clears
+  /// itself once the probe gets an answer; `blocked` never does, so promising
+  /// it will come back "next time this happens" would be a lie — it has not
+  /// stopped happening.
+  it("says why the bar will come back, per tone", async () => {
+    invoke.mockResolvedValue({
+      state: "unreachable",
+      endpoint: "nope.invalid:8080",
+    });
+    const { unmount } = render(<ProxyNoticeBanner offerSettings />);
+    await screen.findByRole("alert");
+    expect(screen.getByLabelText("Dismiss").getAttribute("title")).toBe(
+      "Dismiss — shown again the next time this happens",
+    );
+    unmount();
+
+    invoke.mockResolvedValue({ state: "blocked", reason: "proxy unusable" });
+    render(<ProxyNoticeBanner offerSettings />);
+    await screen.findByRole("alert");
+    expect(screen.getByLabelText("Dismiss").getAttribute("title")).toBe(
+      "Dismiss — shown again if the reason changes",
+    );
+  });
+
+  /// A bar the user cannot put away is its own problem, where putting it away
+  /// does not also throw away the only thing that can fix it.
   it("can be dismissed by hand", async () => {
     invoke.mockResolvedValue({
       state: "unreachable",
       endpoint: "nope.invalid:8080",
     });
-    render(<ProxyNoticeBanner />);
+    render(<ProxyNoticeBanner offerSettings />);
     await screen.findByRole("alert");
     fireEvent.click(screen.getByLabelText("Dismiss"));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
@@ -407,7 +461,7 @@ describe("the banner", () => {
         ? Promise.resolve(state)
         : Promise.resolve(undefined),
     );
-    render(<ProxyNoticeBanner />);
+    render(<ProxyNoticeBanner offerSettings />);
     await screen.findByRole("alert");
     fireEvent.click(screen.getByLabelText("Dismiss"));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
@@ -435,7 +489,7 @@ describe("the banner", () => {
         ? Promise.resolve(state)
         : Promise.resolve(undefined),
     );
-    render(<ProxyNoticeBanner />);
+    render(<ProxyNoticeBanner offerSettings />);
     await screen.findByRole("alert");
     fireEvent.click(screen.getByLabelText("Dismiss"));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
