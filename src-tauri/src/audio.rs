@@ -97,10 +97,21 @@ impl AudioProxy {
         // back to the system, bypass list included, so a user with no proxy
         // configured and an ambient `no_proxy` must keep playing.
         //
-        // Only a restart can clear this: `curlhttpsrc` reads `no_proxy` when
-        // the element is constructed and forwards it as CURLOPT_NOPROXY, which
-        // beats the `proxy` property we set, and the variable cannot be removed
-        // once GTK's threads exist.
+        // The mechanism this guards against is `curlhttpsrc`: it reads
+        // `no_proxy` when the element is constructed and forwards it as
+        // CURLOPT_NOPROXY, which beats the `proxy` property we set, and the
+        // variable cannot be removed once GTK's threads exist — so only a
+        // restart clears it.
+        //
+        // The refusal is deliberately WIDER than that mechanism, and this is
+        // the note that says so rather than a claim the two line up. Curl wins
+        // source selection only while credentials are in play
+        // (`promote_curl_source` restores its rank otherwise), and F6 records
+        // `souphttpsrc` as immune to `no_proxy` — so a credential-free proxy
+        // would in all likelihood route correctly through soup. It is refused
+        // regardless, because nothing here verifies which factory will win at
+        // build time: the rank is process-global, this module mutates it, and
+        // the spec chose fail-closed over an argument about autoplugging.
         if self.launch_bypass && !matches!(plan, crate::proxy::ProxyPlan::Direct) {
             return Err(crate::proxy::BlockReason::new(
                 "a proxy bypass list was set in the environment when SONE \
@@ -185,9 +196,9 @@ fn apply_route_to_source(source: &gst::Element, route: &crate::proxy::Route) {
 /// a 13x preroll cost for a mutex here).
 ///
 /// The captured value is therefore a snapshot. A pipeline that outlives a
-/// settings change keeps it until Task 5's teardown rebuilds the pipeline — this
-/// hook does not re-point a live source, and nothing here should be read as
-/// claiming it does.
+/// settings change keeps it until `SetProxySettings` tears that pipeline down
+/// and rebuilds it — this hook does not re-point a live source, and nothing
+/// here should be read as claiming it does.
 fn watch_pipeline_sources(pipeline: &gst::Pipeline, route: crate::proxy::Route) {
     pipeline.connect_deep_element_added(move |_pipeline, _bin, element| {
         // Check the factory first: this fires for every element in the graph.
@@ -298,6 +309,13 @@ enum AttachJob {
     Attach {
         pipeline: gst::Pipeline,
         concat: gst::Element,
+        /// The `route_generation` the target pipeline was built under — i.e.
+        /// the route its `watch_pipeline_sources` hook applies. The executor
+        /// compares it against the current generation and refuses when they
+        /// differ: the hook is what actually configures this branch's source,
+        /// so a pipeline older than the route would fetch the next track on
+        /// the route the user just replaced.
+        build_generation: u64,
         uri: String,
         is_dash: bool,
         track_id: u64,
@@ -669,6 +687,7 @@ fn run_attach_executor(
             AttachJob::Attach {
                 pipeline,
                 concat,
+                build_generation,
                 uri,
                 is_dash,
                 track_id,
@@ -681,6 +700,23 @@ fn run_attach_executor(
                 // lands from here on, this branch is built under a route that is
                 // no longer current and must not be armed.
                 let generation_at_start = route_generation.load(Ordering::Acquire);
+                // The route below is recomputed from the current settings, but
+                // it is not what configures this branch: the target pipeline's
+                // hook is, and that hook holds the route of `build_generation`.
+                // Refuse before `attach_next_bin`, because that call prerolls —
+                // up to fifteen seconds of the next track on the old route.
+                //
+                // Nothing to detach here: this job built nothing, and the slot
+                // it would otherwise clear belongs to the pipeline that is now
+                // current (`SetProxySettings` already detached anything left on
+                // the stale one), so dropping that reference without detaching
+                // would strand a branch already linked to concat.
+                if build_generation != generation_at_start {
+                    log::warn!(
+                        "[proxy] refusing to preroll onto a pipeline built under the previous route"
+                    );
+                    continue;
+                }
                 let route = {
                     let ap = audio_proxy.lock().unwrap_or_else(|p| p.into_inner());
                     ap.route_for(capability_of(is_dash))
@@ -1832,6 +1868,13 @@ impl AudioPlayer {
             // before storing, so a branch built under the previous route is
             // discarded instead of being armed as the next playing track.
             let route_generation = Arc::new(AtomicU64::new(0));
+            // The generation the live pipeline's hook was built under. Sampled
+            // at each build in `PlayUrl`, carried in every `AttachJob::Attach`,
+            // and compared there: `SetProxySettings` bumps the generation and
+            // only then queues the rebuild on the self-sender, so a
+            // `SetNextTrack` landing in that gap is served by the pipeline that
+            // is about to be replaced.
+            let mut pipeline_route_generation: u64 = 0;
 
             // Serialized attach/detach executor thread (C3). The worker dispatches
             // jobs here and returns immediately — it never blocks on pad-slot ops.
@@ -1960,6 +2003,9 @@ impl AudioPlayer {
                                             cannot be pointed at a proxy"
                                     .to_string());
                             }
+                            // Stamp the pipeline both arms below are about to
+                            // build with the generation this route came from.
+                            pipeline_route_generation = route_generation.load(Ordering::Acquire);
 
                             if exclusive || bit_perfect {
                                 // ── DirectAlsa path ──
@@ -3009,10 +3055,11 @@ impl AudioPlayer {
                         //
                         // `eos` is the one exception, and it is not a play/pause
                         // flag. FOUR bus handlers set it — the terminal EOS arm and
-                        // the Error arm of each mode's watcher — and only `PlayUrl`
-                        // / `HandleGaplessAdvance` clear it. So it means playback
-                        // ended, by completion or by failure; it does NOT mean the
-                        // source drained.
+                        // the Error arm of each mode's watcher — and it is cleared
+                        // only where a track starts or playback is torn down:
+                        // `PlayUrl`, `HandleGaplessAdvance`, and both backend arms
+                        // of `Stop`. So it means playback ended, by completion or by
+                        // failure; it does NOT mean the source drained.
                         //
                         // The failure shape is the one that reaches here, and it is
                         // the containment hole. An Error arm sets `eos`, emits
@@ -3042,6 +3089,14 @@ impl AudioPlayer {
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
                         let route_changed = audio_route_differs(&previous, &current);
                         drop(current);
+                        if !route_changed {
+                            // No rebuild is coming, and the hook on the live
+                            // pipeline still carries what a fresh build would
+                            // compute — so the bump above did not make it stale.
+                            // Without this, a save that changes nothing would
+                            // refuse every later preroll on the playing track.
+                            pipeline_route_generation = route_generation.load(Ordering::Acquire);
+                        }
                         if route_changed && backend.is_some() {
                             if eos.load(Ordering::SeqCst) {
                                 // Queued on the self-sender for the same reason the
@@ -3261,6 +3316,7 @@ impl AudioPlayer {
                         let _ = attach_tx.send(AttachJob::Attach {
                             pipeline,
                             concat,
+                            build_generation: pipeline_route_generation,
                             uri,
                             is_dash,
                             track_id,
@@ -4296,6 +4352,81 @@ mod proxy_source_tests {
             src.property::<Option<String>>("proxy-id").as_deref(),
             Some("bob")
         );
+    }
+
+    #[test]
+    fn a_stale_pipeline_is_refused_before_the_next_branch_is_prerolled() {
+        let _ = gst::init();
+        // `SetProxySettings` bumps the generation and only then queues the
+        // rebuild on the self-sender, so a `SetNextTrack` landing in that gap is
+        // served by the pipeline that is about to be replaced — whose hook still
+        // applies the route the user just left. The refusal therefore has to
+        // come before `attach_next_bin`, which prerolls up to fifteen seconds of
+        // the next track.
+        let Some(concat) = make("concat") else {
+            panic!("concat ships in coreelements, and gapless is gated on it");
+        };
+        let pipeline = gst::Pipeline::new();
+        pipeline.add(&concat).expect("pipeline accepts concat");
+
+        let next_bin: Arc<Mutex<Option<NextBinState>>> = Arc::new(Mutex::new(None));
+        let audio_proxy = Arc::new(Mutex::new(AudioProxy::new(
+            crate::ProxySettings::default(),
+            HostCaps::assume_all_present(),
+        )));
+        let route_generation = Arc::new(AtomicU64::new(7));
+        let (tx, rx) = mpsc::channel::<AttachJob>();
+        let executor = {
+            let next_bin = Arc::clone(&next_bin);
+            let route_generation = Arc::clone(&route_generation);
+            std::thread::spawn(move || {
+                run_attach_executor(rx, next_bin, audio_proxy, route_generation)
+            })
+        };
+
+        // A file that does not exist: nothing is fetched, and the preroll
+        // failing changes nothing here — `attach_next_bin` reports Ok once the
+        // branch is linked into the pipeline.
+        let job = |build_generation: u64, track_id: u64| AttachJob::Attach {
+            pipeline: pipeline.clone(),
+            concat: concat.clone(),
+            build_generation,
+            uri: "file:///nonexistent/sone-gapless-guard.flac".into(),
+            is_dash: false,
+            track_id,
+            qid: track_id.to_string(),
+            norm_gain: 1.0,
+            replay_gain: f64::NAN,
+            peak_amplitude: f64::NAN,
+        };
+
+        // The first job carries the current generation and must attach. Without
+        // it a refusal proves nothing: a branch that could not be built here at
+        // all would leave the same empty pipeline behind.
+        tx.send(job(7, 1)).expect("the executor is running");
+        tx.send(job(6, 2)).expect("the executor is running");
+        drop(tx);
+        executor
+            .join()
+            .expect("the executor thread finishes with the sender");
+
+        let armed = next_bin
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+            .expect("the current-generation job must arm the slot");
+        assert_eq!(
+            armed.track_id, 1,
+            "a job stamped with an older pipeline must not take the slot"
+        );
+        assert_eq!(
+            pipeline.children().len(),
+            3,
+            "the stale job must add nothing: concat plus one branch (a \
+             uridecodebin and its queue) is everything that may be here"
+        );
+
+        detach_bin(&pipeline, &concat, &armed.bin, &armed.branch_queue);
     }
 
     #[test]
