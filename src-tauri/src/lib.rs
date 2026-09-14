@@ -228,7 +228,15 @@ pub struct AppState {
     /// The one reqwest client every consumer shares. Blocked plans hold an
     /// `Err`, so no caller can fall back to an unproxied client.
     pub proxied_http: crate::proxy_http::ProxiedHttp,
-    pub host_caps: crate::proxy::HostCaps,
+    /// The probed GStreamer capabilities, re-read whenever the proxy settings
+    /// are saved. Not a plain value: the audio thread re-probes on every
+    /// `SetProxySettings`, and a copy frozen at startup lets the advisory
+    /// refusal in `commands::playback` outlive the facts the boundary decides
+    /// on — refusing a tier the audio thread would have built. This keeps the
+    /// two answering from one probe; it does not promise that a plugin
+    /// installed mid-session becomes visible, which is why those refusals say
+    /// to restart. Read it through `host_caps()`.
+    pub host_caps: std::sync::Mutex<crate::proxy::HostCaps>,
     pub settings_path: PathBuf,
     pub cache_dir: PathBuf,
     pub disk_cache: DiskCache,
@@ -493,7 +501,7 @@ impl AppState {
             pipeline_probe,
             tidal_client: Mutex::new(tidal_client),
             proxied_http,
-            host_caps,
+            host_caps: std::sync::Mutex::new(host_caps),
             settings_path,
             cache_dir,
             disk_cache,
@@ -524,6 +532,38 @@ impl AppState {
             overlay_handle: Mutex::new(None),
             signal_path,
         }
+    }
+
+    /// The capabilities as last probed. `HostCaps` is `Copy`, so nothing holds
+    /// the lock past the read.
+    pub fn host_caps(&self) -> crate::proxy::HostCaps {
+        *self
+            .host_caps
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Re-read the registry and store the result. Called where the proxy
+    /// settings are saved, which is the moment the audio thread re-probes too —
+    /// so the advisory layer and the boundary answer from the same facts.
+    pub fn refresh_host_caps(&self) {
+        let probed = crate::audio::probe_host_caps();
+        let mut caps = self
+            .host_caps
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *caps != probed {
+            log::info!(
+                "[proxy] host capabilities changed: GStreamer {}.{}.{}, \
+                 dashdemux={}, curlhttpsrc={}",
+                probed.gst_version.0,
+                probed.gst_version.1,
+                probed.gst_version.2,
+                probed.has_dashdemux,
+                probed.has_curlhttpsrc
+            );
+        }
+        *caps = probed;
     }
 
     pub fn load_settings(&self) -> Option<Settings> {

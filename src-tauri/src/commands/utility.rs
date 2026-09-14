@@ -394,7 +394,7 @@ pub fn get_proxy_status(state: State<'_, AppState>) -> crate::proxy::ProxyStatus
     let block = state.proxied_http.client().err();
     crate::proxy::ProxyStatus::observed(
         &settings,
-        &state.host_caps,
+        &state.host_caps(),
         block.as_ref().map(|e| e.cause.as_str()),
         state.proxied_http.unreachable(),
     )
@@ -421,13 +421,12 @@ pub fn get_proxy_status(state: State<'_, AppState>) -> crate::proxy::ProxyStatus
 /// "connection failed". Playback does the same, as its own toast, and that path
 /// deliberately does not treat a block as an unplayable track.
 ///
-/// One thing this still does not cover, so nobody reads it as full coverage.
-/// `get_proxy_status` now emits `ProxyStatus`, and `ProxyBlockedBanner.tsx`
-/// renders a block outside the authenticated shell with a button that turns
-/// the proxy off — so a block has a standing report and a way out. But
-/// `degraded` is still always empty: a plan that serves the API while refusing
-/// one audio tier surfaces only when that tier is actually used, because the
-/// per-feature notice waits on the real `HostCaps` probe in stage 3.
+/// `get_proxy_status` emits `ProxyStatus`, and `ProxyBlockedBanner.tsx` renders
+/// a block outside the authenticated shell with a button that turns the proxy
+/// off — so a block has a standing report and a way out. Its `degraded` list is
+/// real: `get_proxy_status` passes the probed `HostCaps`, so a plan that serves
+/// the API while refusing one audio tier is named before that tier is used —
+/// `lossy` on a host below `CURL_SEEK_FIXED` with a credentialed proxy, say.
 ///
 /// Split out from the command so the ordering can be tested without an
 /// `AppState`; `persist` stands in for the encrypted read-modify-write.
@@ -492,6 +491,12 @@ pub async fn set_proxy_settings(
     state: State<'_, AppState>,
     settings: crate::ProxySettings,
 ) -> Result<(), SoneError> {
+    // Re-probe first, so everything below answers from the same reading the
+    // audio thread takes: it re-probes on every `SetProxySettings`, while the
+    // copy stored at startup never moved. Left frozen, `explain_block` — a
+    // layer that is advisory by design — is a permanent stop the containment
+    // boundary would not impose.
+    state.refresh_host_caps();
     let outcome = persist_then_reconfigure(
         &settings,
         |s| {
@@ -536,7 +541,7 @@ pub async fn set_proxy_settings(
             Ok(())
         },
         state.proxied_http.clone(),
-        state.host_caps,
+        state.host_caps(),
     )
     .await;
 
@@ -600,7 +605,7 @@ pub async fn test_proxy_connection(
     settings: crate::ProxySettings,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let caps = state.host_caps;
+    let caps = state.host_caps();
     test_proxy_connection_inner(settings, caps).await
 }
 

@@ -211,7 +211,7 @@ pub async fn play_tidal_track(
     // as authoritative, and never drop the audio thread's refusals because
     // this exists.
     let proxy_settings = state.load_settings().unwrap_or_default().proxy;
-    explain_block(&proxy_settings, &state.host_caps, is_dash)?;
+    explain_block(&proxy_settings, &state.host_caps(), is_dash)?;
 
     // Store selected values for live toggle
     state.last_replay_gain.store(rg.to_bits(), Ordering::Relaxed);
@@ -253,7 +253,7 @@ pub async fn set_next_track(
     // settings file makes this pass silently. The audio thread is the
     // boundary; it refuses at pipeline build with the settings it holds.
     let proxy_settings = state.load_settings().unwrap_or_default().proxy;
-    explain_block(&proxy_settings, &state.host_caps, is_dash)?;
+    explain_block(&proxy_settings, &state.host_caps(), is_dash)?;
 
     state
         .audio_player

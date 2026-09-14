@@ -32,15 +32,18 @@ pub struct HostCaps {
 }
 
 impl HostCaps {
-    /// Stage 1 default. Stage 3 replaces this with a real probe run after
-    /// `gst::init()` on the audio thread.
+    /// A **test-only** stand-in for host facts. Production reads the registry
+    /// through `crate::audio::probe_host_caps()` — `AppState` and the audio
+    /// thread both do, and there are no production callers of this left. It
+    /// stays `pub` only so the integration targets under `tests/` can build a
+    /// `HostCaps` without a GStreamer registry.
     ///
     /// Every value here is the permissive one, and `gst_version` is exactly
     /// `CURL_SEEK_FIXED` — the lowest version that passes the seek gate. So a
-    /// production call site the stage-3 migration misses does not fail loudly;
-    /// it keeps asserting a host that can serve everything, which is the
-    /// fail-open direction. Each production site carries a `// STAGE 3:`
-    /// marker so `grep -rn "STAGE 3:"` enumerates them.
+    /// new production caller would not fail loudly: it would assert a host that
+    /// can serve everything, which is the fail-open direction this work exists
+    /// to close. Reach for the probe instead.
+    #[doc(hidden)]
     pub fn assume_all_present() -> Self {
         Self {
             has_dashdemux: true,
@@ -301,19 +304,25 @@ impl ProxyPlan {
             // force curlhttpsrc; and it cannot do authenticated SOCKS5 at all.
             if !socks && creds.is_some() && !env.has_curlhttpsrc {
                 return Err(BlockReason::new(
-                    "audio cannot be proxied with credentials: the curl source plugin is missing",
+                    "audio cannot be proxied with credentials: the curl source \
+                     plugin (curlhttpsrc) is missing — install it and restart \
+                     SONE, or use a proxy that needs no username or password",
                 ));
             }
             if socks && creds.is_some() && !env.has_curlhttpsrc {
                 return Err(BlockReason::new(
-                    "authenticated SOCKS5 audio requires the curl source plugin",
+                    "authenticated SOCKS5 audio requires the curl source plugin \
+                     (curlhttpsrc) — install it and restart SONE, or use a \
+                     SOCKS5 proxy that needs no username or password",
                 ));
             }
         }
 
         if c == Capability::Dash && !env.has_dashdemux {
             return Err(BlockReason::new(
-                "high-resolution audio cannot be proxied: the legacy adaptive demuxer is missing",
+                "high-resolution audio cannot be proxied: the legacy adaptive \
+                 demuxer (dashdemux) is missing — install it and restart SONE, \
+                 or lower the streaming quality below high-resolution",
             ));
         }
 
@@ -350,7 +359,10 @@ impl ProxyPlan {
                     // scheme, not a block. Fail closed in every profile.
                     if !env.has_curlhttpsrc {
                         return Err(BlockReason::new(
-                            "authenticated SOCKS5 audio requires the curl source plugin",
+                            "authenticated SOCKS5 audio requires the curl source \
+                             plugin (curlhttpsrc) — install it and restart SONE, \
+                             or use a SOCKS5 proxy that needs no username or \
+                             password",
                         ));
                     }
                     "socks5h"
@@ -433,10 +445,13 @@ pub const PROXY_ENV_VARS: [&str; 8] = [
 /// So each of the remaining six is scrubbed by the stage that replaces it:
 ///
 /// - `http_proxy` / `HTTP_PROXY`, `https_proxy` / `HTTPS_PROXY` and
-///   `all_proxy` / `ALL_PROXY` — **stage 3** for the GStreamer sources (which
-///   gain an explicit `proxy` property) and **stage 4a** for WebKit (which
-///   gains an explicit `WebKitNetworkProxySettings`). Until both are in force
-///   the ambient value is the only thing routing those surfaces.
+///   `all_proxy` / `ALL_PROXY` — still here. The GStreamer sources now carry an
+///   explicit `proxy` property, but the scrub was deliberately **not** widened
+///   with them: WebKit (the login window, `<video>`, the blur backdrop) has no
+///   explicit proxy yet, and those three names are the only thing routing it.
+///   Deleting them would move that surface from proxied-by-ambient-config to
+///   direct, from the real address. They go with the stage that sets
+///   `WebKitNetworkProxySettings`, not before.
 ///
 /// reqwest is already independent of all of this: `proxy_http.rs` builds every
 /// client from the plan, and the `Direct` route restores the captured values
@@ -768,9 +783,15 @@ pub enum ProxyStatus {
 
 impl ProxyStatus {
     /// Pure, so the whole table can be tested without a GStreamer registry or
-    /// an `AppState`. `caps` is `HostCaps::assume_all_present()` until stage 3
-    /// replaces it with a real probe — until then `degraded` is always empty,
-    /// which is honest rather than useful.
+    /// an `AppState` — which is all this is for now. **Production reports
+    /// through `observed`**, which corrects this verdict with what the live
+    /// client cell holds; nothing outside tests calls this, and a caller that
+    /// did would report `Active` for a proxy that cannot hand out a client.
+    ///
+    /// `caps` is the real probe wherever the answer reaches a user, so
+    /// `degraded` genuinely fills: on a host below `CURL_SEEK_FIXED` with a
+    /// credentialed proxy it carries `Lossy`.
+    #[doc(hidden)]
     pub fn evaluate(s: &crate::ProxySettings, caps: &HostCaps) -> Self {
         match plan(s, caps) {
             Ok(p) => Self::for_plan(&p, caps),
@@ -1355,7 +1376,9 @@ mod tests {
         for c in [Capability::Lossy, Capability::Dash] {
             assert_eq!(
                 block_cause(&p, c, &caps),
-                "authenticated SOCKS5 audio requires the curl source plugin",
+                "authenticated SOCKS5 audio requires the curl source plugin \
+                 (curlhttpsrc) — install it and restart SONE, or use a SOCKS5 \
+                 proxy that needs no username or password",
                 "capability {c:?} must fail closed"
             );
         }
