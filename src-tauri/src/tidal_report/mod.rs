@@ -233,14 +233,16 @@ impl TidalReporter {
             .await
             .remove(&tid)
             .unwrap_or_default();
-        let src = source.and_then(|(t, id)| event::resolve_source(&t, &id, tid));
-        log::debug!(
-            "tidal-report: now tracking track={tid} dur={duration_secs}s source={}",
-            src.as_ref()
-                .map(|(t, id)| format!("{}/{}", t.as_tidal(), id))
-                .unwrap_or_else(|| "<none>".into())
+        let src = event::resolve_source(
+            source.as_ref().map(|(t, id)| (t.as_str(), id.as_str())),
+            tid,
         );
-        *self.current.lock().await = Some(PlaySession::new(tid, duration_secs, meta, src));
+        log::debug!(
+            "tidal-report: now tracking track={tid} dur={duration_secs}s source={}/{}",
+            src.0.as_tidal(),
+            src.1
+        );
+        *self.current.lock().await = Some(PlaySession::new(tid, duration_secs, meta, Some(src)));
     }
 
     /// Decide whether a closed session should be reported, logging the reason.

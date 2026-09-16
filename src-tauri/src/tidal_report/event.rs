@@ -64,19 +64,21 @@ impl SourceType {
 /// attributes. Containers keep their id. ITEM must carry the track's own id —
 /// SONE's id for these sources is a search query or section title, which
 /// TIDAL accepts but never surfaces. Favorites use the web player's fixed ids.
-pub fn resolve_source(
-    sone_type: &str,
-    sone_id: &str,
-    track_id: u64,
-) -> Option<(SourceType, String)> {
-    let st = SourceType::from_sone(sone_type)?;
+/// A missing or unknown source is reported as ITEM + track id, matching the
+/// official player, which never sends a sourceless play (sourceless plays are
+/// accepted but never reach Recently played).
+pub fn resolve_source(sone: Option<(&str, &str)>, track_id: u64) -> (SourceType, String) {
+    let st = sone
+        .and_then(|(t, _)| SourceType::from_sone(t))
+        .unwrap_or(SourceType::Item);
+    let sone_id = sone.map(|(_, id)| id).unwrap_or_default();
     let id = match st {
         SourceType::Item => track_id.to_string(),
         SourceType::MyItems if sone_id == "favorites-videos" => "MY_VIDEOS".into(),
         SourceType::MyItems => "MY_TRACKS".into(),
         _ => sone_id.to_string(),
     };
-    Some((st, id))
+    (st, id)
 }
 
 /// JWT claims needed to attribute an event to the account.
@@ -372,11 +374,11 @@ mod tests {
     #[test]
     fn single_track_sources_use_the_track_id() {
         for s in ["search", "home-section", "view-all"] {
-            let (st, id) = resolve_source(s, "tv off", 401317294).unwrap();
+            let (st, id) = resolve_source(Some((s, "tv off")), 401317294);
             assert!(matches!(st, SourceType::Item), "{s} must map to ITEM");
             assert_eq!(id, "401317294", "{s} must carry the track id");
         }
-        let ev = sample(resolve_source("search", "tv off", 42));
+        let ev = sample(Some(resolve_source(Some(("search", "tv off")), 42)));
         let v: Value = serde_json::from_str(&build_body(&ev, &claims())).unwrap();
         assert_eq!(v["payload"]["sourceType"], "ITEM");
         assert_eq!(v["payload"]["sourceId"], "42");
@@ -386,23 +388,41 @@ mod tests {
     // surfaces as the "My Tracks" shortcut in Recently played.
     #[test]
     fn favorites_map_to_my_items() {
-        let (st, id) = resolve_source("favorites", "favorites", 7).unwrap();
+        let (st, id) = resolve_source(Some(("favorites", "favorites")), 7);
         assert!(matches!(st, SourceType::MyItems));
         assert_eq!(id, "MY_TRACKS");
-        let (_, id) = resolve_source("favorites", "favorites-videos", 7).unwrap();
+        let (_, id) = resolve_source(Some(("favorites", "favorites-videos")), 7);
         assert_eq!(id, "MY_VIDEOS");
-        let ev = sample(resolve_source("favorites", "favorites", 7));
+        let ev = sample(Some(resolve_source(Some(("favorites", "favorites")), 7)));
         let v: Value = serde_json::from_str(&build_body(&ev, &claims())).unwrap();
         assert_eq!(v["payload"]["sourceType"], "MY_ITEMS");
     }
 
-    // Real containers keep their own id; unknown sources stay sourceless.
+    // Real containers keep their own id.
     #[test]
     fn container_sources_keep_their_id() {
-        let (st, id) = resolve_source("album", "1765476", 42).unwrap();
+        let (st, id) = resolve_source(Some(("album", "1765476")), 42);
         assert!(matches!(st, SourceType::Album));
         assert_eq!(id, "1765476");
-        assert!(resolve_source("video", "9", 42).is_none());
+    }
+
+    // The official player never sends a sourceless play: a track started
+    // outside any known container is reported as ITEM with its own id, and
+    // only that shape surfaces in Recently played. Covers search Top Hits,
+    // the search bar dropdown, context-menu plays, deep links and any future
+    // entry point that starts a track without setting a playback source.
+    #[test]
+    fn missing_or_unknown_source_falls_back_to_item() {
+        let (st, id) = resolve_source(None, 293340860);
+        assert!(matches!(st, SourceType::Item));
+        assert_eq!(id, "293340860");
+        let (st, id) = resolve_source(Some(("video", "9")), 42);
+        assert!(matches!(st, SourceType::Item));
+        assert_eq!(id, "42");
+        let ev = sample(Some(resolve_source(None, 42)));
+        let v: Value = serde_json::from_str(&build_body(&ev, &claims())).unwrap();
+        assert_eq!(v["payload"]["sourceType"], "ITEM");
+        assert_eq!(v["payload"]["sourceId"], "42");
     }
 
     #[test]
