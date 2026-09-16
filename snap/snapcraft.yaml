@@ -131,6 +131,7 @@ parts:
       - libblas3
       - liblapack3
     source: .
+    source-type: git
     override-build: |
       set -eu
       # rustup snap (core26) crashes if the gnome ext's LD_LIBRARY_PATH makes it
