@@ -50,16 +50,23 @@ textarea {
 }
 
 /* WebKitGTK applies the CSS `zoom` factor to the SVG stroke-width presentation
-   attribute a second time, so icons render `zoom`x too heavy (and too light
-   when zoomed out). A CSS declaration overrides the attribute and scales once. */
+   attribute (and to any `px` CSS value) a second time, so icons render `zoom`x
+   too heavy. A unitless CSS value scales once — but the production CSS
+   optimizer rewrites a bare `2` to `2px`, so the number is carried through a
+   custom property, which it leaves untouched. */
+:root {
+  --icon-stroke-2: 2;
+  --icon-stroke-2-5: 2.5;
+  --icon-stroke-3: 3;
+}
 svg[stroke-width="2"] {
-  stroke-width: 2;
+  stroke-width: var(--icon-stroke-2);
 }
 svg[stroke-width="2.5"] {
-  stroke-width: 2.5;
+  stroke-width: var(--icon-stroke-2-5);
 }
 svg[stroke-width="3"] {
-  stroke-width: 3;
+  stroke-width: var(--icon-stroke-3);
 }
 
 /* Visible selection highlight across dark + light themes.
