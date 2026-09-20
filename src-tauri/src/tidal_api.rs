@@ -55,7 +55,7 @@ const TIDAL_AUTH_URL: &str = "https://auth.tidal.com/v1/oauth2";
 const TIDAL_API_URL: &str = "https://api.tidal.com/v1";
 const TIDAL_API_V2_URL: &str = "https://api.tidal.com/v2";
 const TIDAL_OPENAPI_URL: &str = "https://openapi.tidal.com/v2";
-const TIDAL_CLIENT_VERSION: &str = "2025.11.3";
+const TIDAL_CLIENT_VERSION: &str = "2026.9.15";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AuthTokens {
