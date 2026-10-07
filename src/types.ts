@@ -556,6 +556,8 @@ export interface HomeSection {
   items: HomeItem[];
   hasMore: boolean;
   apiPath?: string;
+  /** The item a HORIZONTAL_LIST_WITH_CONTEXT row is based on ("Because you listened to"). */
+  header?: HomeItem;
 }
 
 export interface HomePageResponse {

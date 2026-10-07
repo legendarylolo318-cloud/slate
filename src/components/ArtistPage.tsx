@@ -205,13 +205,13 @@ export default function ArtistPage({
   // Guaranteed final fallback: the first top track's album cover (always present).
   const firstTrackCover = topTracks[0]?.album?.cover;
 
-  // Image sources in priority order: dedicated artist artwork → legacy picture →
+  // Image sources in priority order: picture → dedicated artist artwork →
   // album-cover fallbacks. Each loads progressively (small first, hi-res swaps in).
   // Mirrors getArtistImage in src/utils/itemHelpers.ts — keep both in sync.
   const heroSources = useMemo(() => {
     const list: { uuid: string; kind: "artist" | "album" }[] = [];
-    if (artworkId) list.push({ uuid: artworkId, kind: "artist" });
     if (picture) list.push({ uuid: picture, kind: "artist" });
+    if (artworkId) list.push({ uuid: artworkId, kind: "artist" });
     if (albumFallback) list.push({ uuid: albumFallback, kind: "album" });
     if (firstTrackCover) list.push({ uuid: firstTrackCover, kind: "album" });
     return list;
