@@ -428,7 +428,7 @@ export default function Home() {
           )}
           {/* Skeleton quick access — only on the static/For-you feed */}
           {slugOf(activeType) === "static" && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 mb-10">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-10">
               {Array.from({ length: 8 }).map((_, i) => (
                 <div
                   key={i}
@@ -502,7 +502,7 @@ export default function Home() {
           {/* Quick Access Grid (Hero) — SHORTCUT_LIST from v2 feed, For-you only */}
           {shortcutSection && (
             <section className="mb-10">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {/* Loved Tracks - always first */}
                 <div
                   onClick={navigateToFavorites}
