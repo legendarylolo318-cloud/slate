@@ -18,6 +18,8 @@ export const ACTION_IDS = [
   "toggleExclusive",
   "toggleBitPerfect",
   "toggleShortcuts",
+  "closeWindow",
+  "quitApp"
 ] as const;
 
 export type ActionId = (typeof ACTION_IDS)[number];
@@ -127,6 +129,18 @@ export const ACTION_REGISTRY: readonly ActionMeta[] = [
     id: "toggleShortcuts",
     label: "Show keyboard shortcuts",
     default: c("Slash", { shift: true }),
+  },
+  {
+    id: "closeWindow",
+    label: "Close window",
+    default: c("KeyW", { mod: true }),
+    repeatable: false,
+  },
+  {
+    id: "quitApp",
+    label: "Quit SONE",
+    default: c("KeyQ", { mod: true }),
+    repeatable: false,
   },
 ] as const;
 

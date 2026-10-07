@@ -12,6 +12,7 @@ import { useEffect, useRef, startTransition } from "react";
 import { useSetAtom, useStore, useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { parseTidalUrl } from "../lib/tidalUrl";
@@ -1400,6 +1401,8 @@ export function AppInitializer() {
     toggleShortcuts: () => {
       window.dispatchEvent(new CustomEvent("toggle-shortcuts"));
     },
+    closeWindow: () => void getCurrentWindow().close(),
+    quitApp: () => void invoke("quit_app").catch(() => {}),
   });
 
   // ================================================================

@@ -1110,6 +1110,7 @@ pub fn run() {
             commands::utility::get_image_bytes,
             commands::utility::get_cache_stats,
             commands::utility::clear_disk_cache,
+            commands::utility::quit_app,
             commands::utility::get_minimize_to_tray,
             commands::utility::set_minimize_to_tray,
             commands::utility::get_enable_logging,

@@ -24,6 +24,11 @@ pub fn open_log_folder() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+#[tauri::command]
 pub fn get_signal_path(state: State<'_, AppState>) -> SignalPath {
     state.signal_path.snapshot()
 }
