@@ -880,6 +880,7 @@ pub fn run() {
                 }
 
                 let _ = window.show();
+                let _ = window.set_focus();
             }
 
             // Pick up external edits to theme.json while the app runs.
