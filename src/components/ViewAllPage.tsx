@@ -27,6 +27,7 @@ import {
   isMixItem,
   isMyTracksItem,
   buildMediaItem,
+  getArtistAlbumSubtitle,
 } from "../utils/itemHelpers";
 
 const PAGE_SIZE = 50;
@@ -335,6 +336,11 @@ export default function ViewAllPage({
                   showPlayButton={!myTracks && !hasArtists && !hasMixes}
                   isFavorited={favProps.isFavorited}
                   onFavoriteToggle={favProps.onFavoriteToggle}
+                  subtitleOverride={
+                    artistId != null && mediaItem?.type === "album"
+                      ? getArtistAlbumSubtitle(item, artistId)
+                      : undefined
+                  }
                   {...(myTracks && {
                     titleOverride: "Loved Tracks",
                     subtitleOverride: "Collection",
