@@ -21,7 +21,7 @@ interface CardScrollSectionProps {
   onCardClick: (item: any, sectionType: string) => void;
   onContextMenu: (e: React.MouseEvent, item: any, sectionType: string) => void;
   onViewAll?: () => void;
-  /** Set on an artist page: album cards show release year and type. */
+  /** The page's artist: album cards show release year and type. */
   artistId?: number;
   favoriteAlbumIds: Set<number>;
   addFavoriteAlbum: (id: number, album: any) => void;
