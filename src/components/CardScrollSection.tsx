@@ -192,6 +192,7 @@ export default function CardScrollSection({
                 }
                 isArtist={isArtistSection}
                 showPlayButton
+                showExplicit
                 isFavorited={isFavorited}
                 onFavoriteToggle={onFavoriteToggle}
                 widthClass="card-scroll-item"

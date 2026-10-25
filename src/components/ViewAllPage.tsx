@@ -334,6 +334,7 @@ export default function ViewAllPage({
                   }
                   isArtist={isArtistItem(item) || hasArtists}
                   showPlayButton={!myTracks && !hasArtists && !hasMixes}
+                  showExplicit={artistId != null}
                   isFavorited={favProps.isFavorited}
                   onFavoriteToggle={favProps.onFavoriteToggle}
                   subtitleOverride={
