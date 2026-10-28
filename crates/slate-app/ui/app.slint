@@ -141,6 +141,7 @@ export component AppWindow inherits Window {
     // ---- playback ----
     in property <string> track-title;
     in property <string> track-artist;
+    in property <string> quality-text;
     in property <image> track-cover;
     in property <bool> playing;
     in property <bool> has-track;
@@ -332,6 +333,7 @@ export component AppWindow inherits Window {
                 compact: root.width < 1250px;
                 title: root.track-title;
                 artist: root.track-artist;
+                quality: root.quality-text;
                 cover: root.track-cover;
                 playing: root.playing;
                 has-track: root.has-track;

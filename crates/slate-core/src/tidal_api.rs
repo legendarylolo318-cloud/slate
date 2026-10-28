@@ -542,7 +542,7 @@ pub struct TidalCredit {
     pub contributors: Vec<TidalContributor>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamInfo {
     pub url: String,

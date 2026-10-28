@@ -21,6 +21,7 @@ mod pages;
 mod panels;
 mod platform;
 mod profile;
+mod quality;
 mod settings;
 mod signal;
 mod themes;

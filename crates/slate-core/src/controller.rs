@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 
 use crate::commands::{pages, playback, scrobble, utility};
 use crate::queue::{Next, Previous, Queue, Repeat, Skip, Snapshot, Source, Track};
+use crate::tidal_api::StreamInfo;
 use crate::{AppState, SlateError};
 
 const DEVICE_RETRY_DELAY: Duration = Duration::from_millis(500);
@@ -96,6 +97,10 @@ pub struct Controller {
     armed: std::sync::Mutex<Option<(u64, String)>>,
     /// Track whose gapless arming failed recently, to avoid retry storms.
     arm_failed: std::sync::Mutex<Option<(u64, std::time::Instant)>>,
+    /// How the current track is being streamed (quality, codec, bit depth).
+    stream: std::sync::Mutex<Option<StreamInfo>>,
+    /// Stream info of the gapless-armed next track.
+    armed_stream: std::sync::Mutex<Option<(u64, StreamInfo)>>,
 }
 
 fn now_secs() -> i64 {
@@ -110,6 +115,8 @@ impl Controller {
             prefs: std::sync::Mutex::new(ContentPrefs::default()),
             armed: std::sync::Mutex::new(None),
             arm_failed: std::sync::Mutex::new(None),
+            stream: std::sync::Mutex::new(None),
+            armed_stream: std::sync::Mutex::new(None),
         }
     }
 
@@ -152,7 +159,10 @@ impl Controller {
         let mut attempt = 0;
         loop {
             match playback::play_tidal_track(&self.state, track.id, use_gain).await {
-                Ok(_) => break,
+                Ok(info) => {
+                    self.set_stream(Some(info));
+                    break;
+                }
                 Err(SlateError::Audio(m)) if m == "device_busy" && attempt < DEVICE_MAX_RETRIES => {
                     attempt += 1;
                     tokio::time::sleep(DEVICE_RETRY_DELAY).await;
@@ -164,6 +174,17 @@ impl Controller {
         self.forget_armed();
         self.notify_started(q, &track, chosen_by_user).await;
         Ok(())
+    }
+
+    fn set_stream(&self, info: Option<StreamInfo>) {
+        if let Ok(mut s) = self.stream.lock() {
+            *s = info;
+        }
+    }
+
+    /// Stream details of what is playing now, if a track has been started.
+    pub fn stream_info(&self) -> Option<StreamInfo> {
+        self.stream.lock().ok().and_then(|s| s.clone())
     }
 
     fn forget_armed(&self) {
@@ -333,7 +354,10 @@ impl Controller {
                     return match playback::play_tidal_track(&self.state, cur.id, q.use_track_gain)
                         .await
                     {
-                        Ok(_) => Outcome::Playing(cur),
+                        Ok(info) => {
+                            self.set_stream(Some(info));
+                            Outcome::Playing(cur)
+                        }
                         Err(e) => Outcome::Failed(PlayFailure::classify(&e)),
                     };
                 }
@@ -419,7 +443,8 @@ impl Controller {
                 // `previous` already moved the old current out; start without
                 // pushing history again.
                 match playback::play_tidal_track(&self.state, track.id, q.use_track_gain).await {
-                    Ok(_) => {
+                    Ok(info) => {
+                        self.set_stream(Some(info));
                         q.begin(track.clone(), true);
                         self.forget_armed();
                         self.notify_started(&q, &track, true).await;
@@ -478,7 +503,8 @@ impl Controller {
             return Outcome::Nothing;
         };
         match playback::play_tidal_track(&self.state, cur.id, q.use_track_gain).await {
-            Ok(_) => {
+            Ok(info) => {
+                self.set_stream(Some(info));
                 self.forget_armed();
                 self.notify_started(&q, &cur, true).await;
                 Outcome::Playing(cur)
@@ -537,9 +563,12 @@ impl Controller {
             return;
         }
         match playback::set_next_track(&self.state, next.id, qid.clone(), use_gain).await {
-            Ok(_) => {
+            Ok(info) => {
                 if let Ok(mut a) = self.armed.lock() {
                     *a = Some((next.id, qid));
+                }
+                if let Ok(mut s) = self.armed_stream.lock() {
+                    *s = Some((next.id, info));
                 }
             }
             Err(e) => {
@@ -573,6 +602,8 @@ impl Controller {
         self.state
             .last_peak_amplitude
             .store(peak.to_bits(), Relaxed);
+        let armed = self.armed_stream.lock().ok().and_then(|mut s| s.take());
+        self.set_stream(armed.filter(|(id, _)| *id == track_id).map(|(_, i)| i));
         self.forget_armed();
         // The outgoing track finished: finalise its scrobble / play report.
         crate::startup::on_track_finished(&self.state).await;

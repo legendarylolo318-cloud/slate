@@ -4,6 +4,7 @@ import { IconButton, Bar } from "widgets.slint";
 export component PlayerBar inherits Rectangle {
     in property <string> title;
     in property <string> artist;
+    in property <string> quality;
     in property <image> cover;
     in property <bool> playing;
     in property <bool> has-track;
@@ -65,6 +66,7 @@ export component PlayerBar inherits Rectangle {
                     alignment: center;
                     Text { text: root.title; color: Theme.text; font-weight: 600; overflow: elide; }
                     Text { text: root.artist; color: Theme.text-muted; font-size: 12px; overflow: elide; }
+                    if root.quality != "": Text { text: root.quality; color: Theme.accent; font-size: 11px; font-weight: 600; overflow: elide; }
                 }
             }
             // transport (wide layout keeps it centred here)

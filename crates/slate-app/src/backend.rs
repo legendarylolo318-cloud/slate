@@ -422,6 +422,12 @@ impl Backend {
             Outcome::Playing(track) => {
                 self.shared.loaded.store(true, Ordering::Relaxed);
                 self.show_track(&track, true);
+                let quality = self
+                    .controller()
+                    .and_then(|c| c.stream_info())
+                    .map(|i| crate::quality::describe(&i))
+                    .unwrap_or_default();
+                self.ui(move |w| w.set_quality_text(quality.into()));
             }
             Outcome::Restarted => {
                 self.ui(|w| {
@@ -532,6 +538,7 @@ impl Backend {
         let dur_text = images::format_time(duration);
         self.ui(move |w| {
             w.set_playing_id(id.into());
+            w.set_quality_text("".into());
             w.set_track_title(title.into());
             w.set_track_artist(artist.into());
             w.set_duration_text(dur_text.into());
