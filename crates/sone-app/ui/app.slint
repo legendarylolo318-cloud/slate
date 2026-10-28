@@ -36,6 +36,14 @@ export component AppWindow inherits Window {
     in property <float> volume: 1;
     in property <string> error;
     callback play-track(string);
+    in property <bool> shuffle;
+    in property <int> repeat;
+    in property <int> queue-count;
+    in property <string> up-next;
+    callback next();
+    callback previous();
+    callback toggle-shuffle();
+    callback cycle-repeat();
     callback toggle-play();
     callback seek(float);
     callback set-volume(float);
@@ -113,6 +121,14 @@ export component AppWindow inherits Window {
             duration-text: root.duration-text;
             progress: root.progress;
             volume: root.volume;
+            shuffle: root.shuffle;
+            repeat: root.repeat;
+            queue-count: root.queue-count;
+            up-next: root.up-next;
+            next => { root.next(); }
+            previous => { root.previous(); }
+            toggle-shuffle => { root.toggle-shuffle(); }
+            cycle-repeat => { root.cycle-repeat(); }
             toggle-play => { root.toggle-play(); }
             seek(f) => { root.seek(f); }
             set-volume(v) => { root.set-volume(v); }

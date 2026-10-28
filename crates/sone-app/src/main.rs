@@ -3,7 +3,9 @@
 
 mod backend;
 mod bootstrap;
+mod control;
 mod images;
+mod platform;
 
 fn main() -> anyhow::Result<()> {
     // Environment surgery must happen before any thread exists: `set_var` and

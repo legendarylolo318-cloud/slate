@@ -55,6 +55,14 @@ export component PlayerBar inherits Rectangle {
     in property <string> duration-text: "0:00";
     in property <float> progress: 0;
     in property <float> volume: 1;
+    in property <bool> shuffle;
+    in property <int> repeat;
+    in property <int> queue-count;
+    in property <string> up-next;
+    callback next();
+    callback previous();
+    callback toggle-shuffle();
+    callback cycle-repeat();
     callback toggle-play();
     callback seek(float);
     callback set-volume(float);
@@ -83,6 +91,12 @@ export component PlayerBar inherits Rectangle {
                 alignment: center;
                 Text { text: root.title; color: Theme.text; font-weight: 600; overflow: elide; }
                 Text { text: root.artist; color: Theme.text-muted; overflow: elide; }
+                Text {
+                    text: root.queue-count > 0 ? "Next (" + root.queue-count + "): " + root.up-next : "";
+                    color: Theme.text-muted;
+                    font-size: 11px;
+                    overflow: elide;
+                }
             }
         }
 
@@ -93,11 +107,32 @@ export component PlayerBar inherits Rectangle {
             spacing: 2px;
             HorizontalLayout {
                 alignment: center;
+                spacing: 8px;
+                IconButton {
+                    glyph: "🔀";
+                    opacity: root.shuffle ? 1.0 : 0.4;
+                    clicked => { root.toggle-shuffle(); }
+                }
+                IconButton {
+                    glyph: "⏮";
+                    enabled: root.has-track;
+                    clicked => { root.previous(); }
+                }
                 IconButton {
                     primary: true;
                     enabled: root.has-track;
                     glyph: root.playing ? "⏸" : "▶";
                     clicked => { root.toggle-play(); }
+                }
+                IconButton {
+                    glyph: "⏭";
+                    enabled: root.has-track;
+                    clicked => { root.next(); }
+                }
+                IconButton {
+                    glyph: root.repeat == 2 ? "🔂" : "🔁";
+                    opacity: root.repeat == 0 ? 0.4 : 1.0;
+                    clicked => { root.cycle-repeat(); }
                 }
             }
             HorizontalLayout {

@@ -114,7 +114,13 @@ fn launch(forced: Option<&str>, index: usize) -> anyhow::Result<()> {
 
     let backend = Backend::start(runtime.handle().clone(), &window);
     wire(&window, &backend);
-    window.run().context("running event loop")?;
+    let b = backend.clone();
+    window
+        .window()
+        .on_close_requested(move || b.close_requested());
+    // Not `window.run()`: hiding the window to the tray must not end the loop.
+    slint::run_event_loop_until_quit().context("running event loop")?;
+    backend.shutdown();
     Ok(())
 }
 
@@ -129,6 +135,14 @@ fn wire(window: &AppWindow, backend: &Backend) {
     window.on_play_track(move |text| b.play_track(&text));
     let b = backend.clone();
     window.on_toggle_play(move || b.toggle_play());
+    let b = backend.clone();
+    window.on_next(move || b.next());
+    let b = backend.clone();
+    window.on_previous(move || b.previous());
+    let b = backend.clone();
+    window.on_toggle_shuffle(move || b.toggle_shuffle());
+    let b = backend.clone();
+    window.on_cycle_repeat(move || b.cycle_repeat());
     let b = backend.clone();
     window.on_seek(move |f| b.seek(f));
     let b = backend.clone();

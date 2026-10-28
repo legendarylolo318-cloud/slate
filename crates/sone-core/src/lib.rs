@@ -16,6 +16,7 @@ pub mod queue;
 pub use events::{AppHandle, EventSink, Events};
 pub mod cache;
 pub mod commands;
+pub mod controller;
 pub mod crypto;
 pub mod discord;
 pub mod discord_ipc;

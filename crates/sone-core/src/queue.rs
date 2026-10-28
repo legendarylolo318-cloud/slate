@@ -63,6 +63,37 @@ impl Track {
         self.extra.get("itemType").and_then(Value::as_str) == Some("video")
     }
 
+    pub fn artist_name(&self) -> &str {
+        self.extra
+            .get("artist")
+            .and_then(|a| a.get("name"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                self.extra
+                    .get("artists")
+                    .and_then(|a| a.get(0))
+                    .and_then(|a| a.get("name"))
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or("")
+    }
+
+    /// TIDAL image id of the cover (album cover, or the video's own image).
+    pub fn cover_id(&self) -> Option<&str> {
+        self.extra
+            .get("album")
+            .and_then(|a| a.get("cover"))
+            .and_then(Value::as_str)
+            .or_else(|| self.extra.get("imageId").and_then(Value::as_str))
+    }
+
+    pub fn duration_secs(&self) -> f32 {
+        self.extra
+            .get("duration")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0) as f32
+    }
+
     pub fn title(&self) -> &str {
         self.extra
             .get("title")
