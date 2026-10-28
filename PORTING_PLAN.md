@@ -81,9 +81,11 @@ Events the core emits (now through `EventSink`): `audio-error`, `audio-resampled
 | Playback engine (playbin3, gapless, exclusive/bit-perfect ALSA) | `audio.rs` | same | done on Linux; **Windows wasapi2sink exclusive path todo** |
 | ReplayGain (`compute_norm_gain`, album/track select) | `commands/playback.rs` + atoms | same | done (Rust half); selection policy in TS todo |
 | Max-quality cap + fallback | `quality_tiers` | same | done (tests exist) |
-| Queue / shuffle / repeat / history / persistence | `usePlaybackActions.ts`, `atoms/playback.ts`, `lib/playbackSource.ts`, `lib/qid.ts` | `sone-core::queue` | **todo (TS→Rust port + tests)** |
-| Autoplay (radio after queue ends) | TS | `sone-core::queue` | todo |
-| Gapless prefetch / prediction | `useGaplessPrefetch.ts`, `lib/gaplessPredict.ts` | `sone-core::queue` | todo |
+| Queue / shuffle / repeat / history / persistence | `usePlaybackActions.ts`, `atoms/playback.ts`, `lib/playbackSource.ts`, `lib/qid.ts` | `sone-core::queue` (model, 18 tests) + `controller` (orchestration) | done; snapshot format identical to the original. Queue *view* (list, drag reorder) todo with step 4 |
+| Autoplay (radio after queue ends) | TS | `queue` + `controller` | done (logic tested; live fetch unverified); no UI toggle yet |
+| Gapless prefetch / prediction | `useGaplessPrefetch.ts`, `lib/gaplessPredict.ts` | `sone-core::controller` (`set_next_track`) | **todo** — queue exposes the next track but arming is not wired, so there is a gap between tracks |
+| `notify_track_started` payload (feeds scrobbling) | `buildTrackStartedPayload` | controller | **todo (step 9)** — no scrobbles are sent yet |
+| Content filter prefs (explicit/AI) | `lib/contentFilter.ts` | `controller::ContentPrefs` | logic done; settings UI + persistence todo |
 | Scrobbling Last.fm / Libre.fm / ListenBrainz + MusicBrainz | `scrobble/*` | same | done (tests exist) |
 | TIDAL play reporting (toggle) | `tidal_report/*` | same | done |
 | Discord Rich Presence | `discord*.rs` | same | done |
@@ -102,8 +104,8 @@ Events the core emits (now through `EventSink`): `audio-error`, `audio-resampled
 | Feature | Plan | Status |
 |---|---|---|
 | Window, renderer fallback (Skia-Vulkan → Skia-GL → FemtoVG → software; `SLINT_BACKEND` override) | `bootstrap.rs`: select + startup-failure respawn with next renderer | done; Skia/Vulkan verified on this machine (Wayland), fallbacks untested |
-| MPRIS / SMTC | `souvlaki`; `mpris-server` on Linux if shuffle/repeat/seek missing (original MPRIS had them → likely needed) | todo |
-| Tray | `ksni` (Linux), `tray-icon` (Windows) | todo |
+| MPRIS / SMTC | Linux: `mpris-server` (shuffle/loop/seek needed, souvlaki lacks them) in `platform/mpris.rs` — **done, registered on D-Bus, shuffle property round-trips**. Windows SMTC via `souvlaki`: todo |
+| Tray | Linux `ksni` in `platform/tray.rs` — **done** (registers; menu clicks not exercised). Close-to-tray via `on_close_requested`. Windows `tray-icon`: todo |
 | Deep links `tidal://`, single instance | .desktop MimeType + IPC forward | todo |
 | Linux audio: DAC detection `/proc/asound` | in core `audio.rs` | done |
 | Windows audio: `wasapi2sink exclusive=true`; hide ALSA-only options | todo |
@@ -150,7 +152,7 @@ All UI work is **todo**. Original line counts shown to indicate size.
 
 1. Workspace + `sone-core` extracted, tests passing, Tauri removed — **done** (367 unit + 16 integration tests pass)
 2. Slint window → login → play one track → player bar — **code complete, partly verified**: login screen renders on Skia/Vulkan; device-code + QR flow, track-ID play box, player bar (play/pause, seek, volume, cover) implemented but **not exercised against live TIDAL** (needs an interactive account approval)
-3. Queue + persistence, media controls, tray — todo
+3. Queue + persistence, media controls, tray — **done on Linux**: 387 core tests pass; app starts, registers MPRIS + tray, saves `queue.json`/`modes.json` on clean exit. **Not verified with a real logged-in playback session** (next/prev/autoplay/restore against live TIDAL)
 4. Library + pages + lazy models + image cache — todo
 5. Search + explore — todo
 6. Drawer + lyrics — todo

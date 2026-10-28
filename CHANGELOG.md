@@ -2,6 +2,10 @@
 
 ## Unreleased (Slint port)
 
+### Added
+- Queue model (manual + context queues, shuffle with order restore, repeat, history, autoplay, snapshot persistence) and playback controller in `sone-core`.
+- MPRIS server and StatusNotifier tray (Linux); previous/next/shuffle/repeat in the player bar.
+
 ### Changed
 - Cargo workspace: `crates/sone-core` (UI-free logic, extracted from `src-tauri`) and
   `crates/sone-app` (Slint application).
