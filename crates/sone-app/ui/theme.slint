@@ -1,0 +1,12 @@
+// Global theme. Presets, light/dark switching and the colour picker arrive in
+// build-order step 7; until then these are the default dark values.
+export global Theme {
+    in-out property <bool> dark: true;
+    in-out property <color> accent: #00d4ff;
+    in-out property <color> background: dark ? #0b0b0d : #f6f6f8;
+    in-out property <color> surface: dark ? #17171b : #ffffff;
+    in-out property <color> surface-raised: dark ? #22222a : #ececf1;
+    in-out property <color> text: dark ? #f2f2f5 : #15151a;
+    in-out property <color> text-muted: dark ? #9a9aa6 : #5f5f6b;
+    in-out property <color> danger: #ff5a6a;
+}

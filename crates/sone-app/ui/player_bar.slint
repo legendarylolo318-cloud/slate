@@ -1,0 +1,129 @@
+import { Theme } from "theme.slint";
+
+component Bar inherits Rectangle {
+    in property <float> fraction: 0;
+    in property <length> bar-height: 4px;
+    callback picked(float);
+    height: 16px;
+    background: transparent;
+    Rectangle {
+        y: (parent.height - root.bar-height) / 2;
+        height: root.bar-height;
+        border-radius: root.bar-height / 2;
+        background: Theme.surface-raised;
+        Rectangle {
+            x: 0;
+            width: parent.width * clamp(root.fraction, 0, 1);
+            border-radius: parent.border-radius;
+            background: Theme.accent;
+        }
+    }
+    TouchArea {
+        // Seek on release, not on every move, so a drag cannot flood the pipeline.
+        clicked => { root.picked(clamp(self.mouse-x / self.width, 0, 1)); }
+    }
+}
+
+component IconButton inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: primary ? 44px : 36px;
+    height: self.width;
+    border-radius: self.width / 2;
+    background: primary ? Theme.text : transparent;
+    opacity: enabled ? 1.0 : 0.4;
+    Text {
+        text: root.glyph;
+        font-size: root.primary ? 18px : 16px;
+        color: root.primary ? Theme.background : Theme.text;
+    }
+    TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component PlayerBar inherits Rectangle {
+    in property <string> title;
+    in property <string> artist;
+    in property <image> cover;
+    in property <bool> playing;
+    in property <bool> has-track;
+    in property <string> position-text: "0:00";
+    in property <string> duration-text: "0:00";
+    in property <float> progress: 0;
+    in property <float> volume: 1;
+    callback toggle-play();
+    callback seek(float);
+    callback set-volume(float);
+
+    height: 88px;
+    background: Theme.surface;
+
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 16px;
+
+        // Track info
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            min-width: 180px;
+            spacing: 12px;
+            Rectangle {
+                width: 64px;
+                height: 64px;
+                border-radius: 6px;
+                background: Theme.surface-raised;
+                clip: true;
+                Image { source: root.cover; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
+            }
+            VerticalLayout {
+                alignment: center;
+                Text { text: root.title; color: Theme.text; font-weight: 600; overflow: elide; }
+                Text { text: root.artist; color: Theme.text-muted; overflow: elide; }
+            }
+        }
+
+        // Transport + seek
+        VerticalLayout {
+            horizontal-stretch: 2;
+            alignment: center;
+            spacing: 2px;
+            HorizontalLayout {
+                alignment: center;
+                IconButton {
+                    primary: true;
+                    enabled: root.has-track;
+                    glyph: root.playing ? "⏸" : "▶";
+                    clicked => { root.toggle-play(); }
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: root.position-text; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
+                Bar {
+                    horizontal-stretch: 1;
+                    fraction: root.progress;
+                    picked(f) => { root.seek(f); }
+                }
+                Text { text: root.duration-text; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
+            }
+        }
+
+        // Volume
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            min-width: 140px;
+            alignment: end;
+            spacing: 8px;
+            Text { text: "🔊"; vertical-alignment: center; color: Theme.text-muted; }
+            Bar {
+                width: 100px;
+                fraction: root.volume;
+                picked(f) => { root.set-volume(f); }
+            }
+        }
+    }
+}

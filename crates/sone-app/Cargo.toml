@@ -21,6 +21,10 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "tracing-log"] }
 anyhow = "1"
+serde_json = "1"
+qrcode = { version = "0.14", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+open = "5"
 
 [build-dependencies]
 slint-build = "1.18"

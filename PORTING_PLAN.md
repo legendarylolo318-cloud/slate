@@ -76,7 +76,7 @@ Events the core emits (now through `EventSink`): `audio-error`, `audio-resampled
 | Feature | Original | New | Status |
 |---|---|---|---|
 | TIDAL client, device-code login, token refresh | `tidal_api.rs`, `commands/auth.rs` | `sone-core` same | done (tests exist) |
-| QR code for login | `qrcode.react` | `qrcode` crate → Slint `Image` | todo |
+| QR code for login | `qrcode.react` | `qrcode` crate → Slint `Image` (`images.rs`) | done (unit-tested) |
 | AES-256-GCM config/cache, keyring | `crypto.rs`, `cache.rs` | same | done (tests exist) |
 | Playback engine (playbin3, gapless, exclusive/bit-perfect ALSA) | `audio.rs` | same | done on Linux; **Windows wasapi2sink exclusive path todo** |
 | ReplayGain (`compute_norm_gain`, album/track select) | `commands/playback.rs` + atoms | same | done (Rust half); selection policy in TS todo |
@@ -101,7 +101,7 @@ Events the core emits (now through `EventSink`): `audio-error`, `audio-resampled
 
 | Feature | Plan | Status |
 |---|---|---|
-| Window, renderer fallback (Skia-Vulkan → Skia-GL → FemtoVG → software; `SLINT_BACKEND` override) | `bootstrap.rs` | skeleton done, **untested at runtime** (headless env) |
+| Window, renderer fallback (Skia-Vulkan → Skia-GL → FemtoVG → software; `SLINT_BACKEND` override) | `bootstrap.rs`: select + startup-failure respawn with next renderer | done; Skia/Vulkan verified on this machine (Wayland), fallbacks untested |
 | MPRIS / SMTC | `souvlaki`; `mpris-server` on Linux if shuffle/repeat/seek missing (original MPRIS had them → likely needed) | todo |
 | Tray | `ksni` (Linux), `tray-icon` (Windows) | todo |
 | Deep links `tidal://`, single instance | .desktop MimeType + IPC forward | todo |
@@ -149,7 +149,7 @@ All UI work is **todo**. Original line counts shown to indicate size.
 ## 7. Build order progress
 
 1. Workspace + `sone-core` extracted, tests passing, Tauri removed — **done** (367 unit + 16 integration tests pass)
-2. Slint window → login → play one track → player bar — in-progress (empty window skeleton)
+2. Slint window → login → play one track → player bar — **code complete, partly verified**: login screen renders on Skia/Vulkan; device-code + QR flow, track-ID play box, player bar (play/pause, seek, volume, cover) implemented but **not exercised against live TIDAL** (needs an interactive account approval)
 3. Queue + persistence, media controls, tray — todo
 4. Library + pages + lazy models + image cache — todo
 5. Search + explore — todo

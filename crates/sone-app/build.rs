@@ -1,3 +1,6 @@
 fn main() {
-    slint_build::compile("ui/app.slint").expect("slint compilation failed");
+    if let Err(e) = slint_build::compile("ui/app.slint") {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
 }

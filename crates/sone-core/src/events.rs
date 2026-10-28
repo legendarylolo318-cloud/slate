@@ -88,6 +88,11 @@ impl AppHandle {
         T::resolve(self)
     }
 
+    /// The shared state, or `None` while the app is still starting up.
+    pub fn try_state(&self) -> Option<Arc<crate::AppState>> {
+        self.shared.get().cloned()
+    }
+
     pub fn emit<S: Serialize>(&self, event: &str, payload: S) -> Result<(), crate::SoneError> {
         self.events.emit(event, payload)
     }

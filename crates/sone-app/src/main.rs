@@ -1,7 +1,9 @@
 // Prevents an extra console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod backend;
 mod bootstrap;
+mod images;
 
 fn main() -> anyhow::Result<()> {
     // Environment surgery must happen before any thread exists: `set_var` and

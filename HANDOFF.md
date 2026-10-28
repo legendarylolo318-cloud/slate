@@ -1,7 +1,7 @@
 # Reviewer handoff
 
-**State: partial port.** Build-order step 1 is complete; step 2 is a bare window. The
-application is **not usable yet** — there is no login, playback UI or any screen. See
+**State: partial port.** Steps 1–2 are implemented: login (code + QR), a track-ID box and a
+player bar. There are no library/search/queue screens yet, so the app is not usable day to day. See
 `PORTING_PLAN.md` for the per-feature table.
 
 ## What is verified
@@ -38,3 +38,9 @@ Tokio on background threads; UI mutation only via `invoke_from_event_loop` /
    (`docs/legacy-tauri/`) exist only locally; they are also in git history (`a34fd6f`).
 7. Commits were authored with a per-command identity (`SONE port (Claude Code)`); rewrite
    authorship as you see fit. Nothing was pushed or published.
+8. Renderer fallback: Slint fixes its platform once per process, so if the chosen renderer
+   fails within 5 s of startup the app re-launches itself with the next one
+   (`SONE_RENDERER_INDEX`), passing back the proxy env vars the launch scrub removed.
+   Only Skia/Vulkan was exercised.
+9. Running the binary uses the real config dir unless `XDG_CONFIG_HOME` is overridden; on my
+   first run it touched `~/.config/sone` (cache rebuild) and connected Discord RPC.
