@@ -12,6 +12,7 @@
 pub mod audio;
 pub mod events;
 pub mod media;
+pub mod queue;
 pub use events::{AppHandle, EventSink, Events};
 pub mod cache;
 pub mod commands;
