@@ -2,24 +2,53 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
+env:
+  CARGO_TERM_COLOR: always
+  GST_VERSION: "1.24.12"
+
 jobs:
-  linux:
-    runs-on: ubuntu-latest
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install system dependencies
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config clang \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
             libasound2-dev libdbus-1-dev libssl-dev libfontconfig1-dev \
             libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libvulkan-dev
+
+      - name: Install GStreamer (Windows MSVC)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install pkgconfiglite -y --no-progress
+          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GST_VERSION/msvc"
+          foreach ($f in "gstreamer-1.0-msvc-x86_64-$env:GST_VERSION.msi", "gstreamer-1.0-devel-msvc-x86_64-$env:GST_VERSION.msi") {
+            Invoke-WebRequest "$base/$f" -OutFile $f
+            Start-Process msiexec.exe -Wait -ArgumentList "/i $f /qn /norestart ADDLOCAL=ALL INSTALLDIR=C:\gstreamer"
+          }
+          $root = "C:\gstreamer\1.0\msvc_x86_64"
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root" >> $env:GITHUB_ENV
+          "PKG_CONFIG_PATH=$root\lib\pkgconfig" >> $env:GITHUB_ENV
+          "$root\bin" >> $env:GITHUB_PATH
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
