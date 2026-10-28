@@ -438,8 +438,11 @@ pub async fn logout(state: &AppState) -> Result<(), SlateError> {
         fs::remove_file(&state.settings_path).ok();
     }
 
-    // Clear all cached data.
+    // Clear all cached data, including the persisted queue of this account.
     state.disk_cache.clear().await;
+    for name in ["queue.json", "modes.json"] {
+        fs::remove_file(state.cache_dir.join(name)).ok();
+    }
 
     Ok(())
 }

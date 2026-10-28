@@ -91,6 +91,18 @@ mod defaults {
     }
 }
 
+/// Write via a sibling temp file and rename so a crash mid-write cannot leave
+/// a truncated (undecryptable) settings or state file behind.
+fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    fs::write(&tmp, data)?;
+    fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&tmp);
+    })
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct LastfmCredentials {
     pub session_key: String,
@@ -603,7 +615,7 @@ impl AppState {
     pub fn save_settings(&self, settings: &Settings) -> Result<(), SlateError> {
         let json = serde_json::to_string_pretty(settings)?;
         let encrypted = self.crypto.encrypt(json.as_bytes())?;
-        fs::write(&self.settings_path, encrypted)?;
+        write_atomic(&self.settings_path, &encrypted)?;
         Ok(())
     }
 
@@ -638,7 +650,7 @@ impl AppState {
     pub fn write_state_file(&self, name: &str, content: &str) -> Result<(), SlateError> {
         let path = self.cache_dir.join(name);
         let encrypted = self.crypto.encrypt(content.as_bytes())?;
-        fs::write(&path, encrypted)?;
+        write_atomic(&path, &encrypted)?;
         Ok(())
     }
 }

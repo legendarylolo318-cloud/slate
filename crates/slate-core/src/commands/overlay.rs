@@ -155,6 +155,12 @@ pub async fn overlay_set_host(
         return Err(SlateError::Io(format!("Invalid host address: {trimmed}")));
     }
 
+    if !crate::overlay::server::is_loopback_host(&trimmed) {
+        return Err(SlateError::Io(
+            "The overlay has no authentication and only listens on a loopback address".to_string(),
+        ));
+    }
+
     let old_settings = state.load_settings().unwrap_or_default();
     let mut settings = old_settings.clone();
     settings.overlay_host = trimmed;

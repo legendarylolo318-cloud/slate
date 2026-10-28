@@ -82,12 +82,19 @@ fn load_or_generate_key(config_dir: &Path) -> Result<[u8; 32], SlateError> {
         Err(e) => log::debug!("Keyring load failed (will try file): {e}"),
     }
 
-    // 2. Try file fallback
+    // 2. Try file fallback (only exists when the keyring was unavailable)
     let key_path = config_dir.join("slate.key");
     if let Ok(key) = load_key_from_file(&key_path) {
-        // Also try to store in keyring for next time
-        if let Err(e) = store_key_in_keyring(&key) {
-            log::debug!("Could not store key in keyring: {e}");
+        // Migrate into the keyring and drop the plaintext copy, but only once
+        // the keyring demonstrably returns the same key.
+        match store_key_in_keyring(&key).and_then(|()| load_key_from_keyring()) {
+            Ok(stored) if stored == key => {
+                if fs::remove_file(&key_path).is_ok() {
+                    log::info!("Master key migrated into the OS keyring; key file removed");
+                }
+            }
+            Ok(_) => log::debug!("Keyring returned a different key; keeping key file"),
+            Err(e) => log::debug!("Could not store key in keyring: {e}"),
         }
         return Ok(key);
     }
@@ -97,13 +104,16 @@ fn load_or_generate_key(config_dir: &Path) -> Result<[u8; 32], SlateError> {
     let mut key = [0u8; 32];
     aes_gcm::aead::OsRng.fill_bytes(&mut key);
 
-    // Always write file backup — keyring may be unreachable on next launch
-    // (e.g. AppImage with different D-Bus session)
-    store_key_in_file(&key_path, &key)?;
-
-    match store_key_in_keyring(&key) {
-        Ok(()) => log::info!("Master key stored in OS keyring + file backup"),
-        Err(e) => log::info!("Keyring unavailable ({e}), using file-based key"),
+    // The key never sits next to the data it protects unless the keyring is
+    // unusable; in that case a 0600 file is the only way to survive a restart.
+    match store_key_in_keyring(&key).and_then(|()| load_key_from_keyring()) {
+        Ok(stored) if stored == key => log::info!("Master key stored in OS keyring"),
+        other => {
+            if let Err(e) = other {
+                log::info!("Keyring unavailable ({e}), using file-based key");
+            }
+            store_key_in_file(&key_path, &key)?;
+        }
     }
 
     Ok(key)
@@ -139,9 +149,18 @@ fn load_key_from_file(path: &Path) -> Result<[u8; 32], SlateError> {
 }
 
 fn store_key_in_file(path: &Path, key: &[u8; 32]) -> Result<(), SlateError> {
-    fs::write(path, key)?;
+    use std::io::Write;
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    // Created 0600 from the start, so there is no window with looser bits.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    f.write_all(key)?;
 
-    // Set 0600 permissions on Unix
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

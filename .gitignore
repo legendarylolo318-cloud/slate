@@ -61,3 +61,12 @@ sone.code-workspace
 
 # watch skill scratch files
 .watchtmp-*
+
+# never commit local account/session data
+settings.json
+slate.key
+queue.json
+modes.json
+proxy.mode
+*.key
+.config/

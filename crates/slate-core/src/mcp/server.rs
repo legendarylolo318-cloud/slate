@@ -79,11 +79,8 @@ pub async fn start_server(
         .map_err(|e| SlateError::Mcp(format!("local_addr: {e}")))?
         .port();
 
-    log::info!(
-        "MCP server listening on http://127.0.0.1:{}/{}/mcp",
-        bound_port,
-        token
-    );
+    // The token is the URL path and acts as the credential: never log it.
+    log::info!("MCP server listening on http://127.0.0.1:{bound_port}/<token>/mcp");
 
     let task = crate::http_util::spawn_with_shutdown(listener, app, cancel.clone(), "MCP");
 

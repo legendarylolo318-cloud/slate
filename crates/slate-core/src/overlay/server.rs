@@ -19,6 +19,14 @@ use crate::error::SlateError;
 
 const MAX_SSE_CONNECTIONS: usize = 16;
 
+/// True for `127.x.x.x` and bracketed or bare `::1`.
+pub fn is_loopback_host(host: &str) -> bool {
+    let bare = host.trim().trim_start_matches('[').trim_end_matches(']');
+    bare.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
 pub struct OverlayHandle {
     pub port: u16,
     pub host: String,
@@ -530,6 +538,14 @@ pub async fn start_server(
         .route("/overlay/events", get(serve_sse))
         .with_state(ctx);
 
+    // The overlay has no authentication, so it only ever listens on loopback.
+    // A non-loopback host in an older settings file is clamped, not honoured.
+    let host = if is_loopback_host(host) {
+        host
+    } else {
+        log::warn!("Overlay host '{host}' is not a loopback address; binding 127.0.0.1 instead");
+        "127.0.0.1"
+    };
     let addr: SocketAddr = format!("{host}:{port}")
         .parse()
         .map_err(|e| SlateError::Io(format!("overlay parse addr '{host}:{port}': {e}")))?;
@@ -678,10 +694,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn url_shows_loopback_for_wildcard_host() {
+    async fn wildcard_host_is_clamped_to_loopback() {
         let (state, _rx, _theme_rx) = crate::overlay::new_state();
         let tx = state.read().await.tx.clone();
         let handle = start_server(state.clone(), tx, "0.0.0.0", 0).await.unwrap();
+        assert_eq!(handle.host, "127.0.0.1");
         assert!(
             handle.url().starts_with("http://127.0.0.1:"),
             "got: {}",
@@ -704,5 +721,14 @@ mod tests {
             .await
             .expect("shutdown not bounded with a stalled client");
         drop(stream);
+    }
+
+    #[test]
+    fn loopback_host_detection() {
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("[::1]"));
+        assert!(!is_loopback_host("0.0.0.0"));
+        assert!(!is_loopback_host("192.168.1.5"));
+        assert!(!is_loopback_host("localhost.evil"));
     }
 }
