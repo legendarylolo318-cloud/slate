@@ -1,4 +1,3 @@
-
 use crate::cache::{CacheResult, CacheTier};
 use crate::tidal_api::{StreamInfo, TidalCredit, TidalLyrics};
 use crate::AppState;
@@ -27,19 +26,13 @@ pub async fn get_playlist_details(
     client.get_playlist_details(&playlist_id).await
 }
 
-pub async fn get_track(
-    state: &AppState,
-    track_id: u64,
-) -> Result<serde_json::Value, SoneError> {
+pub async fn get_track(state: &AppState, track_id: u64) -> Result<serde_json::Value, SoneError> {
     log::debug!("[get_track]: track_id={}", track_id);
     let mut client = state.tidal_client.lock().await;
     client.get_track(track_id).await
 }
 
-pub async fn get_track_lyrics(
-    state: &AppState,
-    track_id: u64,
-) -> Result<TidalLyrics, SoneError> {
+pub async fn get_track_lyrics(state: &AppState, track_id: u64) -> Result<TidalLyrics, SoneError> {
     log::debug!("[get_track_lyrics]: track_id={}", track_id);
     let mut client = state.tidal_client.lock().await;
     client.get_track_lyrics(track_id).await
@@ -78,4 +71,3 @@ pub async fn get_track_credits(
     }
     Ok(credits)
 }
-

@@ -1,8 +1,8 @@
 use serde::Serialize;
 
-use crate::AppState;
 use crate::error::SoneError;
 use crate::mcp::{NowPlayingSnapshot, QueueTrackSnapshot};
+use crate::AppState;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,9 +12,7 @@ pub struct McpConnectionInfo {
     pub port: Option<u16>,
 }
 
-pub async fn mcp_get_connection_info(
-    state: &AppState,
-) -> Result<McpConnectionInfo, SoneError> {
+pub async fn mcp_get_connection_info(state: &AppState) -> Result<McpConnectionInfo, SoneError> {
     let handle = state.mcp_handle.lock().await;
     Ok(match handle.as_ref() {
         Some(h) => McpConnectionInfo {

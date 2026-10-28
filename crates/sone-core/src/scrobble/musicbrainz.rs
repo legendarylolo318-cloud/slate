@@ -14,7 +14,7 @@ const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(1100);
 /// matched recording's artist credit (populated only on an artist-corroborated
 /// match — see `fetch_mbid`).
 #[derive(Clone, Default, Serialize, Deserialize)]
-pub(crate) struct MbidLookup {
+pub struct MbidLookup {
     #[serde(default)]
     pub recording_mbid: Option<String>,
     #[serde(default)]

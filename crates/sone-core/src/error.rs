@@ -104,4 +104,3 @@ impl From<reqwest::Error> for SoneError {
         SoneError::Network(e.to_string())
     }
 }
-

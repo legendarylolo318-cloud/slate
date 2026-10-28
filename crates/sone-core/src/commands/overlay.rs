@@ -1,8 +1,8 @@
 use serde::Serialize;
 
-use crate::AppState;
 use crate::error::SoneError;
 use crate::overlay::OverlayTrackState;
+use crate::AppState;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,9 +107,9 @@ pub async fn overlay_set_enabled(
     if enabled {
         // Start first — only persist enabled=true if it worked, so a bad
         // config never sticks across launches.
-        restart_server(&state, &settings, false).await?;
+        restart_server(state, &settings, false).await?;
     } else {
-        stop_server(&state).await;
+        stop_server(state).await;
     }
     state.save_settings(&settings)?;
 
@@ -130,10 +130,10 @@ pub async fn overlay_set_port(
     let mut settings = old_settings.clone();
     settings.overlay_port = port;
 
-    if let Err(e) = restart_server(&state, &settings, true).await {
+    if let Err(e) = restart_server(state, &settings, true).await {
         // The old server is already stopped — best-effort rollback so a
         // working server isn't left dead.
-        let _ = restart_server(&state, &old_settings, false).await;
+        let _ = restart_server(state, &old_settings, false).await;
         return Err(e);
     }
     state.save_settings(&settings)?;
@@ -159,8 +159,8 @@ pub async fn overlay_set_host(
     let mut settings = old_settings.clone();
     settings.overlay_host = trimmed;
 
-    if let Err(e) = restart_server(&state, &settings, true).await {
-        let _ = restart_server(&state, &old_settings, false).await;
+    if let Err(e) = restart_server(state, &settings, true).await {
+        let _ = restart_server(state, &old_settings, false).await;
         return Err(e);
     }
     state.save_settings(&settings)?;
@@ -171,10 +171,7 @@ pub async fn overlay_set_host(
 /// Receive the full CSS variable block from the frontend (already computed by
 /// `themeToCssVars`) and store it so `/overlay/theme.css` serves it, then
 /// notify connected overlays via SSE so they hot-reload the stylesheet.
-pub async fn overlay_publish_theme(
-    state: &AppState,
-    css: String,
-) -> Result<(), SoneError> {
+pub async fn overlay_publish_theme(state: &AppState, css: String) -> Result<(), SoneError> {
     let mut s = state.overlay_state.write().await;
     s.theme_css = css;
     // Signal all connected overlays to reload theme.css

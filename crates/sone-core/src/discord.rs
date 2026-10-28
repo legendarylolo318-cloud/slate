@@ -264,6 +264,12 @@ impl DiscordHandle {
     }
 }
 
+impl Default for DiscordHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn now_epoch_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

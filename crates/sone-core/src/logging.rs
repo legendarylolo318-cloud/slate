@@ -15,13 +15,12 @@ pub fn read_logging_preference(path: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(path) else {
         return true;
     };
-    match text.trim() {
-        "false" => false,
-        _ => true,
-    }
+    text.trim() != "false"
 }
 
-use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, LoggerHandle, Naming, WriteMode};
+use flexi_logger::{
+    Cleanup, Criterion, Duplicate, FileSpec, Logger, LoggerHandle, Naming, WriteMode,
+};
 use std::path::PathBuf;
 
 /// Initialize the global logger. Must be called exactly once at startup,
@@ -66,9 +65,9 @@ pub fn init_logging(log_dir: PathBuf, file_enabled: bool) -> LoggerHandle {
         .log_to_file(FileSpec::default().directory(&log_dir).basename("sone"))
         .duplicate_to_stderr(Duplicate::All)
         .rotate(
-            Criterion::Size(5_000_000),       // 5 MB
+            Criterion::Size(5_000_000), // 5 MB
             Naming::Numbers,
-            Cleanup::KeepLogFiles(9),         // 9 rotated + 1 active = ~50 MB max
+            Cleanup::KeepLogFiles(9), // 9 rotated + 1 active = ~50 MB max
         )
         .format_for_files(flexi_logger::detailed_format)
         .write_mode(WriteMode::BufferAndFlush)

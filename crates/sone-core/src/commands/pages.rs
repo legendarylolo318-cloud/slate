@@ -1,7 +1,6 @@
 use serde::Serialize;
 use serde_json::Value;
 
-
 use crate::cache::{CacheResult, CacheTier};
 use crate::tidal_api::{
     AlbumPageResponse, HomePageResponse, MixPageResult, PaginatedTracks, TidalAlbumDetail,
@@ -425,10 +424,7 @@ pub async fn get_page_section(
     Ok(page)
 }
 
-pub async fn get_mix_items(
-    state: &AppState,
-    mix_id: String,
-) -> Result<MixPageResult, SoneError> {
+pub async fn get_mix_items(state: &AppState, mix_id: String) -> Result<MixPageResult, SoneError> {
     log::debug!("[get_mix_items]: mix_id={}", mix_id);
 
     let cache_key = format!("mix-page:{}", mix_id);

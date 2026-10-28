@@ -5,16 +5,13 @@ pub mod state_mirror;
 pub mod tools;
 
 pub use server::{start_server, McpHandle};
-pub use state_mirror::{
-    new_state, McpStateRef, NowPlayingSnapshot, QueueTrackSnapshot,
-};
+pub use state_mirror::{new_state, McpStateRef, NowPlayingSnapshot, QueueTrackSnapshot};
 
 /// Start the MCP server if it is enabled in settings and not already running.
 /// Holds the `mcp_handle` lock across the whole check→bind→store so that
 /// concurrent callers (startup spawn + login restore) cannot both bind the
 /// port. No-op if MCP is disabled or a server is already running.
-pub(crate) async fn ensure_mcp_started(app: &crate::AppHandle) {
-    
+pub async fn ensure_mcp_started(app: &crate::AppHandle) {
     let state = app.state::<crate::AppState>();
     let mut guard = state.mcp_handle.lock().await;
     if guard.is_some() {

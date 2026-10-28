@@ -95,9 +95,7 @@ pub async fn notify_track_stopped(state: &AppState) -> Result<(), SoneError> {
     Ok(())
 }
 
-pub async fn get_scrobble_status(
-    state: &AppState,
-) -> Result<Vec<ProviderStatus>, SoneError> {
+pub async fn get_scrobble_status(state: &AppState) -> Result<Vec<ProviderStatus>, SoneError> {
     Ok(state.scrobble_manager.provider_statuses().await)
 }
 
@@ -105,10 +103,7 @@ pub async fn get_scrobble_queue_size(state: &AppState) -> Result<usize, SoneErro
     Ok(state.scrobble_manager.queue_size().await)
 }
 
-pub async fn connect_listenbrainz(
-    state: &AppState,
-    token: String,
-) -> Result<String, SoneError> {
+pub async fn connect_listenbrainz(state: &AppState, token: String) -> Result<String, SoneError> {
     // Validation needs a live client, so a blocked proxy fails the connect
     // outright rather than reaching ListenBrainz directly.
     let client = state
@@ -137,10 +132,7 @@ pub async fn connect_listenbrainz(
     Ok(username)
 }
 
-pub async fn disconnect_provider(
-    state: &AppState,
-    provider: String,
-) -> Result<(), SoneError> {
+pub async fn disconnect_provider(state: &AppState, provider: String) -> Result<(), SoneError> {
     // Clear credentials from settings
     if let Some(mut settings) = state.load_settings() {
         match provider.as_str() {

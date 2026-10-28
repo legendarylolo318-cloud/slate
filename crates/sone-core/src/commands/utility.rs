@@ -1,6 +1,5 @@
 use std::sync::atomic::Ordering;
 
-
 use super::playback::compute_norm_gain;
 use crate::audio::AudioDevice;
 use crate::cache::{CacheResult, CacheTier};
@@ -31,10 +30,7 @@ pub fn refresh_signal_path(state: &AppState) -> SignalPath {
     state.signal_path.snapshot()
 }
 
-pub async fn get_image_bytes(
-    state: &AppState,
-    url: String,
-) -> Result<Vec<u8>, SoneError> {
+pub async fn get_image_bytes(state: &AppState, url: String) -> Result<Vec<u8>, SoneError> {
     log::debug!("[get_image_bytes]: url={}", url);
 
     match state.disk_cache.get(&url, CacheTier::Image).await {
@@ -65,9 +61,7 @@ pub async fn get_image_bytes(
     }
 }
 
-pub async fn get_cache_stats(
-    state: &AppState,
-) -> Result<crate::cache::CacheStats, SoneError> {
+pub async fn get_cache_stats(state: &AppState) -> Result<crate::cache::CacheStats, SoneError> {
     Ok(state.disk_cache.stats().await)
 }
 
@@ -81,10 +75,7 @@ pub fn get_decorations(state: &AppState) -> bool {
     state.decorations.load(Ordering::Relaxed)
 }
 
-pub fn set_decorations(
-    state: &AppState,
-    enabled: bool,
-) -> Result<(), SoneError> {
+pub fn set_decorations(state: &AppState, enabled: bool) -> Result<(), SoneError> {
     state.decorations.store(enabled, Ordering::Relaxed);
     let mut settings = state.load_settings().unwrap_or_default();
     settings.decorations = enabled;
@@ -108,10 +99,7 @@ pub fn get_volume_normalization(state: &AppState) -> bool {
     state.volume_normalization.load(Ordering::Relaxed)
 }
 
-pub fn set_volume_normalization(
-    state: &AppState,
-    enabled: bool,
-) -> Result<(), SoneError> {
+pub fn set_volume_normalization(state: &AppState, enabled: bool) -> Result<(), SoneError> {
     state.volume_normalization.store(enabled, Ordering::Relaxed);
 
     // Immediately apply/reset normalization on the current track
@@ -387,9 +375,8 @@ const PROXY_PROBE_URL: &str = "https://api.tidal.com/v1/ping";
 ///
 /// A blocked cell is left alone. Nothing can be sent through it, `unanswered`
 /// says nothing about it, and the banner reports that state separately.
-pub async fn probe_proxy_reachability(state: &AppState) -> Result<(), ()> {
+pub async fn probe_proxy_reachability(state: &AppState) {
     probe_proxy_reachability_inner(state.proxied_http.clone(), PROXY_PROBE_URL).await;
-    Ok(())
 }
 
 /// The origin is a parameter only so a test can point it at a loopback
@@ -649,10 +636,7 @@ pub fn get_enable_logging() -> bool {
     let Ok(text) = std::fs::read_to_string(&path) else {
         return true;
     };
-    match text.trim() {
-        "false" => false,
-        _ => true,
-    }
+    text.trim() != "false"
 }
 
 pub fn set_enable_logging(enabled: bool) -> Result<(), SoneError> {

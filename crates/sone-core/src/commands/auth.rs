@@ -4,12 +4,11 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs;
 
-
 use crate::tidal_api::{AuthTokens, DeviceAuthResponse};
-use crate::{AppHandle, AppState};
 use crate::AuthMethod;
 use crate::Settings;
 use crate::SoneError;
+use crate::{AppHandle, AppState};
 
 /// Check if the given credentials match the embedded device-code defaults.
 fn are_embedded_defaults(id: &str, secret: &str) -> bool {
@@ -405,9 +404,7 @@ pub async fn logout(state: &AppState) -> Result<(), SoneError> {
     state.tidal_reporter.clear().await;
 
     // Stop playback: tear down the pipeline + clear MPRIS/Discord now-playing.
-    crate::commands::playback::stop_playback(state)
-        .await
-        .ok();
+    crate::commands::playback::stop_playback(state).await.ok();
 
     // Disconnect Discord RPC (close the IPC socket).
     state
@@ -453,11 +450,12 @@ pub async fn logout(state: &AppState) -> Result<(), SoneError> {
 /// purges them) and does NOT lock `tidal_client` (callers hold that lock).
 pub(crate) async fn restore_session_services(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let discord_rpc = state.load_settings().map(|s| s.discord_rpc).unwrap_or(false);
+    let discord_rpc = state
+        .load_settings()
+        .map(|s| s.discord_rpc)
+        .unwrap_or(false);
     if discord_rpc {
-        state
-            .discord
-            .send(crate::discord::DiscordCommand::Connect);
+        state.discord.send(crate::discord::DiscordCommand::Connect);
     }
     crate::mcp::ensure_mcp_started(app).await;
 }
@@ -524,7 +522,7 @@ async fn finish_embedded_pkce(
     settings.client_secret = String::new();
     state.save_settings(&settings)?;
 
-        restore_session_services(&app).await;
+    restore_session_services(&app).await;
 
     Ok(tokens)
 }

@@ -212,7 +212,9 @@ pub async fn play_tidal_track(
     explain_block(&proxy_settings, &state.host_caps(), is_dash)?;
 
     // Store selected values for live toggle
-    state.last_replay_gain.store(rg.to_bits(), Ordering::Relaxed);
+    state
+        .last_replay_gain
+        .store(rg.to_bits(), Ordering::Relaxed);
     state
         .last_peak_amplitude
         .store(peak.to_bits(), Ordering::Relaxed);
@@ -224,9 +226,9 @@ pub async fn play_tidal_track(
         player.set_normalization_gain(norm_gain)?;
         player.play_url(&uri, None)
     })
-        .await
-        .map_err(|e| SoneError::Audio(e.to_string()))?
-        .map_err(SoneError::Audio)?;
+    .await
+    .map_err(|e| SoneError::Audio(e.to_string()))?
+    .map_err(SoneError::Audio)?;
 
     // Save last played track
     if let Some(mut settings) = state.load_settings() {
@@ -260,7 +262,10 @@ pub async fn set_next_track(
 }
 
 pub fn clear_next_track(state: &AppState) -> Result<(), SoneError> {
-    state.audio_player.clear_next_track().map_err(SoneError::Audio)
+    state
+        .audio_player
+        .clear_next_track()
+        .map_err(SoneError::Audio)
 }
 
 /// Pure resolver: returns `StreamInfo` WITHOUT arming the gapless slot or
@@ -289,10 +294,7 @@ pub async fn get_video_stream_info(
     client.get_video_stream_url(video_id, &quality).await
 }
 
-pub async fn get_video_metadata(
-    state: &AppState,
-    video_id: u64,
-) -> Result<TidalVideo, SoneError> {
+pub async fn get_video_metadata(state: &AppState, video_id: u64) -> Result<TidalVideo, SoneError> {
     let mut client = state.tidal_client.lock().await;
     client.get_video(video_id).await
 }
@@ -318,7 +320,7 @@ pub async fn resume_track(state: &AppState) -> Result<(), SoneError> {
 /// `stop_track` command and `logout`.
 pub(crate) async fn stop_playback(state: &AppState) -> Result<(), SoneError> {
     let result = state.audio_player.stop().map_err(SoneError::Audio);
-        state.media.send(crate::media::MediaCommand::Stop);
+    state.media.send(crate::media::MediaCommand::Stop);
     state.discord.send(crate::discord::DiscordCommand::Stop);
     state.tidal_reporter.on_track_stopped().await;
     state.scrobble_manager.on_track_stopped().await;
@@ -336,7 +338,7 @@ pub fn set_volume(state: &AppState, level: f32) -> Result<(), SoneError> {
         .set_volume(level)
         .map_err(SoneError::Audio)?;
 
-        state.media.send(crate::media::MediaCommand::SetVolume {
+    state.media.send(crate::media::MediaCommand::SetVolume {
         volume: level as f64,
     });
 
@@ -365,7 +367,7 @@ pub async fn seek_track(state: &AppState, position_secs: f32) -> Result<(), Sone
         .audio_player
         .seek(position_secs)
         .map_err(SoneError::Audio);
-        state.media.send(crate::media::MediaCommand::Seeked {
+    state.media.send(crate::media::MediaCommand::Seeked {
         position_secs: position_secs as f64,
     });
     state.discord.send(crate::discord::DiscordCommand::Seeked {
@@ -384,10 +386,7 @@ pub async fn is_track_finished(state: &AppState) -> Result<bool, SoneError> {
         .map_err(SoneError::Audio)
 }
 
-pub fn save_playback_queue(
-    state: &AppState,
-    snapshot_json: String,
-) -> Result<(), SoneError> {
+pub fn save_playback_queue(state: &AppState, snapshot_json: String) -> Result<(), SoneError> {
     state.write_state_file("queue.json", &snapshot_json)?;
     Ok(())
 }
@@ -424,11 +423,8 @@ pub struct MprisMetadata {
 }
 
 #[allow(unused_variables)]
-pub fn update_mpris_metadata(
-    state: &AppState,
-    metadata: MprisMetadata,
-) -> Result<(), SoneError> {
-        state.media.send(crate::media::MediaCommand::SetMetadata {
+pub fn update_mpris_metadata(state: &AppState, metadata: MprisMetadata) -> Result<(), SoneError> {
+    state.media.send(crate::media::MediaCommand::SetMetadata {
         track_id: metadata.track_id,
         title: metadata.title.clone(),
         artist: metadata.artist.clone(),
@@ -466,7 +462,7 @@ pub fn update_mpris_playback_status(
     is_playing: bool,
     position_secs: Option<f64>,
 ) -> Result<(), SoneError> {
-        state
+    state
         .media
         .send(crate::media::MediaCommand::SetPlaybackStatus { is_playing });
     state
@@ -479,33 +475,24 @@ pub fn update_mpris_playback_status(
 }
 
 #[allow(unused_variables)]
-pub fn update_mpris_shuffle(
-    state: &AppState,
-    enabled: bool,
-) -> Result<(), SoneError> {
-        state
+pub fn update_mpris_shuffle(state: &AppState, enabled: bool) -> Result<(), SoneError> {
+    state
         .media
         .send(crate::media::MediaCommand::SetShuffle { enabled });
     Ok(())
 }
 
 #[allow(unused_variables)]
-pub fn update_mpris_fullscreen(
-    state: &AppState,
-    fullscreen: bool,
-) -> Result<(), SoneError> {
-        state
+pub fn update_mpris_fullscreen(state: &AppState, fullscreen: bool) -> Result<(), SoneError> {
+    state
         .media
         .send(crate::media::MediaCommand::SetFullscreen { fullscreen });
     Ok(())
 }
 
 #[allow(unused_variables)]
-pub fn update_mpris_loop_status(
-    state: &AppState,
-    mode: u8,
-) -> Result<(), SoneError> {
-        state
+pub fn update_mpris_loop_status(state: &AppState, mode: u8) -> Result<(), SoneError> {
+    state
         .media
         .send(crate::media::MediaCommand::SetLoopStatus { mode });
     Ok(())
@@ -527,7 +514,10 @@ mod tests {
     #[test]
     fn ceiling_max_without_secret_drops_hires() {
         // Reproduces the legacy no-secret branch exactly.
-        assert_eq!(quality_tiers("HI_RES_LOSSLESS", false), vec!["LOSSLESS", "HIGH"]);
+        assert_eq!(
+            quality_tiers("HI_RES_LOSSLESS", false),
+            vec!["LOSSLESS", "HIGH"]
+        );
     }
 
     #[test]
@@ -555,7 +545,10 @@ mod tests {
         for ceiling in ["HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "GARBAGE"] {
             for has_secret in [true, false] {
                 let tiers = quality_tiers(ceiling, has_secret);
-                assert!(tiers.contains(&"HIGH"), "ceiling={ceiling} secret={has_secret}");
+                assert!(
+                    tiers.contains(&"HIGH"),
+                    "ceiling={ceiling} secret={has_secret}"
+                );
             }
         }
     }

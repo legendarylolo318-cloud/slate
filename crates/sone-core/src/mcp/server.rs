@@ -1,11 +1,11 @@
 use std::net::SocketAddr;
 
-use rmcp::handler::server::ServerHandler;
+use crate::AppHandle;
 use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::ServerHandler;
 use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
-use crate::AppHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::SoneError;

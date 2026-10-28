@@ -118,6 +118,10 @@ impl ScrobbleQueue {
         self.entries.lock().await.len()
     }
 
+    pub async fn is_empty(&self) -> bool {
+        self.entries.lock().await.is_empty()
+    }
+
     /// Remove entries for disconnected providers and entries that have exceeded
     /// the maximum retry attempts.
     pub async fn cleanup(&self, connected_providers: &[String]) {

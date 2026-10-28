@@ -1,3 +1,14 @@
+// Inherited from the Tauri-era backend: these style lints would force invasive
+// signature churn in code that is otherwise tested and unchanged by the port.
+#![allow(
+    clippy::double_must_use,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::large_enum_variant,
+    clippy::doc_lazy_continuation,
+    clippy::doc_overindented_list_items
+)]
+
 pub mod audio;
 pub mod events;
 pub mod media;
@@ -11,21 +22,21 @@ pub mod embedded_config;
 pub mod embedded_lastfm;
 pub mod embedded_librefm;
 pub mod error;
+pub mod http_util;
 pub mod idle_inhibit;
 pub mod logging;
+pub mod mcp;
+pub mod overlay;
+pub mod pipeline_probe;
+pub mod proxy;
+pub mod proxy_http;
 pub mod rate_gate;
 pub mod scrobble;
 pub mod signal_path;
-pub mod pipeline_probe;
 pub mod theme_config;
 #[cfg(target_os = "linux")]
 pub mod tidal_api;
 pub mod tidal_report;
-pub mod mcp;
-pub mod overlay;
-pub mod http_util;
-pub mod proxy;
-pub mod proxy_http;
 
 pub use error::SoneError;
 pub use signal_path::{SignalPath, SignalPathTracker};
@@ -43,14 +54,30 @@ use tidal_api::{AuthTokens, TidalClient};
 use tokio::sync::Mutex;
 
 mod defaults {
-    pub fn yes() -> bool { true }
-    pub fn volume() -> f32 { 1.0 }
-    pub fn mcp_enabled() -> bool { false }
-    pub fn mcp_port() -> u16 { 5577 }
-    pub fn overlay_enabled() -> bool { false }
-    pub fn overlay_port() -> u16 { 5578 }
-    pub fn overlay_host() -> String { "127.0.0.1".to_string() }
-    pub fn max_quality() -> String { "HI_RES_LOSSLESS".to_string() }
+    pub fn yes() -> bool {
+        true
+    }
+    pub fn volume() -> f32 {
+        1.0
+    }
+    pub fn mcp_enabled() -> bool {
+        false
+    }
+    pub fn mcp_port() -> u16 {
+        5577
+    }
+    pub fn overlay_enabled() -> bool {
+        false
+    }
+    pub fn overlay_port() -> u16 {
+        5578
+    }
+    pub fn overlay_host() -> String {
+        "127.0.0.1".to_string()
+    }
+    pub fn max_quality() -> String {
+        "HI_RES_LOSSLESS".to_string()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -77,28 +104,20 @@ pub struct ScrobbleSettings {
 /// Only relevant when the user has not provided custom credentials.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AuthMethod {
+    #[default]
     LoginCode,
     Pkce,
 }
 
-impl Default for AuthMethod {
-    fn default() -> Self {
-        Self::LoginCode
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ProxyType {
+    #[default]
     Http,
     Socks5,
-}
-
-impl Default for ProxyType {
-    fn default() -> Self {
-        Self::Http
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -348,9 +367,7 @@ impl AppState {
                 if let Ok(json) = serde_json::to_string_pretty(s) {
                     if let Ok(encrypted) = crypto.encrypt(json.as_bytes()) {
                         if let Err(e) = fs::write(&settings_path, encrypted) {
-                            log::warn!(
-                                "[migration] failed to persist titlebar_migration_v1: {e}"
-                            );
+                            log::warn!("[migration] failed to persist titlebar_migration_v1: {e}");
                         }
                     }
                 }
@@ -439,7 +456,8 @@ impl AppState {
         // Settings that do not form a plan block egress rather than falling back
         // to Direct: "we could not read your proxy" must not become "so we went
         // around it". The user fixes it in settings, which needs no network.
-        let proxied_http = crate::proxy_http::ProxiedHttp::from_settings(&proxy_settings, &host_caps);
+        let proxied_http =
+            crate::proxy_http::ProxiedHttp::from_settings(&proxy_settings, &host_caps);
 
         let scrobble_manager = scrobble::ScrobbleManager::new(
             app_handle.clone(),

@@ -1,14 +1,13 @@
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
-use rmcp::{ErrorData, tool_router};
+use rmcp::{tool_router, ErrorData};
 use serde::Deserialize;
 
-
-use crate::AppState;
-use crate::mcp::events::{EV_FAVORITE_CHANGED, FavoriteChangedPayload};
-use crate::mcp::sanitizer::{SanitizedAlbum, SanitizedArtist, backfill_and_sanitize_tracks};
+use crate::mcp::events::{FavoriteChangedPayload, EV_FAVORITE_CHANGED};
+use crate::mcp::sanitizer::{backfill_and_sanitize_tracks, SanitizedAlbum, SanitizedArtist};
 use crate::mcp::server::SoneMcpServer;
+use crate::AppState;
 
 use super::util::require_user_id;
 
@@ -60,9 +59,9 @@ impl SoneMcpServer {
             "offset": offset,
             "limit": limit,
         });
-        Ok(CallToolResult::success(vec![rmcp::model::ContentBlock::text(
-            json.to_string(),
-        )]))
+        Ok(CallToolResult::success(vec![
+            rmcp::model::ContentBlock::text(json.to_string()),
+        ]))
     }
 
     #[rmcp::tool(
@@ -83,16 +82,17 @@ impl SoneMcpServer {
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         let total = resp.total_number_of_items;
-        let albums: Vec<SanitizedAlbum> = resp.items.iter().map(SanitizedAlbum::from_tidal).collect();
+        let albums: Vec<SanitizedAlbum> =
+            resp.items.iter().map(SanitizedAlbum::from_tidal).collect();
         let json = serde_json::json!({
             "albums": albums,
             "total": total,
             "offset": offset,
             "limit": limit,
         });
-        Ok(CallToolResult::success(vec![rmcp::model::ContentBlock::text(
-            json.to_string(),
-        )]))
+        Ok(CallToolResult::success(vec![
+            rmcp::model::ContentBlock::text(json.to_string()),
+        ]))
     }
 
     #[rmcp::tool(
@@ -113,16 +113,20 @@ impl SoneMcpServer {
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         let total = resp.total_number_of_items;
-        let artists: Vec<SanitizedArtist> = resp.items.iter().map(SanitizedArtist::from_tidal_detail).collect();
+        let artists: Vec<SanitizedArtist> = resp
+            .items
+            .iter()
+            .map(SanitizedArtist::from_tidal_detail)
+            .collect();
         let json = serde_json::json!({
             "artists": artists,
             "total": total,
             "offset": offset,
             "limit": limit,
         });
-        Ok(CallToolResult::success(vec![rmcp::model::ContentBlock::text(
-            json.to_string(),
-        )]))
+        Ok(CallToolResult::success(vec![
+            rmcp::model::ContentBlock::text(json.to_string()),
+        ]))
     }
 
     #[rmcp::tool(
@@ -141,9 +145,9 @@ impl SoneMcpServer {
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         let json = serde_json::json!({ "favorited": favorited });
-        Ok(CallToolResult::success(vec![rmcp::model::ContentBlock::text(
-            json.to_string(),
-        )]))
+        Ok(CallToolResult::success(vec![
+            rmcp::model::ContentBlock::text(json.to_string()),
+        ]))
     }
 
     #[rmcp::tool(
@@ -187,9 +191,9 @@ impl SoneMcpServer {
             )
             .map_err(|e| ErrorData::internal_error(format!("emit failed: {e}"), None))?;
         let json = serde_json::json!({ "status": args.action, "id": args.id });
-        Ok(CallToolResult::success(vec![rmcp::model::ContentBlock::text(
-            json.to_string(),
-        )]))
+        Ok(CallToolResult::success(vec![
+            rmcp::model::ContentBlock::text(json.to_string()),
+        ]))
     }
 
     #[rmcp::tool(
@@ -233,9 +237,9 @@ impl SoneMcpServer {
             )
             .map_err(|e| ErrorData::internal_error(format!("emit failed: {e}"), None))?;
         let json = serde_json::json!({ "status": args.action, "id": args.id });
-        Ok(CallToolResult::success(vec![rmcp::model::ContentBlock::text(
-            json.to_string(),
-        )]))
+        Ok(CallToolResult::success(vec![
+            rmcp::model::ContentBlock::text(json.to_string()),
+        ]))
     }
 
     #[rmcp::tool(
@@ -279,8 +283,8 @@ impl SoneMcpServer {
             )
             .map_err(|e| ErrorData::internal_error(format!("emit failed: {e}"), None))?;
         let json = serde_json::json!({ "status": args.action, "id": args.id });
-        Ok(CallToolResult::success(vec![rmcp::model::ContentBlock::text(
-            json.to_string(),
-        )]))
+        Ok(CallToolResult::success(vec![
+            rmcp::model::ContentBlock::text(json.to_string()),
+        ]))
     }
 }

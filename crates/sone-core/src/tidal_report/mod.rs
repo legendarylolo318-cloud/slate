@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-
 use tokio::sync::Mutex;
 
 use crate::crypto::Crypto;
