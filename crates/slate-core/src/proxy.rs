@@ -523,6 +523,7 @@ pub fn write_sidecar(config_dir: &Path, s: &crate::ProxySettings) {
 /// file is created, so a sidecar written before this change — or by an older
 /// build under a loose umask — would keep its old permissions forever without
 /// the explicit `set_permissions`.
+#[cfg(unix)]
 fn write_sidecar_file(path: &Path, body: &str) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -535,6 +536,12 @@ fn write_sidecar_file(path: &Path, body: &str) -> std::io::Result<()> {
         .open(path)?;
     f.write_all(body.as_bytes())?;
     f.set_permissions(std::fs::Permissions::from_mode(0o600))
+}
+
+/// Windows ACLs on the per-user profile directory already restrict access.
+#[cfg(not(unix))]
+fn write_sidecar_file(path: &Path, body: &str) -> std::io::Result<()> {
+    std::fs::write(path, body)
 }
 
 /// `None` whenever the file is absent, truncated, or carries a proxy type this

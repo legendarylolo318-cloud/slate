@@ -28,7 +28,13 @@ pub mod commands;
 pub mod controller;
 pub mod crypto;
 pub mod discord;
+#[cfg(unix)]
 pub mod discord_ipc;
+/// Windows talks to Discord over a named pipe, which the upstream client handles.
+#[cfg(windows)]
+pub mod discord_ipc {
+    pub type SlateDiscordClient = discord_rich_presence::DiscordIpcClient;
+}
 pub mod embedded_config;
 pub mod embedded_lastfm;
 pub mod embedded_librefm;
@@ -45,7 +51,6 @@ pub mod rate_gate;
 pub mod scrobble;
 pub mod signal_path;
 pub mod theme_config;
-#[cfg(target_os = "linux")]
 pub mod tidal_api;
 pub mod tidal_report;
 

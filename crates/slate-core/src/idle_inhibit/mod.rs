@@ -4,7 +4,9 @@
 //! Wayland native (zwp_idle_inhibit), X11 native (screensaver+DPMS), D-Bus
 //! (ScreenSaver/GNOME/login1), and the XDG portal as a last-resort fallback.
 
+#[cfg(target_os = "linux")]
 mod dbus;
+#[cfg(target_os = "linux")]
 mod x11;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +39,9 @@ impl DisplayServer {
 
 pub struct IdleInhibitor {
     active: bool,
+    #[cfg(target_os = "linux")]
     dbus: dbus::DbusInhibitor,
+    #[cfg(target_os = "linux")]
     x11: Option<x11::X11Inhibitor>,
 }
 
@@ -45,13 +49,27 @@ impl IdleInhibitor {
     pub fn new() -> Self {
         Self {
             active: false,
+            #[cfg(target_os = "linux")]
             dbus: dbus::DbusInhibitor::new(),
+            #[cfg(target_os = "linux")]
             x11: None,
         }
     }
 
     /// Inhibit screen blanking + system sleep. Runs every applicable layer for
     /// the detected display server — no short-circuit.
+    #[cfg(not(target_os = "linux"))]
+    pub async fn inhibit(&mut self) {
+        // No idle inhibition outside Linux yet.
+        self.active = true;
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub async fn uninhibit(&mut self) {
+        self.active = false;
+    }
+
+    #[cfg(target_os = "linux")]
     pub async fn inhibit(&mut self) {
         if self.active {
             return;
@@ -87,6 +105,7 @@ impl IdleInhibitor {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub async fn uninhibit(&mut self) {
         if !self.active {
             return;
