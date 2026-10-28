@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["crates/sone-core"]
+
+[workspace.package]
+version = "0.22.1"
+edition = "2021"
+license = "GPL-3.0-only"
+authors = ["lullabyX", "SONE Slint port contributors"]
+repository = "https://github.com/lullabyX/sone"

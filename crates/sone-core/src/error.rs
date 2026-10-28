@@ -1,0 +1,107 @@
+use serde::Serialize;
+
+/// Structured error type for all Sone backend operations.
+/// Serialized as JSON to the frontend via Tauri IPC.
+#[derive(Debug, thiserror::Error, Serialize)]
+#[serde(tag = "kind", content = "message")]
+pub enum SoneError {
+    /// HTTP API returned a non-success status.
+    #[error("API error ({status}): {body}")]
+    Api { status: u16, body: String },
+
+    /// JSON deserialization or other parse failure.
+    #[error("Parse error: {0}")]
+    Parse(String),
+
+    /// Network/transport failure (timeout, DNS, connection refused).
+    #[error("Network error: {0}")]
+    Network(String),
+
+    /// No auth tokens available (user not logged in).
+    #[error("Not authenticated")]
+    NotAuthenticated,
+
+    /// Client ID / secret not configured.
+    #[error("Not configured: {0}")]
+    NotConfigured(String),
+
+    /// File system / IO error.
+    #[error("IO error: {0}")]
+    Io(String),
+
+    /// GStreamer / audio pipeline error.
+    #[error("Audio error: {0}")]
+    Audio(String),
+
+    /// Encryption / decryption failure.
+    #[error("Crypto error: {0}")]
+    Crypto(String),
+
+    /// Scrobbling service error.
+    #[error("Scrobble error: {0}")]
+    Scrobble(String),
+
+    #[error("MCP error: {0}")]
+    Mcp(String),
+
+    /// The configured proxy cannot serve this request; nothing was sent.
+    /// Never a transport failure — the request never left the process.
+    #[error("Proxy blocked: {reason}")]
+    ProxyBlocked { reason: String },
+}
+
+impl SoneError {
+    /// Returns true if this is a network/transport error.
+    pub fn is_network(&self) -> bool {
+        matches!(self, SoneError::Network(_))
+    }
+
+    /// Upstream is rate-limiting us. Never retry in a loop — a 429 is usually
+    /// self-inflicted, so the fix is to stop asking.
+    pub fn is_rate_limited(&self) -> bool {
+        matches!(self, SoneError::Api { status: 429, .. })
+    }
+
+    /// This specific item cannot be played and no retry will change that.
+    /// 404/410/451 are catalog/licensing terminal; a 401 is terminal only when
+    /// its body carries a terminal playbackinfo sub-status.
+    pub fn is_terminal_unplayable(&self) -> bool {
+        match self {
+            SoneError::Api {
+                status: 404 | 410 | 451,
+                ..
+            } => true,
+            SoneError::Api { status: 401, body } => crate::tidal_api::is_terminal_sub_status(body),
+            _ => false,
+        }
+    }
+
+    /// A log-safe message that omits API response bodies (which may carry
+    /// account data for `/users/` and `/sessions` endpoints). Logs only the
+    /// status for API errors; other variants carry no server response body.
+    pub fn log_safe(&self) -> String {
+        match self {
+            SoneError::Api { status, .. } => format!("API error (status {status})"),
+            other => other.to_string(),
+        }
+    }
+}
+
+impl From<std::io::Error> for SoneError {
+    fn from(e: std::io::Error) -> Self {
+        SoneError::Io(e.to_string())
+    }
+}
+
+impl From<serde_json::Error> for SoneError {
+    fn from(e: serde_json::Error) -> Self {
+        SoneError::Parse(e.to_string())
+    }
+}
+
+impl From<reqwest::Error> for SoneError {
+    fn from(e: reqwest::Error) -> Self {
+        SoneError::Network(e.to_string())
+    }
+}
+
