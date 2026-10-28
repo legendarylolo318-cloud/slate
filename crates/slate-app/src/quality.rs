@@ -28,7 +28,7 @@ pub fn describe(info: &StreamInfo) -> String {
 }
 
 fn khz(hz: u32) -> String {
-    if hz % 1000 == 0 {
+    if hz.is_multiple_of(1000) {
         format!("{}", hz / 1000)
     } else {
         format!("{:.1}", f64::from(hz) / 1000.0)
