@@ -34,8 +34,7 @@ Tokio on background threads; UI mutation only via `invoke_from_event_loop` /
    Needs a product decision.
 4. Embedded-webview PKCE login cannot exist without a webview; login falls back to
    device-code (+QR) or the browser PKCE flow with code paste.
-5. Inherited core still contains `unwrap`/`expect`/`panic!` outside tests (rule not yet
-   met) and some style lints are allowed crate-wide (`lib.rs`).
+5. The no-`unwrap`/`expect`/`panic!` rule is enforced by clippy deny lints (see PORTING_PLAN §13). Some upstream style lints remain allowed crate-wide (`lib.rs`).
 6. `docs/` is gitignored upstream, so the reference copies of the removed Tauri files
    (`docs/legacy-tauri/`) exist only locally; they are also in git history (`a34fd6f`).
 7. Commits were authored with a per-command identity (`SONE port (Claude Code)`); rewrite

@@ -470,10 +470,11 @@ impl ScrobbleManager {
 
                 let result = {
                     let providers = self.providers.read().await;
-                    let provider = providers
-                        .iter()
-                        .find(|p| p.name() == provider_name)
-                        .unwrap();
+                    let Some(provider) = providers.iter().find(|p| p.name() == provider_name)
+                    else {
+                        // Provider was disconnected while we were draining.
+                        break;
+                    };
                     tokio::time::timeout(Duration::from_secs(15), provider.scrobble(&tracks)).await
                 };
 

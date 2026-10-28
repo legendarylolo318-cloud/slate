@@ -1,3 +1,4 @@
+use crate::sync::LockExt;
 use serde::Deserialize;
 use std::sync::atomic::Ordering;
 
@@ -56,7 +57,7 @@ pub async fn resolve_play_uri(
     let stream_info = {
         let mut client = state.tidal_client.lock().await;
         let has_secret = !client.client_secret.is_empty();
-        let ceiling = state.max_quality.lock().unwrap().clone();
+        let ceiling = state.max_quality.lock_safe().clone();
         let tiers = quality_tiers(&ceiling, has_secret);
 
         let mut result: Option<StreamInfo> = None;
@@ -80,7 +81,10 @@ pub async fn resolve_play_uri(
             Some(info) => info,
             // `quality_tiers` always yields at least "HIGH", so the loop runs
             // at least once and `last_err` is set on total failure.
-            None => return Err(last_err.expect("quality_tiers always yields HIGH")),
+            None => {
+                return Err(last_err
+                    .unwrap_or_else(|| SlateError::Audio("no playable quality tier".into())))
+            }
         }
     };
 

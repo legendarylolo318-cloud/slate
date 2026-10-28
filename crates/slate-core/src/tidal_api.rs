@@ -1265,7 +1265,28 @@ pub struct DeviceAuthResponse {
 /// Invoked with freshly refreshed tokens so the caller can persist them.
 pub type TokenPersist = Arc<dyn Fn(&AuthTokens) + Send + Sync>;
 
+/// Service base URLs. Production values by default; tests point them at a mock.
+#[derive(Debug, Clone)]
+pub struct ApiUrls {
+    pub auth: String,
+    pub api: String,
+    pub api_v2: String,
+    pub openapi: String,
+}
+
+impl Default for ApiUrls {
+    fn default() -> Self {
+        Self {
+            auth: TIDAL_AUTH_URL.to_string(),
+            api: TIDAL_API_URL.to_string(),
+            api_v2: TIDAL_API_V2_URL.to_string(),
+            openapi: TIDAL_OPENAPI_URL.to_string(),
+        }
+    }
+}
+
 pub struct TidalClient {
+    urls: ApiUrls,
     /// The shared cell, not a client: when the proxy plan is blocked there is
     /// nothing to hand out, and that must stay unrepresentable here.
     http: crate::proxy_http::ProxiedHttp,
@@ -1282,6 +1303,7 @@ pub struct TidalClient {
 impl TidalClient {
     pub fn new(http: crate::proxy_http::ProxiedHttp) -> Self {
         Self {
+            urls: ApiUrls::default(),
             http,
             tokens: None,
             client_id: String::new(),
@@ -1290,6 +1312,12 @@ impl TidalClient {
             token_persist: None,
             gate: Arc::new(crate::rate_gate::RateGate::new()),
         }
+    }
+
+    /// Points the client at other service URLs (used by tests).
+    pub fn with_urls(mut self, urls: ApiUrls) -> Self {
+        self.urls = urls;
+        self
     }
 
     /// Register the hook that writes refreshed tokens to disk.
@@ -1396,7 +1424,7 @@ impl TidalClient {
 
         let (generation, client) = self.client_at()?;
         let request = client
-            .post(format!("{}/token", TIDAL_AUTH_URL))
+            .post(format!("{}/token", self.urls.auth))
             .form(&form_params);
         let response = self.dispatch(generation, request).await?;
 
@@ -1466,7 +1494,7 @@ impl TidalClient {
         let url = if path.starts_with("http") {
             path.to_string()
         } else {
-            format!("{}{}", TIDAL_API_URL, path)
+            format!("{}{}", self.urls.api, path)
         };
         let response = self.authenticated_get(&url, query).await?;
         let resp_url = response.url().to_string();
@@ -1576,7 +1604,7 @@ impl TidalClient {
 
         let (generation, client) = self.client_at()?;
         let request = client
-            .post(format!("{}/device_authorization", TIDAL_AUTH_URL))
+            .post(format!("{}/device_authorization", self.urls.auth))
             .form(&form_params);
         let response = self.dispatch(generation, request).await?;
 
@@ -1626,7 +1654,7 @@ impl TidalClient {
 
         let (generation, client) = self.client_at()?;
         let request = client
-            .post(format!("{}/token", TIDAL_AUTH_URL))
+            .post(format!("{}/token", self.urls.auth))
             .form(&form_params);
         let response = self.dispatch(generation, request).await?;
 
@@ -1666,7 +1694,7 @@ impl TidalClient {
         }
 
         let (generation, client) = self.client_at()?;
-        let request = client.post(format!("{}/token", TIDAL_AUTH_URL)).form(&[
+        let request = client.post(format!("{}/token", self.urls.auth)).form(&[
             ("code", code),
             ("client_id", self.client_id.as_str()),
             ("grant_type", "authorization_code"),
@@ -1860,13 +1888,13 @@ impl TidalClient {
 
         log::debug!(
             "[create_playlist]: url={}/playlists, body={}",
-            TIDAL_OPENAPI_URL,
+            self.urls.openapi,
             body
         );
 
         let (generation, client) = self.client_at()?;
         let request = client
-            .post(format!("{}/playlists", TIDAL_OPENAPI_URL))
+            .post(format!("{}/playlists", self.urls.openapi))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())])
             .json(&body);
@@ -1917,14 +1945,14 @@ impl TidalClient {
 
         log::debug!(
             "[update_playlist]: url={}/playlists/{}, body={}",
-            TIDAL_OPENAPI_URL,
+            self.urls.openapi,
             playlist_id,
             body
         );
 
         let (generation, client) = self.client_at()?;
         let request = client
-            .patch(format!("{}/playlists/{}", TIDAL_OPENAPI_URL, playlist_id))
+            .patch(format!("{}/playlists/{}", self.urls.openapi, playlist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("Content-Type", "application/vnd.api+json")
             .query(&[("countryCode", self.country_code.as_str())])
@@ -1980,7 +2008,7 @@ impl TidalClient {
         // First, get the playlist ETag which is required for modifications
         let (generation, client) = self.client_at()?;
         let req = client
-            .get(format!("{}/playlists/{}", TIDAL_API_URL, playlist_id))
+            .get(format!("{}/playlists/{}", self.urls.api, playlist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())]);
         let head_response = self.send(generation, req).await?;
@@ -1995,7 +2023,7 @@ impl TidalClient {
         // Add the track
         let (generation, client) = self.client_at()?;
         let req = client
-            .post(format!("{}/playlists/{}/items", TIDAL_API_URL, playlist_id))
+            .post(format!("{}/playlists/{}/items", self.urls.api, playlist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("If-None-Match", &etag)
             .query(&[("countryCode", self.country_code.as_str())])
@@ -2029,7 +2057,7 @@ impl TidalClient {
         // First, get the playlist ETag which is required for modifications
         let (generation, client) = self.client_at()?;
         let req = client
-            .get(format!("{}/playlists/{}", TIDAL_API_URL, playlist_id))
+            .get(format!("{}/playlists/{}", self.urls.api, playlist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())]);
         let head_response = self.send(generation, req).await?;
@@ -2046,7 +2074,7 @@ impl TidalClient {
         let req = client
             .delete(format!(
                 "{}/playlists/{}/items/{}",
-                TIDAL_API_URL, playlist_id, index
+                self.urls.api, playlist_id, index
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("If-None-Match", &etag)
@@ -2072,7 +2100,7 @@ impl TidalClient {
         // First, get the playlist ETag which is required for modifications
         let (generation, client) = self.client_at()?;
         let req = client
-            .get(format!("{}/playlists/{}", TIDAL_API_URL, playlist_id))
+            .get(format!("{}/playlists/{}", self.urls.api, playlist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())]);
         let head_response = self.send(generation, req).await?;
@@ -2087,7 +2115,7 @@ impl TidalClient {
         // Delete the playlist
         let (generation, client) = self.client_at()?;
         let req = client
-            .delete(format!("{}/playlists/{}", TIDAL_API_URL, playlist_id))
+            .delete(format!("{}/playlists/{}", self.urls.api, playlist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("If-None-Match", &etag)
             .query(&[("countryCode", self.country_code.as_str())]);
@@ -2115,7 +2143,7 @@ impl TidalClient {
         let req = client
             .get(format!(
                 "{}/users/{}/favorites/playlists",
-                TIDAL_API_URL, user_id
+                self.urls.api, user_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
@@ -2472,7 +2500,7 @@ impl TidalClient {
         let req = client
             .get(format!(
                 "{}/users/{}/favorites/tracks",
-                TIDAL_API_URL, user_id
+                self.urls.api, user_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
@@ -2527,7 +2555,7 @@ impl TidalClient {
         let req = client
             .get(format!(
                 "{}/users/{}/favorites/tracks",
-                TIDAL_API_URL, user_id
+                self.urls.api, user_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
@@ -2574,7 +2602,7 @@ impl TidalClient {
         let req = client
             .post(format!(
                 "{}/users/{}/favorites/tracks",
-                TIDAL_API_URL, user_id
+                self.urls.api, user_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())])
@@ -2605,7 +2633,7 @@ impl TidalClient {
         let req = client
             .delete(format!(
                 "{}/users/{}/favorites/tracks/{}",
-                TIDAL_API_URL, user_id, track_id
+                self.urls.api, user_id, track_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())]);
@@ -2632,7 +2660,7 @@ impl TidalClient {
         let req = client
             .post(format!(
                 "{}/users/{}/favorites/videos",
-                TIDAL_API_URL, user_id
+                self.urls.api, user_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())])
@@ -2666,7 +2694,7 @@ impl TidalClient {
         let req = client
             .delete(format!(
                 "{}/users/{}/favorites/videos/{}",
-                TIDAL_API_URL, user_id, video_id
+                self.urls.api, user_id, video_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())]);
@@ -2701,7 +2729,7 @@ impl TidalClient {
             let req = client
                 .get(format!(
                     "{}/users/{}/favorites/videos",
-                    TIDAL_API_URL, user_id
+                    self.urls.api, user_id
                 ))
                 .header("Authorization", format!("Bearer {}", tokens.access_token))
                 .query(&[
@@ -2763,7 +2791,7 @@ impl TidalClient {
         let req = client
             .get(format!(
                 "{}/users/{}/favorites/videos",
-                TIDAL_API_URL, user_id
+                self.urls.api, user_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
@@ -2818,7 +2846,7 @@ impl TidalClient {
         let req = client
             .get(format!(
                 "{}/users/{}/favorites/albums",
-                TIDAL_API_URL, user_id
+                self.urls.api, user_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
@@ -2873,7 +2901,7 @@ impl TidalClient {
         let req = client
             .get(format!(
                 "{}/users/{}/favorites/albums",
-                TIDAL_API_URL, user_id
+                self.urls.api, user_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
@@ -2925,7 +2953,7 @@ impl TidalClient {
         let req = client
             .post(format!(
                 "{}/users/{}/favorites/albums",
-                TIDAL_API_URL, user_id
+                self.urls.api, user_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())])
@@ -2956,7 +2984,7 @@ impl TidalClient {
         let req = client
             .delete(format!(
                 "{}/users/{}/favorites/albums/{}",
-                TIDAL_API_URL, user_id, album_id
+                self.urls.api, user_id, album_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())]);
@@ -2986,7 +3014,7 @@ impl TidalClient {
         let req = client
             .post(format!(
                 "{}/users/{}/favorites/playlists",
-                TIDAL_API_URL, user_id
+                self.urls.api, user_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())])
@@ -3017,7 +3045,7 @@ impl TidalClient {
         let req = client
             .delete(format!(
                 "{}/users/{}/favorites/playlists/{}",
-                TIDAL_API_URL, user_id, playlist_uuid
+                self.urls.api, user_id, playlist_uuid
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())]);
@@ -3042,7 +3070,7 @@ impl TidalClient {
         let req = client
             .get(format!(
                 "{}/users/{}/favorites/artists",
-                TIDAL_API_URL, user_id
+                self.urls.api, user_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
@@ -3084,7 +3112,7 @@ impl TidalClient {
         let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
         let (generation, client) = self.client_at()?;
         let req = client
-            .get(format!("{}/users/{}/favorites/ids", TIDAL_API_URL, user_id))
+            .get(format!("{}/users/{}/favorites/ids", self.urls.api, user_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
                 ("countryCode", self.country_code.as_str()),
@@ -3132,7 +3160,7 @@ impl TidalClient {
         let req = client
             .post(format!(
                 "{}/users/{}/favorites/artists",
-                TIDAL_API_URL, user_id
+                self.urls.api, user_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())])
@@ -3163,7 +3191,7 @@ impl TidalClient {
         let req = client
             .delete(format!(
                 "{}/users/{}/favorites/artists/{}",
-                TIDAL_API_URL, user_id, artist_id
+                self.urls.api, user_id, artist_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())]);
@@ -3189,7 +3217,7 @@ impl TidalClient {
 
         let (generation, client) = self.client_at()?;
         let req = client
-            .put(format!("{}/favorites/mixes/add", TIDAL_API_V2_URL))
+            .put(format!("{}/favorites/mixes/add", self.urls.api_v2))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
                 ("countryCode", self.country_code.as_str()),
@@ -3224,7 +3252,7 @@ impl TidalClient {
 
         let (generation, client) = self.client_at()?;
         let req = client
-            .put(format!("{}/favorites/mixes/remove", TIDAL_API_V2_URL))
+            .put(format!("{}/favorites/mixes/remove", self.urls.api_v2))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
                 ("countryCode", self.country_code.as_str()),
@@ -3267,7 +3295,7 @@ impl TidalClient {
         order: &str,
         order_direction: &str,
     ) -> Result<PaginatedResponse<TidalFavoriteMix>, SlateError> {
-        let url = format!("{}/favorites/mixes", TIDAL_API_V2_URL);
+        let url = format!("{}/favorites/mixes", self.urls.api_v2);
         let cc = self.country_code.clone();
         let limit_str = limit.to_string();
         let offset_str = offset.to_string();
@@ -3343,7 +3371,7 @@ impl TidalClient {
         order_direction: &str,
         cursor: &str,
     ) -> Result<serde_json::Value, SlateError> {
-        let url = format!("{}/my-collection/playlists/folders", TIDAL_API_V2_URL);
+        let url = format!("{}/my-collection/playlists/folders", self.urls.api_v2);
         let cc = self.country_code.clone();
         let limit_str = limit.to_string();
         let offset_str = offset.to_string();
@@ -3383,7 +3411,7 @@ impl TidalClient {
     ) -> Result<Vec<serde_json::Value>, SlateError> {
         let url = format!(
             "{}/my-collection/playlists/folders/flattened",
-            TIDAL_API_V2_URL
+            self.urls.api_v2
         );
         let cc = self.country_code.clone();
         let mut accumulated: Vec<serde_json::Value> = Vec::new();
@@ -3456,7 +3484,7 @@ impl TidalClient {
         let req = client
             .put(format!(
                 "{}/my-collection/playlists/folders/create-folder",
-                TIDAL_API_V2_URL
+                self.urls.api_v2
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&params);
@@ -3498,7 +3526,7 @@ impl TidalClient {
         let req = client
             .put(format!(
                 "{}/my-collection/playlists/folders/rename",
-                TIDAL_API_V2_URL
+                self.urls.api_v2
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
@@ -3538,7 +3566,7 @@ impl TidalClient {
         let req = client
             .put(format!(
                 "{}/my-collection/playlists/folders/remove",
-                TIDAL_API_V2_URL
+                self.urls.api_v2
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
@@ -3585,7 +3613,7 @@ impl TidalClient {
         let req = client
             .put(format!(
                 "{}/my-collection/playlists/folders/move",
-                TIDAL_API_V2_URL
+                self.urls.api_v2
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[
@@ -3626,7 +3654,7 @@ impl TidalClient {
         // Get the playlist ETag which is required for modifications
         let (generation, client) = self.client_at()?;
         let req = client
-            .get(format!("{}/playlists/{}", TIDAL_API_URL, playlist_id))
+            .get(format!("{}/playlists/{}", self.urls.api, playlist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())]);
         let head_response = self.send(generation, req).await?;
@@ -3646,7 +3674,7 @@ impl TidalClient {
 
         let (generation, client) = self.client_at()?;
         let req = client
-            .post(format!("{}/playlists/{}/items", TIDAL_API_URL, playlist_id))
+            .post(format!("{}/playlists/{}/items", self.urls.api, playlist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("If-None-Match", &etag)
             .query(&[("countryCode", self.country_code.as_str())])
@@ -3960,7 +3988,7 @@ impl TidalClient {
         // v2 uses a different base URL, so pass the full URL
         let body = self
             .api_get_body(
-                &format!("{}/search", TIDAL_API_V2_URL),
+                &format!("{}/search", self.urls.api_v2),
                 &[
                     ("query", query),
                     ("countryCode", &cc),
@@ -4091,7 +4119,7 @@ impl TidalClient {
             text_suggestions: vec![],
             direct_hits: vec![],
         };
-        let url = format!("{}/suggestions/", TIDAL_API_V2_URL);
+        let url = format!("{}/suggestions/", self.urls.api_v2);
         let country_code = self.country_code.clone();
 
         let resp = self
@@ -4185,7 +4213,7 @@ impl TidalClient {
         feed_slug: &str,
         cursor: Option<&str>,
     ) -> Result<(Vec<HomeTab>, Vec<HomePageSection>, Option<String>), SlateError> {
-        let url = format!("{}/home/feed/{}", TIDAL_API_V2_URL, feed_slug);
+        let url = format!("{}/home/feed/{}", self.urls.api_v2, feed_slug);
         let country_code = self.country_code.clone();
 
         let mut params: Vec<(&str, &str)> = vec![
@@ -5222,7 +5250,7 @@ impl TidalClient {
     pub async fn get_artist_page(&mut self, artist_id: u64) -> Result<Value, SlateError> {
         let cc = self.country_code.clone();
         // Try v2 first
-        let v2_url = format!("{}/artist/{}", TIDAL_API_V2_URL, artist_id);
+        let v2_url = format!("{}/artist/{}", self.urls.api_v2, artist_id);
         match self
             .api_get_body(
                 &v2_url,
@@ -5268,7 +5296,7 @@ impl TidalClient {
         offset: u32,
         limit: u32,
     ) -> Result<Value, SlateError> {
-        let url = format!("{}/artist/ARTIST_TOP_TRACKS/view-all", TIDAL_API_V2_URL);
+        let url = format!("{}/artist/ARTIST_TOP_TRACKS/view-all", self.urls.api_v2);
         let cc = self.country_code.clone();
         let id_str = artist_id.to_string();
         let limit_str = limit.to_string();
@@ -5308,7 +5336,7 @@ impl TidalClient {
             view_all_path.to_string()
         } else {
             let path = view_all_path.trim_start_matches('/');
-            format!("{}/{}", TIDAL_API_V2_URL, path)
+            format!("{}/{}", self.urls.api_v2, path)
         };
         // The path may already contain ?artistId=... — reqwest .query() appends correctly
         let body = self
@@ -5492,7 +5520,7 @@ impl TidalClient {
             if trimmed.starts_with("pages/") {
                 format!("/{}", trimmed)
             } else {
-                format!("{}/{}", TIDAL_API_V2_URL, trimmed)
+                format!("{}/{}", self.urls.api_v2, trimmed)
             }
         };
         let is_v2 = path.contains("/v2/");
@@ -5556,7 +5584,7 @@ impl TidalClient {
         let artist_id_str = artist_id.to_string();
         let artist_body = self
             .api_get_body(
-                &format!("{}/artists/{}", TIDAL_OPENAPI_URL, artist_id),
+                &format!("{}/artists/{}", self.urls.openapi, artist_id),
                 &[
                     ("include", "profileArt,biography,owners"),
                     ("countryCode", &cc),
@@ -5567,7 +5595,7 @@ impl TidalClient {
 
         let playlists_body = self
             .api_get_body(
-                &format!("{}/playlists", TIDAL_OPENAPI_URL),
+                &format!("{}/playlists", self.urls.openapi),
                 &[
                     ("filter[owners.id]", &user_id.to_string()),
                     ("include", "coverArt"),
@@ -5617,7 +5645,7 @@ impl TidalClient {
             .api_get_body(
                 &format!(
                     "{}/artists/{}/relationships/followers",
-                    TIDAL_OPENAPI_URL, artist_id
+                    self.urls.openapi, artist_id
                 ),
                 &[("countryCode", &self.country_code.clone())],
             )
@@ -5643,7 +5671,7 @@ impl TidalClient {
         let body = build_artist_meta_body(artist_id, name, handle, dry_run);
         let (generation, client) = self.client_at()?;
         let request = client
-            .patch(format!("{}/artists/{}", TIDAL_OPENAPI_URL, artist_id))
+            .patch(format!("{}/artists/{}", self.urls.openapi, artist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("Content-Type", "application/vnd.api+json")
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
@@ -5670,7 +5698,7 @@ impl TidalClient {
         let request = client
             .patch(format!(
                 "{}/artistBiographies/{}",
-                TIDAL_OPENAPI_URL, bio_id
+                self.urls.openapi, bio_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("Content-Type", "application/vnd.api+json")
@@ -5698,7 +5726,7 @@ impl TidalClient {
         let body = build_external_links_body(artist_id, &links);
         let (generation, client) = self.client_at()?;
         let request = client
-            .patch(format!("{}/artists/{}", TIDAL_OPENAPI_URL, artist_id))
+            .patch(format!("{}/artists/{}", self.urls.openapi, artist_id))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("Content-Type", "application/vnd.api+json")
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
@@ -5744,7 +5772,7 @@ impl TidalClient {
         });
         let (generation, client) = self.client_at()?;
         let request = client
-            .post(format!("{}/artworks", TIDAL_OPENAPI_URL))
+            .post(format!("{}/artworks", self.urls.openapi))
             .header("Authorization", &bearer)
             .header("Content-Type", "application/vnd.api+json")
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
@@ -5801,7 +5829,7 @@ impl TidalClient {
         let request = client
             .patch(format!(
                 "{}/artists/{}/relationships/profileArt",
-                TIDAL_OPENAPI_URL, artist_id
+                self.urls.openapi, artist_id
             ))
             .header("Authorization", &bearer)
             .header("Content-Type", "application/vnd.api+json")
@@ -5826,7 +5854,7 @@ impl TidalClient {
         for _ in 0..20 {
             let (generation, client) = self.client_at()?;
             let request = client
-                .get(format!("{}/artworks/{}", TIDAL_OPENAPI_URL, artwork_id))
+                .get(format!("{}/artworks/{}", self.urls.openapi, artwork_id))
                 .header("Authorization", &bearer)
                 .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
                 .query(&[("countryCode", self.country_code.as_str())]);
@@ -5862,7 +5890,7 @@ impl TidalClient {
         let request = client
             .patch(format!(
                 "{}/artists/{}/relationships/profileArt",
-                TIDAL_OPENAPI_URL, artist_id
+                self.urls.openapi, artist_id
             ))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("Content-Type", "application/vnd.api+json")
@@ -5884,7 +5912,7 @@ impl TidalClient {
     /// Fetch the activity feed. `user_id` comes from the caller — `self.tokens`
     /// may carry `None` on the token-import path.
     pub async fn fetch_feed(&mut self, user_id: u64) -> Result<FeedResponse, SlateError> {
-        let url = format!("{}/feed/activities", TIDAL_API_V2_URL);
+        let url = format!("{}/feed/activities", self.urls.api_v2);
         let country_code = self.country_code.clone();
         let user_id_str = user_id.to_string();
 
@@ -5930,7 +5958,7 @@ impl TidalClient {
         let user_id_str = user_id.to_string();
         let (generation, client) = self.client_at()?;
         let req = client
-            .put(format!("{}/feed/activities/seen", TIDAL_API_V2_URL))
+            .put(format!("{}/feed/activities/seen", self.urls.api_v2))
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[

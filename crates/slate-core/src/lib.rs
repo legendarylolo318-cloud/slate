@@ -1,3 +1,8 @@
+// No panicking shortcuts in production code; tests may use them freely.
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
 // Inherited from the Tauri-era backend: these style lints would force invasive
 // signature churn in code that is otherwise tested and unchanged by the port.
 #![allow(
@@ -15,6 +20,7 @@ pub mod lyrics;
 pub mod media;
 pub mod queue;
 pub mod startup;
+pub mod sync;
 pub mod theme;
 pub use events::{AppHandle, EventSink, Events};
 pub mod cache;
@@ -332,7 +338,7 @@ fn persist_auth_tokens(path: &Path, crypto: &Crypto, tokens: &AuthTokens) {
 }
 
 impl AppState {
-    pub fn new(app_handle: AppHandle) -> Self {
+    pub fn try_new(app_handle: AppHandle) -> Result<Self, SlateError> {
         // Get config dir
         let mut config_dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
         config_dir.push("slate");
@@ -346,8 +352,10 @@ impl AppState {
         let crypto = match Crypto::new(&config_dir) {
             Ok(c) => Arc::new(c),
             Err(e) => {
-                log::error!("Failed to initialize crypto: {e}. Data-at-rest encryption disabled.");
-                panic!("Crypto initialization failed: {e}");
+                log::error!("Failed to initialize crypto: {e}");
+                return Err(SlateError::Io(format!(
+                    "encryption could not be initialised: {e}"
+                )));
             }
         };
 
@@ -516,7 +524,7 @@ impl AppState {
             })
         });
 
-        Self {
+        Ok(Self {
             audio_player,
             pipeline_probe,
             tidal_client: Mutex::new(tidal_client),
@@ -550,7 +558,7 @@ impl AppState {
             },
             overlay_handle: Mutex::new(None),
             signal_path,
-        }
+        })
     }
 
     /// The capabilities as last probed. `HostCaps` is `Copy`, so nothing holds

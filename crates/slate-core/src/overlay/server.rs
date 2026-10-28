@@ -454,7 +454,7 @@ async fn serve_state(State(ctx): State<AppCtx>) -> Response {
     axum::response::Response::builder()
         .header("Content-Type", "application/json")
         .body(axum::body::Body::from(json))
-        .unwrap()
+        .unwrap_or_else(|_| Response::new(axum::body::Body::empty()))
 }
 
 async fn serve_theme_css(State(ctx): State<AppCtx>) -> Response {
@@ -468,7 +468,7 @@ async fn serve_theme_css(State(ctx): State<AppCtx>) -> Response {
         .header("Content-Type", "text/css; charset=utf-8")
         .header("Cache-Control", "no-store")
         .body(axum::body::Body::from(css))
-        .unwrap()
+        .unwrap_or_else(|_| Response::new(axum::body::Body::empty()))
 }
 
 async fn serve_sse(

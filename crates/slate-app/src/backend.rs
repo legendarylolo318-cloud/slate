@@ -183,9 +183,17 @@ impl Backend {
         self.rt.spawn(async move {
             let app = this.app.clone();
             // AppState::new does blocking disk and keyring work.
-            let built = tokio::task::spawn_blocking(move || AppState::new(app)).await;
+            let built = tokio::task::spawn_blocking(move || AppState::try_new(app)).await;
             let state = match built {
-                Ok(s) => Arc::new(s),
+                Ok(Ok(s)) => Arc::new(s),
+                Ok(Err(e)) => {
+                    tracing::error!("core initialisation failed: {}", e.log_safe());
+                    this.ui(|w| {
+                        w.set_login_status("Could not start the Slate core. See the log.".into());
+                        w.set_screen(Screen::Login);
+                    });
+                    return;
+                }
                 Err(e) => {
                     tracing::error!("core initialisation failed: {e}");
                     this.ui(|w| {

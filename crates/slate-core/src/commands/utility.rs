@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use super::playback::compute_norm_gain;
 use crate::audio::AudioDevice;
 use crate::cache::{CacheResult, CacheTier};
+use crate::sync::LockExt;
 use crate::AppState;
 use crate::SignalPath;
 use crate::SlateError;
@@ -138,7 +139,7 @@ pub fn set_exclusive_mode(state: &AppState, enabled: bool) -> Result<(), SlateEr
             .map_err(SlateError::Audio)?;
     }
 
-    let device = state.exclusive_device.lock().unwrap().clone();
+    let device = state.exclusive_device.lock_safe().clone();
     state
         .audio_player
         .set_exclusive_mode(enabled, device)
@@ -162,7 +163,7 @@ pub fn set_bit_perfect(state: &AppState, enabled: bool) -> Result<(), SlateError
 
     if enabled && !state.exclusive_mode.load(Ordering::Relaxed) {
         state.exclusive_mode.store(true, Ordering::Relaxed);
-        let device = state.exclusive_device.lock().unwrap().clone();
+        let device = state.exclusive_device.lock_safe().clone();
         state
             .audio_player
             .set_exclusive_mode(true, device)
@@ -204,14 +205,14 @@ pub fn set_gapless(state: &AppState, enabled: bool) -> Result<(), SlateError> {
 }
 
 pub fn get_max_quality(state: &AppState) -> String {
-    state.max_quality.lock().unwrap().clone()
+    state.max_quality.lock_safe().clone()
 }
 
 pub fn set_max_quality(state: &AppState, quality: String) -> Result<(), SlateError> {
     if !matches!(quality.as_str(), "HI_RES_LOSSLESS" | "LOSSLESS" | "HIGH") {
         return Err(SlateError::Parse(format!("invalid max_quality: {quality}")));
     }
-    *state.max_quality.lock().unwrap() = quality.clone();
+    *state.max_quality.lock_safe() = quality.clone();
     let mut settings = state.load_settings().unwrap_or_default();
     settings.max_quality = quality;
     state.save_settings(&settings)?;
@@ -219,11 +220,11 @@ pub fn set_max_quality(state: &AppState, quality: String) -> Result<(), SlateErr
 }
 
 pub fn get_exclusive_device(state: &AppState) -> Option<String> {
-    state.exclusive_device.lock().unwrap().clone()
+    state.exclusive_device.lock_safe().clone()
 }
 
 pub fn set_exclusive_device(state: &AppState, device: String) -> Result<(), SlateError> {
-    *state.exclusive_device.lock().unwrap() = Some(device.clone());
+    *state.exclusive_device.lock_safe() = Some(device.clone());
 
     let enabled = state.exclusive_mode.load(Ordering::Relaxed);
     state
@@ -238,14 +239,14 @@ pub fn set_exclusive_device(state: &AppState, device: String) -> Result<(), Slat
 
 pub fn list_audio_devices(state: &AppState) -> Result<Vec<AudioDevice>, SlateError> {
     // Return cached devices if available (avoids slow GStreamer DeviceMonitor probe)
-    let cached = state.cached_audio_devices.lock().unwrap().clone();
+    let cached = state.cached_audio_devices.lock_safe().clone();
     if let Some(devices) = cached {
         return Ok(devices);
     }
 
     // First call: probe directly (not via audio thread) and cache
     let devices = crate::audio::list_alsa_devices().map_err(SlateError::Audio)?;
-    *state.cached_audio_devices.lock().unwrap() = Some(devices.clone());
+    *state.cached_audio_devices.lock_safe() = Some(devices.clone());
     Ok(devices)
 }
 

@@ -1,5 +1,6 @@
-//! Pre-Tauri logger setup. Runs before AppState exists so it cannot
-//! depend on anything in `lib.rs::Settings` beyond a tiny plaintext probe.
+//! The "write log files" preference. Read before `AppState` exists, so it
+//! lives in a tiny plaintext sidecar rather than the encrypted settings.
+//! (The logger itself is set up by the frontend.)
 
 use std::path::Path;
 
@@ -9,84 +10,13 @@ use std::path::Path;
 ///
 /// Defaults to `true` on any failure (missing file, unreadable, or
 /// any content other than the literal string `"false"`). This runs
-/// before Tauri starts and before `AppState` exists, so it intentionally
+/// before `AppState` exists, so it intentionally
 /// reads only this small sidecar — **not** the encrypted `Settings` struct.
 pub fn read_logging_preference(path: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(path) else {
         return true;
     };
     text.trim() != "false"
-}
-
-use flexi_logger::{
-    Cleanup, Criterion, Duplicate, FileSpec, Logger, LoggerHandle, Naming, WriteMode,
-};
-use std::path::PathBuf;
-
-/// Initialize the global logger. Must be called exactly once at startup,
-/// before any `log::*!` macros are invoked.
-///
-/// - `file_enabled = true`  → writes to `<log_dir>/slate_rCURRENT.log` (rotated)
-///                            AND duplicates output to stderr.
-/// - `file_enabled = false` → stderr only (current behavior pre-toggle).
-///
-/// Returns a `LoggerHandle`. The caller MUST keep this alive for the
-/// process lifetime — dropping it stops the background log writer.
-///
-/// Default spec `slate_core=debug,info`: Slate's crate at `debug`,
-/// deps at `info`. `RUST_LOG` overrides it. Falls back to stderr-only
-/// on any file-system error.
-pub fn init_logging(log_dir: PathBuf, file_enabled: bool) -> LoggerHandle {
-    let base = Logger::try_with_env_or_str("slate_core=debug,info")
-        .expect("flexi_logger spec parsing should never fail for a static spec");
-
-    if !file_enabled {
-        return base
-            .log_to_stderr()
-            .write_mode(WriteMode::BufferAndFlush)
-            .start()
-            .expect("stderr logger should always start");
-    }
-
-    if let Err(e) = std::fs::create_dir_all(&log_dir) {
-        eprintln!(
-            "slate: could not create log directory {} ({}), falling back to stderr-only logging",
-            log_dir.display(),
-            e
-        );
-        return base
-            .log_to_stderr()
-            .write_mode(WriteMode::BufferAndFlush)
-            .start()
-            .expect("stderr logger should always start");
-    }
-
-    match base
-        .log_to_file(FileSpec::default().directory(&log_dir).basename("slate"))
-        .duplicate_to_stderr(Duplicate::All)
-        .rotate(
-            Criterion::Size(5_000_000), // 5 MB
-            Naming::Numbers,
-            Cleanup::KeepLogFiles(9), // 9 rotated + 1 active = ~50 MB max
-        )
-        .format_for_files(flexi_logger::detailed_format)
-        .write_mode(WriteMode::BufferAndFlush)
-        .start()
-    {
-        Ok(handle) => handle,
-        Err(e) => {
-            eprintln!(
-                "slate: file logger init failed ({}), falling back to stderr-only logging",
-                e
-            );
-            Logger::try_with_env_or_str("slate_core=debug,info")
-                .unwrap()
-                .log_to_stderr()
-                .write_mode(WriteMode::BufferAndFlush)
-                .start()
-                .expect("stderr fallback should always start")
-        }
-    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
 use crate::signal_path::SignalPathTracker;
+use crate::sync::LockExt;
 use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
@@ -397,19 +398,6 @@ impl PlaybackBackend {
         match self {
             PlaybackBackend::Normal { pipeline, .. }
             | PlaybackBackend::DirectAlsa { pipeline, .. } => pipeline,
-        }
-    }
-
-    /// The head `concat` element. Normal-only — gapless never runs on
-    /// DirectAlsa (the mode gate prevents this path), so calling it on
-    /// DirectAlsa is a programming error.
-    #[allow(dead_code)]
-    fn concat(&self) -> &gst::Element {
-        match self {
-            PlaybackBackend::Normal { concat, .. } => concat,
-            PlaybackBackend::DirectAlsa { .. } => {
-                panic!("PlaybackBackend::concat() called on DirectAlsa — gapless is normal-only")
-            }
         }
     }
 }
@@ -1380,8 +1368,8 @@ fn spawn_alsa_writer(
                                 } else {
                                     // SW pause: blocking writei paces the thread (~50ms per period)
                                     if !write_silence(&pcm, &silence_buf) {
-                                        *decoded_cell.lock().unwrap() = None;
-                                        *output_cell.lock().unwrap() = None;
+                                        *decoded_cell.lock_safe() = None;
+                                        *output_cell.lock_safe() = None;
                                         app_handle.emit("audio-error",
                                             serde_json::json!({ "kind": "device_disconnected" })).ok();
                                         tearing_down.store(true, Ordering::SeqCst);
@@ -1512,8 +1500,8 @@ fn spawn_alsa_writer(
                         }
                         let got_shutdown = drain_writer_rx(&rx);
                         if !write_silence(&pcm, &silence_buf) {
-                            *decoded_cell.lock().unwrap() = None;
-                            *output_cell.lock().unwrap() = None;
+                            *decoded_cell.lock_safe() = None;
+                            *output_cell.lock_safe() = None;
                             app_handle.emit("audio-error",
                                 serde_json::json!({ "kind": "device_disconnected" })).ok();
                             tearing_down.store(true, Ordering::SeqCst);
@@ -1531,8 +1519,8 @@ fn spawn_alsa_writer(
                         log::debug!("[alsa-writer] entering idle silence loop");
                         loop {
                             if !write_silence(&pcm, &silence_buf) {
-                                *decoded_cell.lock().unwrap() = None;
-                                *output_cell.lock().unwrap() = None;
+                                *decoded_cell.lock_safe() = None;
+                                *output_cell.lock_safe() = None;
                                 app_handle.emit("audio-error",
                                     serde_json::json!({ "kind": "device_disconnected" })).ok();
                                 tearing_down.store(true, Ordering::SeqCst);
@@ -1659,8 +1647,8 @@ fn spawn_alsa_writer(
 
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                         if !write_silence(&pcm, &silence_buf) {
-                            *decoded_cell.lock().unwrap() = None;
-                            *output_cell.lock().unwrap() = None;
+                            *decoded_cell.lock_safe() = None;
+                            *output_cell.lock_safe() = None;
                             app_handle.emit("audio-error",
                                 serde_json::json!({ "kind": "device_disconnected" })).ok();
                             tearing_down.store(true, Ordering::SeqCst);
@@ -1819,6 +1807,21 @@ pub struct AudioPlayer {
     output_caps_cell: Arc<Mutex<Option<crate::pipeline_probe::PadCaps>>>,
 }
 
+/// What a command returns when the audio thread is gone.
+trait AudioReply {
+    fn thread_dead() -> Self;
+}
+
+impl<T> AudioReply for Result<T, String> {
+    fn thread_dead() -> Self {
+        Err("Audio thread dead".to_string())
+    }
+}
+
+impl AudioReply for () {
+    fn thread_dead() {}
+}
+
 impl AudioPlayer {
     pub fn new(
         app_handle: crate::AppHandle,
@@ -1841,7 +1844,10 @@ impl AudioPlayer {
 
         std::thread::spawn(move || {
             // GST_PLUGIN_PATH is set in main(), before any thread exists.
-            gst::init().expect("Failed to initialize GStreamer");
+            if let Err(e) = gst::init() {
+                // Pipeline construction reports its own errors per command.
+                log::error!("[audio] GStreamer initialisation failed: {e}");
+            }
 
             // Captured once, before anything promotes it. Re-reading this at a
             // later call site would bake the promoted rank in as "original" and
@@ -2045,8 +2051,8 @@ impl AudioPlayer {
                             has_uri.store(true, Ordering::SeqCst);
                             frames_written.store(0, Ordering::Relaxed);
 
-                            *decoded_cell_thread.lock().unwrap() = None;
-                            *output_cell_thread.lock().unwrap() = None;
+                            *decoded_cell_thread.lock_safe() = None;
+                            *output_cell_thread.lock_safe() = None;
                             signal_path.reset_for_track();
                             if exclusive || bit_perfect {
                                 signal_path.set_backend("DirectAlsa", device.clone());
@@ -2162,7 +2168,9 @@ impl AudioPlayer {
                                         writer_bit_perfect = Some(bit_perfect);
                                     }
 
-                                    let wtx = writer_tx.as_ref().unwrap().clone();
+                                    let Some(wtx) = writer_tx.clone() else {
+                                        return Err("Audio writer unavailable".to_string());
+                                    };
 
                                     // Build appsink pipeline
                                     let fmt_for_pipeline =
@@ -2843,8 +2851,8 @@ impl AudioPlayer {
                                 std::thread::spawn(move || {
                                     pipeline.set_state(gst::State::Null).ok();
                                 });
-                                *decoded_cell_thread.lock().unwrap() = None;
-                                *output_cell_thread.lock().unwrap() = None;
+                                *decoded_cell_thread.lock_safe() = None;
+                                *output_cell_thread.lock_safe() = None;
                                 Ok(())
                             }
                             Some(PlaybackBackend::DirectAlsa { pipeline, .. }) => {
@@ -2891,8 +2899,8 @@ impl AudioPlayer {
                                 }
                                 eos.store(false, Ordering::SeqCst);
                                 has_uri.store(false, Ordering::SeqCst);
-                                *decoded_cell_thread.lock().unwrap() = None;
-                                *output_cell_thread.lock().unwrap() = None;
+                                *decoded_cell_thread.lock_safe() = None;
+                                *output_cell_thread.lock_safe() = None;
                                 Ok(())
                             }
                             None => {
@@ -3412,13 +3420,16 @@ impl AudioPlayer {
                             continue;
                         }
 
-                        let (pipeline, concat) = normal_clones.unwrap();
+                        let Some((pipeline, concat)) = normal_clones else {
+                            let _ = reply.send(Ok(()));
+                            continue;
+                        };
 
                         // Dedup (C5): if an existing next_bin targets the same track,
                         // just refresh its stored qid (so the eventual track-advanced
                         // payload matches the frontend queue) — no re-attach.
                         {
-                            let mut guard = next_bin.lock().unwrap();
+                            let mut guard = next_bin.lock_safe();
                             if let Some(existing) = guard.as_mut() {
                                 if existing.track_id == track_id {
                                     existing.qid = qid.clone();
@@ -3608,11 +3619,12 @@ impl AudioPlayer {
         }
     }
 
-    fn send_cmd<T>(&self, build: impl FnOnce(Reply<T>) -> AudioCommand) -> T {
+    fn send_cmd<T: AudioReply>(&self, build: impl FnOnce(Reply<T>) -> AudioCommand) -> T {
         let (tx, rx) = mpsc::channel();
-        let cmd = build(tx);
-        self.cmd_tx.send(cmd).expect("Audio thread dead");
-        rx.recv().expect("Audio thread dead")
+        if self.cmd_tx.send(build(tx)).is_err() {
+            return T::thread_dead();
+        }
+        rx.recv().unwrap_or_else(|_| T::thread_dead())
     }
 
     /// For commands whose reply is always `Ok`: queued in order without waiting,

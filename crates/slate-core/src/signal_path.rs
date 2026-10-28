@@ -9,6 +9,7 @@
 //! "transparency panel". Mutations emit a `signal-path-changed` event so
 //! the UI can reactively update without polling.
 
+use crate::sync::LockExt;
 use serde::Serialize;
 use std::sync::Mutex;
 
@@ -82,7 +83,7 @@ impl SignalPathTracker {
     }
 
     pub fn snapshot(&self) -> SignalPath {
-        self.state.lock().unwrap().clone()
+        self.state.lock_safe().clone()
     }
 
     fn emit(&self, snap: SignalPath) {
@@ -93,7 +94,7 @@ impl SignalPathTracker {
     /// Called at the start of each `PlayUrl`.
     pub fn reset_for_track(&self) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             s.decoded_format = None;
             s.decoded_rate = None;
             s.decoded_channels = None;
@@ -114,7 +115,7 @@ impl SignalPathTracker {
 
     pub fn set_backend(&self, backend: &str, device: Option<String>) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             s.backend = Some(backend.to_string());
             s.output_device = device;
             s.clone()
@@ -124,7 +125,7 @@ impl SignalPathTracker {
 
     pub fn set_audio_modes(&self, exclusive: bool, bit_perfect: bool) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             s.exclusive_mode = exclusive;
             s.bit_perfect = bit_perfect;
             s.clone()
@@ -134,7 +135,7 @@ impl SignalPathTracker {
 
     pub fn set_normalization_enabled(&self, enabled: bool) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             s.volume_normalization = enabled;
             if !enabled {
                 // RG is off → factor irrelevant, render as 1.0 (unity).
@@ -147,7 +148,7 @@ impl SignalPathTracker {
 
     pub fn set_decoded(&self, fmt: &str, rate: u32, channels: u32) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             s.decoded_format = Some(fmt.to_string());
             s.decoded_rate = Some(rate);
             s.decoded_channels = Some(channels);
@@ -158,7 +159,7 @@ impl SignalPathTracker {
 
     pub fn set_output(&self, fmt: &str, rate: u32, channels: u32) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             s.output_format = Some(fmt.to_string());
             s.output_rate = Some(rate);
             s.output_channels = Some(channels);
@@ -169,7 +170,7 @@ impl SignalPathTracker {
 
     pub fn set_user_volume(&self, vol: f32) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             if (s.user_volume - vol).abs() < 1e-3 {
                 return; // dedup: slider drag fires hundreds of events
             }
@@ -181,7 +182,7 @@ impl SignalPathTracker {
 
     pub fn set_norm_gain_factor(&self, factor: f32) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             s.norm_gain_factor = factor;
             s.clone()
         };
@@ -190,7 +191,7 @@ impl SignalPathTracker {
 
     pub fn record_resample(&self, from: u32, to: u32) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             s.resampled_from = Some(from);
             s.resampled_to = Some(to);
             s.clone()
@@ -200,7 +201,7 @@ impl SignalPathTracker {
 
     pub fn record_bit_depth_promotion(&self, from: &str, to: &str) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             s.promoted_from = Some(from.to_string());
             s.promoted_to = Some(to.to_string());
             s.clone()
@@ -210,7 +211,7 @@ impl SignalPathTracker {
 
     pub fn record_format_fallback(&self, from: &str, to: &str) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             s.format_fallback_from = Some(from.to_string());
             s.format_fallback_to = Some(to.to_string());
             s.clone()
@@ -220,7 +221,7 @@ impl SignalPathTracker {
 
     pub fn clear_resample(&self) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             if s.resampled_from.is_none() && s.resampled_to.is_none() {
                 return;
             }
@@ -233,7 +234,7 @@ impl SignalPathTracker {
 
     pub fn clear_format_fallback(&self) {
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             if s.format_fallback_from.is_none() && s.format_fallback_to.is_none() {
                 return;
             }
@@ -260,7 +261,7 @@ impl SignalPathTracker {
         let (dec_fmt, dec_rate, dec_ch) = split(decoded);
         let (out_fmt, out_rate, out_ch) = split(output);
         let snap = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_safe();
             if s.decoded_format == dec_fmt
                 && s.decoded_rate == dec_rate
                 && s.decoded_channels == dec_ch

@@ -29,7 +29,6 @@ async-trait = "0.1"
 log = "0.4"
 notify = "8.2"
 notify-debouncer-full = "0.7"
-flexi_logger = "0.31"
 thiserror = "2"
 aes-gcm = "0.10"
 keyring = { version = "3", features = ["sync-secret-service"] }
@@ -55,3 +54,4 @@ wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 [dev-dependencies]
 tempfile = "3"
 proptest = "1"
+wiremock = "0.6"

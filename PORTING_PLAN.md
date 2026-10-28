@@ -141,7 +141,7 @@ All UI work is **todo**. Original line counts shown to indicate size.
 | Rule | Status |
 |---|---|
 | `cargo fmt` + `cargo clippy --all-targets -- -D warnings` | passing (style lints inherited from upstream allowed at crate level; see `lib.rs`) |
-| No `unwrap()/expect()` outside tests | **NOT yet met in inherited core code** (many `unwrap`/`expect`/`panic!`, e.g. `AppState::new`, scrobble/overlay, tests guards). Audit + fix todo. New code avoids them (one deliberate `process::abort` in `AppHandle::state`) |
+| No `unwrap()/expect()` outside tests | **MET and enforced** (see §13). Earlier note: ~ (many `unwrap`/`expect`/`panic!`, e.g. `AppState::new`, scrobble/overlay, tests guards). Audit + fix todo. New code avoids them (one deliberate `process::abort` in `AppHandle::state`) |
 | thiserror in core / anyhow in app | core `SoneError` already thiserror; app uses anyhow |
 | Never log tokens | inherited `log_safe()` conventions retained; audit todo |
 | Tests: auth/token parsing, queue, theme, crypto, ReplayGain, lyrics | auth/token, crypto, ReplayGain norm, proxy, scrobble exist (367 tests). **queue, theme.json, lyrics todo** (logic not in Rust yet). wiremock not yet used |
@@ -215,3 +215,9 @@ unwrap/expect audit of inherited core code; wiremock tests; packaging scripts.
 - **Profile page**: view/edit name, handle, bio, website and social links, upload (centre-crop to square JPEG, no crop UI) and remove picture, via the core commands.
 
 Remaining: Windows build + media controls/tray (blocked: no Windows host); shortcut overlay; Explore sub-pages; loved videos tab; global shortcuts; avatar crop UI; unwrap/expect audit of inherited core code; wiremock-based HTTP tests; packaging scripts; theme reload on window focus (watcher used instead).
+
+## 13. Code-rule audit
+
+- `unwrap`/`expect`/`panic!` are **denied by clippy in production code** (`#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]` in both crates; only Slint's generated module is exempt). The 54 inherited violations in `slate-core` were removed: poison-tolerant `LockExt::lock_safe` for mutex state, audio-thread-death returns an error instead of panicking, GStreamer/crypto init failures are reported (`AppState::try_new` is fallible), overlay/scrobble `unwrap`s replaced by fallbacks, unused `concat()` panic path deleted.
+- Logging: core's `flexi_logger` setup is gone; the app writes a rotating `slate.*.log` (7 days) when "Write log files" is on, via `tracing-appender`.
+- Tests: `wiremock` integration tests for the TIDAL client (`tests/tidal_wiremock.rs`, 10 tests): device login, pending/approved polling, 401 → refresh → persist → retry, playbackinfo 401 not treated as expiry, error classification, 429 gate, no-token/no-credentials short-circuits, network failure. `TidalClient::with_urls` makes the base URLs injectable. Scrobbler/ListenBrainz/MusicBrainz HTTP is **not** yet covered by wiremock (their base URLs are still constants).
