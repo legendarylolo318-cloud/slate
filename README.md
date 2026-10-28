@@ -1,3 +1,9 @@
+> **Fork / port notice.** This branch is a port of [lullabyX/sone](https://github.com/lullabyX/sone)
+> from Tauri + React to a native Rust + [Slint](https://slint.dev) UI. It is **work in progress**:
+> see [PORTING_PLAN.md](PORTING_PLAN.md) for status and [HANDOFF.md](HANDOFF.md) for the reviewer notes.
+> Original copyright and the GPL-3.0-only license are retained. The sections below still describe the
+> upstream project and will be rewritten when the port is complete.
+
 <div align="center">
   <img src="sone.png" alt="SONE" width="150">
   <h1>SONE</h1>
