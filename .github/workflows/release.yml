@@ -1,0 +1,146 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:   # build artifacts without publishing
+
+env:
+  GST_VERSION: "1.24.12"
+
+jobs:
+  appimage:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        run: echo "VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> $GITHUB_ENV
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config clang libfuse2 file \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-libav gstreamer1.0-alsa gstreamer1.0-pulseaudio gstreamer1.0-pipewire \
+            libasound2-dev libdbus-1-dev libssl-dev libfontconfig1-dev \
+            libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libvulkan-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p slate
+      - name: Fetch linuxdeploy
+        run: |
+          curl -fsSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20250213-2/linuxdeploy-x86_64.AppImage
+          curl -fsSL -o linuxdeploy-plugin-gstreamer.sh https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gstreamer/master/linuxdeploy-plugin-gstreamer.sh
+          chmod +x linuxdeploy linuxdeploy-plugin-gstreamer.sh
+      - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          DEPLOY_GTK_VERSION: ""
+        run: |
+          install -Dm644 assets/icons/128x128.png AppDir/usr/share/icons/hicolor/128x128/apps/slate.png
+          install -Dm644 data/io.github.legendarylolo318_cloud.slate.metainfo.xml AppDir/usr/share/metainfo/io.github.legendarylolo318_cloud.slate.metainfo.xml
+          install -Dm755 packaging/appimage/gst-registry-hook.sh AppDir/apprun-hooks/gst-registry-hook.sh
+          # Host GPU stack stays on the host; never bundle it.
+          printf '%s\n' libvulkan.so.1 libGL.so.1 libEGL.so.1 libGLX.so.0 libGLdispatch.so.0 libdrm.so.2 libgbm.so.1 > excludelist.txt
+          export EXTRA_PLATFORM_PLUGINS=""
+          for l in $(cat excludelist.txt); do export LINUXDEPLOY_EXCLUDE="$LINUXDEPLOY_EXCLUDE $l"; done
+          ./linuxdeploy --appdir AppDir --plugin gstreamer \
+            --executable target/release/slate \
+            --desktop-file data/slate.desktop \
+            --icon-file assets/icons/128x128.png --icon-filename slate \
+            --exclude-library 'libvulkan*' --exclude-library 'libGL.so*' --exclude-library 'libEGL*' \
+            --exclude-library 'libGLX*' --exclude-library 'libGLdispatch*' --exclude-library 'libdrm*' --exclude-library 'libgbm*' \
+            --output appimage
+          mkdir -p dist
+          mv Slate*.AppImage "dist/slate-$VERSION-x86_64.AppImage" 2>/dev/null || mv *.AppImage "dist/slate-$VERSION-x86_64.AppImage"
+      - name: Check no GPU libs were bundled
+        run: |
+          chmod +x dist/*.AppImage
+          dist/*.AppImage --appimage-extract >/dev/null
+          ! find squashfs-root -name 'libvulkan*' -o -name 'libEGL*' -o -name 'libGL.so*' | grep .
+      - uses: actions/upload-artifact@v4
+        with: { name: appimage, path: dist/*.AppImage }
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version' | Select-Object -First 1).Line.Split('"')[1]
+          "VERSION=$v" >> $env:GITHUB_ENV
+      - name: Install GStreamer
+        shell: pwsh
+        run: |
+          choco install pkgconfiglite innosetup -y --no-progress
+          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GST_VERSION/msvc"
+          foreach ($f in "gstreamer-1.0-msvc-x86_64-$env:GST_VERSION.msi", "gstreamer-1.0-devel-msvc-x86_64-$env:GST_VERSION.msi") {
+            Invoke-WebRequest "$base/$f" -OutFile $f
+            Start-Process msiexec.exe -Wait -ArgumentList "/i $f /qn /norestart ADDLOCAL=ALL INSTALLDIR=C:\gstreamer"
+          }
+          $root = "C:\gstreamer\1.0\msvc_x86_64"
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root" >> $env:GITHUB_ENV
+          "PKG_CONFIG_PATH=$root\lib\pkgconfig" >> $env:GITHUB_ENV
+          "$root\bin" >> $env:GITHUB_PATH
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p slate
+      - name: Bundle
+        shell: pwsh
+        run: ./packaging/windows/collect.ps1 -Out dist/slate-win
+      - name: Zip + installer
+        shell: pwsh
+        run: |
+          Copy-Item LICENSE dist/slate-win/
+          Compress-Archive -Path dist/slate-win/* -DestinationPath "dist/slate-$env:VERSION-windows-x86_64-portable.zip"
+          $env:SLATE_VERSION = $env:VERSION
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging/windows/slate.iss
+      - name: Smoke test portable build
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/slate-win/slate.exe -PassThru
+          Start-Sleep 8
+          if ($p.HasExited) { throw "slate.exe exited early with code $($p.ExitCode)" }
+          Stop-Process $p
+      - name: Smoke test installer (install, run, uninstall)
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist/*-setup.exe | Select-Object -First 1
+          Start-Process $setup.FullName -Wait -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /DIR=C:\SlateTest"
+          if (-not (Test-Path C:\SlateTest\slate.exe)) { throw "install failed" }
+          if (-not (Test-Path "HKLM:\Software\Classes\tidal\shell\open\command") -and -not (Test-Path "HKCU:\Software\Classes\tidal\shell\open\command")) { throw "tidal:// not registered" }
+          Start-Process C:\SlateTest\unins000.exe -Wait -ArgumentList "/VERYSILENT"
+          if (Test-Path C:\SlateTest\slate.exe) { throw "uninstall left files" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [appimage, windows]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts, merge-multiple: true }
+      - name: Source tarball, checksums, notes
+        run: |
+          TAG="${GITHUB_REF_NAME}"; V="${TAG#v}"
+          git archive --format=tar.gz --prefix="slate-$V/" -o "artifacts/slate-$V-source.tar.gz" HEAD
+          (cd artifacts && sha256sum * > SHA256SUMS.txt)
+          awk -v v="$V" '$0 ~ "^## \\[?"v"\\]?" {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
+          cat >> notes.md <<'NOTES'
+
+          **Windows:** the exe and installer are unsigned; SmartScreen may warn ("More info" → "Run anyway").
+          **Linux:** `chmod +x` the AppImage and run it. Needs a working Vulkan or OpenGL driver; falls back to software rendering.
+          Slate is not affiliated with TIDAL. Port of [lullabyX/sone](https://github.com/lullabyX/sone), GPL-3.0-only.
+          NOTES
+      - name: Create release
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh release create "$GITHUB_REF_NAME" artifacts/* --title "Slate $GITHUB_REF_NAME" --notes-file notes.md

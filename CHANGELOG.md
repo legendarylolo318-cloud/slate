@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased (Slate — Slint port of SONE)
+## [0.1.0] - 2026-10-28
+
+First release of Slate, a Rust + Slint port of SONE.
 
 ### Renamed
 - Project renamed from SONE to Slate (crates, binary, config dir, identifiers). Update checker disabled until Slate has its own release feed.

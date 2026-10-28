@@ -34,6 +34,8 @@ fn main() -> anyhow::Result<()> {
     // `remove_var` are unsound once other threads may read the environment.
     #[cfg(target_os = "linux")]
     scrub_environment();
+    #[cfg(windows)]
+    point_gstreamer_at_bundle();
     apply_ui_scale();
 
     // First argument that is a link, if any (`tidal://…` from the OS handler).
@@ -53,6 +55,34 @@ fn main() -> anyhow::Result<()> {
         }
     };
     bootstrap::run(incoming, link)
+}
+
+/// A bundled GStreamer lives next to the executable (`gst-plugins/`); use it
+/// exclusively so a system-wide install cannot mix in incompatible plugins.
+#[cfg(windows)]
+fn point_gstreamer_at_bundle() {
+    let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.join("gst-plugins")))
+    else {
+        return;
+    };
+    if dir.is_dir() {
+        std::env::set_var("GST_PLUGIN_PATH", &dir);
+        std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &dir);
+        std::env::set_var("GST_PLUGIN_SCANNER", dir.join("gst-plugin-scanner.exe"));
+        if let Some(cache) = dirs_cache() {
+            std::env::set_var("GST_REGISTRY", cache);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn dirs_cache() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA")?;
+    let dir = std::path::PathBuf::from(base).join("slate");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("gst-registry.bin"))
 }
 
 /// The saved interface size reaches Slint through its scale-factor override,
