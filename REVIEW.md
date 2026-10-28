@@ -19,3 +19,6 @@ Verified on Linux: `cargo build --release`, `cargo test --workspace` (all pass),
 
 ## Not yet reviewed / known gaps
 Audio bit-perfect caps, renderer fallback, memory/CPU measurement, packaging (AppImage, Windows), CI, cargo audit/deny, clean-container tests. Windows cannot be tested from this machine.
+
+## UI bug found while taking screenshots
+| 7 | Medium | A failed page load (e.g. a 404 album) left its red error banner up on every later page, even healthy ones, until restart | The banner is cleared whenever the user navigates (`pages.rs`, `render`) |

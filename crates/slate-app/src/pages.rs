@@ -316,6 +316,9 @@ impl Backend {
             .unwrap_or((false, false));
         let sel = route.highlight();
         self.ui(move |w| {
+            // An error banner belongs to the page that failed; leaving it up
+            // after navigating makes a healthy page look broken.
+            w.set_error("".into());
             w.set_can_back(back);
             w.set_can_forward(fwd);
             w.set_selected_source(sel.into());

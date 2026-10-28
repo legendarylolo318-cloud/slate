@@ -14,8 +14,9 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 > **Status: work in progress.** See [PORTING_PLAN.md](PORTING_PLAN.md) for what is done,
 > and [HANDOFF.md](HANDOFF.md) for known issues and what has not been tested.
 
-<!-- Screenshots: add images here -->
-*Screenshots: placeholder.*
+![Album page](docs-assets/album.png)
+
+*Album page. Personal playlist names are hidden in this screenshot.*
 
 ## Features
 
