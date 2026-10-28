@@ -105,9 +105,18 @@ export component PlayerBar inherits Rectangle {
                 IconButton { glyph: "⛶"; enabled: root.has-track; clicked => { root.toggle-fullscreen(); } }
                 IconButton { glyph: "☰"; active: root.queue-open; clicked => { root.toggle-queue(); } }
                 if !root.compact: IconButton { glyph: root.volume == 0 ? "🔇" : "🔊"; clicked => { root.toggle-mute(); } }
-                if !root.compact: VerticalLayout {
-                    alignment: center;
-                    Bar { width: 96px; live: true; fraction: root.volume; changed(f) => { root.set-volume(f); } picked(f) => { root.set-volume(f); } }
+                if !root.compact: Rectangle {
+                    // Same height as the buttons so the bar lines up with the icons.
+                    width: 96px;
+                    height: 34px;
+                    Bar {
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width;
+                        live: true;
+                        fraction: root.volume;
+                        changed(f) => { root.set-volume(f); }
+                        picked(f) => { root.set-volume(f); }
+                    }
                 }
             }
         }
