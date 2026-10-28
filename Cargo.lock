@@ -5873,6 +5873,7 @@ name = "slate"
 version = "0.22.1"
 dependencies = [
  "anyhow",
+ "arboard",
  "futures-util",
  "image",
  "ksni",
@@ -5880,6 +5881,7 @@ dependencies = [
  "mpris-server",
  "open",
  "qrcode",
+ "serde",
  "serde_json",
  "slate-core",
  "slint",

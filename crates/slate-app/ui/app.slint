@@ -2,8 +2,11 @@ import { Theme } from "theme.slint";
 import { LoginScreen } from "login.slint";
 import { PlayerBar } from "player_bar.slint";
 import { Sidebar, TrackPage } from "library.slint";
-import { TrackRow, PlaylistEntry } from "types.slint";
-export { TrackRow, PlaylistEntry }
+import { CardsPage, QueuePanel, LyricsPanel } from "pages.slint";
+import { SettingsPage, SettingsState } from "settings.slint";
+import { IconButton, TextField } from "widgets.slint";
+import { TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine } from "types.slint";
+export { TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, SettingsState, Theme }
 
 export enum Screen { loading, login, main }
 
@@ -11,13 +14,19 @@ export component AppWindow inherits Window {
     title: "Slate";
     preferred-width: 1280px;
     preferred-height: 800px;
-    min-width: 640px;
-    min-height: 480px;
+    min-width: 360px;
+    min-height: 420px;
     background: Theme.background;
 
     in property <Screen> screen: Screen.loading;
 
-    // login
+    // Breakpoints: below 900px the sidebar collapses to icons, below 600px the
+    // player bar stacks its controls.
+    property <bool> narrow: self.width < 900px;
+    property <bool> compact: self.width < 600px;
+    property <int> focus-tick: 0;
+
+    // ---- login ----
     in property <string> login-code;
     in property <string> login-url;
     in property <image> login-qr;
@@ -27,7 +36,64 @@ export component AppWindow inherits Window {
     callback start-login();
     callback open-login-url();
 
-    // playback
+    // ---- navigation ----
+    in property <string> view: "tracks";   // tracks | cards | settings
+    in property <string> selected-source;
+    in property <bool> can-back;
+    in property <bool> can-forward;
+    in-out property <string> search-text;
+    callback back();
+    callback forward();
+    callback go(string);
+    callback open-playlist(string);
+    callback open-card(string, string);
+    callback play-card(string, string);
+    callback search(string);
+    callback logout();
+
+    // ---- sidebar ----
+    in property <[PlaylistEntry]> playlists;
+    in property <bool> playlists-loading;
+
+    // ---- track pages ----
+    in property <bool> has-page;
+    in property <string> page-kind: "PLAYLIST";
+    in property <string> page-title;
+    in property <string> page-subtitle;
+    in property <image> page-cover;
+    in property <bool> page-loved;
+    in property <bool> page-loading;
+    in property <[TrackRow]> tracks;
+    in property <string> playing-id;
+    callback play-row(int);
+    callback row-action(int, string);
+    callback play-all();
+    callback shuffle-all();
+
+    // ---- card pages ----
+    in property <string> cards-title;
+    in property <string> cards-subtitle;
+    in property <bool> cards-loading;
+    in property <[CardSection]> sections;
+    in property <bool> has-hero;
+    in property <image> hero-image;
+    in property <string> hero-label;
+    callback hero-play();
+    callback hero-shuffle();
+
+    // ---- right-hand panels ----
+    in-out property <string> panel;  // "" | queue | lyrics
+    in property <[QueueRow]> queue-rows;
+    in property <[LyricLine]> lyric-lines;
+    in property <string> lyrics-status;
+    in property <bool> lyrics-synced;
+    in property <int> lyric-current: -1;
+    callback queue-play(int);
+    callback queue-remove(int);
+    callback queue-clear();
+    callback lyric-seek(int);
+
+    // ---- playback ----
     in property <string> track-title;
     in property <string> track-artist;
     in property <image> track-cover;
@@ -37,109 +103,191 @@ export component AppWindow inherits Window {
     in property <string> duration-text: "0:00";
     in property <float> progress;
     in property <float> volume: 1;
-    in property <string> error;
-    in property <[PlaylistEntry]> playlists;
-    in property <bool> playlists-loading;
-    in property <string> selected-source;
-    in property <bool> has-page;
-    in property <string> page-title;
-    in property <image> page-cover;
-    in property <bool> page-loved;
-    in property <string> page-subtitle;
-    in property <bool> page-loading;
-    in property <[TrackRow]> tracks;
-    in property <string> playing-id;
-    callback open-loved();
-    callback open-playlist(string);
-    callback play-row(int);
-    callback play-all();
-    callback shuffle-all();
     in property <bool> shuffle;
     in property <int> repeat;
-    in property <int> queue-count;
-    in property <string> up-next;
+    in property <string> error;
+    in property <string> notice;
     callback next();
     callback previous();
     callback toggle-shuffle();
     callback cycle-repeat();
     callback toggle-play();
+    callback toggle-mute();
     callback seek(float);
     callback set-volume(float);
-    callback logout();
+    callback seek-relative(float);
 
-    if root.screen == Screen.loading: Text {
-        text: "Starting…";
-        color: Theme.text-muted;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-
-    if root.screen == Screen.login: LoginScreen {
-        user-code: root.login-code;
-        verification-url: root.login-url;
-        qr: root.login-qr;
-        status: root.login-status;
-        busy: root.login-busy;
-        has-code: root.login-has-code;
-        start => { root.start-login(); }
-        open-url => { root.open-login-url(); }
-    }
-
-    if root.screen == Screen.main: VerticalLayout {
-        HorizontalLayout {
-            vertical-stretch: 1;
-            Sidebar {
-                playlists: root.playlists;
-                playlists-loading: root.playlists-loading;
-                selected: root.selected-source;
-                open-loved => { root.open-loved(); }
-                open-playlist(id) => { root.open-playlist(id); }
-                logout => { root.logout(); }
-            }
-            VerticalLayout {
-                horizontal-stretch: 1;
-                if root.error != "": Rectangle {
-                    height: 32px;
-                    background: Theme.danger;
-                    Text { text: root.error; color: #000000; overflow: elide; }
-                }
-                TrackPage {
-                    vertical-stretch: 1;
-                    has-page: root.has-page;
-                    title: root.page-title;
-                    cover: root.page-cover;
-                    loved: root.page-loved;
-                    subtitle: root.page-subtitle;
-                    loading: root.page-loading;
-                    tracks: root.tracks;
-                    playing-id: root.playing-id;
-                    play-row(i) => { root.play-row(i); }
-                    play-all => { root.play-all(); }
-                    shuffle-all => { root.shuffle-all(); }
-                }
-            }
+    // Global shortcuts (ignored while a text field has focus, since fields consume keys).
+    fs := FocusScope {
+        key-pressed(e) => {
+            if (e.text == " ") { root.toggle-play(); return accept; }
+            if (e.modifiers.control && e.text == Key.RightArrow) { root.next(); return accept; }
+            if (e.modifiers.control && e.text == Key.LeftArrow) { root.previous(); return accept; }
+            if (e.text == Key.RightArrow) { root.seek-relative(5); return accept; }
+            if (e.text == Key.LeftArrow) { root.seek-relative(-5); return accept; }
+            if (e.text == "m") { root.toggle-mute(); return accept; }
+            if (e.text == "s") { root.toggle-shuffle(); return accept; }
+            if (e.text == "r") { root.cycle-repeat(); return accept; }
+            if (e.text == "q") { root.panel = root.panel == "queue" ? "" : "queue"; return accept; }
+            if (e.text == "l") { root.panel = root.panel == "lyrics" ? "" : "lyrics"; return accept; }
+            if (e.text == "/") { root.focus-tick += 1; return accept; }
+            reject
         }
-        PlayerBar {
-            title: root.track-title;
-            artist: root.track-artist;
-            cover: root.track-cover;
-            playing: root.playing;
-            has-track: root.has-track;
-            position-text: root.position-text;
-            duration-text: root.duration-text;
-            progress: root.progress;
-            volume: root.volume;
-            shuffle: root.shuffle;
-            repeat: root.repeat;
-            queue-count: root.queue-count;
-            up-next: root.up-next;
-            next => { root.next(); }
-            previous => { root.previous(); }
-            toggle-shuffle => { root.toggle-shuffle(); }
-            cycle-repeat => { root.cycle-repeat(); }
-            toggle-play => { root.toggle-play(); }
-            seek(f) => { root.seek(f); }
-            set-volume(v) => { root.set-volume(v); }
+
+        if root.screen == Screen.loading: Text {
+            text: "Starting…";
+            color: Theme.text-muted;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        if root.screen == Screen.login: LoginScreen {
+            user-code: root.login-code;
+            verification-url: root.login-url;
+            qr: root.login-qr;
+            status: root.login-status;
+            busy: root.login-busy;
+            has-code: root.login-has-code;
+            start => { root.start-login(); }
+            open-url => { root.open-login-url(); }
+        }
+
+        if root.screen == Screen.main: VerticalLayout {
+            HorizontalLayout {
+                vertical-stretch: 1;
+                Sidebar {
+                    playlists: root.playlists;
+                    playlists-loading: root.playlists-loading;
+                    selected: root.selected-source;
+                    collapsed: root.narrow;
+                    go(id) => { root.go(id); }
+                    open-playlist(id) => { root.open-playlist(id); }
+                    logout => { root.logout(); }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    // top bar: history + search
+                    Rectangle {
+                        height: 52px;
+                        background: Theme.background;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 8px;
+                            alignment: start;
+                            VerticalLayout {
+                                alignment: center;
+                                IconButton { glyph: "‹"; enabled: root.can-back; clicked => { root.back(); } }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                IconButton { glyph: "›"; enabled: root.can-forward; clicked => { root.forward(); } }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                TextField {
+                                    focus-request: root.focus-tick;
+                                    text <=> root.search-text;
+                                    placeholder: "Search tracks, albums, artists…   ( / )";
+                                    field-width: min(420px, root.width * 0.5);
+                                    accepted(t) => { root.search(t); }
+                                }
+                            }
+                        }
+                    }
+                    if root.notice != "": Rectangle {
+                        height: 28px;
+                        background: Theme.accent;
+                        Text { text: root.notice; color: #000000; overflow: elide; horizontal-alignment: center; }
+                    }
+                    if root.error != "": Rectangle {
+                        height: 32px;
+                        background: Theme.danger;
+                        Text { text: root.error; color: #000000; overflow: elide; }
+                    }
+                    if root.view == "tracks": TrackPage {
+                        vertical-stretch: 1;
+                        compact: root.compact;
+                        has-page: root.has-page;
+                        kind-label: root.page-kind;
+                        title: root.page-title;
+                        subtitle: root.page-subtitle;
+                        cover: root.page-cover;
+                        loved: root.page-loved;
+                        loading: root.page-loading;
+                        tracks: root.tracks;
+                        playing-id: root.playing-id;
+                        play-row(i) => { root.play-row(i); }
+                        row-action(i, a) => { root.row-action(i, a); }
+                        play-all => { root.play-all(); }
+                        shuffle-all => { root.shuffle-all(); }
+                    }
+                    if root.view == "cards": CardsPage {
+                        vertical-stretch: 1;
+                        compact: root.compact;
+                        title: root.cards-title;
+                        subtitle: root.cards-subtitle;
+                        loading: root.cards-loading;
+                        sections: root.sections;
+                        has-hero: root.has-hero;
+                        hero-image: root.hero-image;
+                        hero-label: root.hero-label;
+                        open(k, id) => { root.open-card(k, id); }
+                        play(k, id) => { root.play-card(k, id); }
+                        hero-play => { root.hero-play(); }
+                        hero-shuffle => { root.hero-shuffle(); }
+                    }
+                    if root.view == "settings": SettingsPage {
+                        vertical-stretch: 1;
+                        compact: root.compact;
+                    }
+                }
+                if root.panel == "queue" && !root.compact: QueuePanel {
+                    width: 320px;
+                    rows: root.queue-rows;
+                    now-title: root.track-title;
+                    now-artist: root.track-artist;
+                    play(i) => { root.queue-play(i); }
+                    remove(i) => { root.queue-remove(i); }
+                    clear => { root.queue-clear(); }
+                    close => { root.panel = ""; }
+                }
+                if root.panel == "lyrics" && !root.compact: LyricsPanel {
+                    width: 360px;
+                    lines: root.lyric-lines;
+                    status: root.lyrics-status;
+                    synced: root.lyrics-synced;
+                    current: root.lyric-current;
+                    seek(i) => { root.lyric-seek(i); }
+                    close => { root.panel = ""; }
+                }
+            }
+            PlayerBar {
+                compact: root.compact;
+                title: root.track-title;
+                artist: root.track-artist;
+                cover: root.track-cover;
+                playing: root.playing;
+                has-track: root.has-track;
+                position-text: root.position-text;
+                duration-text: root.duration-text;
+                progress: root.progress;
+                volume: root.volume;
+                shuffle: root.shuffle;
+                repeat: root.repeat;
+                queue-open: root.panel == "queue";
+                lyrics-open: root.panel == "lyrics";
+                next => { root.next(); }
+                previous => { root.previous(); }
+                toggle-shuffle => { root.toggle-shuffle(); }
+                cycle-repeat => { root.cycle-repeat(); }
+                toggle-play => { root.toggle-play(); }
+                toggle-mute => { root.toggle-mute(); }
+                seek(f) => { root.seek(f); }
+                set-volume(v) => { root.set-volume(v); }
+                toggle-queue => { root.panel = root.panel == "queue" ? "" : "queue"; }
+                toggle-lyrics => { root.panel = root.panel == "lyrics" ? "" : "lyrics"; }
+            }
         }
     }
 }

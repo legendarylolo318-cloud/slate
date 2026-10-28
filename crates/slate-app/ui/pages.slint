@@ -1,0 +1,216 @@
+import { Theme } from "theme.slint";
+import { CardItem, CardSection, QueueRow, LyricLine } from "types.slint";
+import { IconButton, Button } from "widgets.slint";
+import { ScrollView, ListView } from "std-widgets.slint";
+
+global Dim {
+    out property <length> card-w: 168px;
+    out property <length> card-h: 230px;
+}
+
+component Card inherits Rectangle {
+    in property <CardItem> item;
+    callback open();
+    callback play();
+    width: Dim.card-w;
+    height: Dim.card-h;
+    border-radius: 8px;
+    background: ta.has-hover ? Theme.surface : transparent;
+    VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+        Rectangle {
+            height: Dim.card-w - 16px;
+            border-radius: root.item.kind == "artist" ? (Dim.card-w - 16px) / 2 : 6px;
+            background: Theme.surface-raised;
+            clip: true;
+            Image { source: root.item.cover; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
+            if root.item.kind != "artist": Rectangle {
+                x: parent.width - 48px;
+                y: parent.height - 48px;
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                background: pt.has-hover ? Theme.accent.brighter(0.2) : Theme.accent;
+                visible: ta.has-hover;
+                Text { text: "▶"; color: #000000; horizontal-alignment: center; vertical-alignment: center; }
+                pt := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.play(); } }
+            }
+        }
+        Text { text: root.item.title; color: Theme.text; font-weight: 600; overflow: elide; horizontal-alignment: root.item.kind == "artist" ? TextHorizontalAlignment.center : TextHorizontalAlignment.left; }
+        Text { text: root.item.subtitle; color: Theme.text-muted; font-size: 12px; overflow: elide; horizontal-alignment: root.item.kind == "artist" ? TextHorizontalAlignment.center : TextHorizontalAlignment.left; }
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; z: -1; clicked => { root.open(); } }
+}
+
+component Section inherits VerticalLayout {
+    in property <CardSection> data;
+    in property <length> avail-width;
+    callback open(string, string);
+    callback play(string, string);
+    spacing: 8px;
+    property <int> cols: max(1, floor(root.avail-width / Dim.card-w));
+    if root.data.title != "": Text { text: root.data.title; font-size: 20px; font-weight: 700; color: Theme.text; }
+    if root.data.wrap: Rectangle {
+        height: ceil(root.data.cards.length / root.cols) * Dim.card-h;
+        for c[i] in root.data.cards: Card {
+            x: mod(i, root.cols) * Dim.card-w;
+            y: floor(i / root.cols) * Dim.card-h;
+            item: c;
+            open => { root.open(c.kind, c.id); }
+            play => { root.play(c.kind, c.id); }
+        }
+    }
+    if !root.data.wrap: Flickable {
+        height: Dim.card-h;
+        content-width: root.data.cards.length * Dim.card-w;
+        for c[i] in root.data.cards: Card {
+            x: i * Dim.card-w;
+            item: c;
+            open => { root.open(c.kind, c.id); }
+            play => { root.play(c.kind, c.id); }
+        }
+    }
+}
+
+export component CardsPage inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> loading;
+    in property <[CardSection]> sections;
+    in property <bool> has-hero;
+    in property <image> hero-image;
+    in property <string> hero-label;
+    in property <bool> compact: false;
+    in property <string> empty-text: "Nothing here yet.";
+    callback open(string, string);
+    callback play(string, string);
+    callback hero-play();
+    callback hero-shuffle();
+    background: Theme.background;
+
+    ScrollView {
+        VerticalLayout {
+            padding: root.compact ? 12px : 24px;
+            spacing: 16px;
+            if root.has-hero: HorizontalLayout {
+                spacing: 20px;
+                Rectangle {
+                    width: 160px;
+                    height: 160px;
+                    border-radius: 80px;
+                    clip: true;
+                    background: Theme.surface-raised;
+                    Image { source: root.hero-image; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
+                }
+                VerticalLayout {
+                    alignment: end;
+                    spacing: 6px;
+                    Text { text: root.hero-label; font-size: 11px; color: Theme.text-muted; }
+                    Text { text: root.title; font-size: 36px; font-weight: 800; color: Theme.text; overflow: elide; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Button { label: "▶  Play top tracks"; primary: true; clicked => { root.hero-play(); } }
+                        Button { label: "🔀  Shuffle"; clicked => { root.hero-shuffle(); } }
+                    }
+                }
+            }
+            if !root.has-hero: VerticalLayout {
+                spacing: 2px;
+                Text { text: root.title; font-size: 30px; font-weight: 800; color: Theme.text; overflow: elide; }
+                if root.subtitle != "": Text { text: root.subtitle; color: Theme.text-muted; }
+            }
+            if root.loading: Text { text: "Loading…"; color: Theme.text-muted; }
+            if !root.loading && root.sections.length == 0: Text { text: root.empty-text; color: Theme.text-muted; }
+            for s in root.sections: Section {
+                data: s;
+                avail-width: root.width - (root.compact ? 24px : 48px);
+                open(k, id) => { root.open(k, id); }
+                play(k, id) => { root.play(k, id); }
+            }
+        }
+    }
+}
+
+export component QueuePanel inherits Rectangle {
+    in property <[QueueRow]> rows;
+    in property <string> now-title;
+    in property <string> now-artist;
+    callback play(int);
+    callback remove(int);
+    callback clear();
+    callback close();
+    background: Theme.surface;
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        HorizontalLayout {
+            Text { text: "Queue"; font-size: 20px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; }
+            Button { label: "Clear"; min-width: 60px; height: 28px; clicked => { root.clear(); } }
+            IconButton { glyph: "✕"; side: 28px; clicked => { root.close(); } }
+        }
+        Text { text: "NOW PLAYING"; font-size: 11px; color: Theme.text-muted; }
+        Text { text: root.now-title == "" ? "Nothing playing" : root.now-title + " — " + root.now-artist; color: Theme.accent; overflow: elide; }
+        Text { text: "NEXT UP (" + root.rows.length + ")"; font-size: 11px; color: Theme.text-muted; }
+        ListView {
+            vertical-stretch: 1;
+            for r[i] in root.rows: Rectangle {
+                height: 44px;
+                border-radius: 6px;
+                background: qa.has-hover ? Theme.surface-raised : transparent;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    spacing: 6px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Text { text: r.title; color: Theme.text; overflow: elide; }
+                        Text { text: (r.manual ? "Added · " : "") + r.artist; color: Theme.text-muted; font-size: 11px; overflow: elide; }
+                    }
+                    IconButton { glyph: "✕"; side: 28px; visible: qa.has-hover; clicked => { root.remove(i); } }
+                }
+                qa := TouchArea { mouse-cursor: MouseCursor.pointer; z: -1; double-clicked => { root.play(i); } }
+            }
+        }
+    }
+}
+
+export component LyricsPanel inherits Rectangle {
+    in property <[LyricLine]> lines;
+    in property <string> status;
+    in property <bool> synced;
+    in property <int> current;
+    callback seek(int);
+    callback close();
+    background: Theme.surface;
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        HorizontalLayout {
+            Text { text: "Lyrics"; font-size: 20px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; }
+            IconButton { glyph: "✕"; side: 28px; clicked => { root.close(); } }
+        }
+        if root.status != "": Text { text: root.status; color: Theme.text-muted; wrap: word-wrap; }
+        lv := ListView {
+            vertical-stretch: 1;
+            for l[i] in root.lines: Rectangle {
+                height: 36px;
+                TouchArea { mouse-cursor: root.synced ? MouseCursor.pointer : MouseCursor.default; clicked => { if (root.synced) { root.seek(i); } } }
+                Text {
+                    text: l.text;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                    color: l.active ? Theme.accent : Theme.text-muted;
+                    font-size: l.active ? 18px : 15px;
+                    font-weight: l.active ? 700 : 400;
+                    animate color { duration: 150ms; }
+                }
+            }
+        }
+    }
+    // Keep the active line in view.
+    changed current => {
+        lv.content-y = -max(0px, root.current * 36px - lv.height / 2);
+    }
+}

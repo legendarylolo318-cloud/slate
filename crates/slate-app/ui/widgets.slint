@@ -1,0 +1,218 @@
+import { Theme } from "theme.slint";
+
+// Shared controls. Every clickable thing gets a pointer cursor and hover feedback.
+
+export component Toggle inherits Rectangle {
+    in-out property <bool> checked;
+    in property <bool> enabled: true;
+    opacity: root.enabled ? 1.0 : 0.4;
+    callback toggled(bool);
+    width: 40px;
+    height: 22px;
+    border-radius: 11px;
+    background: root.checked ? Theme.accent : Theme.surface-raised;
+    animate background { duration: 120ms; }
+    Rectangle {
+        x: root.checked ? parent.width - self.width - 3px : 3px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: root.checked ? #000000 : Theme.text-muted;
+        animate x { duration: 120ms; }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+export component Button inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    in property <bool> danger: false;
+    callback clicked();
+    min-width: 84px;
+    height: 34px;
+    border-radius: 17px;
+    background: !root.enabled ? Theme.surface
+        : root.primary ? (ta.pressed ? Theme.accent.darker(0.2) : ta.has-hover ? Theme.accent.brighter(0.15) : Theme.accent)
+        : (ta.pressed ? Theme.surface : ta.has-hover ? Theme.surface-raised.brighter(0.15) : Theme.surface-raised);
+    opacity: root.enabled ? 1.0 : 0.5;
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        Text {
+            text: root.label;
+            color: root.primary ? #000000 : (root.danger ? Theme.danger : Theme.text);
+            font-weight: 600;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component IconButton inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> primary: false;
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    in property <length> side: primary ? 44px : 34px;
+    callback clicked();
+    width: root.side;
+    height: root.side;
+    border-radius: root.side / 2;
+    background: root.primary ? (ta.has-hover ? Theme.text.darker(0.1) : Theme.text)
+        : (ta.has-hover ? Theme.surface-raised : transparent);
+    opacity: root.enabled ? 1.0 : 0.4;
+    Text {
+        text: root.glyph;
+        font-size: root.primary ? 18px : 15px;
+        color: root.primary ? Theme.background : (root.active ? Theme.accent : Theme.text);
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> index;
+    callback picked(int);
+    height: 32px;
+    border-radius: 16px;
+    background: Theme.surface;
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for opt[i] in root.options: Rectangle {
+            border-radius: 14px;
+            min-width: 56px;
+            background: i == root.index ? Theme.surface-raised : (st.has-hover ? Theme.surface-raised.with-alpha(0.4) : transparent);
+            Text {
+                text: opt;
+                color: i == root.index ? Theme.text : Theme.text-muted;
+                font-weight: i == root.index ? 700 : 400;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            st := TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => {
+                    root.index = i;
+                    root.picked(i);
+                }
+            }
+        }
+    }
+}
+
+export component TextField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <bool> secret: false;
+    in property <length> field-width: 240px;
+    /// Bump to move keyboard focus into the field.
+    in property <int> focus-request: 0;
+    changed focus-request => { ti.focus(); }
+    callback edited(string);
+    callback accepted(string);
+    width: root.field-width;
+    height: 34px;
+    border-radius: 8px;
+    background: Theme.surface;
+    border-width: ti.has-focus ? 1px : 0px;
+    border-color: Theme.accent;
+    TouchArea {
+        mouse-cursor: MouseCursor.text;
+        clicked => { ti.focus(); }
+    }
+    ti := TextInput {
+        x: 10px;
+        width: parent.width - 20px;
+        y: (parent.height - self.preferred-height) / 2;
+        text <=> root.text;
+        color: Theme.text;
+        single-line: true;
+        input-type: root.secret ? InputType.password : InputType.text;
+        edited => { root.edited(self.text); }
+        accepted => { root.accepted(self.text); }
+    }
+    Text {
+        x: 10px;
+        text: root.placeholder;
+        color: Theme.text-muted;
+        vertical-alignment: center;
+        visible: ti.text == "";
+    }
+}
+
+/// Seek / volume bar. Drag to scrub; `changed` fires while dragging when `live`,
+/// `picked` fires once on release (or on a plain click).
+export component Bar inherits Rectangle {
+    in property <float> fraction: 0;
+    in property <bool> live: false;
+    in property <length> thickness: 4px;
+    callback picked(float);
+    callback changed(float);
+    property <bool> dragging: false;
+    property <float> drag-fraction: 0;
+    height: 18px;
+    background: transparent;
+    property <float> shown: dragging ? drag-fraction : clamp(root.fraction, 0, 1);
+    Rectangle {
+        y: (parent.height - root.thickness) / 2;
+        height: root.thickness;
+        border-radius: root.thickness / 2;
+        background: Theme.surface-raised;
+        Rectangle {
+            x: 0;
+            width: parent.width * root.shown;
+            border-radius: parent.border-radius;
+            background: (ta.has-hover || root.dragging) ? Theme.accent : Theme.text;
+        }
+        Rectangle {
+            visible: ta.has-hover || root.dragging;
+            x: parent.width * root.shown - self.width / 2;
+            y: (parent.height - self.height) / 2;
+            width: 12px;
+            height: 12px;
+            border-radius: 6px;
+            background: Theme.text;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.left) {
+                if (e.kind == PointerEventKind.down) {
+                    root.dragging = true;
+                    root.drag-fraction = clamp(self.mouse-x / self.width, 0, 1);
+                    if (root.live) { root.changed(root.drag-fraction); }
+                } else if (e.kind == PointerEventKind.up) {
+                    root.dragging = false;
+                    root.picked(clamp(self.mouse-x / self.width, 0, 1));
+                }
+            }
+        }
+        moved => {
+            if (root.dragging) {
+                root.drag-fraction = clamp(self.mouse-x / self.width, 0, 1);
+                if (root.live) { root.changed(root.drag-fraction); }
+            }
+        }
+    }
+}

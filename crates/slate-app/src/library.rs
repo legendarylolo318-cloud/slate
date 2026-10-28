@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::stream::{self, StreamExt};
-use slate_core::commands::{auth, library as lib_cmds};
+use slate_core::commands::{auth, library as lib_cmds, pages};
 use slate_core::queue::{Source, Track};
 use slate_core::tidal_api::TidalTrack;
 use slint::{Image, Model, ModelRc, VecModel};
@@ -28,6 +28,17 @@ const MAX_PLAYLIST_PAGES: u32 = 40;
 pub enum SourceKind {
     Loved,
     Playlist(String),
+    Album(u64),
+    Mix(String),
+}
+
+/// What the page header shows.
+pub struct Header {
+    pub label: &'static str,
+    pub title: String,
+    pub subtitle: String,
+    pub cover: Option<String>,
+    pub loved: bool,
 }
 
 #[derive(Clone)]
@@ -46,6 +57,11 @@ pub struct LibState {
     user_id: Mutex<Option<u64>>,
     /// Playlist uuid → TIDAL image id, for the page header.
     playlist_images: Mutex<HashMap<String, Option<String>>>,
+    /// Mix items arrive in one response; paging serves slices of it.
+    static_tracks: Mutex<Vec<TidalTrack>>,
+    /// Artist page "Play top tracks" list.
+    pub hero_tracks: Mutex<Vec<Track>>,
+    cards_gen: AtomicU64,
 }
 
 fn to_track(t: &TidalTrack) -> Option<Track> {
@@ -95,10 +111,25 @@ fn set_playlist_cover(w: &AppWindow, i: usize, uuid: &str, cover: Image) {
     }
 }
 
+impl LibState {
+    /// Invalidates in-flight card-page work and returns the new generation.
+    pub fn bump_cards(&self) -> u64 {
+        self.cards_gen.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    pub fn cards_generation(&self) -> u64 {
+        self.cards_gen.load(Ordering::SeqCst)
+    }
+}
+
 impl Backend {
+    pub(crate) fn cached_track(&self, index: usize) -> Option<Track> {
+        self.lib.tracks.lock().ok()?.get(&index).cloned()
+    }
+
     // ---------- sidebar ----------
 
-    async fn user_id(&self) -> Option<u64> {
+    pub(crate) async fn user_id(&self) -> Option<u64> {
         if let Some(id) = self.lib.user_id.lock().ok().and_then(|g| *g) {
             return Some(id);
         }
@@ -209,81 +240,77 @@ impl Backend {
 
     // ---------- opening a list ----------
 
-    pub fn open_loved(&self) {
-        self.open_source(SourceKind::Loved, "Loved Tracks".into(), "loved".into());
-    }
-
-    pub fn open_playlist(&self, uuid: &str) {
-        let uuid = uuid.to_string();
-        // The title is already in the sidebar model; read it on the UI thread.
-        let this = self.clone();
-        self.ui(move |w| {
-            use slint::Model;
-            let title = w
-                .get_playlists()
-                .iter()
-                .find(|p| p.uuid == uuid.as_str())
-                .map(|p| p.title.to_string())
-                .unwrap_or_else(|| "Playlist".into());
-            this.open_source(SourceKind::Playlist(uuid.clone()), title, uuid);
-        });
-    }
-
-    fn open_source(&self, kind: SourceKind, title: String, id: String) {
+    /// Opens a track list. The header fills in as soon as its details arrive.
+    pub fn open(&self, kind: SourceKind, selected: String) {
         let generation = self.lib.generation.fetch_add(1, Ordering::SeqCst) + 1;
         if let Ok(mut t) = self.lib.tracks.lock() {
             t.clear();
+        }
+        if let Ok(mut s) = self.lib.static_tracks.lock() {
+            s.clear();
         }
         self.lib.total.store(0, Ordering::Relaxed);
         if let Ok(mut a) = self.lib.active.lock() {
             *a = Some(Active {
                 kind: kind.clone(),
-                title: title.clone(),
-                id: id.clone(),
+                title: String::new(),
+                id: selected.clone(),
             });
         }
 
         let this = self.clone();
-        let (page_title, selected) = (title.clone(), id.clone());
-        let is_loved = kind == SourceKind::Loved;
         self.ui(move |w| {
             let for_fetch = this.clone();
             let model = LazyTracks::new(Box::new(move |page| {
                 for_fetch.request_page(generation, page)
             }));
             w.set_tracks(ModelRc::from(Rc::new(model)));
+            w.set_view("tracks".into());
             w.set_has_page(true);
-            w.set_page_title(page_title.into());
+            w.set_page_title("".into());
             w.set_page_subtitle("".into());
             w.set_page_loading(true);
-            w.set_selected_source(selected.into());
             w.set_page_cover(Image::default());
-            w.set_page_loved(is_loved);
+            w.set_page_loved(false);
+            w.set_selected_source(selected.into());
         });
-        if let SourceKind::Playlist(uuid) = &kind {
-            let image = self
-                .lib
-                .playlist_images
-                .lock()
-                .ok()
-                .and_then(|m| m.get(uuid).cloned().flatten());
-            if let (Some(image), Some(state)) = (image, self.state()) {
-                let this = self.clone();
-                self.rt.spawn(async move {
-                    let url = tidal_image_url(&image, 320);
-                    if let Some(px) = this.images.get(&state, &url).await {
-                        if this.lib.generation.load(Ordering::SeqCst) == generation {
-                            this.ui(move |w| w.set_page_cover(Image::from_rgba8(px)));
+
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let header = this.header_for(&kind).await;
+            if this.lib.generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            if let Ok(mut a) = this.lib.active.lock() {
+                if let Some(a) = a.as_mut() {
+                    a.title = header.title.clone();
+                }
+            }
+            let (label, title, loved) = (header.label, header.title.clone(), header.loved);
+            let subtitle = header.subtitle.clone();
+            this.ui(move |w| {
+                w.set_page_kind(label.into());
+                w.set_page_title(title.into());
+                w.set_page_subtitle(subtitle.into());
+                w.set_page_loved(loved);
+            });
+            if let (Some(image), Some(state)) = (header.cover, this.state()) {
+                let this2 = this.clone();
+                this.rt.spawn(async move {
+                    if let Some(px) = this2
+                        .images
+                        .get(&state, &tidal_image_url(&image, 320))
+                        .await
+                    {
+                        if this2.lib.generation.load(Ordering::SeqCst) == generation {
+                            this2.ui(move |w| w.set_page_cover(Image::from_rgba8(px)));
                         }
                     }
                 });
             }
-        }
 
-        // Page 0 tells us the total; fill it before publishing the total so the
-        // list does not ask for it a second time.
-        let this = self.clone();
-        self.rt.spawn(async move {
+            // Page 0 tells us the total; fill it before publishing the total so the
+            // list does not ask for it a second time.
             match this.fetch_page(&kind, 0).await {
                 Ok((tracks, total)) => {
                     if this.lib.generation.load(Ordering::SeqCst) != generation {
@@ -296,7 +323,6 @@ impl Backend {
                             m.fill(0, rows);
                             m.set_total(total);
                         });
-                        w.set_page_subtitle(format!("{total} tracks").into());
                         w.set_page_loading(false);
                     });
                 }
@@ -306,6 +332,101 @@ impl Backend {
                 }),
             }
         });
+    }
+
+    async fn header_for(&self, kind: &SourceKind) -> Header {
+        let none = |label, title: &str| Header {
+            label,
+            title: title.to_string(),
+            subtitle: String::new(),
+            cover: None,
+            loved: false,
+        };
+        let Some(state) = self.state() else {
+            return none("", "");
+        };
+        match kind {
+            SourceKind::Loved => Header {
+                loved: true,
+                ..none("LOVED", "Loved Tracks")
+            },
+            SourceKind::Playlist(uuid) => {
+                match slate_core::commands::metadata::get_playlist_details(&state, uuid.clone())
+                    .await
+                {
+                    Ok(v) => {
+                        let count = v["numberOfTracks"].as_u64().unwrap_or(0);
+                        let by = v["creator"]["name"].as_str().unwrap_or("");
+                        Header {
+                            label: "PLAYLIST",
+                            title: v["title"].as_str().unwrap_or("Playlist").to_string(),
+                            subtitle: if by.is_empty() {
+                                format!("{count} tracks")
+                            } else {
+                                format!("{by} · {count} tracks")
+                            },
+                            cover: v["squareImage"]
+                                .as_str()
+                                .or_else(|| v["image"].as_str())
+                                .map(str::to_string),
+                            loved: false,
+                        }
+                    }
+                    Err(_) => none("PLAYLIST", "Playlist"),
+                }
+            }
+            SourceKind::Album(id) => match pages::get_album_detail(&state, *id).await {
+                Ok(a) => {
+                    let artist = a
+                        .artist
+                        .as_ref()
+                        .map(|x| x.name.clone())
+                        .or_else(|| {
+                            a.artists.as_ref().map(|v| {
+                                v.iter()
+                                    .map(|x| x.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                        })
+                        .unwrap_or_default();
+                    let year = a
+                        .release_date
+                        .as_deref()
+                        .and_then(|d| d.get(..4))
+                        .unwrap_or("");
+                    let count = a.number_of_tracks.unwrap_or(0);
+                    let parts: Vec<String> = [artist, year.to_string(), format!("{count} tracks")]
+                        .into_iter()
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    Header {
+                        label: "ALBUM",
+                        title: a.title,
+                        subtitle: parts.join(" · "),
+                        cover: a.cover,
+                        loved: false,
+                    }
+                }
+                Err(_) => none("ALBUM", "Album"),
+            },
+            SourceKind::Mix(id) => match pages::get_mix_items(&state, id.clone()).await {
+                Ok(m) => {
+                    let count = m.tracks.len();
+                    if let Ok(mut s) = self.lib.static_tracks.lock() {
+                        *s = m.tracks;
+                    }
+                    Header {
+                        label: "MIX",
+                        title: m.title.unwrap_or_else(|| "Mix".into()),
+                        subtitle: format!("{} · {count} tracks", m.subtitle.unwrap_or_default()),
+                        cover: m.image,
+                        loved: false,
+                    }
+                }
+                Err(_) => none("MIX", "Mix"),
+            },
+        }
     }
 
     /// Called from the UI thread when the list scrolls onto an unloaded page.
@@ -430,6 +551,23 @@ impl Backend {
                 )
                 .await
             }
+            SourceKind::Album(id) => pages::get_album_tracks(&state, *id, offset, limit).await,
+            SourceKind::Mix(_) => {
+                // Served from the single response stashed when the header loaded.
+                let all = self
+                    .lib
+                    .static_tracks
+                    .lock()
+                    .map(|s| s.clone())
+                    .unwrap_or_default();
+                let total = all.len();
+                let items = all
+                    .into_iter()
+                    .skip(offset as usize)
+                    .take(limit as usize)
+                    .collect();
+                return Ok((items, total));
+            }
         };
         result
             .map(|p| (p.items, p.total_number_of_items as usize))
@@ -476,6 +614,8 @@ impl Backend {
         let (kind, id) = match &active.kind {
             SourceKind::Loved => ("favorites", serde_json::Value::from("loved")),
             SourceKind::Playlist(u) => ("playlist", serde_json::Value::from(u.as_str())),
+            SourceKind::Album(a) => ("album", serde_json::Value::from(a.to_string())),
+            SourceKind::Mix(m) => ("mix", serde_json::Value::from(m.as_str())),
         };
         let _ = &active.id;
         let source = Source {
@@ -506,19 +646,23 @@ impl Backend {
             let Some((all, source)) = this.ensure_all().await else {
                 return;
             };
-            let outcome = ctl.play_from_source(track, all, Some(source), false).await;
+            let album = source.kind == "album";
+            let outcome = ctl.play_from_source(track, all, Some(source), album).await;
             this.apply(outcome).await;
         });
     }
 
     pub fn play_all(&self, shuffle: bool) {
+        // album pages play in album order with album ReplayGain
+
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(ctl) = this.controller() else { return };
             let Some((all, source)) = this.ensure_all().await else {
                 return;
             };
-            let outcome = ctl.play_all(all, Some(source), false, shuffle).await;
+            let album = source.kind == "album" && !shuffle;
+            let outcome = ctl.play_all(all, Some(source), album, shuffle).await;
             this.apply(outcome).await;
         });
     }

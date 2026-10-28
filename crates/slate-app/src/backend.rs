@@ -2,7 +2,7 @@
 //! every method forwards to a core command on the tokio runtime and publishes
 //! the result with `upgrade_in_event_loop`.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -24,6 +24,9 @@ pub(crate) struct Shared {
     /// Audio pipeline holds the current track (false for a restored, not yet started one).
     loaded: AtomicBool,
     shuffle: AtomicBool,
+    current_id: AtomicU64,
+    /// Volume before muting, as `f32` bits; 0 when not muted.
+    pre_mute: AtomicU32,
     /// Latest position in seconds, as `f32` bits.
     position: AtomicU32,
     controller: OnceLock<Arc<Controller>>,
@@ -82,6 +85,10 @@ pub struct Backend {
     pub(crate) shared: Arc<Shared>,
     pub(crate) lib: Arc<crate::library::LibState>,
     pub(crate) images: Arc<crate::imgcache::ImageCache>,
+    pub(crate) nav: Arc<Mutex<crate::pages::Nav>>,
+    pub(crate) lyrics: Arc<Mutex<Vec<slate_core::lyrics::Line>>>,
+    pub(crate) lyric_index: Arc<AtomicI32>,
+    pub(crate) pending_scrobble: Arc<Mutex<Option<(String, String)>>>,
 }
 
 impl Backend {
@@ -100,6 +107,10 @@ impl Backend {
             shared,
             lib: Arc::new(crate::library::LibState::default()),
             images: Arc::new(crate::imgcache::ImageCache::default()),
+            nav: Arc::new(Mutex::new(crate::pages::Nav::default())),
+            lyrics: Arc::new(Mutex::new(Vec::new())),
+            lyric_index: Arc::new(AtomicI32::new(-1)),
+            pending_scrobble: Arc::new(Mutex::new(None)),
         };
         let finished = backend.clone();
         let _ = backend
@@ -147,6 +158,8 @@ impl Backend {
             let volume = state.load_settings().map(|s| s.volume).unwrap_or(1.0);
             this.ui(move |w| w.set_volume(volume));
 
+            slate_core::startup::run_startup(&this.app).await;
+
             let controller = Arc::new(Controller::new(Arc::clone(&state)));
             let (shuffle, repeat, autoplay) = controller.load_modes().await;
             controller.set_modes(shuffle, repeat, autoplay).await;
@@ -166,7 +179,7 @@ impl Backend {
             match auth::load_saved_auth(&state).await {
                 Ok(Some(_)) => {
                     this.ui(|w| w.set_screen(Screen::Main));
-                    this.load_library();
+                    this.enter_main();
                 }
                 Ok(None) => this.ui(|w| w.set_screen(Screen::Login)),
                 Err(e) => {
@@ -196,6 +209,7 @@ impl Backend {
                     continue;
                 };
                 this.shared.position.store(pos.to_bits(), Ordering::Relaxed);
+                this.update_lyric_position(pos);
                 let dur = this.shared.duration();
                 let progress = if dur > 0.0 {
                     (pos / dur).clamp(0.0, 1.0)
@@ -290,7 +304,7 @@ impl Backend {
                         w.set_login_has_code(false);
                         w.set_screen(Screen::Main);
                     });
-                    self.load_library();
+                    self.enter_main();
                     return Ok(());
                 }
                 Ok(None) => {}
@@ -399,6 +413,8 @@ impl Backend {
     /// Fills the player bar and OS metadata for `track`.
     fn show_track(&self, track: &Track, playing: bool) {
         let id = track.id.to_string();
+        self.shared.current_id.store(track.id, Ordering::Relaxed);
+        self.load_lyrics(track.id);
         let title = track.title().to_string();
         let artist = track.artist_name().to_string();
         let duration = track.duration_secs();
@@ -481,26 +497,12 @@ impl Backend {
         }
     }
 
-    async fn refresh_queue_info(&self) {
-        let Some(ctl) = self.controller() else { return };
-        let (count, next) = ctl
-            .with_queue(|q| {
-                (
-                    q.manual.len() + q.queue.len(),
-                    q.upcoming()
-                        .next()
-                        .map(|t| format!("{} — {}", t.title(), t.artist_name())),
-                )
-            })
-            .await;
-        self.ui(move |w| {
-            w.set_queue_count(i32::try_from(count).unwrap_or(i32::MAX));
-            w.set_up_next(next.unwrap_or_default().into());
-        });
+    pub(crate) async fn refresh_queue_info(&self) {
+        self.publish_queue().await;
     }
 
     /// Queue + modes to disk, off the UI thread.
-    async fn save(&self) {
+    pub(crate) async fn save(&self) {
         let Some(ctl) = self.controller() else { return };
         if let Err(e) = ctl.save().await {
             tracing::warn!("could not save queue: {}", e.log_safe());
@@ -602,7 +604,7 @@ impl Backend {
         }
     }
 
-    fn seek_to_secs(&self, secs: f32) {
+    pub(crate) fn seek_to_secs(&self, secs: f32) {
         let secs = secs.max(0.0);
         let this = self.clone();
         self.rt.spawn(async move {
@@ -640,6 +642,39 @@ impl Backend {
                 tracing::warn!("set_volume: {}", e.log_safe());
             }
         });
+    }
+
+    pub(crate) fn current_track_id(&self) -> Option<u64> {
+        let id = self.shared.current_id.load(Ordering::Relaxed);
+        (id != 0).then_some(id)
+    }
+
+    pub fn seek_relative(&self, delta: f32) {
+        let pos = f32::from_bits(self.shared.position.load(Ordering::Relaxed));
+        self.seek_to_secs((pos + delta).clamp(0.0, self.shared.duration()));
+    }
+
+    pub fn toggle_mute(&self) {
+        let pre = f32::from_bits(self.shared.pre_mute.load(Ordering::Relaxed));
+        if pre > 0.0 {
+            self.shared.pre_mute.store(0, Ordering::Relaxed);
+            self.set_volume(pre);
+        } else {
+            let cur = self
+                .state()
+                .and_then(|s| s.load_settings())
+                .map_or(1.0, |s| s.volume);
+            if cur > 0.0 {
+                self.shared.pre_mute.store(cur.to_bits(), Ordering::Relaxed);
+                self.set_volume(0.0);
+            }
+        }
+    }
+
+    /// Entering the main screen: sidebar, then the landing page.
+    pub fn enter_main(&self) {
+        self.load_library();
+        self.navigate(crate::pages::Route::Home);
     }
 
     // ---- external control (media keys, MPRIS, tray) ----

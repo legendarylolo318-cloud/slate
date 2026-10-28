@@ -153,7 +153,7 @@ All UI work is **todo**. Original line counts shown to indicate size.
 1. Workspace + `slate-core` extracted, tests passing, Tauri removed — **done** (367 unit + 16 integration tests pass)
 2. Slint window → login → play one track → player bar — **code complete, partly verified**: login screen renders on Skia/Vulkan; device-code + QR flow, track-ID play box, player bar (play/pause, seek, volume, cover) implemented but **not exercised against live TIDAL** (needs an interactive account approval)
 3. Queue + persistence, media controls, tray — **done on Linux**: 387 core tests pass; app starts, registers MPRIS + tray, saves `queue.json`/`modes.json` on clean exit. **Not verified with a real logged-in playback session** (next/prev/autoplay/restore against live TIDAL)
-4. Library + pages + lazy models + image cache — **in progress**: sidebar (Loved Tracks + all user playlists), paged lazy track list (`models::LazyTracks`, 2 tests), double-click-to-play, Play / Shuffle (whole list fetched in 6 parallel pages on demand). Still todo: albums, artists, mixes, folders, Album/Artist/Playlist-detail pages, cover thumbnails + bounded LRU image cache, loved videos tab, search/pagination UI, track context menu
+4./5./6. Library, pages, search, home, queue, lyrics, settings — **code complete, only partly verified live** (see list below). Earlier note: : sidebar (Loved Tracks + all user playlists), paged lazy track list (`models::LazyTracks`, 2 tests), double-click-to-play, Play / Shuffle (whole list fetched in 6 parallel pages on demand). Still todo: albums, artists, mixes, folders, Album/Artist/Playlist-detail pages, cover thumbnails + bounded LRU image cache, loved videos tab, search/pagination UI, track context menu
 5. Search + explore — todo
 6. Drawer + lyrics — todo
 7. Theme system — todo
@@ -166,3 +166,21 @@ All UI work is **todo**. Original line counts shown to indicate size.
 - [ ] delete `src/`, `package.json`, `pnpm-*`, `vite.config.*`, `tsconfig*`, `eslint*`, `index.html`, `miniplayer.html`, `sync-version.mjs`, `knip*`, `public/`
 - [ ] update `build-scripts/` (PKGBUILD, AppImage, etc.) and `data/*.desktop` for the new binary
 - [ ] README (fork attribution), CHANGELOG, HANDOFF
+
+## 9. Status after the "scalable UI / pages / settings" pass
+
+Implemented (builds, clippy-clean, unit-tested where logic is pure; **not all exercised against live TIDAL**):
+- Responsive shell: sidebar collapses <900px, player bar restacks <600px, columns hide on narrow lists; interface-size setting (applies at next start via `SLINT_SCALE_FACTOR`); keyboard shortcuts (Space, ←/→ seek, Ctrl+←/→ prev/next, M, S, R, Q, L, `/`).
+- Button/controls: shared `widgets.slint` (hover/pressed states, pointer cursors, draggable seek + live volume bar, mute toggle).
+- Navigation with back/forward history; Home, Albums/Artists/Mixes library tabs, Search (tracks/artists/albums/playlists), Album, Artist (popular + discography), Mix, Playlist, Loved pages; hover play on cards; right-click track menu (play next, queue, go to album/artist, copy link); queue panel (play/remove/clear); synced lyrics panel (click to seek; `slate-core::lyrics`, 6 tests).
+- Settings: General (theme dark/light, interface size, close-to-tray, logging, cache), Playback (quality, normalization, gapless, exclusive, bit-perfect, device), Scrobbling (ListenBrainz, Last.fm, Libre.fm, report plays, Discord), Network (proxy save/test), Integrations (MCP, OBS overlay), About.
+- Core `startup::run_startup` ports the original launch tasks (apply audio modes, MCP/overlay, scrobbler restore, queue draining) and `track-finished` finalisation.
+
+Still todo / known gaps:
+- Playlist **folders** (core commands exist, no UI), create/rename/delete playlists, add-to-playlist menu, favourite/unfavourite buttons.
+- Explore sub-pages, "view all" pages, feed, loved **videos**, profile page/editing, avatar.
+- Home-feed card detection is heuristic (`pages::card_from_value`); unrecognised item types are skipped.
+- Theme presets (15), custom colour picker and `theme.json` handling (step 7); light/dark toggle exists.
+- Full-screen player, miniplayer, music video (step 8); signal-path panel; shortcut overlay; update toast.
+- Gapless arming and scrobble `notify_track_started` payload (see §3).
+- Interface size needs a restart (Slint reads the override at startup).

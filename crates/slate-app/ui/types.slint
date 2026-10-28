@@ -15,3 +15,29 @@ export struct PlaylistEntry {
     subtitle: string,
     cover: image,
 }
+
+export struct CardItem {
+    kind: string,
+    id: string,
+    title: string,
+    subtitle: string,
+    cover: image,
+}
+
+export struct CardSection {
+    title: string,
+    /// true: wrapping grid; false: single horizontally scrolling row.
+    wrap: bool,
+    cards: [CardItem],
+}
+
+export struct QueueRow {
+    title: string,
+    artist: string,
+    manual: bool,
+}
+
+export struct LyricLine {
+    text: string,
+    active: bool,
+}

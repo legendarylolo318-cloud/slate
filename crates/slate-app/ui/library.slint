@@ -1,6 +1,7 @@
 import { Theme } from "theme.slint";
 import { TrackRow, PlaylistEntry } from "types.slint";
 import { ListView } from "std-widgets.slint";
+import { Button } from "widgets.slint";
 
 component NavItem inherits Rectangle {
     in property <string> label;
@@ -29,7 +30,7 @@ component NavItem inherits Rectangle {
             vertical-alignment: center;
         }
     }
-    ta := TouchArea { clicked => { root.clicked(); } }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
 }
 
 component CoverTile inherits Rectangle {
@@ -59,6 +60,7 @@ component CoverTile inherits Rectangle {
 
 component PlaylistItem inherits Rectangle {
     in property <PlaylistEntry> entry;
+    in property <bool> collapsed: false;
     in property <bool> active;
     callback clicked();
     height: 52px;
@@ -68,7 +70,7 @@ component PlaylistItem inherits Rectangle {
         padding: 6px;
         spacing: 10px;
         CoverTile { source: root.entry.cover; }
-        VerticalLayout {
+        if !root.collapsed: VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;
             Text {
@@ -85,36 +87,49 @@ component PlaylistItem inherits Rectangle {
             }
         }
     }
-    pt := TouchArea { clicked => { root.clicked(); } }
+    pt := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
 }
 
 export component Sidebar inherits Rectangle {
     in property <[PlaylistEntry]> playlists;
     in property <string> selected;
     in property <bool> playlists-loading;
-    callback open-loved();
+    in property <bool> collapsed: false;
+    callback go(string);
     callback open-playlist(string);
     callback logout();
 
     background: Theme.surface;
-    width: 240px;
+    width: root.collapsed ? 64px : 248px;
+    animate width { duration: 120ms; }
 
     VerticalLayout {
-        padding: 12px;
-        spacing: 4px;
+        padding: 10px;
+        spacing: 2px;
         Text {
-            text: "Slate";
+            text: root.collapsed ? "S" : "Slate";
             font-size: 22px;
             font-weight: 800;
             color: Theme.accent;
             height: 44px;
             vertical-alignment: center;
+            horizontal-alignment: root.collapsed ? TextHorizontalAlignment.center : TextHorizontalAlignment.left;
         }
-        Text {
-            text: "MY COLLECTION";
+        for item in [
+            { id: "home", glyph: "⌂", label: "Home" },
+            { id: "albums", glyph: "◉", label: "Albums" },
+            { id: "artists", glyph: "♫", label: "Artists" },
+            { id: "mixes", glyph: "✦", label: "Mixes" },
+        ]: NavItem {
+            label: root.collapsed ? item.glyph : item.glyph + "   " + item.label;
+            active: root.selected == item.id;
+            clicked => { root.go(item.id); }
+        }
+        if !root.collapsed: Text {
+            text: "PLAYLISTS";
             font-size: 11px;
             color: Theme.text-muted;
-            height: 24px;
+            height: 28px;
             vertical-alignment: bottom;
         }
         Rectangle {
@@ -125,37 +140,32 @@ export component Sidebar inherits Rectangle {
                 padding: 6px;
                 spacing: 10px;
                 CoverTile { loved: true; }
-                Text {
+                if !root.collapsed: Text {
                     text: "Loved Tracks";
                     color: Theme.text;
                     font-weight: root.selected == "loved" ? 700 : 500;
                     vertical-alignment: center;
                 }
             }
-            lt := TouchArea { clicked => { root.open-loved(); } }
+            lt := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.go("loved"); } }
         }
-        Text {
-            text: "PLAYLISTS";
-            font-size: 11px;
-            color: Theme.text-muted;
-            height: 28px;
-            vertical-alignment: bottom;
-        }
-        if root.playlists-loading: Text {
-            text: "Loading…";
-            color: Theme.text-muted;
-            height: 28px;
-        }
+        if root.playlists-loading && !root.collapsed: Text { text: "Loading…"; color: Theme.text-muted; height: 28px; }
         ListView {
             vertical-stretch: 1;
             for p in root.playlists: PlaylistItem {
                 entry: p;
+                collapsed: root.collapsed;
                 active: root.selected == p.uuid;
                 clicked => { root.open-playlist(p.uuid); }
             }
         }
         NavItem {
-            label: "Sign out";
+            label: root.collapsed ? "⚙" : "⚙   Settings";
+            active: root.selected == "settings";
+            clicked => { root.go("settings"); }
+        }
+        NavItem {
+            label: root.collapsed ? "⏻" : "⏻   Sign out";
             clicked => { root.logout(); }
         }
     }
@@ -165,21 +175,49 @@ component Row inherits Rectangle {
     in property <TrackRow> item;
     in property <int> index;
     in property <bool> playing;
+    in property <bool> show-album: true;
+    in property <bool> show-artist: true;
     callback play();
+    callback action(string);
     height: 48px;
     border-radius: 6px;
     background: ta.has-hover ? Theme.surface : transparent;
 
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        double-clicked => { root.play(); }
+    }
+    ContextMenuArea {
+        Menu {
+            MenuItem { title: "Play"; activated => { root.play(); } }
+            MenuItem { title: "Play next"; activated => { root.action("play-next"); } }
+            MenuItem { title: "Add to queue"; activated => { root.action("queue"); } }
+            MenuItem { title: "Go to album"; activated => { root.action("album"); } }
+            MenuItem { title: "Go to artist"; activated => { root.action("artist"); } }
+            MenuItem { title: "Copy TIDAL link"; activated => { root.action("copy-link"); } }
+        }
+    }
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 12px;
         spacing: 12px;
-        Text {
+        // index, or a play button on hover
+        Rectangle {
             width: 28px;
-            text: root.playing ? "▶" : (root.index + 1);
-            color: root.playing ? Theme.accent : Theme.text-muted;
-            vertical-alignment: center;
-            horizontal-alignment: right;
+            Text {
+                visible: !ta.has-hover;
+                text: root.playing ? "▶" : (root.index + 1);
+                color: root.playing ? Theme.accent : Theme.text-muted;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+            Text {
+                visible: ta.has-hover;
+                text: "▶";
+                color: Theme.text;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
         }
         HorizontalLayout {
             horizontal-stretch: 3;
@@ -202,7 +240,7 @@ component Row inherits Rectangle {
                 vertical-alignment: center;
             }
         }
-        Text {
+        if root.show-artist: Text {
             horizontal-stretch: 2;
             min-width: 80px;
             text: root.item.artist;
@@ -210,7 +248,7 @@ component Row inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
-        Text {
+        if root.show-album: Text {
             horizontal-stretch: 2;
             min-width: 80px;
             text: root.item.album;
@@ -226,9 +264,6 @@ component Row inherits Rectangle {
             horizontal-alignment: right;
         }
     }
-    ta := TouchArea {
-        double-clicked => { root.play(); }
-    }
 }
 
 export component TrackPage inherits Rectangle {
@@ -240,6 +275,9 @@ export component TrackPage inherits Rectangle {
     in property <bool> has-page;
     in property <image> cover;
     in property <bool> loved;
+    in property <string> kind-label: "PLAYLIST";
+    in property <bool> compact: false;
+    callback row-action(int, string);
     callback play-row(int);
     callback play-all();
     callback shuffle-all();
@@ -254,15 +292,15 @@ export component TrackPage inherits Rectangle {
     }
 
     if root.has-page: VerticalLayout {
-        padding: 24px;
+        padding: root.compact ? 12px : 24px;
         spacing: 12px;
         HorizontalLayout {
             spacing: 20px;
-            CoverTile { source: root.cover; loved: root.loved; side: 160px; radius: 8px; }
+            CoverTile { source: root.cover; loved: root.loved; side: root.compact ? 96px : 160px; radius: 8px; }
             VerticalLayout {
                 alignment: end;
                 spacing: 4px;
-                Text { text: "PLAYLIST"; font-size: 11px; color: Theme.text-muted; }
+                Text { text: root.kind-label; font-size: 11px; color: Theme.text-muted; }
                 Text { text: root.title; font-size: 36px; font-weight: 800; color: Theme.text; overflow: elide; }
                 Text { text: root.loading ? "Loading…" : root.subtitle; color: Theme.text-muted; }
             }
@@ -270,22 +308,8 @@ export component TrackPage inherits Rectangle {
         HorizontalLayout {
             spacing: 8px;
             alignment: start;
-            Rectangle {
-                width: 96px;
-                height: 36px;
-                border-radius: 18px;
-                background: Theme.accent;
-                Text { text: "▶  Play"; color: #000000; font-weight: 700; }
-                TouchArea { clicked => { root.play-all(); } }
-            }
-            Rectangle {
-                width: 96px;
-                height: 36px;
-                border-radius: 18px;
-                background: Theme.surface-raised;
-                Text { text: "🔀  Shuffle"; color: Theme.text; }
-                TouchArea { clicked => { root.shuffle-all(); } }
-            }
+            Button { label: "▶  Play"; primary: true; clicked => { root.play-all(); } }
+            Button { label: "🔀  Shuffle"; clicked => { root.shuffle-all(); } }
         }
         HorizontalLayout {
             padding-left: 12px;
@@ -294,8 +318,8 @@ export component TrackPage inherits Rectangle {
             height: 24px;
             Text { width: 28px; text: "#"; color: Theme.text-muted; horizontal-alignment: right; }
             Text { horizontal-stretch: 3; min-width: 120px; text: "TITLE"; color: Theme.text-muted; font-size: 11px; }
-            Text { horizontal-stretch: 2; min-width: 80px; text: "ARTIST"; color: Theme.text-muted; font-size: 11px; }
-            Text { horizontal-stretch: 2; min-width: 80px; text: "ALBUM"; color: Theme.text-muted; font-size: 11px; }
+            if root.width > 520px: Text { horizontal-stretch: 2; min-width: 80px; text: "ARTIST"; color: Theme.text-muted; font-size: 11px; }
+            if root.width > 760px: Text { horizontal-stretch: 2; min-width: 80px; text: "ALBUM"; color: Theme.text-muted; font-size: 11px; }
             Text { width: 52px; text: "TIME"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: right; }
         }
         ListView {
@@ -304,7 +328,10 @@ export component TrackPage inherits Rectangle {
                 item: r;
                 index: i;
                 playing: r.id != "" && r.id == root.playing-id;
+                show-artist: root.width > 520px;
+                show-album: root.width > 760px;
                 play => { root.play-row(i); }
+                action(a) => { root.row-action(i, a); }
             }
         }
     }

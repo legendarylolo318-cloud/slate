@@ -240,6 +240,9 @@ impl Controller {
 
     /// Track ended on its own (`explicit == false`) or the user pressed Next.
     pub async fn next(&self, explicit: bool) -> Outcome {
+        if !explicit {
+            crate::startup::on_track_finished(&self.state).await;
+        }
         let mut q = self.queue.lock().await;
         // Stop first so a stale `track-finished` from the old pipeline cannot
         // advance the queue a second time.

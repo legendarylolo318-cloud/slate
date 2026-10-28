@@ -1,49 +1,5 @@
 import { Theme } from "theme.slint";
-
-component Bar inherits Rectangle {
-    in property <float> fraction: 0;
-    in property <length> bar-height: 4px;
-    callback picked(float);
-    height: 16px;
-    background: transparent;
-    Rectangle {
-        y: (parent.height - root.bar-height) / 2;
-        height: root.bar-height;
-        border-radius: root.bar-height / 2;
-        background: Theme.surface-raised;
-        Rectangle {
-            x: 0;
-            width: parent.width * clamp(root.fraction, 0, 1);
-            border-radius: parent.border-radius;
-            background: Theme.accent;
-        }
-    }
-    TouchArea {
-        // Seek on release, not on every move, so a drag cannot flood the pipeline.
-        clicked => { root.picked(clamp(self.mouse-x / self.width, 0, 1)); }
-    }
-}
-
-component IconButton inherits Rectangle {
-    in property <string> glyph;
-    in property <bool> primary: false;
-    in property <bool> enabled: true;
-    callback clicked();
-    width: primary ? 44px : 36px;
-    height: self.width;
-    border-radius: self.width / 2;
-    background: primary ? Theme.text : transparent;
-    opacity: enabled ? 1.0 : 0.4;
-    Text {
-        text: root.glyph;
-        font-size: root.primary ? 18px : 16px;
-        color: root.primary ? Theme.background : Theme.text;
-    }
-    TouchArea {
-        enabled: root.enabled;
-        clicked => { root.clicked(); }
-    }
-}
+import { IconButton, Bar } from "widgets.slint";
 
 export component PlayerBar inherits Rectangle {
     in property <string> title;
@@ -57,8 +13,9 @@ export component PlayerBar inherits Rectangle {
     in property <float> volume: 1;
     in property <bool> shuffle;
     in property <int> repeat;
-    in property <int> queue-count;
-    in property <string> up-next;
+    in property <bool> compact: false;
+    in property <bool> queue-open: false;
+    in property <bool> lyrics-open: false;
     callback next();
     callback previous();
     callback toggle-shuffle();
@@ -66,102 +23,83 @@ export component PlayerBar inherits Rectangle {
     callback toggle-play();
     callback seek(float);
     callback set-volume(float);
+    callback toggle-mute();
+    callback toggle-queue();
+    callback toggle-lyrics();
 
-    height: 88px;
+    height: root.compact ? 112px : 88px;
     background: Theme.surface;
 
-    HorizontalLayout {
-        padding: 12px;
-        spacing: 16px;
-
-        // Track info
+    // Wide: info | transport | volume. Compact: info on top, transport below.
+    VerticalLayout {
+        padding: 10px;
+        spacing: 4px;
         HorizontalLayout {
-            horizontal-stretch: 1;
-            min-width: 180px;
-            spacing: 12px;
-            Rectangle {
-                width: 64px;
-                height: 64px;
-                border-radius: 6px;
-                background: Theme.surface-raised;
-                clip: true;
-                Image { source: root.cover; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
+            spacing: 16px;
+            // track info
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                spacing: 12px;
+                Rectangle {
+                    width: root.compact ? 40px : 56px;
+                    height: self.width;
+                    border-radius: 6px;
+                    background: Theme.surface-raised;
+                    clip: true;
+                    Image { source: root.cover; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text { text: root.title; color: Theme.text; font-weight: 600; overflow: elide; }
+                    Text { text: root.artist; color: Theme.text-muted; font-size: 12px; overflow: elide; }
+                }
             }
-            VerticalLayout {
+            // transport (wide layout keeps it centred here)
+            if !root.compact: VerticalLayout {
+                horizontal-stretch: 2;
                 alignment: center;
-                Text { text: root.title; color: Theme.text; font-weight: 600; overflow: elide; }
-                Text { text: root.artist; color: Theme.text-muted; overflow: elide; }
-                Text {
-                    text: root.queue-count > 0 ? "Next (" + root.queue-count + "): " + root.up-next : "";
-                    color: Theme.text-muted;
-                    font-size: 11px;
-                    overflow: elide;
+                spacing: 2px;
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 6px;
+                    IconButton { glyph: "🔀"; active: root.shuffle; opacity: root.shuffle ? 1.0 : 0.6; clicked => { root.toggle-shuffle(); } }
+                    IconButton { glyph: "⏮"; enabled: root.has-track; clicked => { root.previous(); } }
+                    IconButton { primary: true; enabled: root.has-track; glyph: root.playing ? "⏸" : "▶"; clicked => { root.toggle-play(); } }
+                    IconButton { glyph: "⏭"; enabled: root.has-track; clicked => { root.next(); } }
+                    IconButton { glyph: root.repeat == 2 ? "🔂" : "🔁"; active: root.repeat != 0; opacity: root.repeat == 0 ? 0.6 : 1.0; clicked => { root.cycle-repeat(); } }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: root.position-text; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; width: 40px; horizontal-alignment: right; }
+                    Bar { horizontal-stretch: 1; fraction: root.progress; picked(f) => { root.seek(f); } }
+                    Text { text: root.duration-text; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; width: 40px; }
+                }
+            }
+            // right cluster
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                alignment: end;
+                spacing: 4px;
+                if root.compact: IconButton { primary: true; enabled: root.has-track; glyph: root.playing ? "⏸" : "▶"; clicked => { root.toggle-play(); } }
+                IconButton { glyph: "♪"; active: root.lyrics-open; enabled: root.has-track; clicked => { root.toggle-lyrics(); } }
+                IconButton { glyph: "☰"; active: root.queue-open; clicked => { root.toggle-queue(); } }
+                if !root.compact: IconButton { glyph: root.volume == 0 ? "🔇" : "🔊"; clicked => { root.toggle-mute(); } }
+                if !root.compact: VerticalLayout {
+                    alignment: center;
+                    Bar { width: 96px; live: true; fraction: root.volume; changed(f) => { root.set-volume(f); } picked(f) => { root.set-volume(f); } }
                 }
             }
         }
-
-        // Transport + seek
-        VerticalLayout {
-            horizontal-stretch: 2;
-            alignment: center;
-            spacing: 2px;
-            HorizontalLayout {
-                alignment: center;
-                spacing: 8px;
-                IconButton {
-                    glyph: "🔀";
-                    opacity: root.shuffle ? 1.0 : 0.4;
-                    clicked => { root.toggle-shuffle(); }
-                }
-                IconButton {
-                    glyph: "⏮";
-                    enabled: root.has-track;
-                    clicked => { root.previous(); }
-                }
-                IconButton {
-                    primary: true;
-                    enabled: root.has-track;
-                    glyph: root.playing ? "⏸" : "▶";
-                    clicked => { root.toggle-play(); }
-                }
-                IconButton {
-                    glyph: "⏭";
-                    enabled: root.has-track;
-                    clicked => { root.next(); }
-                }
-                IconButton {
-                    glyph: root.repeat == 2 ? "🔂" : "🔁";
-                    opacity: root.repeat == 0 ? 0.4 : 1.0;
-                    clicked => { root.cycle-repeat(); }
-                }
-            }
-            HorizontalLayout {
-                spacing: 8px;
-                Text { text: root.position-text; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
-                Bar {
-                    horizontal-stretch: 1;
-                    fraction: root.progress;
-                    picked(f) => { root.seek(f); }
-                }
-                Text { text: root.duration-text; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
-            }
-        }
-
-        // Volume
-        HorizontalLayout {
-            horizontal-stretch: 1;
-            min-width: 140px;
-            alignment: end;
-            spacing: 8px;
-            VerticalLayout { alignment: center; Text { text: "🔊"; color: Theme.text-muted; } }
-            VerticalLayout {
-                alignment: center;
-                Bar {
-                    width: 100px;
-                    fraction: root.volume;
-                    picked(f) => { root.set-volume(f); }
-                }
-            }
+        if root.compact: HorizontalLayout {
+            spacing: 4px;
+            IconButton { glyph: "🔀"; side: 30px; active: root.shuffle; clicked => { root.toggle-shuffle(); } }
+            IconButton { glyph: "⏮"; side: 30px; enabled: root.has-track; clicked => { root.previous(); } }
+            IconButton { glyph: "⏭"; side: 30px; enabled: root.has-track; clicked => { root.next(); } }
+            IconButton { glyph: root.repeat == 2 ? "🔂" : "🔁"; side: 30px; active: root.repeat != 0; clicked => { root.cycle-repeat(); } }
+            Text { text: root.position-text; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
+            Bar { horizontal-stretch: 1; fraction: root.progress; picked(f) => { root.seek(f); } }
+            Text { text: root.duration-text; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
         }
     }
 }

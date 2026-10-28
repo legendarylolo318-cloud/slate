@@ -112,6 +112,7 @@ fn launch(forced: Option<&str>, index: usize) -> anyhow::Result<()> {
     window.show().context("showing main window")?;
     tracing::info!(renderer = %active, "UI renderer active");
 
+    Backend::apply_theme(&window, &crate::uiprefs::UiPrefs::load());
     let backend = Backend::start(runtime.handle().clone(), &window);
     wire(&window, &backend);
     let b = backend.clone();
@@ -125,36 +126,56 @@ fn launch(forced: Option<&str>, index: usize) -> anyhow::Result<()> {
 }
 
 fn wire(window: &AppWindow, backend: &Backend) {
+    macro_rules! bind {
+        ($on:ident, |$b:ident $(, $a:ident)*| $body:expr) => {{
+            let $b = backend.clone();
+            window.$on(move |$($a),*| $body);
+        }};
+    }
+    bind!(on_start_login, |b| b.start_login());
+    bind!(on_open_login_url, |b| b.open_login_url());
+    bind!(on_logout, |b| b.logout());
+    bind!(on_back, |b| b.back());
+    bind!(on_forward, |b| b.forward());
+    bind!(on_go, |b, key| b.go(&key));
+    bind!(on_open_playlist, |b, id| b.open_playlist(&id));
+    bind!(on_open_card, |b, kind, id| b.open_card(&kind, &id));
+    bind!(on_play_card, |b, kind, id| b.play_card(&kind, &id));
+    bind!(on_search, |b, q| b.search(&q));
+    bind!(on_play_row, |b, i| b
+        .play_row(usize::try_from(i).unwrap_or(0)));
+    bind!(on_row_action, |b, i, a| b
+        .row_action(usize::try_from(i).unwrap_or(0), &a));
+    bind!(on_play_all, |b| b.play_all(false));
+    bind!(on_shuffle_all, |b| b.play_all(true));
+    bind!(on_hero_play, |b| b.hero_play(false));
+    bind!(on_hero_shuffle, |b| b.hero_play(true));
+    bind!(on_queue_play, |b, i| b
+        .queue_play(usize::try_from(i).unwrap_or(0)));
+    bind!(on_queue_remove, |b, i| b
+        .queue_remove(usize::try_from(i).unwrap_or(0)));
+    bind!(on_queue_clear, |b| b.queue_clear());
+    bind!(on_lyric_seek, |b, i| b
+        .lyric_seek(usize::try_from(i).unwrap_or(0)));
+    bind!(on_toggle_play, |b| b.toggle_play());
+    bind!(on_next, |b| b.next());
+    bind!(on_previous, |b| b.previous());
+    bind!(on_toggle_shuffle, |b| b.toggle_shuffle());
+    bind!(on_cycle_repeat, |b| b.cycle_repeat());
+    bind!(on_toggle_mute, |b| b.toggle_mute());
+    bind!(on_seek, |b, f| b.seek(f));
+    bind!(on_seek_relative, |b, d| b.seek_relative(d));
+    bind!(on_set_volume, |b, v| b.set_volume(v));
+
+    let g = window.global::<SettingsState>();
     let b = backend.clone();
-    window.on_start_login(move || b.start_login());
+    g.on_changed_bool(move |k, v| b.setting_bool(&k, v));
     let b = backend.clone();
-    window.on_open_login_url(move || b.open_login_url());
+    g.on_changed_int(move |k, v| b.setting_int(&k, v));
     let b = backend.clone();
-    window.on_logout(move || b.logout());
+    g.on_changed_str(move |k, v| b.setting_str(&k, &v));
     let b = backend.clone();
-    window.on_open_loved(move || b.open_loved());
-    let b = backend.clone();
-    window.on_open_playlist(move |id| b.open_playlist(&id));
-    let b = backend.clone();
-    window.on_play_row(move |i| b.play_row(usize::try_from(i).unwrap_or(0)));
-    let b = backend.clone();
-    window.on_play_all(move || b.play_all(false));
-    let b = backend.clone();
-    window.on_shuffle_all(move || b.play_all(true));
-    let b = backend.clone();
-    window.on_toggle_play(move || b.toggle_play());
-    let b = backend.clone();
-    window.on_next(move || b.next());
-    let b = backend.clone();
-    window.on_previous(move || b.previous());
-    let b = backend.clone();
-    window.on_toggle_shuffle(move || b.toggle_shuffle());
-    let b = backend.clone();
-    window.on_cycle_repeat(move || b.cycle_repeat());
-    let b = backend.clone();
-    window.on_seek(move |f| b.seek(f));
-    let b = backend.clone();
-    window.on_set_volume(move |v| b.set_volume(v));
+    g.on_action(move |a| b.setting_action(&a));
 }
 
 /// Slint fixes its platform once per process, so trying another renderer needs

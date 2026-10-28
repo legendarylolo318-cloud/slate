@@ -8,14 +8,30 @@ mod images;
 mod imgcache;
 mod library;
 mod models;
+mod pages;
+mod panels;
 mod platform;
+mod settings;
+mod uiprefs;
 
 fn main() -> anyhow::Result<()> {
     // Environment surgery must happen before any thread exists: `set_var` and
     // `remove_var` are unsound once other threads may read the environment.
     #[cfg(target_os = "linux")]
     scrub_environment();
+    apply_ui_scale();
     bootstrap::run()
+}
+
+/// The saved interface size reaches Slint through its scale-factor override,
+/// which is read at startup. A value already in the environment wins.
+fn apply_ui_scale() {
+    if std::env::var_os("SLINT_SCALE_FACTOR").is_some() {
+        return;
+    }
+    if let Some(scale) = uiprefs::UiPrefs::load().scale_factor() {
+        std::env::set_var("SLINT_SCALE_FACTOR", scale.to_string());
+    }
 }
 
 #[cfg(target_os = "linux")]

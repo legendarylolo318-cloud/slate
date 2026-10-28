@@ -1,0 +1,301 @@
+import { Theme } from "theme.slint";
+import { Toggle, Button, Segmented, TextField } from "widgets.slint";
+import { ScrollView } from "std-widgets.slint";
+
+/// Everything the settings page shows. Rust fills it from the core and handles
+/// the callbacks; the page itself holds no logic.
+export global SettingsState {
+    in-out property <int> tab: 0;
+    in-out property <string> status;
+
+    // General
+    in-out property <bool> minimize-to-tray;
+    in-out property <int> ui-scale-index;
+    in-out property <bool> logging;
+    // Playback
+    in-out property <bool> normalization;
+    in-out property <bool> gapless;
+    in-out property <bool> gapless-supported: true;
+    in-out property <int> quality-index;
+    in-out property <bool> exclusive;
+    in-out property <bool> bit-perfect;
+    in-out property <bool> show-alsa-options: true;
+    in-out property <[string]> devices;
+    in-out property <int> device-index;
+    // Scrobbling
+    in-out property <bool> report-plays;
+    in-out property <bool> lb-connected;
+    in-out property <string> lb-user;
+    in-out property <string> lb-token;
+    in-out property <bool> lastfm-connected;
+    in-out property <string> lastfm-user;
+    in-out property <bool> librefm-connected;
+    in-out property <string> librefm-user;
+    in-out property <bool> audioscrobbler-pending;
+    in-out property <bool> discord-rpc;
+    in-out property <string> discord-text;
+    // Network
+    in-out property <bool> proxy-enabled;
+    in-out property <int> proxy-type-index;
+    in-out property <string> proxy-host;
+    in-out property <string> proxy-port;
+    in-out property <string> proxy-user;
+    in-out property <string> proxy-pass;
+    // Integrations
+    in-out property <bool> mcp-enabled;
+    in-out property <string> mcp-url;
+    in-out property <bool> overlay-enabled;
+    in-out property <string> overlay-url;
+    // About
+    in-out property <string> version;
+
+    callback changed-bool(string, bool);
+    callback changed-int(string, int);
+    callback changed-str(string, string);
+    callback action(string);
+}
+
+component Row inherits Rectangle {
+    in property <string> label;
+    in property <string> hint;
+    min-height: 52px;
+    HorizontalLayout {
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 16px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            Text { text: root.label; color: Theme.text; wrap: word-wrap; }
+            if root.hint != "": Text { text: root.hint; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; }
+        }
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
+    }
+    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.surface-raised; }
+}
+
+export component SettingsPage inherits Rectangle {
+    in property <bool> compact: false;
+    background: Theme.background;
+    property <[string]> tabs: ["General", "Playback", "Scrobbling", "Network", "Integrations", "About"];
+
+    VerticalLayout {
+        padding: root.compact ? 12px : 24px;
+        spacing: 12px;
+        Text { text: "Settings"; font-size: 30px; font-weight: 800; color: Theme.text; }
+        ScrollView {
+            height: 38px;
+            content-height: 38px;
+            Segmented {
+                options: root.tabs;
+                index <=> SettingsState.tab;
+            }
+        }
+        if SettingsState.status != "": Rectangle {
+            height: 30px;
+            border-radius: 6px;
+            background: Theme.surface-raised;
+            Text { text: SettingsState.status; color: Theme.text; overflow: elide; }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                max-width: 760px;
+                alignment: start;
+
+                if SettingsState.tab == 0: VerticalLayout {
+                    Row {
+                        label: "Dark theme";
+                        hint: "Switch between the dark and light palette.";
+                        Toggle { checked: Theme.dark; toggled(v) => { Theme.dark = v; SettingsState.changed-bool("dark", v); } }
+                    }
+                    Row {
+                        label: "Interface size";
+                        hint: "Applies the next time Slate starts.";
+                        Segmented {
+                            options: ["Auto", "100%", "125%", "150%", "175%", "200%"];
+                            index: SettingsState.ui-scale-index;
+                            picked(i) => { SettingsState.ui-scale-index = i; SettingsState.changed-int("ui-scale", i); }
+                        }
+                    }
+                    Row {
+                        label: "Close to tray";
+                        hint: "Keep playing in the system tray when the window is closed.";
+                        Toggle { checked: SettingsState.minimize-to-tray; toggled(v) => { SettingsState.minimize-to-tray = v; SettingsState.changed-bool("minimize-to-tray", v); } }
+                    }
+                    Row {
+                        label: "Write log files";
+                        hint: "Rotating logs in the Slate config folder.";
+                        Toggle { checked: SettingsState.logging; toggled(v) => { SettingsState.logging = v; SettingsState.changed-bool("logging", v); } }
+                    }
+                    Row {
+                        label: "Log folder";
+                        Button { label: "Open"; clicked => { SettingsState.action("open-logs"); } }
+                    }
+                    Row {
+                        label: "Image cache";
+                        hint: "Cover art and metadata kept on disk.";
+                        Button { label: "Clear"; clicked => { SettingsState.action("clear-cache"); } }
+                    }
+                }
+
+                if SettingsState.tab == 1: VerticalLayout {
+                    Row {
+                        label: "Maximum quality";
+                        hint: "Slate falls back automatically when a track is not available at this level.";
+                        Segmented {
+                            options: ["Max", "Lossless", "High"];
+                            index: SettingsState.quality-index;
+                            picked(i) => { SettingsState.quality-index = i; SettingsState.changed-int("quality", i); }
+                        }
+                    }
+                    Row {
+                        label: "Volume normalization";
+                        hint: "Level tracks using ReplayGain.";
+                        Toggle { checked: SettingsState.normalization; toggled(v) => { SettingsState.normalization = v; SettingsState.changed-bool("normalization", v); } }
+                    }
+                    Row {
+                        label: "Gapless playback";
+                        hint: SettingsState.gapless-supported ? "Seamless transitions between tracks." : "Needs GStreamer 1.24 or newer.";
+                        Toggle { enabled: SettingsState.gapless-supported; checked: SettingsState.gapless; toggled(v) => { SettingsState.gapless = v; SettingsState.changed-bool("gapless", v); } }
+                    }
+                    if SettingsState.show-alsa-options: Row {
+                        label: "Exclusive mode";
+                        hint: "Take over the audio device (ALSA).";
+                        Toggle { checked: SettingsState.exclusive; toggled(v) => { SettingsState.exclusive = v; SettingsState.changed-bool("exclusive", v); } }
+                    }
+                    if SettingsState.show-alsa-options: Row {
+                        label: "Bit-perfect output";
+                        hint: "Send the stream to the DAC unmodified. Disables volume control and normalization.";
+                        Toggle { checked: SettingsState.bit-perfect; toggled(v) => { SettingsState.bit-perfect = v; SettingsState.changed-bool("bit-perfect", v); } }
+                    }
+                    if SettingsState.show-alsa-options && SettingsState.devices.length > 0: Row {
+                        label: "Exclusive device";
+                        Segmented {
+                            options: SettingsState.devices;
+                            index: SettingsState.device-index;
+                            picked(i) => { SettingsState.device-index = i; SettingsState.changed-int("device", i); }
+                        }
+                    }
+                }
+
+                if SettingsState.tab == 2: VerticalLayout {
+                    Row {
+                        label: "Report plays to TIDAL";
+                        hint: "Feeds Recently Played and recommendations.";
+                        Toggle { checked: SettingsState.report-plays; toggled(v) => { SettingsState.report-plays = v; SettingsState.changed-bool("report-plays", v); } }
+                    }
+                    Row {
+                        label: "ListenBrainz";
+                        hint: SettingsState.lb-connected ? "Connected as " + SettingsState.lb-user : "Paste your user token from listenbrainz.org/settings.";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            if !SettingsState.lb-connected: TextField {
+                                text <=> SettingsState.lb-token;
+                                placeholder: "User token";
+                                secret: true;
+                                field-width: 200px;
+                            }
+                            Button {
+                                label: SettingsState.lb-connected ? "Disconnect" : "Connect";
+                                danger: SettingsState.lb-connected;
+                                clicked => { SettingsState.action(SettingsState.lb-connected ? "lb-disconnect" : "lb-connect"); }
+                            }
+                        }
+                    }
+                    Row {
+                        label: "Last.fm";
+                        hint: SettingsState.lastfm-connected ? "Connected as " + SettingsState.lastfm-user : "Approve Slate in your browser, then press Finish.";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            if !SettingsState.lastfm-connected && SettingsState.audioscrobbler-pending: Button { label: "Finish"; primary: true; clicked => { SettingsState.action("lastfm-finish"); } }
+                            Button {
+                                label: SettingsState.lastfm-connected ? "Disconnect" : "Connect";
+                                danger: SettingsState.lastfm-connected;
+                                clicked => { SettingsState.action(SettingsState.lastfm-connected ? "lastfm-disconnect" : "lastfm-connect"); }
+                            }
+                        }
+                    }
+                    Row {
+                        label: "Libre.fm";
+                        hint: SettingsState.librefm-connected ? "Connected as " + SettingsState.librefm-user : "Approve Slate in your browser, then press Finish.";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            if !SettingsState.librefm-connected && SettingsState.audioscrobbler-pending: Button { label: "Finish"; primary: true; clicked => { SettingsState.action("librefm-finish"); } }
+                            Button {
+                                label: SettingsState.librefm-connected ? "Disconnect" : "Connect";
+                                danger: SettingsState.librefm-connected;
+                                clicked => { SettingsState.action(SettingsState.librefm-connected ? "librefm-disconnect" : "librefm-connect"); }
+                            }
+                        }
+                    }
+                    Row {
+                        label: "Discord Rich Presence";
+                        Toggle { checked: SettingsState.discord-rpc; toggled(v) => { SettingsState.discord-rpc = v; SettingsState.changed-bool("discord-rpc", v); } }
+                    }
+                    Row {
+                        label: "Discord status text";
+                        hint: "Shown under the track name. Leave empty for the default.";
+                        TextField {
+                            text <=> SettingsState.discord-text;
+                            placeholder: "Listening on Slate";
+                            accepted(t) => { SettingsState.changed-str("discord-text", t); }
+                        }
+                    }
+                }
+
+                if SettingsState.tab == 3: VerticalLayout {
+                    Row {
+                        label: "Use a proxy";
+                        hint: "All Slate traffic goes through it, or nothing is sent.";
+                        Toggle { checked: SettingsState.proxy-enabled; toggled(v) => { SettingsState.proxy-enabled = v; } }
+                    }
+                    Row { label: "Type"; Segmented { options: ["HTTP", "SOCKS5"]; index <=> SettingsState.proxy-type-index; } }
+                    Row { label: "Host"; TextField { text <=> SettingsState.proxy-host; placeholder: "proxy.example.com"; } }
+                    Row { label: "Port"; TextField { text <=> SettingsState.proxy-port; placeholder: "8080"; field-width: 100px; } }
+                    Row { label: "Username"; TextField { text <=> SettingsState.proxy-user; placeholder: "optional"; } }
+                    Row { label: "Password"; TextField { text <=> SettingsState.proxy-pass; placeholder: "optional"; secret: true; } }
+                    HorizontalLayout {
+                        padding-top: 12px;
+                        spacing: 8px;
+                        Button { label: "Test"; clicked => { SettingsState.action("proxy-test"); } }
+                        Button { label: "Save"; primary: true; clicked => { SettingsState.action("proxy-save"); } }
+                    }
+                }
+
+                if SettingsState.tab == 4: VerticalLayout {
+                    Row {
+                        label: "MCP server";
+                        hint: SettingsState.mcp-enabled ? SettingsState.mcp-url : "Lets AI assistants control playback. Local only (127.0.0.1:5577).";
+                        Toggle { checked: SettingsState.mcp-enabled; toggled(v) => { SettingsState.mcp-enabled = v; SettingsState.changed-bool("mcp", v); } }
+                    }
+                    if SettingsState.mcp-enabled: Row {
+                        label: "MCP token";
+                        hint: "Generates a new URL; old clients stop working.";
+                        Button { label: "Regenerate"; clicked => { SettingsState.action("mcp-regenerate"); } }
+                    }
+                    Row {
+                        label: "OBS overlay";
+                        hint: SettingsState.overlay-enabled ? SettingsState.overlay-url : "Now-playing browser source for streaming. Local only (127.0.0.1:5578).";
+                        Toggle { checked: SettingsState.overlay-enabled; toggled(v) => { SettingsState.overlay-enabled = v; SettingsState.changed-bool("overlay", v); } }
+                    }
+                }
+
+                if SettingsState.tab == 5: VerticalLayout {
+                    spacing: 8px;
+                    padding-top: 12px;
+                    Text { text: "Slate " + SettingsState.version; font-size: 22px; font-weight: 700; color: Theme.text; }
+                    Text { text: "A native, Rust + Slint TIDAL client."; color: Theme.text-muted; }
+                    Text {
+                        wrap: word-wrap;
+                        text: "Slate is a fork and port of SONE by lullabyX (github.com/lullabyX/sone). All credit for the original design and backend goes to lullabyX and SONE's contributors. Licensed GPL-3.0-only.";
+                        color: Theme.text-muted;
+                    }
+                }
+            }
+        }
+    }
+}
