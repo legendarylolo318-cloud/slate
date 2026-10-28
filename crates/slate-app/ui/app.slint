@@ -251,12 +251,12 @@ export component AppWindow inherits Window {
                     if root.notice != "": Rectangle {
                         height: 28px;
                         background: Theme.accent;
-                        Text { text: root.notice; color: Theme.on-accent; overflow: elide; horizontal-alignment: center; }
+                        Text { text: root.notice; color: Theme.on-accent; overflow: elide; horizontal-alignment: center; vertical-alignment: center; }
                     }
                     if root.error != "": Rectangle {
                         height: 32px;
                         background: Theme.danger;
-                        Text { text: root.error; color: Theme.on-accent; overflow: elide; }
+                        Text { text: root.error; color: Theme.on-accent; overflow: elide; horizontal-alignment: center; vertical-alignment: center; }
                     }
                     if root.view == "tracks": TrackPage {
                         vertical-stretch: 1;

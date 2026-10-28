@@ -48,7 +48,7 @@ export component ProfilePage inherits Rectangle {
                 height: 30px;
                 border-radius: 6px;
                 background: Theme.surface-raised;
-                Text { text: ProfileState.status; color: Theme.text; overflow: elide; }
+                Text { text: ProfileState.status; color: Theme.text; overflow: elide; horizontal-alignment: center; vertical-alignment: center; }
             }
             if !ProfileState.loading && ProfileState.available: VerticalLayout {
                 spacing: 12px;
