@@ -31,6 +31,7 @@ struct Snapshot {
     discord_rpc: bool,
     discord_text: String,
     proxy: ProxySettings,
+    auth_max: bool,
     mcp: (bool, String),
     overlay: (bool, String),
 }
@@ -48,6 +49,9 @@ async fn snapshot(state: &Arc<AppState>) -> Snapshot {
         discord_rpc: utility::get_discord_rpc(state),
         discord_text: utility::get_discord_status_text(state),
         proxy: utility::get_proxy_settings(state),
+        auth_max: state
+            .load_settings()
+            .is_some_and(|s| s.auth_method == slate_core::AuthMethod::Pkce),
         ..Snapshot::default()
     };
     let quality = utility::get_max_quality(state);
@@ -112,6 +116,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
             _ => {}
         }
     }
+    g.set_auth_max(s.auth_max);
     g.set_discord_rpc(s.discord_rpc);
     g.set_discord_text(s.discord_text.into());
     g.set_proxy_enabled(s.proxy.enabled);
@@ -253,6 +258,8 @@ impl Backend {
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
             match name.as_str() {
+                "pkce-start" => this.start_pkce(),
+                "pkce-finish" => this.finish_pkce().await,
                 "open-logs" => {
                     if let Err(e) = utility::open_log_folder() {
                         this.settings_status(e);

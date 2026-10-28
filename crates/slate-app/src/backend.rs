@@ -106,6 +106,7 @@ pub struct Backend {
     pub(crate) video: crate::video::SharedVideo,
     pub(crate) theme_watcher: Arc<Mutex<Option<slate_core::theme_config::ThemeWatcher>>>,
     pub(crate) profile: Arc<crate::profile::LoadedProfile>,
+    pub(crate) pkce: Arc<crate::pkce::PendingPkce>,
     pub(crate) pending_link: Arc<Mutex<Option<String>>>,
     pub(crate) in_main: Arc<AtomicBool>,
 }
@@ -138,6 +139,7 @@ impl Backend {
             theme: Arc::new(Mutex::new(initial_theme)),
             video: Arc::new(Mutex::new(None)),
             profile: Arc::new(Mutex::new(None)),
+            pkce: Arc::new(Mutex::new(None)),
             pending_link: Arc::new(Mutex::new(None)),
             in_main: Arc::new(AtomicBool::new(false)),
             theme_watcher: Arc::new(Mutex::new(None)),

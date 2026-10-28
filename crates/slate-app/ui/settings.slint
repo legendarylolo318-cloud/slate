@@ -17,6 +17,11 @@ export global SettingsState {
     in-out property <string> accent-hex;
     in-out property <string> bg-hex;
     in-out property <int> picking: 0;
+    // Browser (PKCE) sign-in: the only login TIDAL serves lossless / Max quality to.
+    in-out property <bool> auth-max;
+    in-out property <bool> pkce-pending;
+    in-out property <string> pkce-input;
+    in-out property <string> pkce-status;
     // General
     in-out property <bool> minimize-to-tray;
     in-out property <int> ui-scale-index;
@@ -120,6 +125,21 @@ export component SettingsPage inherits Rectangle {
                 alignment: start;
 
                 if SettingsState.tab == 0: VerticalLayout {
+                    Row {
+                        label: "Streaming quality access";
+                        hint: SettingsState.auth-max ? "Signed in with the browser login: Lossless and Max are available." : "This sign-in is limited to 320 kbps AAC. Sign in with your browser to unlock Lossless and Max.";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            if SettingsState.pkce-pending: TextField {
+                                text <=> SettingsState.pkce-input;
+                                placeholder: "Paste the page address";
+                                field-width: 200px;
+                            }
+                            if SettingsState.pkce-pending: Button { label: "Finish"; primary: true; clicked => { SettingsState.action("pkce-finish"); } }
+                            if !SettingsState.auth-max && !SettingsState.pkce-pending: Button { label: "Sign in with browser"; primary: true; clicked => { SettingsState.action("pkce-start"); } }
+                        }
+                    }
+                    if SettingsState.pkce-status != "": Text { text: SettingsState.pkce-status; color: Theme.text-muted; wrap: word-wrap; font-size: 12px; }
                     Row {
                         label: "Interface size";
                         hint: "Applies the next time Slate starts.";

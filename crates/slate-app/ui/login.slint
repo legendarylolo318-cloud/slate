@@ -1,4 +1,6 @@
 import { Theme } from "theme.slint";
+import { Button, TextField } from "widgets.slint";
+import { SettingsState } from "settings.slint";
 
 export component LoginScreen inherits Rectangle {
     in property <string> user-code;
@@ -77,6 +79,37 @@ export component LoginScreen inherits Rectangle {
                 enabled: !root.busy;
                 mouse-cursor: MouseCursor.pointer;
                 clicked => { root.start(); }
+            }
+        }
+
+        // Browser sign-in: the only way to get Lossless / Max quality.
+        VerticalLayout {
+            spacing: 8px;
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                if !SettingsState.pkce-pending: Button {
+                    label: "Sign in with browser (Lossless / Max)";
+                    clicked => { SettingsState.action("pkce-start"); }
+                }
+            }
+            if SettingsState.pkce-pending: HorizontalLayout {
+                alignment: center;
+                spacing: 8px;
+                TextField {
+                    text <=> SettingsState.pkce-input;
+                    placeholder: "Paste the page address";
+                    field-width: 260px;
+                    accepted(t) => { SettingsState.action("pkce-finish"); }
+                }
+                Button { label: "Finish"; primary: true; clicked => { SettingsState.action("pkce-finish"); } }
+            }
+            if SettingsState.pkce-status != "": Text {
+                text: SettingsState.pkce-status;
+                color: Theme.text-muted;
+                wrap: word-wrap;
+                font-size: 12px;
+                horizontal-alignment: center;
             }
         }
 

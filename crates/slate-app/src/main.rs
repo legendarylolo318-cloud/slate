@@ -19,6 +19,7 @@ mod mini;
 mod models;
 mod pages;
 mod panels;
+mod pkce;
 mod platform;
 mod profile;
 mod quality;

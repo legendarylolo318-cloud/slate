@@ -102,9 +102,9 @@ const PKCE_REDIRECT_URI: &str = "https://tidal.com/android/login/auth";
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PkceAuthParams {
-    authorize_url: String,
-    code_verifier: String,
-    client_unique_key: String,
+    pub authorize_url: String,
+    pub code_verifier: String,
+    pub client_unique_key: String,
 }
 
 pub fn greet(name: &str) -> String {
