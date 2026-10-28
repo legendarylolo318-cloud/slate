@@ -59,11 +59,21 @@ pub fn format_time(secs: f32) -> String {
     }
 }
 
-/// TIDAL image UUID → CDN URL.
-pub fn tidal_image_url(uuid: &str, size: u32) -> String {
+/// TIDAL image id → CDN URL. TIDAL only serves 160/320/640/1280 squares, so the
+/// requested size snaps up to the next one; full URLs pass through untouched.
+pub fn tidal_image_url(id: &str, size: u32) -> String {
+    if id.starts_with("http") {
+        return id.to_string();
+    }
+    let size = match size {
+        0..=160 => 160,
+        161..=320 => 320,
+        321..=640 => 640,
+        _ => 1280,
+    };
     format!(
         "https://resources.tidal.com/images/{}/{size}x{size}.jpg",
-        uuid.replace('-', "/")
+        id.replace('-', "/")
     )
 }
 
@@ -78,6 +88,14 @@ mod tests {
         assert_eq!(format_time(3725.0), "1:02:05");
         assert_eq!(format_time(f32::NAN), "0:00");
         assert_eq!(format_time(-3.0), "0:00");
+    }
+
+    #[test]
+    fn snaps_sizes_and_passes_urls_through() {
+        assert!(tidal_image_url("a-b", 80).ends_with("/160x160.jpg"));
+        assert!(tidal_image_url("a-b", 321).ends_with("/640x640.jpg"));
+        assert!(tidal_image_url("a-b", 5000).ends_with("/1280x1280.jpg"));
+        assert_eq!(tidal_image_url("https://x/y.jpg", 320), "https://x/y.jpg");
     }
 
     #[test]

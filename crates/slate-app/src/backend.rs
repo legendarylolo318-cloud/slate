@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use slate_core::commands::{auth, playback, utility};
+use slate_core::commands::{auth, playback};
 use slate_core::controller::{Controller, Outcome, PlayFailure};
 use slate_core::queue::{Repeat, Track};
 use slate_core::{AppHandle, AppState, EventSink, Events};
@@ -81,6 +81,7 @@ pub struct Backend {
     pub(crate) ui: Weak<AppWindow>,
     pub(crate) shared: Arc<Shared>,
     pub(crate) lib: Arc<crate::library::LibState>,
+    pub(crate) images: Arc<crate::imgcache::ImageCache>,
 }
 
 impl Backend {
@@ -98,6 +99,7 @@ impl Backend {
             ui: window.as_weak(),
             shared,
             lib: Arc::new(crate::library::LibState::default()),
+            images: Arc::new(crate::imgcache::ImageCache::default()),
         };
         let finished = backend.clone();
         let _ = backend
@@ -474,20 +476,8 @@ impl Backend {
     }
 
     async fn load_cover(&self, state: Arc<AppState>, url: String) {
-        let bytes = match utility::get_image_bytes(&state, url).await {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::debug!("cover fetch failed: {}", e.log_safe());
-                return;
-            }
-        };
-        // Decode off the async workers and off the UI thread.
-        let buf = tokio::task::spawn_blocking(move || images::decode(&bytes))
-            .await
-            .ok()
-            .flatten();
-        if let Some(buf) = buf {
-            self.ui(move |w| w.set_track_cover(Image::from_rgba8(buf)));
+        if let Some(px) = self.images.get(&state, &url).await {
+            self.ui(move |w| w.set_track_cover(Image::from_rgba8(px)));
         }
     }
 

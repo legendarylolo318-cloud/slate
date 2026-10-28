@@ -43,6 +43,8 @@ export component AppWindow inherits Window {
     in property <string> selected-source;
     in property <bool> has-page;
     in property <string> page-title;
+    in property <image> page-cover;
+    in property <bool> page-loved;
     in property <string> page-subtitle;
     in property <bool> page-loading;
     in property <[TrackRow]> tracks;
@@ -105,6 +107,8 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                     has-page: root.has-page;
                     title: root.page-title;
+                    cover: root.page-cover;
+                    loved: root.page-loved;
                     subtitle: root.page-subtitle;
                     loading: root.page-loading;
                     tracks: root.tracks;

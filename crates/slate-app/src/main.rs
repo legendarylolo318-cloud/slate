@@ -5,6 +5,7 @@ mod backend;
 mod bootstrap;
 mod control;
 mod images;
+mod imgcache;
 mod library;
 mod models;
 mod platform;

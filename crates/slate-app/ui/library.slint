@@ -32,6 +32,62 @@ component NavItem inherits Rectangle {
     ta := TouchArea { clicked => { root.clicked(); } }
 }
 
+component CoverTile inherits Rectangle {
+    in property <image> source;
+    in property <bool> loved;
+    in property <length> side: 40px;
+    in property <length> radius: 4px;
+    width: root.side;
+    height: root.side;
+    border-radius: root.radius;
+    clip: true;
+    background: root.loved ? Theme.accent : Theme.surface-raised;
+    if root.loved: Text {
+        text: "♥";
+        color: #000000;
+        font-size: root.side * 0.5;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if !root.loved: Image {
+        source: root.source;
+        width: parent.width;
+        height: parent.height;
+        image-fit: ImageFit.cover;
+    }
+}
+
+component PlaylistItem inherits Rectangle {
+    in property <PlaylistEntry> entry;
+    in property <bool> active;
+    callback clicked();
+    height: 52px;
+    border-radius: 6px;
+    background: root.active ? Theme.surface-raised : (pt.has-hover ? Theme.background : transparent);
+    HorizontalLayout {
+        padding: 6px;
+        spacing: 10px;
+        CoverTile { source: root.entry.cover; }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.entry.title;
+                color: root.active ? Theme.text : Theme.text;
+                font-weight: root.active ? 700 : 500;
+                overflow: elide;
+            }
+            Text {
+                text: root.entry.subtitle;
+                color: Theme.text-muted;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+    }
+    pt := TouchArea { clicked => { root.clicked(); } }
+}
+
 export component Sidebar inherits Rectangle {
     in property <[PlaylistEntry]> playlists;
     in property <string> selected;
@@ -61,10 +117,22 @@ export component Sidebar inherits Rectangle {
             height: 24px;
             vertical-alignment: bottom;
         }
-        NavItem {
-            label: "Loved Tracks";
-            active: root.selected == "loved";
-            clicked => { root.open-loved(); }
+        Rectangle {
+            height: 52px;
+            border-radius: 6px;
+            background: root.selected == "loved" ? Theme.surface-raised : (lt.has-hover ? Theme.background : transparent);
+            HorizontalLayout {
+                padding: 6px;
+                spacing: 10px;
+                CoverTile { loved: true; }
+                Text {
+                    text: "Loved Tracks";
+                    color: Theme.text;
+                    font-weight: root.selected == "loved" ? 700 : 500;
+                    vertical-alignment: center;
+                }
+            }
+            lt := TouchArea { clicked => { root.open-loved(); } }
         }
         Text {
             text: "PLAYLISTS";
@@ -80,9 +148,8 @@ export component Sidebar inherits Rectangle {
         }
         ListView {
             vertical-stretch: 1;
-            for p in root.playlists: NavItem {
-                label: p.title;
-                hint: p.subtitle;
+            for p in root.playlists: PlaylistItem {
+                entry: p;
                 active: root.selected == p.uuid;
                 clicked => { root.open-playlist(p.uuid); }
             }
@@ -99,7 +166,7 @@ component Row inherits Rectangle {
     in property <int> index;
     in property <bool> playing;
     callback play();
-    height: 44px;
+    height: 48px;
     border-radius: 6px;
     background: ta.has-hover ? Theme.surface : transparent;
 
@@ -117,7 +184,11 @@ component Row inherits Rectangle {
         HorizontalLayout {
             horizontal-stretch: 3;
             min-width: 120px;
-            spacing: 6px;
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                CoverTile { source: root.item.cover; side: 34px; radius: 3px; }
+            }
             Text {
                 text: root.item.title;
                 color: root.playing ? Theme.accent : Theme.text;
@@ -167,6 +238,8 @@ export component TrackPage inherits Rectangle {
     in property <[TrackRow]> tracks;
     in property <string> playing-id;
     in property <bool> has-page;
+    in property <image> cover;
+    in property <bool> loved;
     callback play-row(int);
     callback play-all();
     callback shuffle-all();
@@ -183,10 +256,16 @@ export component TrackPage inherits Rectangle {
     if root.has-page: VerticalLayout {
         padding: 24px;
         spacing: 12px;
-        VerticalLayout {
-            spacing: 4px;
-            Text { text: root.title; font-size: 30px; font-weight: 800; color: Theme.text; overflow: elide; }
-            Text { text: root.loading ? "Loading…" : root.subtitle; color: Theme.text-muted; }
+        HorizontalLayout {
+            spacing: 20px;
+            CoverTile { source: root.cover; loved: root.loved; side: 160px; radius: 8px; }
+            VerticalLayout {
+                alignment: end;
+                spacing: 4px;
+                Text { text: "PLAYLIST"; font-size: 11px; color: Theme.text-muted; }
+                Text { text: root.title; font-size: 36px; font-weight: 800; color: Theme.text; overflow: elide; }
+                Text { text: root.loading ? "Loading…" : root.subtitle; color: Theme.text-muted; }
+            }
         }
         HorizontalLayout {
             spacing: 8px;

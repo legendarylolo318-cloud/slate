@@ -7,14 +7,26 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
-use slint::{Model, ModelNotify, ModelTracker};
+use slint::{Image, Model, ModelNotify, ModelTracker};
 
 use crate::bootstrap::{AppWindow, TrackRow};
 
 /// Rows per fetch. Matches what TIDAL accepts for playlist/favourite pages.
 pub const PAGE_SIZE: usize = 100;
 
+/// A row's text, `Send` so it can be built off the UI thread.
+#[derive(Clone, Debug, Default)]
+pub struct RowData {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub duration: String,
+    pub explicit: bool,
+}
+
 pub struct LazyTracks {
+    covers: RefCell<HashMap<usize, Image>>,
     total: Cell<usize>,
     rows: RefCell<HashMap<usize, TrackRow>>,
     requested: RefCell<HashSet<usize>>,
@@ -25,6 +37,7 @@ pub struct LazyTracks {
 impl LazyTracks {
     pub fn new(fetch: Box<dyn Fn(usize)>) -> Self {
         Self {
+            covers: RefCell::new(HashMap::new()),
             total: Cell::new(0),
             rows: RefCell::new(HashMap::new()),
             requested: RefCell::new(HashSet::new()),
@@ -39,15 +52,39 @@ impl LazyTracks {
     }
 
     /// Stores a fetched page starting at `offset` and redraws those rows.
-    pub fn fill(&self, offset: usize, rows: Vec<TrackRow>) {
+    pub fn fill(&self, offset: usize, rows: Vec<RowData>) {
         let mut map = self.rows.borrow_mut();
         let count = rows.len();
-        for (i, row) in rows.into_iter().enumerate() {
-            map.insert(offset + i, row);
+        for (i, r) in rows.into_iter().enumerate() {
+            map.insert(
+                offset + i,
+                TrackRow {
+                    id: r.id.into(),
+                    title: r.title.into(),
+                    artist: r.artist.into(),
+                    album: r.album.into(),
+                    duration: r.duration.into(),
+                    explicit: r.explicit,
+                    loaded: true,
+                    cover: Image::default(),
+                },
+            );
         }
         drop(map);
         for i in 0..count {
             self.notify.row_changed(offset + i);
+        }
+    }
+
+    /// Shows `cover` on every listed row.
+    pub fn set_cover(&self, indices: &[usize], cover: &Image) {
+        let mut covers = self.covers.borrow_mut();
+        for &i in indices {
+            covers.insert(i, cover.clone());
+        }
+        drop(covers);
+        for &i in indices {
+            self.notify.row_changed(i);
         }
     }
 
@@ -65,6 +102,7 @@ impl LazyTracks {
             duration: "".into(),
             explicit: false,
             loaded: false,
+            cover: Image::default(),
         }
     }
 }
@@ -81,7 +119,11 @@ impl Model for LazyTracks {
             return None;
         }
         if let Some(r) = self.rows.borrow().get(&row) {
-            return Some(r.clone());
+            let mut r = r.clone();
+            if let Some(c) = self.covers.borrow().get(&row) {
+                r.cover = c.clone();
+            }
+            return Some(r);
         }
         let page = row / PAGE_SIZE;
         if self.requested.borrow_mut().insert(page) {
@@ -112,11 +154,11 @@ mod tests {
     use super::*;
     use std::rc::Rc;
 
-    fn row(t: &str) -> TrackRow {
-        TrackRow {
+    fn row(t: &str) -> RowData {
+        RowData {
             id: t.into(),
             title: t.into(),
-            ..LazyTracks::placeholder()
+            ..RowData::default()
         }
     }
 
@@ -134,6 +176,16 @@ mod tests {
         m.fill(0, vec![row("a"), row("b")]);
         assert_eq!(m.row_data(1).map(|r| r.title.to_string()), Some("b".into()));
         assert!(m.row_data(250).is_none());
+    }
+
+    #[test]
+    fn covers_attach_to_rows() {
+        let m = LazyTracks::new(Box::new(|_| {}));
+        m.set_total(3);
+        m.fill(0, vec![row("a"), row("b")]);
+        m.set_cover(&[1], &Image::default());
+        assert!(m.row_data(1).is_some());
+        assert_eq!(m.covers.borrow().len(), 1);
     }
 
     #[test]
