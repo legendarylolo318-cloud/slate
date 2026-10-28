@@ -270,23 +270,37 @@ component Row inherits Rectangle {
                 vertical-alignment: center;
             }
         }
-        if root.show-artist: Text {
+        if root.show-artist: Rectangle {
+            // A bare Text in a layout shrinks to its text and gets centred in its
+            // cell; a full-width Text inside a Rectangle stays left-aligned.
             horizontal-stretch: 2;
             min-width: 80px;
-            text: root.item.artist;
-            color: Theme.text-muted;
-            horizontal-alignment: left;
-            vertical-alignment: center;
-            overflow: elide;
+            Text {
+                x: 0;
+                width: parent.width;
+                height: parent.height;
+                text: root.item.artist;
+                color: Theme.text-muted;
+                horizontal-alignment: left;
+                vertical-alignment: center;
+                overflow: elide;
+            }
         }
-        if root.show-album: Text {
+        if root.show-album: Rectangle {
+            // A bare Text in a layout shrinks to its text and gets centred in its
+            // cell; a full-width Text inside a Rectangle stays left-aligned.
             horizontal-stretch: 2;
             min-width: 80px;
-            text: root.item.album;
-            color: Theme.text-muted;
-            horizontal-alignment: left;
-            vertical-alignment: center;
-            overflow: elide;
+            Text {
+                x: 0;
+                width: parent.width;
+                height: parent.height;
+                text: root.item.album;
+                color: Theme.text-muted;
+                horizontal-alignment: left;
+                vertical-alignment: center;
+                overflow: elide;
+            }
         }
         Rectangle {
             width: 24px;
@@ -372,8 +386,16 @@ export component TrackPage inherits Rectangle {
                 Rectangle { width: 34px; }
                 Text { text: "TITLE"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: left; }
             }
-            if root.width > 520px: Text { horizontal-stretch: 2; min-width: 80px; text: "ARTIST"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: left; }
-            if root.width > 760px: Text { horizontal-stretch: 2; min-width: 80px; text: "ALBUM"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: left; }
+            if root.width > 520px: Rectangle {
+                horizontal-stretch: 2;
+                min-width: 80px;
+                Text { x: 0; width: parent.width; height: parent.height; text: "ARTIST"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: left; vertical-alignment: center; }
+            }
+            if root.width > 760px: Rectangle {
+                horizontal-stretch: 2;
+                min-width: 80px;
+                Text { x: 0; width: parent.width; height: parent.height; text: "ALBUM"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: left; vertical-alignment: center; }
+            }
             Rectangle { width: 24px; }
             Text { width: 52px; text: "TIME"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: right; }
         }
