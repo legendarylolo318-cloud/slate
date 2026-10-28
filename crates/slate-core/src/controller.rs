@@ -289,6 +289,19 @@ impl Controller {
         }
     }
 
+    /// The full list of the source being played finished loading after playback
+    /// began on a partial one. Ignored if the user has since moved elsewhere.
+    pub async fn extend_source(&self, all: Vec<Track>, source: &Source) {
+        let mut q = self.queue.lock().await;
+        let same = q
+            .playback_source
+            .as_ref()
+            .is_some_and(|s| s.kind == source.kind && s.id == source.id);
+        if same {
+            q.extend_context(all, &mut rand::rng());
+        }
+    }
+
     // ---------- navigation ----------
 
     /// Track ended on its own (`explicit == false`) or the user pressed Next.

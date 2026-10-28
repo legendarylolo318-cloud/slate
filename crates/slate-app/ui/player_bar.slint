@@ -33,6 +33,11 @@ export component PlayerBar inherits Rectangle {
     callback toggle-queue();
     callback toggle-lyrics();
 
+    // Side columns are equal so the transport sits exactly in the middle; stretch
+    // factors would add to each column's own content width and push it off-centre.
+    // The right group (8 buttons + volume bar) needs ~420px.
+    property <length> side-w: max(430px, root.width * 0.28);
+    property <length> mid-w: max(0px, root.width - 2 * root.side-w - 52px);
     height: root.compact ? 112px : 88px;
     background: Theme.surface;
 
@@ -44,8 +49,9 @@ export component PlayerBar inherits Rectangle {
             spacing: 16px;
             // track info
             HorizontalLayout {
-                horizontal-stretch: 1;
-                min-width: 0px;
+                horizontal-stretch: root.compact ? 1 : 0;
+                min-width: root.compact ? 0px : root.side-w;
+                max-width: root.compact ? 100000px : root.side-w;
                 spacing: 12px;
                 Rectangle {
                     width: root.compact ? 40px : 56px;
@@ -63,7 +69,8 @@ export component PlayerBar inherits Rectangle {
             }
             // transport (wide layout keeps it centred here)
             if !root.compact: VerticalLayout {
-                horizontal-stretch: 2;
+                min-width: root.mid-w;
+                max-width: root.mid-w;
                 alignment: center;
                 spacing: 2px;
                 HorizontalLayout {
@@ -84,7 +91,9 @@ export component PlayerBar inherits Rectangle {
             }
             // right cluster
             HorizontalLayout {
-                horizontal-stretch: 1;
+                horizontal-stretch: root.compact ? 1 : 0;
+                min-width: root.compact ? 0px : root.side-w;
+                max-width: root.compact ? 100000px : root.side-w;
                 alignment: end;
                 spacing: 4px;
                 if root.compact: IconButton { primary: true; enabled: root.has-track; glyph: root.playing ? "⏸" : "▶"; clicked => { root.toggle-play(); } }

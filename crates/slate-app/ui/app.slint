@@ -328,7 +328,8 @@ export component AppWindow inherits Window {
                 }
             }
             PlayerBar {
-                compact: root.compact;
+                // The three-column bar needs ~1250px; below that the stacked layout is used.
+                compact: root.width < 1250px;
                 title: root.track-title;
                 artist: root.track-artist;
                 cover: root.track-cover;

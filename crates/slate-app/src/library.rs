@@ -45,7 +45,6 @@ pub struct Header {
 struct Active {
     kind: SourceKind,
     title: String,
-    id: String,
 }
 
 #[derive(Default)]
@@ -282,7 +281,6 @@ impl Backend {
             *a = Some(Active {
                 kind: kind.clone(),
                 title: String::new(),
-                id: selected.clone(),
             });
         }
 
@@ -642,22 +640,7 @@ impl Backend {
             }
         }
         let all: Vec<Track> = self.lib.tracks.lock().ok()?.values().cloned().collect();
-        let (kind, id) = match &active.kind {
-            SourceKind::Loved => ("favorites", serde_json::Value::from("loved")),
-            SourceKind::Playlist(u) => ("playlist", serde_json::Value::from(u.as_str())),
-            SourceKind::Album(a) => ("album", serde_json::Value::from(a.to_string())),
-            SourceKind::Mix(m) => ("mix", serde_json::Value::from(m.as_str())),
-        };
-        let _ = &active.id;
-        let source = Source {
-            kind: kind.into(),
-            id,
-            name: active.title,
-            image: None,
-            subtitle: None,
-            mix_type: None,
-            tracks: all.clone(),
-        };
+        let source = Self::source_for(&active, all.clone());
         Some((all, source))
     }
 
@@ -665,22 +648,61 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(ctl) = this.controller() else { return };
-            let Some(track) = this
-                .lib
-                .tracks
-                .lock()
-                .ok()
-                .and_then(|c| c.get(&index).cloned())
-            else {
+            let Some(track) = this.cached_track(index) else {
                 return;
             };
-            let Some((all, source)) = this.ensure_all().await else {
+            let total = this.lib.total.load(Ordering::Relaxed);
+            let complete = this.lib.tracks.lock().is_ok_and(|c| c.len() >= total);
+            if complete {
+                let Some((all, source)) = this.ensure_all().await else {
+                    return;
+                };
+                let album = source.kind == "album";
+                let outcome = ctl.play_from_source(track, all, Some(source), album).await;
+                this.apply(outcome).await;
+                return;
+            }
+            // Big list: start right away from what is already loaded, then fill in
+            // the rest of the queue once every page has arrived.
+            let Some((partial, source)) = this.snapshot_source() else {
                 return;
             };
             let album = source.kind == "album";
-            let outcome = ctl.play_from_source(track, all, Some(source), album).await;
+            let outcome = ctl
+                .play_from_source(track, partial, Some(source), album)
+                .await;
             this.apply(outcome).await;
+            if let Some((all, source)) = this.ensure_all().await {
+                ctl.extend_source(all, &source).await;
+                this.refresh_queue_info().await;
+                this.save().await;
+            }
         });
+    }
+
+    /// What is loaded so far, as a playable list and its source (no network).
+    fn snapshot_source(&self) -> Option<(Vec<Track>, Source)> {
+        let active = self.lib.active.lock().ok()?.clone()?;
+        let all: Vec<Track> = self.lib.tracks.lock().ok()?.values().cloned().collect();
+        Some((all.clone(), Self::source_for(&active, all)))
+    }
+
+    fn source_for(active: &Active, all: Vec<Track>) -> Source {
+        let (kind, id) = match &active.kind {
+            SourceKind::Loved => ("favorites", serde_json::Value::from("loved")),
+            SourceKind::Playlist(u) => ("playlist", serde_json::Value::from(u.as_str())),
+            SourceKind::Album(a) => ("album", serde_json::Value::from(a.to_string())),
+            SourceKind::Mix(m) => ("mix", serde_json::Value::from(m.as_str())),
+        };
+        Source {
+            kind: kind.into(),
+            id,
+            name: active.title.clone(),
+            image: None,
+            subtitle: None,
+            mix_type: None,
+            tracks: all,
+        }
     }
 
     pub fn play_all(&self, shuffle: bool) {

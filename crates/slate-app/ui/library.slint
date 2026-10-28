@@ -215,7 +215,8 @@ component Row inherits Rectangle {
 
     ta := TouchArea {
         mouse-cursor: MouseCursor.pointer;
-        double-clicked => { root.play(); }
+        // One click plays, as people expect from a track list.
+        clicked => { root.play(); }
     }
     ContextMenuArea {
         Menu {

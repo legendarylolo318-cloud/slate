@@ -379,6 +379,42 @@ impl Queue {
         track
     }
 
+    /// The full list of the playing source arrived after playback already started
+    /// on a partial one. In order: rebuild the queue as `play_from_source` would
+    /// have (everything after the current track, then the wrap-around). Shuffled:
+    /// append only tracks not seen yet, shuffled. The manual queue is untouched.
+    pub fn extend_context(&mut self, all: Vec<Track>, rng: &mut impl rand::Rng) {
+        let Some(current_id) = self.current.as_ref().map(|t| t.id) else {
+            return;
+        };
+        if let Some(src) = self.playback_source.as_mut() {
+            src.tracks = stamp_all(all.clone());
+        }
+        if self.shuffle {
+            let seen: std::collections::HashSet<u64> = self
+                .queue
+                .iter()
+                .chain(self.history.iter())
+                .map(|t| t.id)
+                .chain(std::iter::once(current_id))
+                .collect();
+            let fresh: Vec<Track> = all.into_iter().filter(|t| !seen.contains(&t.id)).collect();
+            self.append(fresh, true, rng);
+        } else {
+            let rest: Vec<Track> = match all.iter().position(|t| t.id == current_id) {
+                Some(i) => all[i + 1..]
+                    .iter()
+                    .chain(all[..i].iter())
+                    .cloned()
+                    .collect(),
+                None => all.into_iter().filter(|t| t.id != current_id).collect(),
+            };
+            self.queue = stamp_all(rest);
+            self.original = None;
+        }
+        self.epoch += 1;
+    }
+
     /// "Play all" / "Shuffle all". Returns the first track, or `None` if empty.
     pub fn play_all(
         &mut self,
@@ -1200,6 +1236,39 @@ mod tests {
         let again = q.adopt_advanced(2, "q-nope").expect("fallback");
         assert_eq!(again.id, 2);
         assert!(q.adopt_advanced(42, "q-nope").is_none());
+    }
+
+    #[test]
+    fn extending_a_partial_source_in_order_rebuilds_after_the_current_track() {
+        let mut q = Queue::new();
+        let s = src("A", vec![]);
+        // started on a partial list of 1..=3 from track 2
+        let first = q.play_from_source(t(2), vec![t(1), t(2), t(3)], Some(s), false, &mut rng());
+        q.begin(first, false);
+        assert_eq!(ids(&q.queue), vec![3, 1]);
+        q.add_to_queue(t(99), None);
+        q.extend_context(vec![t(1), t(2), t(3), t(4), t(5)], &mut rng());
+        assert_eq!(ids(&q.queue), vec![3, 4, 5, 1]);
+        assert_eq!(ids(&q.manual), vec![99], "manual queue untouched");
+        assert_eq!(q.playback_source.as_ref().map(|s| s.tracks.len()), Some(5));
+    }
+
+    #[test]
+    fn extending_while_shuffled_only_appends_unseen_tracks() {
+        let mut q = Queue::new();
+        q.shuffle = true;
+        let first = q.play_from_source(
+            t(1),
+            vec![t(1), t(2)],
+            Some(src("A", vec![])),
+            false,
+            &mut rng(),
+        );
+        q.begin(first, false);
+        q.extend_context(vec![t(1), t(2), t(3), t(4)], &mut rng());
+        let mut got = ids(&q.queue);
+        got.sort();
+        assert_eq!(got, vec![2, 3, 4], "current track is not re-queued");
     }
 
     #[test]
