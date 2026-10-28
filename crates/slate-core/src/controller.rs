@@ -39,7 +39,7 @@ impl ContentPrefs {
     pub fn blocks(&self, t: &Track) -> bool {
         let flag = |k: &str| t.extra.get(k).and_then(serde_json::Value::as_bool);
         (!self.allow_explicit && flag("explicit") == Some(true))
-            || (!self.allow_ai && flag("aiGenerated") == Some(true))
+            || (!self.allow_ai && flag("ai") == Some(true))
     }
 }
 

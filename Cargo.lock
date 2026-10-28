@@ -5864,6 +5864,7 @@ name = "slate"
 version = "0.22.1"
 dependencies = [
  "anyhow",
+ "futures-util",
  "image",
  "ksni",
  "mpris-server",

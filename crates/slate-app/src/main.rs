@@ -5,6 +5,8 @@ mod backend;
 mod bootstrap;
 mod control;
 mod images;
+mod library;
+mod models;
 mod platform;
 
 fn main() -> anyhow::Result<()> {

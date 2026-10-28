@@ -132,7 +132,15 @@ fn wire(window: &AppWindow, backend: &Backend) {
     let b = backend.clone();
     window.on_logout(move || b.logout());
     let b = backend.clone();
-    window.on_play_track(move |text| b.play_track(&text));
+    window.on_open_loved(move || b.open_loved());
+    let b = backend.clone();
+    window.on_open_playlist(move |id| b.open_playlist(&id));
+    let b = backend.clone();
+    window.on_play_row(move |i| b.play_row(usize::try_from(i).unwrap_or(0)));
+    let b = backend.clone();
+    window.on_play_all(move || b.play_all(false));
+    let b = backend.clone();
+    window.on_shuffle_all(move || b.play_all(true));
     let b = backend.clone();
     window.on_toggle_play(move || b.toggle_play());
     let b = backend.clone();

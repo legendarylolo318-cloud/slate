@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use slate_core::commands::{auth, metadata, playback, utility};
+use slate_core::commands::{auth, playback, utility};
 use slate_core::controller::{Controller, Outcome, PlayFailure};
 use slate_core::queue::{Repeat, Track};
 use slate_core::{AppHandle, AppState, EventSink, Events};
@@ -18,7 +18,7 @@ use crate::images;
 
 /// Playback facts the ticker needs without touching the UI thread.
 #[derive(Default)]
-struct Shared {
+pub(crate) struct Shared {
     playing: AtomicBool,
     has_track: AtomicBool,
     /// Audio pipeline holds the current track (false for a restored, not yet started one).
@@ -76,10 +76,11 @@ impl EventSink for UiSink {
 
 #[derive(Clone)]
 pub struct Backend {
-    rt: tokio::runtime::Handle,
-    app: AppHandle,
-    ui: Weak<AppWindow>,
-    shared: Arc<Shared>,
+    pub(crate) rt: tokio::runtime::Handle,
+    pub(crate) app: AppHandle,
+    pub(crate) ui: Weak<AppWindow>,
+    pub(crate) shared: Arc<Shared>,
+    pub(crate) lib: Arc<crate::library::LibState>,
 }
 
 impl Backend {
@@ -96,6 +97,7 @@ impl Backend {
             app,
             ui: window.as_weak(),
             shared,
+            lib: Arc::new(crate::library::LibState::default()),
         };
         let finished = backend.clone();
         let _ = backend
@@ -108,13 +110,13 @@ impl Backend {
         backend
     }
 
-    fn ui<F: FnOnce(AppWindow) + Send + 'static>(&self, f: F) {
+    pub(crate) fn ui<F: FnOnce(AppWindow) + Send + 'static>(&self, f: F) {
         if self.ui.upgrade_in_event_loop(f).is_err() {
             tracing::debug!("UI already closed; dropping update");
         }
     }
 
-    fn state(&self) -> Option<Arc<AppState>> {
+    pub(crate) fn state(&self) -> Option<Arc<AppState>> {
         self.app.try_state()
     }
 
@@ -160,7 +162,10 @@ impl Backend {
             this.refresh_queue_info().await;
 
             match auth::load_saved_auth(&state).await {
-                Ok(Some(_)) => this.ui(|w| w.set_screen(Screen::Main)),
+                Ok(Some(_)) => {
+                    this.ui(|w| w.set_screen(Screen::Main));
+                    this.load_library();
+                }
                 Ok(None) => this.ui(|w| w.set_screen(Screen::Login)),
                 Err(e) => {
                     tracing::warn!("saved session unusable: {}", e.log_safe());
@@ -283,6 +288,7 @@ impl Backend {
                         w.set_login_has_code(false);
                         w.set_screen(Screen::Main);
                     });
+                    self.load_library();
                     return Ok(());
                 }
                 Ok(None) => {}
@@ -336,40 +342,12 @@ impl Backend {
 
     // ---- playback ----
 
-    fn controller(&self) -> Option<Arc<Controller>> {
+    pub(crate) fn controller(&self) -> Option<Arc<Controller>> {
         self.shared.controller.get().cloned()
     }
 
-    /// Typed-in track ID (temporary entry point until search lands).
-    pub fn play_track(&self, text: &str) {
-        let Ok(id) = text.trim().parse::<u64>() else {
-            self.ui(|w| w.set_error("That is not a track ID.".into()));
-            return;
-        };
-        let this = self.clone();
-        self.rt.spawn(async move {
-            let (Some(state), Some(ctl)) = (this.state(), this.controller()) else {
-                return;
-            };
-            this.ui(|w| w.set_error("".into()));
-            let track = match metadata::get_track(&state, id)
-                .await
-                .map_err(|e| e.log_safe())
-                .and_then(|v| serde_json::from_value::<Track>(v).map_err(|e| e.to_string()))
-            {
-                Ok(t) => t,
-                Err(e) => {
-                    this.ui(move |w| w.set_error(format!("Could not load track: {e}").into()));
-                    return;
-                }
-            };
-            let outcome = ctl.play_single(track).await;
-            this.apply(outcome).await;
-        });
-    }
-
     /// Publishes a controller outcome: UI, OS media surfaces, persistence.
-    async fn apply(&self, outcome: Outcome) {
+    pub(crate) async fn apply(&self, outcome: Outcome) {
         match outcome {
             Outcome::Playing(track) => {
                 self.shared.loaded.store(true, Ordering::Relaxed);
@@ -418,6 +396,7 @@ impl Backend {
 
     /// Fills the player bar and OS metadata for `track`.
     fn show_track(&self, track: &Track, playing: bool) {
+        let id = track.id.to_string();
         let title = track.title().to_string();
         let artist = track.artist_name().to_string();
         let duration = track.duration_secs();
@@ -475,6 +454,7 @@ impl Backend {
 
         let dur_text = images::format_time(duration);
         self.ui(move |w| {
+            w.set_playing_id(id.into());
             w.set_track_title(title.into());
             w.set_track_artist(artist.into());
             w.set_duration_text(dur_text.into());

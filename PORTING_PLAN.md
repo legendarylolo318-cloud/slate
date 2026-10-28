@@ -153,7 +153,7 @@ All UI work is **todo**. Original line counts shown to indicate size.
 1. Workspace + `slate-core` extracted, tests passing, Tauri removed — **done** (367 unit + 16 integration tests pass)
 2. Slint window → login → play one track → player bar — **code complete, partly verified**: login screen renders on Skia/Vulkan; device-code + QR flow, track-ID play box, player bar (play/pause, seek, volume, cover) implemented but **not exercised against live TIDAL** (needs an interactive account approval)
 3. Queue + persistence, media controls, tray — **done on Linux**: 387 core tests pass; app starts, registers MPRIS + tray, saves `queue.json`/`modes.json` on clean exit. **Not verified with a real logged-in playback session** (next/prev/autoplay/restore against live TIDAL)
-4. Library + pages + lazy models + image cache — todo
+4. Library + pages + lazy models + image cache — **in progress**: sidebar (Loved Tracks + all user playlists), paged lazy track list (`models::LazyTracks`, 2 tests), double-click-to-play, Play / Shuffle (whole list fetched in 6 parallel pages on demand). Still todo: albums, artists, mixes, folders, Album/Artist/Playlist-detail pages, cover thumbnails + bounded LRU image cache, loved videos tab, search/pagination UI, track context menu
 5. Search + explore — todo
 6. Drawer + lyrics — todo
 7. Theme system — todo

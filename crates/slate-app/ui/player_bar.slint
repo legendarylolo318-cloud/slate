@@ -153,11 +153,14 @@ export component PlayerBar inherits Rectangle {
             min-width: 140px;
             alignment: end;
             spacing: 8px;
-            Text { text: "🔊"; vertical-alignment: center; color: Theme.text-muted; }
-            Bar {
-                width: 100px;
-                fraction: root.volume;
-                picked(f) => { root.set-volume(f); }
+            VerticalLayout { alignment: center; Text { text: "🔊"; color: Theme.text-muted; } }
+            VerticalLayout {
+                alignment: center;
+                Bar {
+                    width: 100px;
+                    fraction: root.volume;
+                    picked(f) => { root.set-volume(f); }
+                }
             }
         }
     }

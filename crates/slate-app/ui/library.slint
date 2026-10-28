@@ -1,0 +1,232 @@
+import { Theme } from "theme.slint";
+import { TrackRow, PlaylistEntry } from "types.slint";
+import { ListView } from "std-widgets.slint";
+
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <string> hint;
+    in property <bool> active;
+    callback clicked();
+    height: 36px;
+    border-radius: 6px;
+    background: root.active ? Theme.surface-raised : (ta.has-hover ? Theme.surface : transparent);
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 6px;
+        Text {
+            text: root.label;
+            color: root.active ? Theme.text : Theme.text-muted;
+            font-weight: root.active ? 600 : 400;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        if root.hint != "": Text {
+            text: root.hint;
+            color: Theme.text-muted;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+export component Sidebar inherits Rectangle {
+    in property <[PlaylistEntry]> playlists;
+    in property <string> selected;
+    in property <bool> playlists-loading;
+    callback open-loved();
+    callback open-playlist(string);
+    callback logout();
+
+    background: Theme.surface;
+    width: 240px;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 4px;
+        Text {
+            text: "Slate";
+            font-size: 22px;
+            font-weight: 800;
+            color: Theme.accent;
+            height: 44px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: "MY COLLECTION";
+            font-size: 11px;
+            color: Theme.text-muted;
+            height: 24px;
+            vertical-alignment: bottom;
+        }
+        NavItem {
+            label: "Loved Tracks";
+            active: root.selected == "loved";
+            clicked => { root.open-loved(); }
+        }
+        Text {
+            text: "PLAYLISTS";
+            font-size: 11px;
+            color: Theme.text-muted;
+            height: 28px;
+            vertical-alignment: bottom;
+        }
+        if root.playlists-loading: Text {
+            text: "Loading…";
+            color: Theme.text-muted;
+            height: 28px;
+        }
+        ListView {
+            vertical-stretch: 1;
+            for p in root.playlists: NavItem {
+                label: p.title;
+                hint: p.subtitle;
+                active: root.selected == p.uuid;
+                clicked => { root.open-playlist(p.uuid); }
+            }
+        }
+        NavItem {
+            label: "Sign out";
+            clicked => { root.logout(); }
+        }
+    }
+}
+
+component Row inherits Rectangle {
+    in property <TrackRow> item;
+    in property <int> index;
+    in property <bool> playing;
+    callback play();
+    height: 44px;
+    border-radius: 6px;
+    background: ta.has-hover ? Theme.surface : transparent;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        Text {
+            width: 28px;
+            text: root.playing ? "▶" : (root.index + 1);
+            color: root.playing ? Theme.accent : Theme.text-muted;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+        HorizontalLayout {
+            horizontal-stretch: 3;
+            min-width: 120px;
+            spacing: 6px;
+            Text {
+                text: root.item.title;
+                color: root.playing ? Theme.accent : Theme.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if root.item.explicit: Text {
+                text: "E";
+                font-size: 10px;
+                color: Theme.text-muted;
+                vertical-alignment: center;
+            }
+        }
+        Text {
+            horizontal-stretch: 2;
+            min-width: 80px;
+            text: root.item.artist;
+            color: Theme.text-muted;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            horizontal-stretch: 2;
+            min-width: 80px;
+            text: root.item.album;
+            color: Theme.text-muted;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            width: 52px;
+            text: root.item.duration;
+            color: Theme.text-muted;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+    }
+    ta := TouchArea {
+        double-clicked => { root.play(); }
+    }
+}
+
+export component TrackPage inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> loading;
+    in property <[TrackRow]> tracks;
+    in property <string> playing-id;
+    in property <bool> has-page;
+    callback play-row(int);
+    callback play-all();
+    callback shuffle-all();
+
+    background: Theme.background;
+
+    if !root.has-page: Text {
+        text: "Pick Loved Tracks or a playlist from the sidebar";
+        color: Theme.text-muted;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    if root.has-page: VerticalLayout {
+        padding: 24px;
+        spacing: 12px;
+        VerticalLayout {
+            spacing: 4px;
+            Text { text: root.title; font-size: 30px; font-weight: 800; color: Theme.text; overflow: elide; }
+            Text { text: root.loading ? "Loading…" : root.subtitle; color: Theme.text-muted; }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            Rectangle {
+                width: 96px;
+                height: 36px;
+                border-radius: 18px;
+                background: Theme.accent;
+                Text { text: "▶  Play"; color: #000000; font-weight: 700; }
+                TouchArea { clicked => { root.play-all(); } }
+            }
+            Rectangle {
+                width: 96px;
+                height: 36px;
+                border-radius: 18px;
+                background: Theme.surface-raised;
+                Text { text: "🔀  Shuffle"; color: Theme.text; }
+                TouchArea { clicked => { root.shuffle-all(); } }
+            }
+        }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 12px;
+            height: 24px;
+            Text { width: 28px; text: "#"; color: Theme.text-muted; horizontal-alignment: right; }
+            Text { horizontal-stretch: 3; min-width: 120px; text: "TITLE"; color: Theme.text-muted; font-size: 11px; }
+            Text { horizontal-stretch: 2; min-width: 80px; text: "ARTIST"; color: Theme.text-muted; font-size: 11px; }
+            Text { horizontal-stretch: 2; min-width: 80px; text: "ALBUM"; color: Theme.text-muted; font-size: 11px; }
+            Text { width: 52px; text: "TIME"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: right; }
+        }
+        ListView {
+            vertical-stretch: 1;
+            for r[i] in root.tracks: Row {
+                item: r;
+                index: i;
+                playing: r.id != "" && r.id == root.playing-id;
+                play => { root.play-row(i); }
+            }
+        }
+    }
+}
