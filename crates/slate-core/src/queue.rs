@@ -63,6 +63,25 @@ impl Track {
         self.extra.get("itemType").and_then(Value::as_str) == Some("video")
     }
 
+    /// All credited artists, for scrobblers that take a combined string.
+    pub fn artist_display(&self) -> String {
+        let names: Vec<&str> = self
+            .extra
+            .get("artists")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.get("name").and_then(Value::as_str))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if names.is_empty() {
+            self.artist_name().to_string()
+        } else {
+            names.join(", ")
+        }
+    }
+
     pub fn artist_name(&self) -> &str {
         self.extra
             .get("artist")
@@ -705,6 +724,55 @@ impl Queue {
         Previous::Play(prev)
     }
 
+    /// The track to pre-arm for a gapless transition, or `None` when the boundary
+    /// must go through the normal track-finished path: repeat-one, nothing queued,
+    /// unavailable/blocked/video heads, or a head from a different source (so
+    /// "Playing from" never goes wrong).
+    pub fn pick_gapless_next(
+        &self,
+        now_epoch_secs: i64,
+        blocked: impl Fn(&Track) -> bool,
+    ) -> Option<&Track> {
+        if self.repeat == Repeat::One {
+            return None;
+        }
+        let head = self.manual.first().or_else(|| self.queue.first())?;
+        if head.is_unavailable(now_epoch_secs) || blocked(head) || head.is_video() {
+            return None;
+        }
+        if let Some(tag) = head.source_tag() {
+            let current = self.playback_source.as_ref().map(|s| &s.id);
+            if current != Some(&tag.id) {
+                return None;
+            }
+        }
+        Some(head)
+    }
+
+    /// The engine already switched to a pre-armed track: reconcile the queues and
+    /// make it current. Removes exactly one entry, matched by `qid` (falling back
+    /// to the track id), so duplicates elsewhere in the list survive.
+    pub fn adopt_advanced(&mut self, track_id: u64, qid: &str) -> Option<Track> {
+        let by_qid = |t: &Track| t.qid.as_deref() == Some(qid);
+        let track = if let Some(i) = self.manual.iter().position(by_qid) {
+            self.manual.remove(i)
+        } else {
+            let i = self
+                .queue
+                .iter()
+                .position(by_qid)
+                .or_else(|| self.queue.iter().position(|t| t.id == track_id))?;
+            let t = self.queue.remove(i);
+            self.drop_from_original(&t);
+            self.autoplay_ids.retain(|id| *id != t.id);
+            t
+        };
+        let mut track = track;
+        track.extra.remove("_source");
+        self.begin(track.clone(), false);
+        Some(track)
+    }
+
     /// Everything currently queued, manual first (what the queue view shows).
     pub fn upcoming(&self) -> impl Iterator<Item = &Track> {
         self.manual.iter().chain(self.queue.iter())
@@ -1079,6 +1147,59 @@ mod tests {
             .parse()
             .unwrap_or(0);
         assert!(n > 999);
+    }
+
+    #[test]
+    fn gapless_prediction_rules() {
+        let mut q = Queue::new();
+        let now = 1_700_000_000;
+        assert!(q.pick_gapless_next(now, |_| false).is_none());
+        q.set_tracks(vec![t(1), t(2)], Some(src("A", vec![])), false);
+        assert_eq!(q.pick_gapless_next(now, |_| false).map(|t| t.id), Some(1));
+        // manual head wins
+        q.add_to_queue(t(9), None);
+        assert_eq!(q.pick_gapless_next(now, |_| false).map(|t| t.id), Some(9));
+        // blocked head: no gapless (the normal path drains it)
+        assert!(q.pick_gapless_next(now, |t| t.id == 9).is_none());
+        // repeat-one
+        q.repeat = Repeat::One;
+        assert!(q.pick_gapless_next(now, |_| false).is_none());
+        q.repeat = Repeat::Off;
+        // a head from another source is not gapless
+        let other = Source {
+            id: Value::from(99),
+            ..src("B", vec![])
+        };
+        q.manual.clear();
+        q.add_to_queue(t(7), Some(&other));
+        assert!(q.pick_gapless_next(now, |_| false).is_none());
+        // video heads are not gapless
+        q.manual.clear();
+        let mut v = t(8);
+        v.extra.insert("itemType".into(), Value::from("video"));
+        q.manual.push(v.stamped());
+        assert!(q.pick_gapless_next(now, |_| false).is_none());
+    }
+
+    #[test]
+    fn adopt_advanced_removes_exactly_one_by_qid() {
+        let mut q = Queue::new();
+        q.set_tracks(vec![t(1), t(2), t(1)], None, false);
+        q.begin(t(0), false);
+        let second_one = q.queue[2].qid.clone().unwrap_or_default();
+        let got = q.adopt_advanced(1, &second_one).expect("adopted");
+        assert_eq!(got.id, 1);
+        assert_eq!(ids(&q.queue), vec![1, 2]);
+        assert_eq!(
+            q.queue[0].qid.as_deref(),
+            q.queue.first().and_then(|t| t.qid.as_deref())
+        );
+        assert_eq!(q.current.as_ref().map(|t| t.id), Some(1));
+        assert_eq!(ids(&q.history), vec![0]);
+        // unknown qid falls back to the first track with that id
+        let again = q.adopt_advanced(2, "q-nope").expect("fallback");
+        assert_eq!(again.id, 2);
+        assert!(q.adopt_advanced(42, "q-nope").is_none());
     }
 
     #[test]

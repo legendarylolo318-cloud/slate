@@ -33,6 +33,7 @@ pub enum Route {
     Mix(String),
     Search(String),
     Folder(String),
+    Profile,
     Settings,
 }
 
@@ -46,6 +47,7 @@ impl Route {
             "mixes" => Self::Mixes,
             "loved" => Self::Loved,
             "settings" => Self::Settings,
+            "profile" => Self::Profile,
             _ => return None,
         })
     }
@@ -60,6 +62,7 @@ impl Route {
             Self::Loved => "loved".into(),
             Self::Playlist(u) => u.clone(),
             Self::Settings => "settings".into(),
+            Self::Profile => "profile".into(),
             _ => String::new(),
         }
     }
@@ -329,6 +332,10 @@ impl Backend {
             Route::Playlist(u) => self.open(SourceKind::Playlist(u.clone()), u),
             Route::Album(id) => self.open(SourceKind::Album(id), String::new()),
             Route::Mix(id) => self.open(SourceKind::Mix(id), String::new()),
+            Route::Profile => {
+                self.load_profile();
+                self.ui(|w| w.set_view("profile".into()));
+            }
             Route::Settings => {
                 self.load_settings_ui();
                 self.ui(|w| w.set_view("settings".into()));

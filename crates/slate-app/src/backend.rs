@@ -33,6 +33,7 @@ pub(crate) struct Shared {
     /// Set once the backend exists; invoked when a track ends by itself.
     on_finished: OnceLock<Box<dyn Fn() + Send + Sync>>,
     on_theme_file: OnceLock<Box<dyn Fn(serde_json::Value) + Send + Sync>>,
+    on_advanced: OnceLock<Box<dyn Fn(serde_json::Value) + Send + Sync>>,
     #[cfg(target_os = "linux")]
     tray: tokio::sync::Mutex<Option<crate::platform::tray::TrayHandle>>,
     /// Track length in seconds, stored as `f32` bits.
@@ -67,6 +68,11 @@ impl EventSink for UiSink {
                     w.set_playing(false);
                 });
             }
+            "track-advanced" => {
+                if let Some(cb) = self.shared.on_advanced.get() {
+                    cb(payload);
+                }
+            }
             "theme-file-changed" => {
                 if let Some(cb) = self.shared.on_theme_file.get() {
                     cb(payload);
@@ -99,6 +105,9 @@ pub struct Backend {
     pub(crate) theme: crate::themes::SharedTheme,
     pub(crate) video: crate::video::SharedVideo,
     pub(crate) theme_watcher: Arc<Mutex<Option<slate_core::theme_config::ThemeWatcher>>>,
+    pub(crate) profile: Arc<crate::profile::LoadedProfile>,
+    pub(crate) pending_link: Arc<Mutex<Option<String>>>,
+    pub(crate) in_main: Arc<AtomicBool>,
 }
 
 impl Backend {
@@ -128,6 +137,9 @@ impl Backend {
             favs: Arc::new(Mutex::new(crate::favorites::Favs::default())),
             theme: Arc::new(Mutex::new(initial_theme)),
             video: Arc::new(Mutex::new(None)),
+            profile: Arc::new(Mutex::new(None)),
+            pending_link: Arc::new(Mutex::new(None)),
+            in_main: Arc::new(AtomicBool::new(false)),
             theme_watcher: Arc::new(Mutex::new(None)),
         };
         let finished = backend.clone();
@@ -135,6 +147,11 @@ impl Backend {
             .shared
             .on_finished
             .set(Box::new(move || finished.advance(false)));
+        let advanced = backend.clone();
+        let _ = backend
+            .shared
+            .on_advanced
+            .set(Box::new(move |v| advanced.track_advanced(v)));
         let themed = backend.clone();
         let _ = backend
             .shared
@@ -533,6 +550,9 @@ impl Backend {
 
     pub(crate) async fn refresh_queue_info(&self) {
         self.publish_queue().await;
+        if let Some(ctl) = self.controller() {
+            ctl.refresh_gapless().await;
+        }
     }
 
     /// Queue + modes to disk, off the UI thread.
@@ -620,6 +640,7 @@ impl Backend {
             let Some(ctl) = this.controller() else { return };
             let mode = ctl.cycle_repeat().await;
             this.publish_repeat(mode);
+            ctl.refresh_gapless().await;
             this.save().await;
         });
     }
@@ -709,7 +730,57 @@ impl Backend {
     pub fn enter_main(&self) {
         self.load_favorites();
         self.load_library();
-        self.navigate(crate::pages::Route::Home);
+        self.in_main.store(true, Ordering::Relaxed);
+        let pending = self.pending_link.lock().ok().and_then(|mut p| p.take());
+        match pending {
+            Some(link) => self.open_link(&link),
+            None => self.navigate(crate::pages::Route::Home),
+        }
+    }
+
+    /// The engine moved to the pre-armed track on its own.
+    pub fn track_advanced(&self, payload: serde_json::Value) {
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let Some(ctl) = this.controller() else { return };
+            if let Some(track) = ctl.on_track_advanced(&payload).await {
+                this.apply(Outcome::Playing(track)).await;
+            }
+        });
+    }
+
+    /// A link given on the command line; opened once signed in.
+    pub fn queue_link(&self, link: String) {
+        if let Ok(mut p) = self.pending_link.lock() {
+            *p = Some(link);
+        }
+    }
+
+    /// A message from a later launch: "raise", or a link to open.
+    pub fn handle_message(&self, msg: &str) {
+        self.handle_control(Control::Raise);
+        if msg == crate::ipc::RAISE {
+            return;
+        }
+        if self.in_main.load(Ordering::Relaxed) {
+            self.open_link(msg);
+        } else {
+            self.queue_link(msg.to_string());
+        }
+    }
+
+    pub(crate) fn open_link(&self, link: &str) {
+        use crate::deeplink::DeepLink;
+        use crate::pages::Route;
+        match crate::deeplink::parse(link) {
+            Some(DeepLink::Album(id)) => self.navigate(Route::Album(id)),
+            Some(DeepLink::Artist(id)) => self.navigate(Route::Artist(id)),
+            Some(DeepLink::Playlist(u)) => self.navigate(Route::Playlist(u)),
+            Some(DeepLink::Mix(m)) => self.navigate(Route::Mix(m)),
+            Some(DeepLink::Track(id)) => self.play_track_id(&id.to_string()),
+            Some(DeepLink::Video(id)) => self.play_video(id),
+            None => tracing::debug!("ignored an unrecognised link"),
+        }
     }
 
     // ---- external control (media keys, MPRIS, tray) ----

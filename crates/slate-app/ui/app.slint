@@ -7,10 +7,11 @@ import { FullscreenPlayer } from "fullscreen.slint";
 import { MiniPlayerWindow } from "mini.slint";
 import { VideoView } from "video.slint";
 import { SettingsPage, SettingsState } from "settings.slint";
+import { ProfilePage, ProfileState } from "profile.slint";
 import { IconButton, TextField, Button } from "widgets.slint";
 import { ListView } from "std-widgets.slint";
 import { TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile, KeyValue } from "types.slint";
-export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile, KeyValue, SettingsState, Theme }
+export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile, KeyValue, SettingsState, ProfileState, Theme }
 
 export enum Screen { loading, login, main }
 
@@ -296,6 +297,10 @@ export component AppWindow inherits Window {
                         toggle-hero-favorite => { root.toggle-hero-favorite(); }
                         hero-play => { root.hero-play(); }
                         hero-shuffle => { root.hero-shuffle(); }
+                    }
+                    if root.view == "profile": ProfilePage {
+                        vertical-stretch: 1;
+                        compact: root.compact;
                     }
                     if root.view == "settings": SettingsPage {
                         vertical-stretch: 1;

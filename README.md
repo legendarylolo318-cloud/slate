@@ -42,8 +42,10 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
   previous/next, `M` mute, `S` shuffle, `R` repeat, `Q` queue, `L` lyrics, `F` full screen,
   `/` search.
 
-Not yet done (see the plan): Windows media controls and tray, gapless arming,
-scrobble submission, profile page, Explore sub-pages, shortcut overlay.
+- Gapless playback, single-instance with `tidal://` links, profile editing.
+
+Not yet done (see the plan): Windows media controls and tray, Explore sub-pages,
+shortcut overlay, global shortcuts.
 
 ## Build
 

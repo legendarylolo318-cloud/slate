@@ -1,0 +1,93 @@
+import { Theme } from "theme.slint";
+import { Button, TextField, TextArea } from "widgets.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export global ProfileState {
+    in-out property <bool> loading;
+    in-out property <bool> available: true;
+    in-out property <string> status;
+    in-out property <image> avatar;
+    in-out property <string> name;
+    in-out property <string> handle;
+    in-out property <string> bio;
+    in-out property <string> website;
+    in-out property <string> instagram;
+    in-out property <string> tiktok;
+    in-out property <string> facebook;
+    in-out property <string> twitter;
+    in-out property <string> snapchat;
+    in-out property <string> fans;
+    callback save();
+    callback pick-picture();
+    callback remove-picture();
+}
+
+component Field inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 12px;
+    Text { text: root.label; color: Theme.text-muted; width: 100px; vertical-alignment: center; }
+    @children
+}
+
+export component ProfilePage inherits Rectangle {
+    in property <bool> compact: false;
+    background: Theme.background;
+    ScrollView {
+        VerticalLayout {
+            padding: root.compact ? 12px : 24px;
+            spacing: 12px;
+            max-width: 720px;
+            Text { text: "Profile"; font-size: 30px; font-weight: 800; color: Theme.text; }
+            if ProfileState.loading: Text { text: "Loading…"; color: Theme.text-muted; }
+            if !ProfileState.loading && !ProfileState.available: Text {
+                text: "This account has no public profile to edit.";
+                color: Theme.text-muted;
+                wrap: word-wrap;
+            }
+            if ProfileState.status != "": Rectangle {
+                height: 30px;
+                border-radius: 6px;
+                background: Theme.surface-raised;
+                Text { text: ProfileState.status; color: Theme.text; overflow: elide; }
+            }
+            if !ProfileState.loading && ProfileState.available: VerticalLayout {
+                spacing: 12px;
+                HorizontalLayout {
+                    spacing: 16px;
+                    Rectangle {
+                        width: 96px;
+                        height: 96px;
+                        border-radius: 48px;
+                        clip: true;
+                        background: Theme.surface-raised;
+                        Image { source: ProfileState.avatar; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 8px;
+                        Text { text: ProfileState.fans; color: Theme.text-muted; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            Button { label: "Choose picture…"; clicked => { ProfileState.pick-picture(); } }
+                            Button { label: "Remove"; danger: true; clicked => { ProfileState.remove-picture(); } }
+                        }
+                    }
+                }
+                Field { label: "Name"; TextField { text <=> ProfileState.name; field-width: 360px; } }
+                Field { label: "Handle"; TextField { text <=> ProfileState.handle; field-width: 360px; } }
+                Field { label: "Bio"; TextArea { text <=> ProfileState.bio; placeholder: "Tell people about yourself"; } }
+                Field { label: "Website"; TextField { text <=> ProfileState.website; placeholder: "https://"; field-width: 360px; } }
+                Field { label: "Instagram"; TextField { text <=> ProfileState.instagram; field-width: 360px; } }
+                Field { label: "TikTok"; TextField { text <=> ProfileState.tiktok; field-width: 360px; } }
+                Field { label: "Facebook"; TextField { text <=> ProfileState.facebook; field-width: 360px; } }
+                Field { label: "X / Twitter"; TextField { text <=> ProfileState.twitter; field-width: 360px; } }
+                Field { label: "Snapchat"; TextField { text <=> ProfileState.snapchat; field-width: 360px; } }
+                HorizontalLayout {
+                    alignment: start;
+                    Button { label: "Save"; primary: true; clicked => { ProfileState.save(); } }
+                }
+            }
+        }
+    }
+}

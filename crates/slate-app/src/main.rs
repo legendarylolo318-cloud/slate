@@ -4,15 +4,18 @@
 mod backend;
 mod bootstrap;
 mod control;
+mod deeplink;
 mod favorites;
 mod images;
 mod imgcache;
+mod ipc;
 mod library;
 mod mini;
 mod models;
 mod pages;
 mod panels;
 mod platform;
+mod profile;
 mod settings;
 mod signal;
 mod themes;
@@ -25,7 +28,24 @@ fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "linux")]
     scrub_environment();
     apply_ui_scale();
-    bootstrap::run()
+
+    // First argument that is a link, if any (`tidal://…` from the OS handler).
+    let link = std::env::args()
+        .skip(1)
+        .find(|a| deeplink::parse(a).is_some());
+    // A renderer-fallback relaunch is our own child: the parent still holds the
+    // socket, so claiming it here would forward to the parent and quit.
+    let is_relaunch = std::env::var_os("SLATE_RENDERER_INDEX").is_some();
+    let incoming = if is_relaunch {
+        None
+    } else {
+        match ipc::claim(link.as_deref()) {
+            ipc::Claim::Forwarded => return Ok(()),
+            ipc::Claim::Primary(rx) => Some(rx),
+            ipc::Claim::Unavailable => None,
+        }
+    };
+    bootstrap::run(incoming, link)
 }
 
 /// The saved interface size reaches Slint through its scale-factor override,

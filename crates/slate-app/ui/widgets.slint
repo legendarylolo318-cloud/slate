@@ -321,3 +321,33 @@ export component ColorPicker inherits Rectangle {
         }
     }
 }
+
+/// Multi-line text box (Enter inserts a newline).
+export component TextArea inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <length> field-height: 110px;
+    height: root.field-height;
+    border-radius: 8px;
+    background: Theme.surface;
+    border-width: ti.has-focus ? 1px : 0px;
+    border-color: Theme.accent;
+    TouchArea { mouse-cursor: MouseCursor.text; clicked => { ti.focus(); } }
+    ti := TextInput {
+        x: 10px;
+        y: 8px;
+        width: parent.width - 20px;
+        height: parent.height - 16px;
+        text <=> root.text;
+        color: Theme.text;
+        wrap: word-wrap;
+        single-line: false;
+    }
+    Text {
+        x: 10px;
+        y: 8px;
+        text: root.placeholder;
+        color: Theme.text-muted;
+        visible: ti.text == "";
+    }
+}

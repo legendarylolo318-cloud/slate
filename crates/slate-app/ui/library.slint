@@ -137,6 +137,7 @@ export component Sidebar inherits Rectangle {
             { id: "albums", glyph: "◉", label: "Albums" },
             { id: "artists", glyph: "♫", label: "Artists" },
             { id: "mixes", glyph: "✦", label: "Mixes" },
+            { id: "profile", glyph: "☺", label: "Profile" },
         ]: NavItem {
             label: root.collapsed ? item.glyph : item.glyph + "   " + item.label;
             active: root.selected == item.id;

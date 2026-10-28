@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use tokio::sync::Mutex;
 
-use crate::commands::{pages, playback};
+use crate::commands::{pages, playback, scrobble, utility};
 use crate::queue::{Next, Previous, Queue, Repeat, Skip, Snapshot, Source, Track};
 use crate::{AppState, SlateError};
 
@@ -92,6 +92,10 @@ pub struct Controller {
     state: Arc<AppState>,
     queue: Mutex<Queue>,
     prefs: std::sync::Mutex<ContentPrefs>,
+    /// (track id, qid) currently armed for a gapless transition.
+    armed: std::sync::Mutex<Option<(u64, String)>>,
+    /// Track whose gapless arming failed recently, to avoid retry storms.
+    arm_failed: std::sync::Mutex<Option<(u64, std::time::Instant)>>,
 }
 
 fn now_secs() -> i64 {
@@ -104,6 +108,8 @@ impl Controller {
             state,
             queue: Mutex::new(Queue::new()),
             prefs: std::sync::Mutex::new(ContentPrefs::default()),
+            armed: std::sync::Mutex::new(None),
+            arm_failed: std::sync::Mutex::new(None),
         }
     }
 
@@ -142,7 +148,6 @@ impl Controller {
         track: Track,
         chosen_by_user: bool,
     ) -> Result<(), PlayFailure> {
-        let _ = chosen_by_user; // consumed by scrobbling in a later step
         let use_gain = q.use_track_gain;
         let mut attempt = 0;
         loop {
@@ -155,8 +160,56 @@ impl Controller {
                 Err(e) => return Err(PlayFailure::classify(&e)),
             }
         }
-        q.begin(track, false);
+        q.begin(track.clone(), false);
+        self.forget_armed();
+        self.notify_started(q, &track, chosen_by_user).await;
         Ok(())
+    }
+
+    fn forget_armed(&self) {
+        if let Ok(mut a) = self.armed.lock() {
+            *a = None;
+        }
+    }
+
+    /// Tells scrobblers and TIDAL play reporting a track began.
+    async fn notify_started(&self, q: &Queue, track: &Track, chosen_by_user: bool) {
+        let source = q.playback_source.as_ref();
+        let album = track
+            .extra
+            .get("album")
+            .and_then(|a| a.get("title"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .filter(|s| !s.is_empty());
+        let payload = scrobble::TrackStartedPayload {
+            artist: track.artist_display(),
+            artist_primary: track.artist_name().to_string(),
+            title: track.title().to_string(),
+            album,
+            album_artist: None,
+            duration_secs: track.duration_secs() as u32,
+            track_number: track
+                .extra
+                .get("trackNumber")
+                .and_then(serde_json::Value::as_u64)
+                .map(|n| n as u32),
+            chosen_by_user,
+            isrc: track
+                .extra
+                .get("isrc")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            track_id: Some(track.id),
+            source_type: source.map(|s| s.kind.clone()),
+            source_id: source.map(|s| match &s.id {
+                serde_json::Value::String(v) => v.clone(),
+                other => other.to_string(),
+            }),
+        };
+        if let Err(e) = scrobble::notify_track_started(&self.state, payload).await {
+            log::debug!("[controller] scrobble start not recorded: {}", e.log_safe());
+        }
     }
 
     /// Play a single track, discarding the queue.
@@ -355,6 +408,8 @@ impl Controller {
                 match playback::play_tidal_track(&self.state, track.id, q.use_track_gain).await {
                     Ok(_) => {
                         q.begin(track.clone(), true);
+                        self.forget_armed();
+                        self.notify_started(&q, &track, true).await;
                         Outcome::Playing(track)
                     }
                     Err(e) => Outcome::Failed(PlayFailure::classify(&e)),
@@ -410,9 +465,120 @@ impl Controller {
             return Outcome::Nothing;
         };
         match playback::play_tidal_track(&self.state, cur.id, q.use_track_gain).await {
-            Ok(_) => Outcome::Playing(cur),
+            Ok(_) => {
+                self.forget_armed();
+                self.notify_started(&q, &cur, true).await;
+                Outcome::Playing(cur)
+            }
             Err(e) => Outcome::Failed(PlayFailure::classify(&e)),
         }
+    }
+
+    // ---------- gapless ----------
+
+    fn gapless_enabled(&self) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        utility::get_gapless_supported()
+            && self.state.gapless.load(Relaxed)
+            && !self.state.exclusive_mode.load(Relaxed)
+            && !self.state.bit_perfect.load(Relaxed)
+    }
+
+    /// Keeps the engine's "next track" slot in step with the queue. Call after
+    /// anything that can change what plays next (start, edits, shuffle, repeat).
+    pub async fn refresh_gapless(&self) {
+        const FAILURE_MEMO: Duration = Duration::from_secs(10);
+        let wanted = {
+            let q = self.queue.lock().await;
+            let prefs = self.prefs();
+            if !self.gapless_enabled() || q.current.as_ref().is_none_or(Track::is_video) {
+                None
+            } else {
+                q.pick_gapless_next(now_secs(), |t| prefs.blocks(t))
+                    .map(|t| (t.clone(), q.use_track_gain))
+            }
+        };
+        let Some((next, use_gain)) = wanted else {
+            let had = self.armed.lock().ok().and_then(|mut a| a.take()).is_some();
+            if had {
+                let _ = playback::clear_next_track(&self.state);
+            }
+            return;
+        };
+        let qid = next.qid.clone().unwrap_or_else(|| next.id.to_string());
+        if self
+            .armed
+            .lock()
+            .ok()
+            .is_some_and(|a| a.as_ref() == Some(&(next.id, qid.clone())))
+        {
+            return;
+        }
+        let recently_failed = self
+            .arm_failed
+            .lock()
+            .ok()
+            .and_then(|f| *f)
+            .is_some_and(|(id, at)| id == next.id && at.elapsed() < FAILURE_MEMO);
+        if recently_failed {
+            return;
+        }
+        match playback::set_next_track(&self.state, next.id, qid.clone(), use_gain).await {
+            Ok(_) => {
+                if let Ok(mut a) = self.armed.lock() {
+                    *a = Some((next.id, qid));
+                }
+            }
+            Err(e) => {
+                log::debug!("[controller] could not arm next track: {}", e.log_safe());
+                if let Ok(mut f) = self.arm_failed.lock() {
+                    *f = Some((next.id, std::time::Instant::now()));
+                }
+            }
+        }
+    }
+
+    /// The engine switched to the armed track by itself (`track-advanced`).
+    /// Audio reality wins: reconcile the queue and adopt it. Returns the track now playing.
+    pub async fn on_track_advanced(&self, payload: &serde_json::Value) -> Option<Track> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let track_id = payload.get("trackId").and_then(serde_json::Value::as_u64)?;
+        let qid = payload
+            .get("qid")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let rg = payload
+            .get("replayGain")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(f64::NAN);
+        let peak = payload
+            .get("peakAmplitude")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(f64::NAN);
+        // So a live volume-normalisation toggle is right for the new track.
+        self.state.last_replay_gain.store(rg.to_bits(), Relaxed);
+        self.state
+            .last_peak_amplitude
+            .store(peak.to_bits(), Relaxed);
+        self.forget_armed();
+        // The outgoing track finished: finalise its scrobble / play report.
+        crate::startup::on_track_finished(&self.state).await;
+
+        let mut q = self.queue.lock().await;
+        let track = match q.adopt_advanced(track_id, qid) {
+            Some(t) => t,
+            None => {
+                // Armed track no longer in the queue: audio is playing it anyway.
+                let meta = crate::commands::metadata::get_track(&self.state, track_id)
+                    .await
+                    .ok()?;
+                let t: Track = serde_json::from_value(meta).ok()?;
+                q.begin(t.clone(), false);
+                t
+            }
+        };
+        self.notify_started(&q, &track, false).await;
+        Some(track)
     }
 
     // ---------- persistence ----------

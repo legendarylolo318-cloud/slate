@@ -54,7 +54,10 @@ const CHAIN: &[Renderer] = &[
     Renderer::Software,
 ];
 
-pub fn run() -> anyhow::Result<()> {
+pub fn run(
+    incoming: Option<std::sync::mpsc::Receiver<String>>,
+    link: Option<String>,
+) -> anyhow::Result<()> {
     init_tracing();
 
     // `SLINT_BACKEND` wins: hand the decision to Slint untouched.
@@ -65,7 +68,7 @@ pub fn run() -> anyhow::Result<()> {
         .unwrap_or(0);
 
     let started = Instant::now();
-    let outcome = launch(forced.as_deref(), index);
+    let outcome = launch(forced.as_deref(), index, incoming, link);
 
     match outcome {
         Err(e) if forced.is_none() && started.elapsed() < RENDERER_STARTUP_WINDOW => {
@@ -86,7 +89,12 @@ pub fn run() -> anyhow::Result<()> {
     }
 }
 
-fn launch(forced: Option<&str>, index: usize) -> anyhow::Result<()> {
+fn launch(
+    forced: Option<&str>,
+    index: usize,
+    incoming: Option<std::sync::mpsc::Receiver<String>>,
+    link: Option<String>,
+) -> anyhow::Result<()> {
     let active = match forced {
         Some(name) => {
             tracing::info!(backend = name, "SLINT_BACKEND override in effect");
@@ -116,6 +124,23 @@ fn launch(forced: Option<&str>, index: usize) -> anyhow::Result<()> {
     crate::themes::apply(&window, &initial_theme);
     let backend = Backend::start(runtime.handle().clone(), &window, initial_theme);
     wire(&window, &backend);
+    if let Some(l) = link {
+        backend.queue_link(l);
+    }
+    if let Some(rx) = incoming {
+        let b = backend.clone();
+        // Messages from later launches: raise the window or open a link.
+        let spawned = std::thread::Builder::new()
+            .name("slate-links".into())
+            .spawn(move || {
+                for msg in rx {
+                    b.handle_message(&msg);
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::warn!("link forwarding unavailable: {e}");
+        }
+    }
     let b = backend.clone();
     window
         .window()
@@ -180,6 +205,14 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_seek, |b, f| b.seek(f));
     bind!(on_seek_relative, |b, d| b.seek_relative(d));
     bind!(on_set_volume, |b, v| b.set_volume(v));
+
+    let p = window.global::<ProfileState>();
+    let b = backend.clone();
+    p.on_save(move || b.save_profile());
+    let b = backend.clone();
+    p.on_pick_picture(move || b.pick_profile_picture());
+    let b = backend.clone();
+    p.on_remove_picture(move || b.remove_profile_picture());
 
     let g = window.global::<SettingsState>();
     let b = backend.clone();

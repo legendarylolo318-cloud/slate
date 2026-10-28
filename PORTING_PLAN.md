@@ -206,3 +206,12 @@ Open (not done): Windows build verification and Windows media controls/tray (blo
 gapless arming; scrobble `notify_track_started` submission; profile page + editing; Explore sub-pages;
 loved videos tab; shortcut overlay; deep links (`tidal://`) and single-instance; global shortcuts;
 unwrap/expect audit of inherited core code; wiremock tests; packaging scripts.
+
+## 12. Gaps closed in the last pass
+
+- **Scrobble / play-report submission**: `Controller` sends `notify_track_started` on every start (normal, previous, replay, restore, gapless) and finalises on track end; startup restores providers. *Live submission to a real scrobbler not verified.*
+- **Gapless**: `Queue::pick_gapless_next` (original `pickGaplessNext` rules, tested) + `Controller::refresh_gapless` (arms/clears the engine's next-track slot, 10 s failure memo) + `track-advanced` handling (`Queue::adopt_advanced`, qid-exact, tested). Only in normal output mode with gapless supported. *Audible gaplessness not verified live.*
+- **Single instance + `tidal://`**: local-socket IPC (`ipc.rs`), second launch forwards its link/raise and exits (verified live: 8 ms, first instance opened the album); link parser accepts only content references (`deeplink.rs`, tests). The renderer-fallback child skips the claim. Windows registry association is left to the installer.
+- **Profile page**: view/edit name, handle, bio, website and social links, upload (centre-crop to square JPEG, no crop UI) and remove picture, via the core commands.
+
+Remaining: Windows build + media controls/tray (blocked: no Windows host); shortcut overlay; Explore sub-pages; loved videos tab; global shortcuts; avatar crop UI; unwrap/expect audit of inherited core code; wiremock-based HTTP tests; packaging scripts; theme reload on window focus (watcher used instead).

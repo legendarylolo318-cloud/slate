@@ -71,4 +71,5 @@ Tokio on background threads; UI mutation only via `invoke_from_event_loop` /
 13. `build-scripts/`, `flake.nix`, metainfo and screenshots under `data/` are still upstream's and
     describe the Tauri build; they need replacing before any packaging.
 14. The interface-scale setting uses `SLINT_SCALE_FACTOR` at launch, so it needs a restart.
-15. Deep links (`tidal://`), single-instance forwarding and global shortcuts are not implemented.
+15. Global shortcuts are not implemented. `tidal://` + single instance use `interprocess` local sockets; on Windows the URL scheme registration must be done by the installer.
+16. Gapless and scrobble submission are implemented but were only unit-tested, not heard / observed against live services.

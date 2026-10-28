@@ -6,6 +6,7 @@
 - Project renamed from SONE to Slate (crates, binary, config dir, identifiers). Update checker disabled until Slate has its own release feed.
 
 ### Added
+- Gapless playback, scrobble/play-report submission, single-instance with `tidal://` deep links, profile page.
 - Slint UI: login (QR), library, search, home, album/artist/playlist/mix pages, queue and lyrics panels,
   full-screen player, mini-player, settings, 15 themes with a colour picker, signal-path panel, music video.
 - Playlist and folder management, favourites, add-to-playlist.
