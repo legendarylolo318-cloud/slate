@@ -5875,6 +5875,8 @@ dependencies = [
  "anyhow",
  "arboard",
  "futures-util",
+ "gstreamer",
+ "gstreamer-app",
  "image",
  "ksni",
  "lru",

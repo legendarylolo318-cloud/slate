@@ -1,14 +1,16 @@
 # Reviewer handoff — Slate (port of lullabyX/sone)
 
-**State: partial port.** Steps 1–2 are implemented: login (code + QR), a track-ID box and a
-player bar. There are no library/search/queue screens yet, so the app is not usable day to day. See
-`PORTING_PLAN.md` for the per-feature table.
+**State: substantial but incomplete port.** The Slint app covers login, library, search, home,
+album/artist/playlist/mix pages, queue, lyrics, full-screen player, mini-player, settings, themes,
+signal path and music video on Linux. Gaps are listed in `PORTING_PLAN.md` §11. Everything was
+developed and smoke-tested on one Linux/Wayland machine with one TIDAL account.
 
 ## What is verified
-- `cargo test --workspace`: 367 core unit tests + 16 integration/guard tests pass (Linux).
+- `cargo test --workspace`: ~400 core tests, ~37 app tests and the source guards pass (Linux).
 - `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`: clean.
-- Not verified: running the Slint window (no display in the authoring environment), any
-  Windows build, any live TIDAL call.
+- Exercised live: sign-in, playback, library/playlist pages, artwork, queue, folders listing, settings
+  page, themes. **Not exercised live**: music video, miniplayer, signal-path panel, scrobbling,
+  Discord, MCP/overlay toggles, proxy, exclusive/bit-perfect output, any Windows build.
 
 ## Architecture
 - `slate-core` — no UI/Tauri deps. `AppState` owns audio, client, caches, scrobbling,
@@ -58,3 +60,15 @@ Tokio on background threads; UI mutation only via `invoke_from_event_loop` /
       maintainer, then `APPLICATION_ID` swapped.
     - Not yet renamed: `data/` (desktop file, metainfo), `build-scripts/`, the checkout directory,
       README body (still upstream text) — handled in the final cleanup.
+11. Threading model (as built): `tokio` multi-thread runtime owns all network, disk and GStreamer
+    work; `Backend` (cheaply cloneable) forwards UI callbacks to it and publishes results with
+    `Weak<AppWindow>::upgrade_in_event_loop` (wrapped in `Backend::ui`). Lists use a custom lazy
+    `slint::Model` (`models::LazyTracks`); async results find it by downcasting the window's model.
+    MPRIS runs on its own current-thread runtime. Video frames are dropped (not queued) when the UI
+    thread is behind.
+12. Renderer fallback relaunches the process; if a renderer "starts" but draws nothing, that is not
+    detected.
+13. `build-scripts/`, `flake.nix`, metainfo and screenshots under `data/` are still upstream's and
+    describe the Tauri build; they need replacing before any packaging.
+14. The interface-scale setting uses `SLINT_SCALE_FACTOR` at launch, so it needs a restart.
+15. Deep links (`tidal://`), single-instance forwarding and global shortcuts are not implemented.

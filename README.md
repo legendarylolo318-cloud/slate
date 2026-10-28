@@ -1,612 +1,117 @@
-> **Slate** is a fork / port of [lullabyX/sone](https://github.com/lullabyX/sone), rewritten from Tauri + React
-> to a native Rust + [Slint](https://slint.dev) UI. It is **work in progress**: see
-> [PORTING_PLAN.md](PORTING_PLAN.md) for status and [HANDOFF.md](HANDOFF.md) for reviewer notes. All credit for the
-> original design and backend goes to lullabyX and SONE's contributors; the GPL-3.0-only license is retained.
-> The sections below still describe the upstream project and will be rewritten when the port is complete.
+# Slate
 
-<div align="center">
-  <img src="sone.png" alt="SONE" width="150">
-  <h1>SONE</h1>
-<p>The native desktop client for <a href="https://tidal.com">TIDAL</a> on Linux. Lossless streaming with bit-perfect ALSA output up to 24-bit/192kHz (MAX) — your DAC, not your browser's resampler.</p>
+A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust with a
+[Slint](https://slint.dev) UI. No webview, no Node.
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Platform: Linux](https://img.shields.io/badge/Platform-Linux-yellow.svg)]()
-[![Built with Tauri 2](https://img.shields.io/badge/Built_with-Tauri_2-orange.svg)](https://v2.tauri.app/)
+> **Slate is a fork and port of [SONE](https://github.com/lullabyX/sone) by lullabyX.**
+> The backend (TIDAL client, audio engine, scrobbling, proxy handling, MCP/OBS servers)
+> comes from SONE; the Tauri + React frontend was replaced by a Slint UI and the logic
+> that lived in the frontend (queue, shuffle/repeat, lyrics timing, themes) was ported to Rust.
+> All credit for the original design and backend goes to lullabyX and SONE's contributors.
+> Licensed under **GPL-3.0-only**, same as the original. Slate is **not affiliated with
+> TIDAL**.
 
-  <div align="center">
-    <a href="https://flathub.org/apps/io.github.lullabyX.sone">
-      <img height="60" align="middle" alt="Download on Flathub" src="https://flathub.org/api/badge?locale=en"/>
-    </a>  
-    <a href="https://snapcraft.io/sone">
-      <img height="64" align="middle" alt="Get it from the Snap Store" src="https://snapcraft.io/static/images/badges/en/snap-store-black.svg"/>
-    </a>
-  </div>
-</div>
+> **Status: work in progress.** See [PORTING_PLAN.md](PORTING_PLAN.md) for what is done,
+> and [HANDOFF.md](HANDOFF.md) for known issues and what has not been tested.
 
-> [!IMPORTANT]
-> Requires an active [TIDAL](https://tidal.com) subscription. Not affiliated with TIDAL.
-
-https://github.com/user-attachments/assets/67d7a8ed-352b-4ce6-8b9c-70b7427a5f22
-
-<p align="center">
-  <img src="data/sone_homepage_readme.png" width="32%" alt="SONE Linux TIDAL client — home page with lossless streaming library" />
-  <img src="data/sone_drawer_readme.png" width="32%" alt="SONE now playing drawer — Hi-Res FLAC playback with synced lyrics" />
-  <img src="data/sone_theme_readme.png" width="32%" alt="SONE custom theme — native Linux music player with full color customization" />
-</p>
-
-## The Vision
-
-The Linux desktop app TIDAL never built.
-
-SONE finally gives Linux users a first-class streaming client. It delivers the complete, fully-featured experience you expect with seamless library management and a sleek, familiar workflow—and then supercharges it.
-
-We went beyond the basics with direct-to-DAC bit-perfect ALSA output, a resizable-adaptive floating miniplayer, music video playback, custom themes, Discord Rich Presence, and multi-service scrobbling (Last.fm, Libre.fm, ListenBrainz)—all wrapped in a fast, native Linux app.
-
-<details>
-<summary>Table of Contents</summary>
-
-- [Features](#features)
-- [Why SONE?](#why-sone)
-- [Installation](#installation)
-- [Usage](#usage)
-- [FAQ](#faq)
-- [Tech Stack](#tech-stack)
-- [Contributing](#contributing)
-- [Disclaimer](#disclaimer)
-- [License](#license)
-
-</details>
+<!-- Screenshots: add images here -->
+*Screenshots: placeholder.*
 
 ## Features
 
-### Audio
+- Sign in with a device code + QR code; session kept in an encrypted config (AES-256-GCM,
+  key in the OS keyring).
+- Home, Search (tracks, artists, albums, playlists, videos), Library (Loved Tracks, albums,
+  artists, mixes, playlists and folders), Album / Artist / Mix / Playlist pages.
+- Lazy, virtualised track lists (thousands of tracks stay smooth) and a bounded
+  thumbnail cache.
+- Queue panel, shuffle (order restored when turned off), repeat, history, autoplay radio,
+  queue persisted across restarts.
+- Synced lyrics (click a line to seek), full-screen player, adaptive mini-player window,
+  music-video playback.
+- Audio: GStreamer engine, ReplayGain normalisation, maximum-quality cap with automatic
+  fallback, exclusive and bit-perfect ALSA output with DAC detection (Linux), Signal Path
+  panel with a PRISTINE / MODIFIED verdict.
+- Scrobbling to Last.fm, Libre.fm and ListenBrainz; TIDAL play reporting (toggleable);
+  Discord Rich Presence.
+- HTTP / HTTPS / SOCKS5 proxy with fail-closed behaviour.
+- MCP server (`127.0.0.1:5577`) and OBS overlay (`127.0.0.1:5578`), both off by default.
+- 15 theme presets, custom colours with a built-in picker, `theme.json` with live reload,
+  interface scale setting.
+- MPRIS and tray on Linux. Keyboard shortcuts: `Space` play/pause, `←/→` seek, `Ctrl+←/→`
+  previous/next, `M` mute, `S` shuffle, `R` repeat, `Q` queue, `L` lyrics, `F` full screen,
+  `/` search.
 
-- **Lossless FLAC and MQA streaming** up to Hi-Res (24-bit/192kHz) with automatic quality fallback
-- **Max streaming quality** — cap streaming at your preferred quality tier
-- **Bit-perfect output** — no resampling, no dithering. Your DAC receives the unaltered decoded signal
-- **Exclusive ALSA** — bypasses PipeWire/PulseAudio entirely for direct hardware access
-- **Smart DAC matching** — automatically detects your hardware's supported formats and sample rates, picking the best fit
-- **Signal Path Transparency** — see exactly what your audio is going through end-to-end. Probes the live GStreamer pipeline, OS mixer (`pactl`), and ALSA card (`/proc/asound`); flags every conversion, format mismatch, or volume alteration with a PRISTINE verdict for bit-clean playback
-- **Volume normalization** (ReplayGain) with automatic context switching between album and track gain
-- **Autoplay** — discovers and plays similar tracks when your queue ends
-- **Gapless playback** — seamless, silence-free transitions between tracks in normal output mode. On by default, with automatic fallback when unavailable
+Not yet done (see the plan): Windows media controls and tray, gapless arming,
+scrobble submission, profile page, Explore sub-pages, shortcut overlay.
 
-### Video
+## Build
 
-- **Music video playback** — a dedicated player (fullscreen or minimized to the bar) with adaptive HLS that starts at your selected quality; videos and tracks share one queue (shuffle, repeat, autoplay, history) controllable from the tray, MPRIS media keys, miniplayer, and shortcuts
-- **Favorite & browse** — love videos separately from tracks, with dedicated Tracks/Videos tabs on your loved page — a paginated, searchable grid with tab-aware Play/Shuffle
-- **Find videos** — add them to playlists (mixed playlists show accurate "N Videos · M Tracks"), and discover them across Explore and search — a Videos section, a dedicated Videos tab, and rows in Top Hits
+Requirements: a recent stable Rust toolchain and GStreamer 1.20+ (1.24+ for gapless).
 
-### Interface
-
-- **Custom themes** — 15 presets and a full color picker for accent and background with both light/dark mode
-- **Lyrics** — synced lyrics display for supported tracks
-- **Miniplayer** — compact floating window with album art, playback controls, and resizable-adaptive layout
-- **Full-screen player** — maximized view with album art, lyrics option and auto-hiding controls
-- **Queue persistence** — picks up where you left off across restarts
-- **MPRIS integration** — media keys, shuffle, repeat, seek, and desktop widget support
-- **System tray** with playback controls and minimize-to-tray
-- **Keyboard shortcuts** for all common actions with a built-in shortcut overlay
-
-### Library
-
-- **Library management** — browse and sort your playlists, albums, artists, and mixes with playlist folder support
-- **Share** — share tracks, albums, playlists, artists, and mixes with your friends via a direct TIDAL link
-- **Deep links** — open `tidal://` URLs directly in SONE
-- **Profile** — edit your bio, social links, and avatar
-
-### Integrations
-
-- **MCP server** — built-in [Model Context Protocol](https://modelcontextprotocol.io) server on port 5577 lets external AI agents (Claude Code, etc.) search your library, control playback, and manage playlists/favorites. Off by default; enable in Settings with one-click token generation
-- **OBS overlay** — built-in browser source widget (port 5578) displays the currently playing track — album art, title, artist, audio quality badge, and a live progress bar — in any streaming software. Off by default; Enable in Settings, add the URL as a Browser Source in OBS at 400×120px. Inherits your active SONE theme automatically
-- **Scrobbling** — track your listening history on Last.fm, Libre.fm, and ListenBrainz with full ISRC and MusicBrainz metadata
-- **Play reporting** — reports finished plays to TIDAL so Recently Played reflects what you listen to in SONE. On by default; turn it off in Settings → Scrobbling
-- **Discord Rich Presence** — show what you're listening to with album art, track info, and a direct TIDAL link
-- **Proxy support** — route everything through an HTTP, HTTPS, or SOCKS5 proxy, including audio playback, with optional username and password. If the proxy can't be reached, SONE stops rather than sending your traffic around it
-
-## Why SONE?
-
-SONE is a lightweight, native alternative to the official TIDAL web player and Electron-based unofficial clients.
-
-- **Full audio quality** — browsers and Electron apps downsample audio to 48kHz before it leaves the application. SONE is native — it outputs at the source's original sample rate, up to 192kHz (TIDAL's max). Exclusive ALSA mode bypasses the system mixer entirely for bit-perfect output to your DAC.
-- **Familiar interface** — a modern UI inspired by the streaming apps you already use
-- **Direct hardware access** — GStreamer talks directly to your audio hardware. Lock your DAC to the exact source format, bypassing the system mixer
-- **Lightweight** — built with Tauri and Rust. Small binary, low memory footprint
-- **Encrypted at rest** — credentials, cache, and settings are encrypted with AES-256-GCM
-- **No telemetry, no tracking** — fully open source under GPL-3.0. SONE collects no telemetry and sends nothing to its developers. Finished plays are reported to TIDAL so Recently Played works; turn it off in Settings → Scrobbling
-
-## Installation
-
-### Flathub
-
-SONE is officially available on Flathub, making it easy to install on any Linux distribution. You can install it via your software center or by using the CLI:
-
-**Install the application**
-
-```
-flatpak install flathub io.github.lullabyX.sone
-```
-
-**Run the application**
-
-```
-flatpak run io.github.lullabyX.sone
-```
-
-<a href="https://flathub.org/apps/io.github.lullabyX.sone">
-  <img width="200" alt="Download on Flathub" src="https://flathub.org/api/badge?locale=en"/>
-</a>
-
-### OS Packages
-
-Pre-built packages for Ubuntu/Debian (.deb), Fedora (.rpm), openSUSE (.rpm), and Arch Linux (PKGBUILD) are available on the [GitHub Releases](https://github.com/lullabyX/sone/releases) page.
-
-<p align="center">
-  <a href="https://github.com/lullabyX/sone/releases/latest">
-    <img src="https://img.shields.io/badge/Debian%20/%20Ubuntu-.deb-A81D33?style=for-the-badge&logo=debian" height="60" alt="Download SONE .deb package for Debian and Ubuntu" />
-  </a>
-  <a href="https://github.com/lullabyX/sone/releases/latest">
-    <img src="https://img.shields.io/badge/Fedora-.rpm-51A2DA?style=for-the-badge&logo=fedora" height="60" alt="Download SONE .rpm package for Fedora Linux" />
-  </a>
-  <a href="https://github.com/lullabyX/sone/releases/latest">
-    <img src="https://img.shields.io/badge/openSUSE-.rpm-73BA25?style=for-the-badge&logo=opensuse" height="60" alt="Download SONE .rpm package for openSUSE Linux" />
-  </a>
-  <a href="https://github.com/lullabyX/sone/releases/latest">
-    <img src="https://img.shields.io/badge/Arch%20Linux-PKGBUILD-1793D1?style=for-the-badge&logo=archlinux" height="60" alt="Download SONE PKGBUILD for Arch Linux and Manjaro" />
-  </a>
-  <a href="https://aur.archlinux.org/packages/sone">
-    <img src="https://img.shields.io/badge/AUR-sone-1793D1?style=for-the-badge&logo=archlinux" height="60" alt="Install SONE from AUR (build from source)" />
-  </a>
-  <a href="https://aur.archlinux.org/packages/sone-bin">
-    <img src="https://img.shields.io/badge/AUR-sone--bin-1793D1?style=for-the-badge&logo=archlinux" height="60" alt="Install SONE from AUR (pre-built binary)" />
-  </a>
-</p>
-
-Or add the repository so `apt upgrade` / `dnf upgrade` / `zypper up` keep SONE current automatically (the setup script auto-detects your distro and imports the signing key):
-
-<details>
-<summary><b>Debian / Ubuntu (apt)</b></summary>
+### Arch Linux
 
 ```bash
-curl -1sLf 'https://dl.cloudsmith.io/public/lullabyx/sone/setup.deb.sh' | sudo -E bash
-sudo apt install sone
+sudo pacman -S --needed base-devel clang pkgconf rust gstreamer gst-plugins-base \
+  gst-plugins-good gst-plugins-bad gst-libav alsa-lib dbus openssl fontconfig \
+  libxkbcommon wayland libx11 vulkan-icd-loader
 ```
 
-Derivatives (Kubuntu, Linux Mint, Pop!\_OS, Zorin, MX, LMDE) use the same command.
-
-</details>
-
-<details>
-<summary><b>Fedora (dnf)</b></summary>
+### Debian / Ubuntu
 
 ```bash
-curl -1sLf 'https://dl.cloudsmith.io/public/lullabyx/sone/setup.rpm.sh' | sudo -E bash
-sudo dnf install sone
+sudo apt install build-essential clang pkg-config libgstreamer1.0-dev \
+  libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-libav libasound2-dev libdbus-1-dev libssl-dev libfontconfig1-dev \
+  libxkbcommon-dev libwayland-dev libx11-dev libvulkan-dev
 ```
 
-</details>
-
-<details>
-<summary><b>openSUSE (zypper)</b></summary>
+### Fedora
 
 ```bash
-curl -1sLf 'https://dl.cloudsmith.io/public/lullabyx/sone/setup.rpm.sh' | sudo -E bash
-sudo zypper install sone
+sudo dnf install gcc gcc-c++ clang pkgconf-pkg-config gstreamer1-devel \
+  gstreamer1-plugins-base-devel gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+  gstreamer1-libav alsa-lib-devel dbus-devel openssl-devel fontconfig-devel \
+  libxkbcommon-devel wayland-devel libX11-devel vulkan-loader-devel
 ```
 
-</details>
+### Windows
 
-<details>
-<summary><b>Arch Linux (AUR)</b></summary>
+1. Install Rust with the **MSVC** toolchain (`rustup default stable-x86_64-pc-windows-msvc`)
+   and the Visual Studio Build Tools (C++ workload).
+2. Install the official GStreamer **MSVC 64-bit runtime and development** packages from
+   <https://gstreamer.freedesktop.org/download/>, then set `GSTREAMER_1_0_ROOT_MSVC_X86_64`
+   and add `%GSTREAMER_1_0_ROOT_MSVC_X86_64%\bin` to `PATH` and
+   `%GSTREAMER_1_0_ROOT_MSVC_X86_64%\lib\pkgconfig` to `PKG_CONFIG_PATH` (pkg-config is required).
+3. `cargo build --release`.
+
+> The Windows build has **not been verified** yet; ALSA-only options are hidden there and
+> media controls / tray are not implemented on Windows.
+
+## Run
 
 ```bash
-yay -S sone-bin    # prebuilt binary — or 'yay -S sone' to build from source
+cargo run --release -p slate        # or ./target/release/slate
 ```
 
-</details>
+Settings and cache live in `~/.config/slate` (`%APPDATA%\slate` on Windows). Log level is
+controlled with `SLATE_LOG` (default `info`), e.g. `SLATE_LOG=slate=debug,info`.
 
-<p align="center">
-  <a href="https://cloudsmith.com">
-    <img src="https://img.shields.io/badge/OSS%20hosting%20by-cloudsmith-blue?logo=cloudsmith&style=for-the-badge" alt="Package hosting by Cloudsmith" />
-  </a>
-</p>
+### Renderer
 
-### Snap Store
+Slate tries Skia (Vulkan), then Skia (OpenGL), then FemtoVG, then the software renderer,
+relaunching itself with the next one if a renderer fails to start, and logs the one in use.
+Force one with Slint's variable, e.g. `SLINT_BACKEND=winit-femtovg` or
+`SLINT_BACKEND=winit-software`. Cargo features: `renderer-skia-vulkan` (default),
+`renderer-femtovg`, `renderer-software`.
 
-SONE is available on the Snap Store for any distribution with snap support. Install it via your software center or the CLI:
-
-**Install the application**
-
-```
-sudo snap install sone
-```
-
-**Run the application**
-
-```
-sone
-```
-
-> For exclusive / bit-perfect ALSA output, also connect the hardware-access interface:
->
-> ```
-> sudo snap connect sone:alsa
-> ```
-
-<a href="https://snapcraft.io/sone">
-  <img width="200" style="border-radius: 8px;" alt="Get it from the Snap Store" src="https://snapcraft.io/static/images/badges/en/snap-store-black.svg"/>
-</a>
-
-### Nix
-
-SONE ships a [Nix flake](flake.nix). On any system with Nix and flakes enabled, run it without installing:
+## Development
 
 ```bash
-nix run github:lullabyX/sone
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-Or install it into your profile:
-
-```bash
-nix profile install github:lullabyX/sone
-```
-
-The flake builds from source (no binary cache yet) and also exposes a development shell with every build and runtime dependency wired up:
-
-```bash
-nix develop github:lullabyX/sone   # then: pnpm tauri dev
-```
-
-### Building from source
-
-**Rust:**
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-```
-
-**Node.js** 22+ (via [nvm](https://github.com/nvm-sh/nvm), [fnm](https://github.com/Schniz/fnm), or your preferred method)
-
-**pnpm** 11.x:
-
-```bash
-npm install -g pnpm@11.1.3
-# or, if corepack ships with your Node install:
-corepack enable
-```
-
-**System dependencies:**
-
-<details>
-<summary>Ubuntu / Debian</summary>
-
-```bash
-sudo apt install -y \
-    build-essential curl wget file patchelf \
-    libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libdbus-1-dev \
-    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-    gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav \
-    libsecret-1-dev libasound2-dev xdg-utils \
-    pulseaudio-utils
-```
-
-`pulseaudio-utils` provides the `pactl` binary, used by the signal-path panel to read OS mixer state (sink format/rate, volume, mute) in Normal mode. SONE runs without it but the Normal-mode panel will show degraded info. Exclusive mode is unaffected.
-
-Optional (for exclusive ALSA output):
-
-```bash
-sudo apt install -y gstreamer1.0-alsa
-```
-
-</details>
-
-<details>
-<summary>Fedora</summary>
-
-```bash
-sudo dnf install -y \
-    gcc gcc-c++ make curl wget file patchelf \
-    webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel openssl-devel dbus-devel \
-    gstreamer1-devel gstreamer1-plugins-base-devel \
-    gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-libav \
-    libsecret-devel alsa-lib-devel xdg-utils \
-    pulseaudio-utils
-```
-
-`pulseaudio-utils` provides the `pactl` binary, used by the signal-path panel to read OS mixer state (sink format/rate, volume, mute) in Normal mode. SONE runs without it but the Normal-mode panel will show degraded info. Exclusive mode is unaffected.
-
-Optional (for exclusive ALSA output):
-
-```bash
-sudo dnf install -y gstreamer1-plugins-base-tools
-```
-
-</details>
-
-<details>
-<summary>Arch Linux</summary>
-
-#### AUR
-
-SONE is available on the AUR in two variants:
-
-- [`sone`](https://aur.archlinux.org/packages/sone) — builds from source
-- [`sone-bin`](https://aur.archlinux.org/packages/sone-bin) — pre-built binary, no compilation required
-
-**Install with your AUR helper:**
-
-```bash
-yay -S sone       # build from source
-# or
-yay -S sone-bin   # pre-built binary
-```
-
-#### Manual Install
-
-```bash
-sudo pacman -S --needed \
-    base-devel curl wget file patchelf \
-    webkit2gtk-4.1 gtk3 libayatana-appindicator librsvg openssl dbus \
-    gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav \
-    libsecret alsa-lib xdg-utils \
-    libpulse
-```
-
-`libpulse` provides the `pactl` binary, used by the signal-path panel to read OS mixer state (sink format/rate, volume, mute) in Normal mode. SONE runs without it but the Normal-mode panel will show degraded info. Exclusive mode is unaffected.
-
-Optional (for exclusive ALSA output):
-
-```bash
-sudo pacman -S --needed gst-plugin-pipewire alsa-plugins
-```
-
-</details>
-
-**Build and run:**
-
-```bash
-git clone https://github.com/lullabyX/sone.git
-cd sone
-pnpm install
-pnpm tauri dev             # Development mode
-pnpm tauri build           # Release build (produces .deb, .rpm, .AppImage)
-```
-
-**Using build scripts:**
-
-Docker-based build scripts are provided in `build-scripts/build/` to produce distro-specific packages in isolated environments. Requires Docker.
-
-```bash
-./build-scripts/build/all.sh              # Build all packages in parallel (deb, rpm, pacman)
-./build-scripts/build/deb.sh              # Build .deb only (Ubuntu 22.04)
-./build-scripts/build/rpm.sh              # Build .rpm only (Fedora)
-./build-scripts/build/pacman.sh           # Build pacman package only (Arch)
-./build-scripts/build/all.sh --omit rpm   # Build all except rpm
-```
-
-Output goes to `dist/<format>/`. Pass `--no-cache` to force a clean Docker build.
-
-## Usage
-
-1. Launch the app
-2. Click **Get Login Code**. You'll be automatically redirected to the official [link.tidal.com](https://link.tidal.com) to login and approve the code. Optionally, you can scan the **QR Code** to login via your mobile device.
-3. Your library loads automatically — browse and play!
-
-> [!NOTE]
-> **NVIDIA GPU users:** If you see a blank window, rendering glitches, or a Wayland protocol error on launch, start the app with:
->
-> ```bash
-> WEBKIT_DISABLE_COMPOSITING_MODE=1 sone
-> ```
-
-<details>
-<summary>Troubleshooting</summary>
-
-**No sound?**
-Make sure GStreamer plugins are installed — you need at minimum `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, `gstreamer1.0-plugins-bad`, and `gstreamer1.0-libav` (or your distro's equivalents).
-
-**Audio won't play with a proxy enabled?**
-A proxy that requires a username and password needs GStreamer's curl source (`curlhttpsrc`), which SONE uses in place of the default HTTP source. Check whether you have it:
-
-```bash
-gst-inspect-1.0 curlhttpsrc
-```
-
-If it's missing, install the GStreamer "bad" plugin set and restart SONE — `gstreamer1.0-plugins-bad` (Debian/Ubuntu), `gst-plugins-bad` (Arch), `gstreamer-plugins-bad` (openSUSE), or `gstreamer1-plugins-bad-free` on Fedora 42+ (`gstreamer1-plugins-bad-free-extras` on Fedora 41 and earlier). Curl support is a build-time option, so the element can be missing even when the package is installed. The Flatpak build always includes it.
-
-**Playback errors in exclusive/bit-perfect mode?**
-SONE automatically detects your DAC's supported formats and sample rates, but if playback still fails, your hardware may not support the source format at all. Try a lower quality tier or switch to normal output mode.
-
-**"Error 71 (Protocol error) dispatching to Wayland display" on launch?**
-This is a known WebKitGTK/Wayland issue affecting Tauri apps on systems with NVIDIA GPUs ([tauri-apps/tauri#10702](https://github.com/tauri-apps/tauri/issues/10702)). As a workaround, launch SONE with the DMA-BUF renderer disabled:
-
-```bash
-WEBKIT_DISABLE_DMABUF_RENDERER=1 sone
-```
-
-If you're using X11 or don't have an NVIDIA GPU but still see this error, try updating your WebKitGTK and graphics drivers to the latest versions.
-
-**Blank window or rendering glitches on NVIDIA?**
-If the app launches but shows a blank/white window or has visual artifacts, try disabling WebKit's compositing mode:
-
-```bash
-WEBKIT_DISABLE_COMPOSITING_MODE=1 sone
-```
-
-This is a known issue with NVIDIA's proprietary drivers and WebKitGTK hardware acceleration.
-
-</details>
-
-## Custom theme file
-
-The theme presets/custom colors are stored in `theme.json`, inside SONE's config
-directory. **That directory depends on how you installed SONE**, because Flatpak
-and Snap both redirect `XDG_CONFIG_HOME` into their own sandbox:
-
-| Install | `theme.json` |
-| --- | --- |
-| Native (AUR, `.deb`, `.rpm`, AppImage) | `~/.config/sone/theme.json` |
-| Flatpak | `~/.var/app/io.github.lullabyX.sone/config/sone/theme.json` |
-| Snap | `~/snap/sone/current/.config/sone/theme.json` |
-
-A sandboxed SONE cannot read `~/.config/sone/`, so tools that write the theme
-for you need the matching path above.
-
-SONE reads the file at startup and **watches it while running**, so an external
-edit is applied straight away — even when SONE is unfocused or sitting in the
-tray. The watch can miss edits: it may fail to start (SONE logs a warning), it
-is not re-armed for the rest of the session if the config directory is deleted
-and recreated, and on filesystems where inotify does not work (NFS, sshfs, some
-overlay mounts) it starts but then never fires. In all of these the file is
-still read at startup, so restarting SONE always applies it.
-
-```json
-{
-    "version": 1,
-    "preset": "custom",
-    "custom": {
-        "accent": "#3B82F6",
-        "background": "#0E1118"
-    }
-}
-```
-
-- `preset` = `"custom"`, or one of the built-in preset names (e.g. `"Ocean"`, `"Forest"`, `"Noir"`), case-sensitive.
-- `custom.accent` / `custom.background` = `#RGB` or `#RRGGBB` colors.
-- Both keys are required, even when `preset` names a built-in — `{"preset": "Ocean"}` on its own is rejected.
-- Strict JSON only: comments and trailing commas are not accepted.
-
-When `preset` names a built-in, that preset's colors win and `custom` is ignored
-for display. SONE rewrites `custom` to match the preset the next time you change
-the theme in Settings.
-
-A file SONE cannot parse is left alone and the in-app theme is kept. Fix the
-file and the watcher picks it up, or change the theme in Settings to overwrite
-it.
-
-## FAQ
-
-<details>
-<summary>Is SONE free and open source?</summary>
-
-Yes. SONE is fully open source under the GPL-3.0 license, with no telemetry or tracking — SONE itself collects nothing about you. Your play history is reported to TIDAL so Recently Played reflects what you play in SONE; disable it in Settings → Scrobbling.
-
-</details>
-
-<details>
-<summary>Do I need a TIDAL subscription?</summary>
-
-Yes. SONE is a client for TIDAL and requires an active paid TIDAL subscription. SONE is an independent project and is not affiliated with or endorsed by TIDAL.
-
-</details>
-
-<details>
-<summary>Which Linux distributions are supported?</summary>
-
-Any modern Linux distribution. SONE is on Flathub (works everywhere), and ships native packages for Debian/Ubuntu (`.deb`), Fedora and openSUSE (`.rpm`), and Arch Linux (AUR).
-
-</details>
-
-<details>
-<summary>Does SONE support offline downloads?</summary>
-
-No. SONE is a streaming client only — it streams directly from TIDAL and does not download tracks for offline playback.
-
-</details>
-
-<details>
-<summary>Can I watch music videos?</summary>
-
-Yes. SONE plays TIDAL music videos in a dedicated player — fullscreen or minimized to the player bar — and videos share the same queue, shuffle, repeat, autoplay, favorites, and history as your audio tracks. You can browse and search videos, love them, and add them to playlists. Video audio is streamed and does not use the bit-perfect lossless signal path that music tracks use.
-
-</details>
-
-<details>
-<summary>I'm getting a "Device busy" error in exclusive or bit-perfect mode</summary>
-
-Your system's sound server (PulseAudio or PipeWire) or another application is already using the ALSA device. Exclusive and bit-perfect modes need direct hardware access — only one application can hold the device at a time.
-
-To fix this, either close the other application using the device, or select a different output device in SONE's settings.
-
-</details>
-
-<details>
-<summary>What is the difference between exclusive mode and bit-perfect mode?</summary>
-
-Both bypass your system's sound server (PulseAudio/PipeWire) and write directly to the ALSA hardware device. The difference is in how much processing happens before audio reaches your DAC.
-
-**Exclusive mode** locks the ALSA device so no other application can use it. Audio is converted to a fixed format (32-bit integer, stereo) while preserving the source's native sample rate — no resampling occurs. You still have software volume control and volume normalization (ReplayGain).
-
-**Bit-perfect mode** goes a step further. There is zero processing — no format conversion, no resampling, no volume control. The decoded audio reaches your DAC exactly as it was encoded. The volume slider is locked at 100% and disabled. This is the mode to use if you want the purest signal path to your DAC.
-
-In short: exclusive gives you direct hardware access with volume control. Bit-perfect gives you a completely unaltered signal.
-
-</details>
-
-<details>
-<summary>Discord Rich Presence isn't showing up (Flatpak or Snap)</summary>
-
-Discord Rich Presence talks over a socket in your session's runtime directory. Sandboxed packages are restricted there, so the fix depends on how you installed SONE. Native packages (`.deb`, `.rpm`, AUR) are unaffected.
-
-**Flatpak** — start Discord *before* SONE.
-
-A Flatpak grants access to that socket when the sandbox starts. If Discord isn't running yet, there is nothing to grant, and the socket stays invisible to SONE for the rest of that run no matter how long Discord has been up since. Quitting SONE and reopening it after Discord is running is enough.
-
-Flatpak and Vesktop builds of Discord work in either order. Only Discord installed natively or from Snap needs the ordering, and this cannot be fixed from SONE's side — the permission has to resolve before the app starts.
-
-If you'd rather not think about launch order, grant SONE your whole runtime directory once:
-
-```bash
-flatpak override --user --filesystem=/run/user/$(id -u) io.github.lullabyX.sone
-```
-
-**Snap** — the connection is blocked outright.
-
-Snap's strict confinement lets SONE *see* Discord's socket but denies the connection to it, and no Snap interface can grant it. SONE logs this rather than silently reporting Discord as absent:
-
-```
-Discord IPC socket at /run/user/1000/discord-ipc-0 exists but the sandbox
-denied the connection; Rich Presence cannot reach Discord from this package
-```
-
-SONE can only reach sockets inside its own runtime directory, so forward Discord's into it:
-
-```bash
-mkdir -p $XDG_RUNTIME_DIR/snap.sone
-socat UNIX-LISTEN:$XDG_RUNTIME_DIR/snap.sone/discord-ipc-0,fork \
-      UNIX-CONNECT:$XDG_RUNTIME_DIR/discord-ipc-0
-```
-
-Leave that running and SONE will find it. Run it before starting SONE, or restart SONE afterwards. To make it permanent, wrap it in a systemd user service. If you'd rather not, install the Flatpak or a native package instead.
-
-</details>
-
-## Tech Stack
-
-- **Backend:** Rust ([Tauri 2](https://v2.tauri.app/))
-- **Frontend:** React 19, Tailwind 4, Jotai
-- **Audio:** [GStreamer](https://gstreamer.freedesktop.org/)
-- **Config:** `~/.config/sone/`
-
-## Contributing
-
-Issues and pull requests are welcome on [GitHub](https://github.com/lullabyX/sone). To set up a development environment, follow the [Building from source](#building-from-source) instructions. AI-assisted contributions are welcome, as long as they're reviewed and manually tested.
-
-If you enjoy using SONE, consider giving the project a star to help others find it.
-
-## Disclaimer
-
-SONE is an independent, community-driven project. It is **not affiliated with, endorsed by, or connected to TIDAL** in any way. All content is streamed directly from TIDAL's service and requires a valid paid subscription. SONE is a streaming client only — it does not support offline downloads, and does not redistribute or circumvent protection of any content. As with any third-party client, please be aware of TIDAL's terms of use.
-
-SONE is developed with AI assistance; every change is reviewed and tested before release.
-
-All trademarks belong to their respective owners.
-
-## License
-
-[GPL-3.0-only](LICENSE)
-
----
-
-**TL;DR** — SONE is an open-source, native Linux desktop client for TIDAL built with Tauri 2 and Rust. It streams lossless FLAC and Hi-Res audio up to 24-bit/192kHz, with exclusive ALSA output that bypasses PulseAudio and PipeWire entirely for bit-perfect playback directly to your DAC. It also plays TIDAL music videos in a dedicated player — fullscreen or minimized to the bar — that shares a single queue (shuffle, repeat, autoplay, favorites, and history) with your audio tracks. Lightweight and encrypted at rest, with no telemetry or tracking.
+Layout: `crates/slate-core` (all non-UI logic, no Slint) and `crates/slate-app` (Slint UI and
+platform glue). See [HANDOFF.md](HANDOFF.md) for the architecture and threading model.

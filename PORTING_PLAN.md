@@ -5,9 +5,8 @@ Slate is a port of [lullabyX/sone](https://github.com/lullabyX/sone) (Tauri 2 + 
 
 Status legend: `done` · `in-progress` · `todo` · `blocked (reason)`.
 
-The original frontend (`src/`, ~46 k lines TS/TSX, 242 files) and its JS tooling are
-**still in the tree on purpose** as the porting reference. They are deleted in the
-final cleanup commit (see §8). The Tauri shell (`src-tauri/`) is already gone.
+The original frontend (`src/`, ~46 k lines TS/TSX) and the Tauri shell are **removed** from the tree; the
+reference is upstream commit `a34fd6f` (`git show a34fd6f:src/...`).
 
 ## 0. Key findings from the study
 
@@ -163,9 +162,9 @@ All UI work is **todo**. Original line counts shown to indicate size.
 
 ## 8. Final cleanup checklist
 
-- [ ] delete `src/`, `package.json`, `pnpm-*`, `vite.config.*`, `tsconfig*`, `eslint*`, `index.html`, `miniplayer.html`, `sync-version.mjs`, `knip*`, `public/`
-- [ ] update `build-scripts/` (PKGBUILD, AppImage, etc.) and `data/*.desktop` for the new binary
-- [ ] README (fork attribution), CHANGELOG, HANDOFF
+- [x] delete `src/`, `package.json`, `pnpm-*`, `vite.config.*`, `tsconfig*`, `eslint*`, `index.html`, `sync-version.mjs`, `knip*` (done)
+- [x] `data/slate.desktop` and CI workflow updated; [ ] `build-scripts/`, `flake.nix`, `data/*.metainfo.xml` and screenshots are still upstream's (Tauri/pnpm) and **stale**
+- [x] README, CHANGELOG, HANDOFF
 
 ## 9. Status after the "scalable UI / pages / settings" pass
 
@@ -195,3 +194,15 @@ Done (builds, clippy-clean; 400 core + 34 app tests; not all exercised live):
 - Full-screen player: window full-screen, auto-hiding controls, optional synced lyrics (`F` / ⛶, Esc exits).
 
 Still todo: move playlist to folder / rename / delete folder and playlist; remove-from-playlist; miniplayer window; music video; signal-path panel; shortcut overlay; profile; explore sub-pages; loved videos; gapless arming; scrobble `notify_track_started`; Windows media controls/tray; final cleanup of the JS tree.
+
+## 11. Final pass
+
+Done since §10: playlist/folder rename, delete, move and remove-track; Signal Path panel with the
+PRISTINE verdict (`slate-core::signal_path::verdict`, 4 tests); adaptive mini-player window; music
+video (GStreamer appsink → Slint image; unverified live; refused while a proxy is enabled because
+GStreamer's HTTP bypasses the proxy-aware client; not queued, no "minimise into the bar" yet).
+
+Open (not done): Windows build verification and Windows media controls/tray (blocked: no Windows host);
+gapless arming; scrobble `notify_track_started` submission; profile page + editing; Explore sub-pages;
+loved videos tab; shortcut overlay; deep links (`tidal://`) and single-instance; global shortcuts;
+unwrap/expect audit of inherited core code; wiremock tests; packaging scripts.
