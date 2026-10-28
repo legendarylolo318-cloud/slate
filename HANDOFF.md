@@ -1,4 +1,4 @@
-# Reviewer handoff
+# Reviewer handoff — Slate (port of lullabyX/sone)
 
 **State: partial port.** Steps 1–2 are implemented: login (code + QR), a track-ID box and a
 player bar. There are no library/search/queue screens yet, so the app is not usable day to day. See
@@ -11,10 +11,10 @@ player bar. There are no library/search/queue screens yet, so the app is not usa
   Windows build, any live TIDAL call.
 
 ## Architecture
-- `sone-core` — no UI/Tauri deps. `AppState` owns audio, client, caches, scrobbling,
+- `slate-core` — no UI/Tauri deps. `AppState` owns audio, client, caches, scrobbling,
   Discord, MCP/overlay servers. Frontends implement `EventSink` (events) and
-  `MediaSink` (OS media controls) and call `sone_core::commands::*`.
-- `sone-app` — `main.rs` runs the pre-thread environment scrub (proxy vars,
+  `MediaSink` (OS media controls) and call `slate_core::commands::*`.
+- `slate-app` — `main.rs` runs the pre-thread environment scrub (proxy vars,
   `GST_PLUGIN_PATH`), then `bootstrap.rs` starts tracing, a tokio multi-thread runtime,
   chooses a renderer, opens the window.
 
@@ -40,7 +40,21 @@ Tokio on background threads; UI mutation only via `invoke_from_event_loop` /
    authorship as you see fit. Nothing was pushed or published.
 8. Renderer fallback: Slint fixes its platform once per process, so if the chosen renderer
    fails within 5 s of startup the app re-launches itself with the next one
-   (`SONE_RENDERER_INDEX`), passing back the proxy env vars the launch scrub removed.
+   (`SLATE_RENDERER_INDEX`), passing back the proxy env vars the launch scrub removed.
    Only Skia/Vulkan was exercised.
 9. Running the binary uses the real config dir unless `XDG_CONFIG_HOME` is overridden; on my
    first run it touched `~/.config/sone` (cache rebuild) and connected Discord RPC.
+10. **Rename sone → Slate.** Crates `slate-core` / `slate-app`, binary `slate`, error type
+    `SlateError`, env vars `SLATE_LOG` / `SLATE_RENDERER_INDEX`, MPRIS/tray/desktop id `slate`.
+    Credit to lullabyX/sone is kept (README, Cargo `authors`, LICENSE, MusicBrainz UA).
+    Consequences you should know about:
+    - Config/cache now live in `~/.config/slate`, keyring service is `slate`, and the encrypted-file
+      magic is `SLAT`: **Slate does not read or touch a SONE install's data** (which also means no
+      shared login).
+    - The update checker is **disabled** (no Slate release feed); pointing it at upstream would
+      announce SONE's versions as Slate updates.
+    - **Discord Rich Presence still uses upstream's Discord application id** (name shown there is
+      "SONE") and upstream's logo URL. A Slate Discord application must be registered by the
+      maintainer, then `APPLICATION_ID` swapped.
+    - Not yet renamed: `data/` (desktop file, metainfo), `build-scripts/`, the checkout directory,
+      README body (still upstream text) — handled in the final cleanup.

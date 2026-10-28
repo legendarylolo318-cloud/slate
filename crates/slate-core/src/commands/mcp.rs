@@ -1,0 +1,125 @@
+use serde::Serialize;
+
+use crate::error::SlateError;
+use crate::mcp::{NowPlayingSnapshot, QueueTrackSnapshot};
+use crate::AppState;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpConnectionInfo {
+    pub enabled: bool,
+    pub url: Option<String>,
+    pub port: Option<u16>,
+}
+
+pub async fn mcp_get_connection_info(state: &AppState) -> Result<McpConnectionInfo, SlateError> {
+    let handle = state.mcp_handle.lock().await;
+    Ok(match handle.as_ref() {
+        Some(h) => McpConnectionInfo {
+            enabled: true,
+            url: Some(h.url()),
+            port: Some(h.port),
+        },
+        None => McpConnectionInfo {
+            enabled: false,
+            url: None,
+            port: None,
+        },
+    })
+}
+
+pub async fn mcp_publish_state(
+    state: &AppState,
+    now_playing: Option<NowPlayingSnapshot>,
+    queue: Option<Vec<QueueTrackSnapshot>>,
+) -> Result<(), SlateError> {
+    let mut s = state.mcp_state.write().await;
+    if let Some(np) = now_playing {
+        s.now_playing = Some(np);
+    }
+    if let Some(q) = queue {
+        s.queue = q;
+    }
+    Ok(())
+}
+
+pub async fn mcp_set_enabled(
+    state: &AppState,
+    app_handle: crate::AppHandle,
+    enabled: bool,
+) -> Result<McpConnectionInfo, SlateError> {
+    let mut settings = state.load_settings().unwrap_or_default();
+
+    settings.mcp_enabled = enabled;
+
+    if enabled && settings.mcp_token.is_empty() {
+        settings.mcp_token = uuid::Uuid::new_v4().simple().to_string();
+    }
+
+    {
+        // Hold the guard across stop→bind→store so this cannot race the
+        // startup spawn (or a concurrent regenerate) into a double bind.
+        let mut guard = state.mcp_handle.lock().await;
+        if let Some(handle) = guard.take() {
+            handle.shutdown().await;
+        }
+        if enabled {
+            let h = crate::mcp::start_server(
+                app_handle.clone(),
+                settings.mcp_port,
+                settings.mcp_token.clone(),
+            )
+            .await?;
+            *guard = Some(h);
+        }
+    }
+    // Persist only after the server matches — a failed enable must not
+    // stick across launches.
+    state.save_settings(&settings)?;
+
+    mcp_get_connection_info(state).await
+}
+
+pub async fn mcp_regenerate_token(
+    state: &AppState,
+    app_handle: crate::AppHandle,
+) -> Result<McpConnectionInfo, SlateError> {
+    let old_settings = state.load_settings().unwrap_or_default();
+    let mut settings = old_settings.clone();
+    settings.mcp_token = uuid::Uuid::new_v4().simple().to_string();
+
+    {
+        let mut guard = state.mcp_handle.lock().await;
+        if let Some(handle) = guard.take() {
+            handle.shutdown().await;
+        }
+        if settings.mcp_enabled {
+            match crate::mcp::start_server(
+                app_handle.clone(),
+                settings.mcp_port,
+                settings.mcp_token.clone(),
+            )
+            .await
+            {
+                Ok(h) => *guard = Some(h),
+                Err(e) => {
+                    // Best-effort rollback with the old token so a working
+                    // server isn't left dead.
+                    if let Ok(h) = crate::mcp::start_server(
+                        app_handle.clone(),
+                        old_settings.mcp_port,
+                        old_settings.mcp_token.clone(),
+                    )
+                    .await
+                    {
+                        *guard = Some(h);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    }
+    state.save_settings(&settings)?;
+
+    mcp_get_connection_info(state).await
+}

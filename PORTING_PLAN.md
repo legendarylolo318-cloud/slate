@@ -1,7 +1,7 @@
-# SONE → Slint port: plan and status
+# Slate (Slint port of SONE): plan and status
 
-Port of [lullabyX/sone](https://github.com/lullabyX/sone) (Tauri 2 + React 19) to a
-100 % Rust app with a native Slint UI. Baseline: upstream `a34fd6f` (v0.22.1).
+Slate is a port of [lullabyX/sone](https://github.com/lullabyX/sone) (Tauri 2 + React 19) to a
+100 % Rust app with a native Slint UI. Below, "SONE" / "upstream" means the original project. Baseline: upstream `a34fd6f` (v0.22.1).
 
 Status legend: `done` · `in-progress` · `todo` · `blocked (reason)`.
 
@@ -19,7 +19,7 @@ final cleanup commit (see §8). The Tauri shell (`src-tauri/`) is already gone.
    LRC parsing / content filtering / theme presets+validation / shortcuts are NOT in Rust.**
    They live in the React layer (`hooks/usePlaybackActions.ts` 1.8 k lines, `atoms/*`,
    `lib/*`). The brief says "reuse existing Rust"; for these there is nothing to reuse and
-   they are **ports from TypeScript to Rust** into `sone-core`. This is the largest piece
+   they are **ports from TypeScript to Rust** into `slate-core`. This is the largest piece
    of net-new core work.
 3. The Rust backend only owns: ReplayGain *normalisation gain* (`compute_norm_gain`),
    persisted queue blob (`save_playback_queue` / `load_playback_queue`, opaque JSON), and
@@ -31,11 +31,11 @@ final cleanup commit (see §8). The Tauri shell (`src-tauri/`) is already gone.
 
 | Original | New | Status |
 |---|---|---|
-| `src-tauri/src/*` (core logic) | `crates/sone-core/src/*` | done |
-| `tauri::AppHandle` (emit, state) | `sone_core::AppHandle` + `EventSink` trait (`events.rs`) | done |
-| `#[tauri::command] fn x(State<AppState>, ..)` | plain `pub fn/async fn x(&AppState, ..)` in `sone_core::commands::*` | done |
-| MPRIS thread owned by core | `sone_core::media::{MediaCommand, MediaSink, MediaHub}`; app registers the sink | core side done; sinks todo |
-| `main.rs` pre-thread env scrub (proxy, `GST_PLUGIN_PATH`) | `crates/sone-app/src/main.rs` (source guards updated to scan it) | done |
+| `src-tauri/src/*` (core logic) | `crates/slate-core/src/*` | done |
+| `tauri::AppHandle` (emit, state) | `slate_core::AppHandle` + `EventSink` trait (`events.rs`) | done |
+| `#[tauri::command] fn x(State<AppState>, ..)` | plain `pub fn/async fn x(&AppState, ..)` in `slate_core::commands::*` | done |
+| MPRIS thread owned by core | `slate_core::media::{MediaCommand, MediaSink, MediaHub}`; app registers the sink | core side done; sinks todo |
+| `main.rs` pre-thread env scrub (proxy, `GST_PLUGIN_PATH`) | `crates/slate-app/src/main.rs` (source guards updated to scan it) | done |
 | WebKit-only env (`WEBKIT_DISABLE_DMABUF_RENDERER`, `SOUP_FORCE_HTTP1`) | dropped, no webview | done |
 | `tauri-plugin-window-state` | todo: persist window pos/size in app | todo |
 | `tauri-plugin-single-instance` + `deep-link` | `single-instance` + `tidal://` in app | todo |
@@ -43,7 +43,7 @@ final cleanup commit (see §8). The Tauri shell (`src-tauri/`) is already gone.
 | `tauri-plugin-opener` | `open` crate | todo |
 | `tauri-plugin-oauth` (localhost redirect) | not needed: native uses code-paste / browser flow | see §4 |
 
-## 2. Backend commands (`#[tauri::command]` → `sone_core::commands`)
+## 2. Backend commands (`#[tauri::command]` → `slate_core::commands`)
 
 All callable as plain Rust today. "UI wiring" = Slint callback + model glue (not started
 unless noted). Command bodies were moved, not rewritten.
@@ -75,15 +75,15 @@ Events the core emits (now through `EventSink`): `audio-error`, `audio-resampled
 
 | Feature | Original | New | Status |
 |---|---|---|---|
-| TIDAL client, device-code login, token refresh | `tidal_api.rs`, `commands/auth.rs` | `sone-core` same | done (tests exist) |
+| TIDAL client, device-code login, token refresh | `tidal_api.rs`, `commands/auth.rs` | `slate-core` same | done (tests exist) |
 | QR code for login | `qrcode.react` | `qrcode` crate → Slint `Image` (`images.rs`) | done (unit-tested) |
 | AES-256-GCM config/cache, keyring | `crypto.rs`, `cache.rs` | same | done (tests exist) |
 | Playback engine (playbin3, gapless, exclusive/bit-perfect ALSA) | `audio.rs` | same | done on Linux; **Windows wasapi2sink exclusive path todo** |
 | ReplayGain (`compute_norm_gain`, album/track select) | `commands/playback.rs` + atoms | same | done (Rust half); selection policy in TS todo |
 | Max-quality cap + fallback | `quality_tiers` | same | done (tests exist) |
-| Queue / shuffle / repeat / history / persistence | `usePlaybackActions.ts`, `atoms/playback.ts`, `lib/playbackSource.ts`, `lib/qid.ts` | `sone-core::queue` (model, 18 tests) + `controller` (orchestration) | done; snapshot format identical to the original. Queue *view* (list, drag reorder) todo with step 4 |
+| Queue / shuffle / repeat / history / persistence | `usePlaybackActions.ts`, `atoms/playback.ts`, `lib/playbackSource.ts`, `lib/qid.ts` | `slate-core::queue` (model, 18 tests) + `controller` (orchestration) | done; snapshot format identical to the original. Queue *view* (list, drag reorder) todo with step 4 |
 | Autoplay (radio after queue ends) | TS | `queue` + `controller` | done (logic tested; live fetch unverified); no UI toggle yet |
-| Gapless prefetch / prediction | `useGaplessPrefetch.ts`, `lib/gaplessPredict.ts` | `sone-core::controller` (`set_next_track`) | **todo** — queue exposes the next track but arming is not wired, so there is a gap between tracks |
+| Gapless prefetch / prediction | `useGaplessPrefetch.ts`, `lib/gaplessPredict.ts` | `slate-core::controller` (`set_next_track`) | **todo** — queue exposes the next track but arming is not wired, so there is a gap between tracks |
 | `notify_track_started` payload (feeds scrobbling) | `buildTrackStartedPayload` | controller | **todo (step 9)** — no scrobbles are sent yet |
 | Content filter prefs (explicit/AI) | `lib/contentFilter.ts` | `controller::ContentPrefs` | logic done; settings UI + persistence todo |
 | Scrobbling Last.fm / Libre.fm / ListenBrainz + MusicBrainz | `scrobble/*` | same | done (tests exist) |
@@ -93,13 +93,13 @@ Events the core emits (now through `EventSink`): `audio-error`, `audio-resampled
 | MCP server 127.0.0.1:5577, token, default off | `mcp/*` (rmcp+axum) | same | done; `ensure_mcp_started` now `pub` |
 | OBS overlay 127.0.0.1:5578, default off | `overlay/*` | same + embedded HTML asset | done; **open question:** the embedded overlay page (`overlay/server.rs`) contains an inline `<script>` (live updates). The brief allows only static HTML/CSS; a JS-free alternative (meta-refresh / SSE-less polling is not possible in pure CSS) needs a decision — see HANDOFF |
 | Signal path probing | `signal_path.rs`, `pipeline_probe.rs` | same | done |
-| `theme.json` read/write/validate + watcher | `theme_config.rs` (file IO) + `lib/themeFile.ts` (validation) | `sone-core::theme` | IO done; **validation + 15 presets are TS → todo with rejection-case tests** |
-| Lyrics fetch + LRC timing | `get_track_lyrics` + `lib/lrc.ts` | `sone-core::lyrics` | fetch done; **LRC parse/seek todo** |
+| `theme.json` read/write/validate + watcher | `theme_config.rs` (file IO) + `lib/themeFile.ts` (validation) | `slate-core::theme` | IO done; **validation + 15 presets are TS → todo with rejection-case tests** |
+| Lyrics fetch + LRC timing | `get_track_lyrics` + `lib/lrc.ts` | `slate-core::lyrics` | fetch done; **LRC parse/seek todo** |
 | Content filter (explicit/AI hide) | `lib/contentFilter.ts`, `useContentPrefs.ts` | core | todo |
 | Idle inhibit | `idle_inhibit/*` | same | D-Bus + X11 done; **Wayland-native layer blocked (needs wl_surface from winit; D-Bus covers it meanwhile)** |
 | Logging | flexi_logger (core) | app uses `tracing` + `tracing-log` bridge | app side done; core still `log` |
 
-## 4. Platform shells (`sone-app`)
+## 4. Platform shells (`slate-app`)
 
 | Feature | Plan | Status |
 |---|---|---|
@@ -132,9 +132,9 @@ All UI work is **todo**. Original line counts shown to indicate size.
 | Context menus, toasts, tooltips, share (copy TIDAL link) | MediaContextMenu, TrackContextMenu, ToastContext, TooltipLayer | `ui/menus.slint` |
 | Settings (General, Playback, Themes, Network, Scrobble, Discord, MCP, Overlay, Utilities) | components/settings/* | `ui/settings/*.slint` |
 | Signal Path panel + PRISTINE verdict | SignalPathPanel, signal-path/* | `ui/signal_path.slint` |
-| Theme: Theme global, 15 presets, light/dark, colour picker | lib/theme.ts, ColorPicker, ThemesTab | `ui/theme.slint` + `sone-core::theme` |
+| Theme: Theme global, 15 presets, light/dark, colour picker | lib/theme.ts, ColorPicker, ThemesTab | `ui/theme.slint` + `slate-core::theme` |
 | Shortcut overlay + all shortcuts | lib/shortcuts.ts(426) | `ui/shortcuts.slint` + app key handling |
-| Image cache (disk + bounded LRU, off-thread decode) | `get_image_bytes` + TidalImage | `sone-app::images` |
+| Image cache (disk + bounded LRU, off-thread decode) | `get_image_bytes` + TidalImage | `slate-app::images` |
 | Update toast, about modal | AboutModal, updates | `ui/about.slint` |
 
 ## 6. Rules compliance status
@@ -150,7 +150,7 @@ All UI work is **todo**. Original line counts shown to indicate size.
 
 ## 7. Build order progress
 
-1. Workspace + `sone-core` extracted, tests passing, Tauri removed — **done** (367 unit + 16 integration tests pass)
+1. Workspace + `slate-core` extracted, tests passing, Tauri removed — **done** (367 unit + 16 integration tests pass)
 2. Slint window → login → play one track → player bar — **code complete, partly verified**: login screen renders on Skia/Vulkan; device-code + QR flow, track-ID play box, player bar (play/pause, seek, volume, cover) implemented but **not exercised against live TIDAL** (needs an interactive account approval)
 3. Queue + persistence, media controls, tray — **done on Linux**: 387 core tests pass; app starts, registers MPRIS + tray, saves `queue.json`/`modes.json` on clean exit. **Not verified with a real logged-in playback session** (next/prev/autoplay/restore against live TIDAL)
 4. Library + pages + lazy models + image cache — todo

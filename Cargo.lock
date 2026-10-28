@@ -5860,6 +5860,73 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
+name = "slate"
+version = "0.22.1"
+dependencies = [
+ "anyhow",
+ "image",
+ "ksni",
+ "mpris-server",
+ "open",
+ "qrcode",
+ "serde_json",
+ "slate-core",
+ "slint",
+ "slint-build",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "slate-core"
+version = "0.22.1"
+dependencies = [
+ "aes-gcm",
+ "alsa",
+ "async-trait",
+ "axum",
+ "base64 0.21.7",
+ "crossbeam-channel",
+ "dirs",
+ "discord-rich-presence",
+ "flexi_logger",
+ "futures-util",
+ "gstreamer",
+ "gstreamer-app",
+ "id3",
+ "image",
+ "keyring",
+ "libc",
+ "log",
+ "md5",
+ "notify",
+ "notify-debouncer-full",
+ "proptest",
+ "rand 0.10.1",
+ "reqwest",
+ "rmcp",
+ "schemars",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "uuid 1.20.0",
+ "walkdir",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "x11rb",
+ "zbus",
+ "zeroize",
+]
+
+[[package]]
 name = "slint"
 version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6037,73 +6104,6 @@ dependencies = [
  "web-sys",
  "windows-sys 0.61.2",
  "x11rb",
-]
-
-[[package]]
-name = "sone"
-version = "0.22.1"
-dependencies = [
- "anyhow",
- "image",
- "ksni",
- "mpris-server",
- "open",
- "qrcode",
- "serde_json",
- "slint",
- "slint-build",
- "sone-core",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "sone-core"
-version = "0.22.1"
-dependencies = [
- "aes-gcm",
- "alsa",
- "async-trait",
- "axum",
- "base64 0.21.7",
- "crossbeam-channel",
- "dirs",
- "discord-rich-presence",
- "flexi_logger",
- "futures-util",
- "gstreamer",
- "gstreamer-app",
- "id3",
- "image",
- "keyring",
- "libc",
- "log",
- "md5",
- "notify",
- "notify-debouncer-full",
- "proptest",
- "rand 0.10.1",
- "reqwest",
- "rmcp",
- "schemars",
- "semver",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "uuid 1.20.0",
- "walkdir",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols",
- "x11rb",
- "zbus",
- "zeroize",
 ]
 
 [[package]]

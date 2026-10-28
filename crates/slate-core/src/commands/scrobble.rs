@@ -1,0 +1,271 @@
+use serde::{Deserialize, Serialize};
+
+use crate::scrobble::listenbrainz::ListenBrainzProvider;
+use crate::scrobble::{ProviderStatus, ScrobbleTrack};
+use crate::{AppState, LastfmCredentials, ListenBrainzCredentials, SlateError};
+
+#[derive(Debug, Serialize)]
+pub struct AuthStartResponse {
+    pub url: String,
+    pub token: String,
+}
+
+// ---------------------------------------------------------------------------
+// Payload types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackStartedPayload {
+    pub artist: String,
+    #[serde(default)]
+    pub artist_primary: String,
+    pub title: String,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub duration_secs: u32,
+    pub track_number: Option<u32>,
+    pub chosen_by_user: bool,
+    pub isrc: Option<String>,
+    pub track_id: Option<u64>,
+    /// Container the play was started from (album/playlist/artist/mix), for
+    /// TIDAL play-reporting attribution. Absent for radio/single-track plays.
+    #[serde(default)]
+    pub source_type: Option<String>,
+    #[serde(default)]
+    pub source_id: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+pub async fn notify_track_started(
+    state: &AppState,
+    payload: TrackStartedPayload,
+) -> Result<(), SlateError> {
+    let source = match (payload.source_type, payload.source_id) {
+        (Some(t), Some(id)) => Some((t, id)),
+        _ => None,
+    };
+    let track = ScrobbleTrack {
+        artist: payload.artist,
+        track: payload.title,
+        album: payload.album,
+        album_artist: payload.album_artist,
+        duration_secs: payload.duration_secs,
+        track_number: payload.track_number,
+        timestamp: crate::now_secs() as i64,
+        chosen_by_user: payload.chosen_by_user,
+        isrc: payload.isrc,
+        track_id: payload.track_id,
+        recording_mbid: None,
+        artist_primary: payload.artist_primary,
+        artist_mbids: Vec::new(),
+    };
+    state
+        .tidal_reporter
+        .on_track_started(payload.track_id, payload.duration_secs, source)
+        .await;
+    state.scrobble_manager.on_track_started(track).await;
+    Ok(())
+}
+
+pub async fn notify_track_paused(state: &AppState) -> Result<(), SlateError> {
+    state.tidal_reporter.on_pause().await;
+    state.scrobble_manager.on_pause().await;
+    Ok(())
+}
+
+pub async fn notify_track_resumed(state: &AppState) -> Result<(), SlateError> {
+    state.tidal_reporter.on_resume().await;
+    state.scrobble_manager.on_resume().await;
+    Ok(())
+}
+
+pub async fn notify_track_seeked(state: &AppState) -> Result<(), SlateError> {
+    state.tidal_reporter.on_seek().await;
+    state.scrobble_manager.on_seek().await;
+    Ok(())
+}
+
+pub async fn notify_track_stopped(state: &AppState) -> Result<(), SlateError> {
+    state.tidal_reporter.on_track_stopped().await;
+    state.scrobble_manager.on_track_stopped().await;
+    Ok(())
+}
+
+pub async fn get_scrobble_status(state: &AppState) -> Result<Vec<ProviderStatus>, SlateError> {
+    Ok(state.scrobble_manager.provider_statuses().await)
+}
+
+pub async fn get_scrobble_queue_size(state: &AppState) -> Result<usize, SlateError> {
+    Ok(state.scrobble_manager.queue_size().await)
+}
+
+pub async fn connect_listenbrainz(state: &AppState, token: String) -> Result<String, SlateError> {
+    // Validation needs a live client, so a blocked proxy fails the connect
+    // outright rather than reaching ListenBrainz directly.
+    let client = state
+        .proxied_http
+        .client()
+        .map_err(|e| SlateError::ProxyBlocked { reason: e.cause })?;
+    let username = ListenBrainzProvider::validate_token(&client, &token).await?;
+
+    // Create and register the provider
+    let provider = ListenBrainzProvider::new(state.proxied_http.clone());
+    provider.set_token(token.clone(), username.clone()).await;
+    state
+        .scrobble_manager
+        .add_provider(Box::new(provider))
+        .await;
+
+    // Save credentials to settings
+    if let Some(mut settings) = state.load_settings() {
+        settings.scrobble.listenbrainz = Some(ListenBrainzCredentials {
+            token,
+            username: username.clone(),
+        });
+        state.save_settings(&settings)?;
+    }
+
+    Ok(username)
+}
+
+pub async fn disconnect_provider(state: &AppState, provider: String) -> Result<(), SlateError> {
+    // Clear credentials from settings
+    if let Some(mut settings) = state.load_settings() {
+        match provider.as_str() {
+            "lastfm" => settings.scrobble.lastfm = None,
+            "listenbrainz" => settings.scrobble.listenbrainz = None,
+            "librefm" => settings.scrobble.librefm = None,
+            _ => {
+                return Err(SlateError::Scrobble(format!(
+                    "unknown provider: {provider}"
+                )));
+            }
+        }
+        state.save_settings(&settings)?;
+    }
+
+    state.scrobble_manager.remove_provider(&provider).await;
+    Ok(())
+}
+
+/// Fetch a request token and return the auth URL + token for Last.fm desktop auth.
+pub async fn connect_lastfm(state: &AppState) -> Result<AuthStartResponse, SlateError> {
+    if !crate::embedded_lastfm::has_stream_keys() {
+        return Err(SlateError::Scrobble("Last.fm not configured".into()));
+    }
+    let http_client = state.proxied_http.clone();
+    let provider = crate::scrobble::lastfm::AudioscrobblerProvider::new(
+        "lastfm",
+        "https://ws.audioscrobbler.com/2.0/",
+        "https://www.last.fm/api/auth/",
+        crate::embedded_lastfm::stream_key_a(),
+        crate::embedded_lastfm::stream_key_b(),
+        http_client,
+    );
+    let token = provider.get_token().await?;
+    let url = provider.auth_url_with_token(&token);
+    Ok(AuthStartResponse { url, token })
+}
+
+/// Fetch a request token and return the auth URL + token for Libre.fm desktop auth.
+pub async fn connect_librefm(state: &AppState) -> Result<AuthStartResponse, SlateError> {
+    if !crate::embedded_librefm::has_stream_keys() {
+        return Err(SlateError::Scrobble("Libre.fm not configured".into()));
+    }
+    let http_client = state.proxied_http.clone();
+    let provider = crate::scrobble::lastfm::AudioscrobblerProvider::new(
+        "librefm",
+        crate::scrobble::librefm::LIBREFM_API_URL,
+        "https://libre.fm/api/auth/",
+        crate::embedded_librefm::stream_key_a(),
+        crate::embedded_librefm::stream_key_b(),
+        http_client,
+    );
+    let token = provider.get_token().await?;
+    let url = provider.auth_url_with_token(&token);
+    Ok(AuthStartResponse { url, token })
+}
+
+/// Exchange an auth token for a permanent session key.
+/// The frontend calls this after the user authorizes in the browser and
+/// provides the token.
+pub async fn complete_audioscrobbler_auth(
+    state: &AppState,
+    provider_name: String,
+    token: String,
+) -> Result<String, SlateError> {
+    let (api_key, api_secret, api_url, auth_base_url) = match provider_name.as_str() {
+        "lastfm" => {
+            if !crate::embedded_lastfm::has_stream_keys() {
+                return Err(SlateError::Scrobble("Last.fm not configured".into()));
+            }
+            (
+                crate::embedded_lastfm::stream_key_a(),
+                crate::embedded_lastfm::stream_key_b(),
+                "https://ws.audioscrobbler.com/2.0/",
+                "https://www.last.fm/api/auth/",
+            )
+        }
+        "librefm" => {
+            if !crate::embedded_librefm::has_stream_keys() {
+                return Err(SlateError::Scrobble("Libre.fm not configured".into()));
+            }
+            (
+                crate::embedded_librefm::stream_key_a(),
+                crate::embedded_librefm::stream_key_b(),
+                crate::scrobble::librefm::LIBREFM_API_URL,
+                "https://libre.fm/api/auth/",
+            )
+        }
+        _ => {
+            return Err(SlateError::Scrobble(format!(
+                "Unknown provider: {provider_name}"
+            )));
+        }
+    };
+
+    let http_client = state.proxied_http.clone();
+    let provider = crate::scrobble::lastfm::AudioscrobblerProvider::new(
+        if provider_name == "lastfm" {
+            "lastfm"
+        } else {
+            "librefm"
+        },
+        api_url,
+        auth_base_url,
+        api_key,
+        api_secret,
+        http_client,
+    );
+
+    let (session_key, username) = provider.get_session(&token).await?;
+    provider
+        .set_session(session_key.clone(), username.clone())
+        .await;
+
+    // Save credentials
+    if let Some(mut settings) = state.load_settings() {
+        let creds = LastfmCredentials {
+            session_key,
+            username: username.clone(),
+        };
+        match provider_name.as_str() {
+            "lastfm" => settings.scrobble.lastfm = Some(creds),
+            "librefm" => settings.scrobble.librefm = Some(creds),
+            _ => {}
+        }
+        state.save_settings(&settings)?;
+    }
+
+    // Register provider with the scrobble manager
+    state
+        .scrobble_manager
+        .add_provider(Box::new(provider))
+        .await;
+
+    Ok(username)
+}

@@ -1,0 +1,137 @@
+import { Theme } from "theme.slint";
+import { LoginScreen } from "login.slint";
+import { PlayerBar } from "player_bar.slint";
+
+export enum Screen { loading, login, main }
+
+export component AppWindow inherits Window {
+    title: "Slate";
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    min-width: 640px;
+    min-height: 480px;
+    background: Theme.background;
+
+    in property <Screen> screen: Screen.loading;
+
+    // login
+    in property <string> login-code;
+    in property <string> login-url;
+    in property <image> login-qr;
+    in property <string> login-status;
+    in property <bool> login-busy;
+    in property <bool> login-has-code;
+    callback start-login();
+    callback open-login-url();
+
+    // playback
+    in property <string> track-title;
+    in property <string> track-artist;
+    in property <image> track-cover;
+    in property <bool> playing;
+    in property <bool> has-track;
+    in property <string> position-text: "0:00";
+    in property <string> duration-text: "0:00";
+    in property <float> progress;
+    in property <float> volume: 1;
+    in property <string> error;
+    callback play-track(string);
+    in property <bool> shuffle;
+    in property <int> repeat;
+    in property <int> queue-count;
+    in property <string> up-next;
+    callback next();
+    callback previous();
+    callback toggle-shuffle();
+    callback cycle-repeat();
+    callback toggle-play();
+    callback seek(float);
+    callback set-volume(float);
+    callback logout();
+
+    if root.screen == Screen.loading: Text {
+        text: "Starting…";
+        color: Theme.text-muted;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    if root.screen == Screen.login: LoginScreen {
+        user-code: root.login-code;
+        verification-url: root.login-url;
+        qr: root.login-qr;
+        status: root.login-status;
+        busy: root.login-busy;
+        has-code: root.login-has-code;
+        start => { root.start-login(); }
+        open-url => { root.open-login-url(); }
+    }
+
+    if root.screen == Screen.main: VerticalLayout {
+        // Placeholder content area until the real pages land (steps 4-5):
+        // a track-ID box is the only way to start playback for now.
+        Rectangle {
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+                padding: 32px;
+                Text {
+                    text: "Enter a TIDAL track ID to play";
+                    color: Theme.text-muted;
+                    horizontal-alignment: center;
+                }
+                Rectangle {
+                    height: 40px;
+                    max-width: 360px;
+                    background: Theme.surface;
+                    border-radius: 8px;
+                    id-input := TextInput {
+                        x: 12px;
+                        width: parent.width - 24px;
+                        color: Theme.text;
+                        single-line: true;
+                        input-type: number;
+                        accepted => { root.play-track(self.text); }
+                    }
+                }
+                Text {
+                    text: root.error;
+                    color: Theme.danger;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+                Rectangle {
+                    height: 32px;
+                    max-width: 120px;
+                    background: Theme.surface-raised;
+                    border-radius: 8px;
+                    Text { text: "Sign out"; color: Theme.text; }
+                    TouchArea { clicked => { root.logout(); } }
+                }
+            }
+        }
+        PlayerBar {
+            title: root.track-title;
+            artist: root.track-artist;
+            cover: root.track-cover;
+            playing: root.playing;
+            has-track: root.has-track;
+            position-text: root.position-text;
+            duration-text: root.duration-text;
+            progress: root.progress;
+            volume: root.volume;
+            shuffle: root.shuffle;
+            repeat: root.repeat;
+            queue-count: root.queue-count;
+            up-next: root.up-next;
+            next => { root.next(); }
+            previous => { root.previous(); }
+            toggle-shuffle => { root.toggle-shuffle(); }
+            cycle-repeat => { root.cycle-repeat(); }
+            toggle-play => { root.toggle-play(); }
+            seek(f) => { root.seek(f); }
+            set-volume(v) => { root.set-volume(v); }
+        }
+    }
+}

@@ -1,0 +1,7385 @@
+use crate::SlateError;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::sync::Arc;
+
+/// Playbackinfo sub-statuses occupy the 4xxx range. Auth failures use a
+/// different namespace (11002/11003 token, 6001 session, 1002 pending), so a
+/// 4xxx code on a 401 is never fixed by refreshing the token.
+const PLAYBACKINFO_SUB_STATUS_RANGE: std::ops::RangeInclusive<u64> = 4000..=4999;
+
+/// Sub-statuses meaning "this track will not play, move on". Deliberately
+/// excludes 4006 (streaming privileges lost — recovers) and 4033 (subscription
+/// up-sell — the user can fix it), which must NOT delete the track.
+const TERMINAL_SUB_STATUSES: &[u64] = &[4005, 4010, 4030, 4031, 4032, 4034, 4035];
+
+fn sub_status(body: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("subStatus").cloned())
+        .and_then(|s| match s.as_u64() {
+            Some(n) => Some(n),
+            // A float-encoded whole number (4005.0) is still a sub-status; the
+            // frontend's `typeof sub === "number"` accepts it, so we must too.
+            None => s
+                .as_f64()
+                .filter(|f| f.is_finite() && f.fract() == 0.0 && *f >= 0.0)
+                .map(|f| f as u64),
+        })
+}
+
+/// True when a response body carries a playbackinfo sub-status. Drives the
+/// "do not refresh the token" decision.
+pub fn is_playbackinfo_sub_status(body: &str) -> bool {
+    sub_status(body).is_some_and(|s| PLAYBACKINFO_SUB_STATUS_RANGE.contains(&s))
+}
+
+/// True when the sub-status means the track itself is unplayable.
+pub fn is_terminal_sub_status(body: &str) -> bool {
+    sub_status(body).is_some_and(|s| TERMINAL_SUB_STATUSES.contains(&s))
+}
+
+/// Body for a synthesized 429. `retryAfterSecs` is machine-readable for the
+/// frontend; `userMessage` is what the user actually sees in an error banner.
+fn rate_limited_error(secs: u64) -> SlateError {
+    SlateError::Api {
+        status: 429,
+        body: format!(
+            r#"{{"status":429,"retryAfterSecs":{},"userMessage":"Too many requests — retrying in {}s"}}"#,
+            secs, secs
+        ),
+    }
+}
+
+const TIDAL_AUTH_URL: &str = "https://auth.tidal.com/v1/oauth2";
+const TIDAL_API_URL: &str = "https://api.tidal.com/v1";
+const TIDAL_API_V2_URL: &str = "https://api.tidal.com/v2";
+const TIDAL_OPENAPI_URL: &str = "https://openapi.tidal.com/v2";
+const TIDAL_CLIENT_VERSION: &str = "2026.9.15";
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AuthTokens {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_in: u64,
+    pub token_type: String,
+    #[serde(default)]
+    pub user_id: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaMetadata {
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalTrack {
+    pub id: u64,
+    pub title: String,
+    pub duration: u32,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub artist: Option<TidalArtist>,
+    /// Some endpoints return `artists` (plural array) instead of / in addition to `artist`.
+    #[serde(default)]
+    pub artists: Option<Vec<TidalArtist>>,
+    #[serde(default)]
+    pub album: Option<TidalAlbum>,
+    #[serde(default)]
+    pub audio_quality: Option<String>,
+    #[serde(default)]
+    pub track_number: Option<u32>,
+    #[serde(default)]
+    pub volume_number: Option<u32>,
+    #[serde(default)]
+    pub date_added: Option<String>,
+    #[serde(default)]
+    pub isrc: Option<String>,
+    #[serde(default)]
+    pub explicit: Option<bool>,
+    #[serde(default)]
+    pub ai: Option<bool>,
+    #[serde(default)]
+    pub popularity: Option<u32>,
+    #[serde(default)]
+    pub replay_gain: Option<f64>,
+    #[serde(default)]
+    pub peak: Option<f64>,
+    #[serde(default)]
+    pub copyright: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub stream_ready: Option<bool>,
+    #[serde(default)]
+    pub allow_streaming: Option<bool>,
+    #[serde(default)]
+    pub premium_streaming_only: Option<bool>,
+    #[serde(default)]
+    pub stream_start_date: Option<String>,
+    #[serde(default)]
+    pub audio_modes: Option<Vec<String>>,
+    #[serde(default)]
+    pub media_metadata: Option<MediaMetadata>,
+    /// Present on track detail responses — contains mix IDs like `TRACK_MIX`.
+    #[serde(default)]
+    pub mixes: Option<Value>,
+    /// From the `/playlists/{id}/items` wrapper `type` — "track" or "video".
+    #[serde(default)]
+    pub item_type: Option<String>,
+    /// Video thumbnail UUID (videos carry `imageId` instead of `album.cover`).
+    #[serde(default)]
+    pub image_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MixPageResult {
+    pub mix_id: String,
+    pub mix_type: Option<String>,
+    pub title: Option<String>,
+    pub subtitle: Option<String>,
+    pub image: Option<String>,
+    pub tracks: Vec<TidalTrack>,
+}
+
+impl TidalTrack {
+    /// If `artist` is None but `artists` has entries, fill from the first element.
+    pub fn backfill_artist(&mut self) {
+        if self.artist.is_none() {
+            if let Some(ref artists) = self.artists {
+                if let Some(first) = artists.first() {
+                    self.artist = Some(first.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Parse `/playlists/{id}/items` wrapper entries (`{ item, type }`) into TidalTracks.
+/// A video's inner `item` deserializes cleanly (its missing track-only fields are
+/// all `#[serde(default)]`); we stamp `item_type` from the wrapper and copy `imageId`.
+fn parse_playlist_items(items: Vec<Value>) -> Result<Vec<TidalTrack>, SlateError> {
+    let mut out = Vec::with_capacity(items.len());
+    for entry in items {
+        let item_type = entry
+            .get("type")
+            .and_then(|t| t.as_str())
+            .map(|s| s.to_lowercase());
+        let Some(inner) = entry.get("item") else {
+            continue;
+        };
+        // A playlist can interleave tracks and videos; a video item may carry a
+        // null or absent `duration`, which fails TidalTrack's required u32 and
+        // would abort the ENTIRE playlist. Default it to 0 so one such item can't
+        // blank the list — the video player reads the real length from the stream.
+        let mut inner = inner.clone();
+        // NOTE (verified): use `is_none_or`, NOT `map_or(true, …)` — clippy's
+        // `unnecessary_map_or` lint (warn-by-default on this repo's rustc 1.95)
+        // would fail `cargo clippy -- -D warnings`. `id`/`title` remain hard-required
+        // (the only other non-default TidalTrack fields); real video items always
+        // carry them, so defaulting `duration` alone resolves the observed abort.
+        if inner.get("duration").is_none_or(|d| d.is_null()) {
+            if let Some(obj) = inner.as_object_mut() {
+                obj.insert("duration".to_string(), Value::from(0u32));
+            }
+        }
+        let mut track: TidalTrack = serde_json::from_value(inner.clone())
+            .map_err(|e| SlateError::Parse(format!("{} - Item: {}", e, inner)))?;
+        if track.image_id.is_none() {
+            track.image_id = inner
+                .get("imageId")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+        }
+        track.item_type = item_type;
+        track.backfill_artist();
+        out.push(track);
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalAlbumDetail {
+    pub id: u64,
+    pub title: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub cover: Option<String>,
+    #[serde(default)]
+    pub vibrant_color: Option<String>,
+    #[serde(default)]
+    pub video_cover: Option<String>,
+    #[serde(default)]
+    pub artist: Option<TidalArtist>,
+    /// v2 API returns "artists" (plural array) instead of "artist" (singular)
+    #[serde(default)]
+    pub artists: Option<Vec<TidalArtist>>,
+    #[serde(default)]
+    pub number_of_tracks: Option<u32>,
+    #[serde(default)]
+    pub number_of_videos: Option<u32>,
+    #[serde(default)]
+    pub number_of_volumes: Option<u32>,
+    #[serde(default)]
+    pub duration: Option<u32>,
+    #[serde(default)]
+    pub release_date: Option<String>,
+    #[serde(default)]
+    pub upc: Option<String>,
+    /// "ALBUM" | "EP" | "SINGLE"
+    #[serde(default, rename = "type")]
+    pub album_type: Option<String>,
+    #[serde(default)]
+    pub copyright: Option<String>,
+    #[serde(default)]
+    pub explicit: Option<bool>,
+    #[serde(default)]
+    pub ai: Option<bool>,
+    #[serde(default)]
+    pub popularity: Option<u32>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub audio_quality: Option<String>,
+    #[serde(default)]
+    pub stream_ready: Option<bool>,
+    #[serde(default)]
+    pub allow_streaming: Option<bool>,
+    #[serde(default)]
+    pub stream_start_date: Option<String>,
+    #[serde(default)]
+    pub audio_modes: Option<Vec<String>>,
+    #[serde(default)]
+    pub media_metadata: Option<MediaMetadata>,
+}
+
+impl TidalAlbumDetail {
+    /// Backfill `artist` from `artists[0]` if `artist` is None (v2 API uses plural `artists`)
+    pub fn backfill_artist(&mut self) {
+        if self.artist.is_none() {
+            if let Some(ref artists) = self.artists {
+                if let Some(first) = artists.first() {
+                    self.artist = Some(first.clone());
+                }
+            }
+        }
+    }
+}
+
+// ==================== Album Page types ====================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumPageResponse {
+    pub album: TidalAlbumDetail,
+    pub tracks: Vec<TidalTrack>,
+    pub total_tracks: u32,
+    pub vibrant_color: Option<String>,
+    pub video_cover: Option<String>,
+    pub copyright: Option<String>,
+    pub credits: Vec<TidalCredit>,
+    pub review: Option<TidalReview>,
+    pub sections: Vec<AlbumPageSection>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalReview {
+    pub source: Option<String>,
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumPageSection {
+    pub title: String,
+    #[serde(rename(deserialize = "type", serialize = "sectionType"))]
+    pub section_type: String,
+    pub items: Vec<Value>,
+    pub api_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginatedTracks {
+    pub items: Vec<TidalTrack>,
+    pub total_number_of_items: u32,
+    pub offset: u32,
+    pub limit: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AllFavoriteIds {
+    pub tracks: Vec<u64>,
+    pub albums: Vec<u64>,
+    pub artists: Vec<u64>,
+    pub playlists: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginatedResponse<T> {
+    pub items: Vec<T>,
+    pub total_number_of_items: u32,
+    pub offset: u32,
+    pub limit: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalArtist {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub picture: Option<String>,
+    #[serde(default)]
+    pub artwork_id: Option<String>,
+    #[serde(default)]
+    pub selected_album_cover_fallback: Option<String>,
+    /// "MAIN" | "FEATURED" — present on embedded artist refs in tracks/albums
+    #[serde(default, rename = "type")]
+    pub artist_type: Option<String>,
+    #[serde(default)]
+    pub handle: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalAlbum {
+    pub id: u64,
+    pub title: String,
+    #[serde(default)]
+    pub cover: Option<String>,
+    #[serde(default)]
+    pub vibrant_color: Option<String>,
+    #[serde(default)]
+    pub video_cover: Option<String>,
+    #[serde(default)]
+    pub release_date: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalPlaylistCreator {
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalPlaylistRaw {
+    pub uuid: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub square_image: Option<String>,
+    #[serde(default)]
+    pub number_of_tracks: Option<u32>,
+    #[serde(default)]
+    pub number_of_videos: Option<u32>,
+    #[serde(default)]
+    pub creator: Option<TidalPlaylistCreator>,
+    /// "USER" | "EDITORIAL" | "ARTIST"
+    #[serde(default, rename = "type")]
+    pub playlist_type: Option<String>,
+    #[serde(default)]
+    pub duration: Option<u32>,
+    #[serde(default)]
+    pub popularity: Option<u32>,
+    #[serde(default)]
+    pub public_playlist: Option<bool>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub created: Option<String>,
+    #[serde(default)]
+    pub last_updated: Option<String>,
+    #[serde(default)]
+    pub last_item_added_at: Option<String>,
+}
+
+/// OpenAPI v2 playlist response envelope
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenApiPlaylistResponse {
+    pub data: OpenApiPlaylistData,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenApiPlaylistData {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub data_type: String,
+    pub attributes: OpenApiPlaylistAttributes,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenApiPlaylistAttributes {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub access_type: Option<String>,
+    #[serde(default)]
+    pub playlist_type: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub last_modified_at: Option<String>,
+}
+
+impl From<OpenApiPlaylistResponse> for TidalPlaylist {
+    fn from(resp: OpenApiPlaylistResponse) -> Self {
+        let d = resp.data;
+        let a = d.attributes;
+        TidalPlaylist {
+            uuid: d.id,
+            title: a.name,
+            description: a.description,
+            image: None,
+            number_of_tracks: Some(0),
+            number_of_videos: Some(0),
+            creator: None,
+            playlist_type: a.playlist_type,
+            duration: Some(0),
+            last_updated: a.last_modified_at,
+            access_type: a.access_type,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalPlaylist {
+    pub uuid: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub image: Option<String>,
+    pub number_of_tracks: Option<u32>,
+    pub number_of_videos: Option<u32>,
+    pub creator: Option<TidalPlaylistCreator>,
+    /// "USER" | "EDITORIAL" | "ARTIST"
+    #[serde(default)]
+    pub playlist_type: Option<String>,
+    #[serde(default)]
+    pub duration: Option<u32>,
+    #[serde(default)]
+    pub last_updated: Option<String>,
+    #[serde(default)]
+    pub access_type: Option<String>,
+}
+
+impl From<TidalPlaylistRaw> for TidalPlaylist {
+    fn from(raw: TidalPlaylistRaw) -> Self {
+        TidalPlaylist {
+            uuid: raw.uuid,
+            title: raw.title,
+            description: raw.description,
+            // Prefer squareImage, fallback to image
+            image: raw.square_image.or(raw.image),
+            number_of_tracks: raw.number_of_tracks,
+            number_of_videos: raw.number_of_videos,
+            creator: raw.creator,
+            playlist_type: raw.playlist_type,
+            duration: raw.duration,
+            last_updated: raw.last_updated,
+            access_type: raw.public_playlist.map(|p| {
+                if p {
+                    "PUBLIC".to_string()
+                } else {
+                    "UNLISTED".to_string()
+                }
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalLyrics {
+    #[serde(default)]
+    pub track_id: Option<u64>,
+    #[serde(default)]
+    pub lyrics_provider: Option<String>,
+    #[serde(default)]
+    pub provider_commontrack_id: Option<String>,
+    #[serde(default)]
+    pub provider_lyrics_id: Option<String>,
+    #[serde(default)]
+    pub lyrics: Option<String>,
+    #[serde(default)]
+    pub subtitles: Option<String>,
+    #[serde(default)]
+    pub is_right_to_left: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TidalContributor {
+    pub name: String,
+    #[serde(default)]
+    pub id: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TidalCredit {
+    #[serde(rename(deserialize = "type", serialize = "creditType"))]
+    pub credit_type: String,
+    #[serde(default)]
+    pub contributors: Vec<TidalContributor>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamInfo {
+    pub url: String,
+    #[serde(default)]
+    pub codec: Option<String>,
+    #[serde(default)]
+    pub bit_depth: Option<u32>,
+    #[serde(default)]
+    pub sample_rate: Option<u32>,
+    #[serde(default)]
+    pub audio_quality: Option<String>,
+    /// "STEREO" | "DOLBY_ATMOS"
+    #[serde(default)]
+    pub audio_mode: Option<String>,
+    /// "FULL" | "PREVIEW"
+    #[serde(default)]
+    pub asset_presentation: Option<String>,
+    /// Raw MPD/DASH manifest XML when the stream is DASH.
+    /// `None` for BTS (single-URL) streams.
+    #[serde(default)]
+    pub manifest: Option<String>,
+    /// "application/dash+xml" | "application/vnd.tidal.bts"
+    #[serde(default)]
+    pub manifest_mime_type: Option<String>,
+    #[serde(default)]
+    pub manifest_hash: Option<String>,
+    #[serde(default)]
+    pub track_id: Option<u64>,
+    #[serde(default)]
+    pub album_replay_gain: Option<f64>,
+    #[serde(default)]
+    pub album_peak_amplitude: Option<f64>,
+    #[serde(default)]
+    pub track_replay_gain: Option<f64>,
+    #[serde(default)]
+    pub track_peak_amplitude: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoStreamInfo {
+    pub url: String,
+    pub video_quality: String,
+    pub manifest_mime_type: String,
+    pub video_id: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalVideo {
+    pub id: u64,
+    pub title: String,
+    #[serde(default)]
+    pub duration: Option<u32>,
+    #[serde(default)]
+    pub image_id: Option<String>,
+    #[serde(default)]
+    pub vibrant_color: Option<String>,
+    #[serde(default)]
+    pub quality: Option<String>,
+    #[serde(default, rename = "type")]
+    pub video_type: Option<String>,
+    #[serde(default)]
+    pub explicit: Option<bool>,
+    #[serde(default)]
+    pub ads_pre_paywall_only: Option<bool>,
+    #[serde(default)]
+    pub artist: Option<TidalArtist>,
+    #[serde(default)]
+    pub artists: Option<Vec<TidalArtist>>,
+}
+
+// ==================== Feed (activity notifications) ====================
+
+/// Which entity a feed activity carries. The payload key in
+/// `followableActivity` is the real discriminant; this is its typed form.
+///
+/// `rename_all` must live on the enum — a struct-level `rename_all` does not
+/// rename enum variants, and the wire contract is lowercase.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FeedItemKind {
+    Mix,
+    Album,
+    Unknown,
+}
+
+/// One flattened feed row. `item` is the raw payload, passed through untouched
+/// so the frontend's existing item helpers can render and play it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedItem {
+    pub kind: FeedItemKind,
+    pub activity_type: String,
+    pub occurred_at: String,
+    pub seen: bool,
+    pub item: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedResponse {
+    pub items: Vec<FeedItem>,
+    pub unseen_count: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeedActivitiesEnvelope {
+    #[serde(default)]
+    activities: Vec<FeedActivityEntry>,
+    #[serde(default)]
+    stats: Option<FeedStats>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedStats {
+    #[serde(default)]
+    total_not_seen_activities: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedActivityEntry {
+    #[serde(default)]
+    followable_activity: Option<serde_json::Value>,
+    #[serde(default)]
+    seen: bool,
+}
+
+/// Keys inside `followableActivity` that are metadata, not the payload.
+const FEED_META_KEYS: [&str; 2] = ["activityType", "occurredAt"];
+
+/// Flatten one `followableActivity` object into a `FeedItem`.
+///
+/// The object holds exactly one payload, keyed by content type
+/// (`historyMix`, `album`, …). Returns `None` when no payload object is
+/// present at all — such an entry has nothing to render.
+pub fn flatten_feed_activity(seen: bool, activity: &serde_json::Value) -> Option<FeedItem> {
+    let obj = activity.as_object()?;
+
+    let activity_type = obj
+        .get("activityType")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let occurred_at = obj
+        .get("occurredAt")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let (key, payload) = obj
+        .iter()
+        .find(|(k, v)| !FEED_META_KEYS.contains(&k.as_str()) && v.is_object())?;
+
+    let kind = match key.as_str() {
+        "historyMix" => FeedItemKind::Mix,
+        "album" => FeedItemKind::Album,
+        other => {
+            log::warn!(
+                "[feed] unrecognized payload key '{}' (activityType={})",
+                other,
+                activity_type
+            );
+            FeedItemKind::Unknown
+        }
+    };
+
+    Some(FeedItem {
+        kind,
+        activity_type,
+        occurred_at,
+        seen,
+        item: payload.clone(),
+    })
+}
+
+/// Parse a feed response body into flattened rows.
+pub fn parse_feed_body(body: &str) -> Result<FeedResponse, serde_json::Error> {
+    let envelope: FeedActivitiesEnvelope = serde_json::from_str(body)?;
+
+    let items: Vec<FeedItem> = envelope
+        .activities
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .followable_activity
+                .as_ref()
+                .and_then(|a| flatten_feed_activity(entry.seen, a))
+        })
+        .collect();
+
+    let unseen_count = envelope
+        .stats
+        .as_ref()
+        .map(|s| s.total_not_seen_activities)
+        .unwrap_or(0);
+
+    Ok(FeedResponse {
+        items,
+        unseen_count,
+    })
+}
+
+// ==================== v2 Home Feed MIX types ====================
+// These structs document the v2 MIX shape. Not yet consumed by backend code
+// (home feed items pass through as raw Value), but available for future typed parsing.
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MixTextInfo {
+    #[serde(default)]
+    pub color: Option<String>,
+    pub text: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MixImage {
+    #[serde(default)]
+    pub size: Option<String>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+    pub url: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MixImageRef {
+    #[serde(default)]
+    pub image_uuid: Option<String>,
+    #[serde(default)]
+    pub vibrant_color: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MixArtistRef {
+    #[serde(default)]
+    pub artist_id: Option<u64>,
+    #[serde(default)]
+    pub artist_name: Option<String>,
+    #[serde(default)]
+    pub artist_image: Option<MixImageRef>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MixTrackRef {
+    #[serde(default)]
+    pub track_id: Option<u64>,
+    #[serde(default)]
+    pub track_title: Option<String>,
+    #[serde(default)]
+    pub track_group: Option<String>,
+    #[serde(default)]
+    pub track_image: Option<MixImageRef>,
+}
+
+/// v2 home feed MIX entity — completely unique shape from other Tidal entities.
+/// Returned in home/feed sections with type "MIX".
+#[allow(dead_code)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalMix {
+    pub id: String,
+    /// "TRACK_MIX" | "ARTIST_MIX" | "HISTORY_ALLTIME_MIX" | "HISTORY_MONTHLY_MIX" | "HISTORY_YEARLY_MIX"
+    #[serde(default, rename = "type")]
+    pub mix_type: Option<String>,
+    #[serde(default)]
+    pub title_text_info: Option<MixTextInfo>,
+    #[serde(default)]
+    pub subtitle_text_info: Option<MixTextInfo>,
+    #[serde(default)]
+    pub short_subtitle_text_info: Option<MixTextInfo>,
+    #[serde(default)]
+    pub description: Option<MixTextInfo>,
+    #[serde(default)]
+    pub mix_images: Option<Vec<MixImage>>,
+    #[serde(default)]
+    pub detail_mix_images: Option<Vec<MixImage>>,
+    #[serde(default)]
+    pub artist: Option<MixArtistRef>,
+    #[serde(default)]
+    pub track: Option<MixTrackRef>,
+    #[serde(default)]
+    pub content_behavior: Option<String>,
+    #[serde(default)]
+    pub country_code: Option<String>,
+    #[serde(default)]
+    pub is_stable_id: Option<bool>,
+    #[serde(default)]
+    pub sort_type: Option<String>,
+    #[serde(default)]
+    pub updated: Option<u64>,
+    #[serde(default)]
+    pub artifact_id_type: Option<String>,
+}
+
+// ==================== v2 Favorite Mixes types ====================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FavoriteMixImageUrl {
+    pub url: String,
+}
+
+/// Shape returned by /v2/favorites/mixes — different from the home feed MIX entity.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalFavoriteMix {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub sub_title: Option<String>,
+    #[serde(default)]
+    pub mix_type: Option<String>,
+    #[serde(default)]
+    pub images: Option<FavoriteMixImages>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "UPPERCASE")]
+pub struct FavoriteMixImages {
+    #[serde(default)]
+    pub small: Option<FavoriteMixImageUrl>,
+    #[serde(default)]
+    pub medium: Option<FavoriteMixImageUrl>,
+    #[serde(default)]
+    pub large: Option<FavoriteMixImageUrl>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalSearchResults {
+    pub artists: Vec<TidalArtist>,
+    pub albums: Vec<TidalAlbumDetail>,
+    pub tracks: Vec<TidalTrack>,
+    pub playlists: Vec<TidalPlaylist>,
+    #[serde(default)]
+    pub videos: Vec<TidalVideo>,
+    #[serde(default)]
+    pub top_hit_type: Option<String>,
+    /// Ordered top hits from the v2 search API (mixed entity types, ranked by relevance)
+    #[serde(default)]
+    pub top_hits: Vec<DirectHitItem>,
+}
+
+// ==================== Suggestions / Mini-search ====================
+
+/// A single direct hit from the v2 /suggestions/ endpoint.
+/// Each hit is a typed entity (artist, album, track, playlist) rendered in API order.
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectHitItem {
+    pub hit_type: String, // "ARTISTS", "ALBUMS", "TRACKS", "PLAYLISTS"
+    // Common
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artwork_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_album_cover_fallback: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    // For tracks/albums: artist info
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist_name: Option<String>,
+    // For tracks: album info
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_cover: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number_of_tracks: Option<u32>,
+    /// ALBUMS hits only; TRACKS hits carry it on `track`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai: Option<bool>,
+    /// The complete track entity for TRACKS hits. The payload is a full track —
+    /// `artists[]`, `explicit`, `album.vibrantColor`, `mediaMetadata`, `mixes` —
+    /// so carry it whole rather than re-projecting it onto the flat fields above
+    /// and losing everything they have no room for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track: Option<TidalTrack>,
+    /// The complete video entity for VIDEOS hits, for the same reason as `track`:
+    /// the flat fields cannot express `explicit` or more than one artist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video: Option<TidalVideo>,
+}
+
+impl DirectHitItem {
+    /// Parse a JSON item with { "type": "ARTISTS"|"ALBUMS"|..., "value": {...} } into a DirectHitItem.
+    /// Returns None if the type is unrecognized or value is missing.
+    pub fn from_typed_value(item: &serde_json::Value) -> Option<Self> {
+        let hit_type = item
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let val = item.get("value")?;
+
+        match hit_type.as_str() {
+            "ARTISTS" => Some(DirectHitItem {
+                hit_type,
+                id: val.get("id").and_then(|v| v.as_u64()),
+                uuid: None,
+                name: val.get("name").and_then(|v| v.as_str()).map(String::from),
+                title: None,
+                picture: val
+                    .get("picture")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                artwork_id: val
+                    .get("artworkId")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                selected_album_cover_fallback: val
+                    .get("selectedAlbumCoverFallback")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                cover: None,
+                image: None,
+                artist_name: None,
+                album_id: None,
+                album_title: None,
+                album_cover: None,
+                duration: None,
+                number_of_tracks: None,
+                ai: None,
+                track: None,
+                video: None,
+            }),
+            "ALBUMS" => {
+                let artist_name = val
+                    .get("artists")
+                    .and_then(|a| a.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|a| a.get("name").and_then(|v| v.as_str()))
+                    .or_else(|| {
+                        val.get("artist")
+                            .and_then(|a| a.get("name").and_then(|v| v.as_str()))
+                    })
+                    .map(String::from);
+                Some(DirectHitItem {
+                    hit_type,
+                    id: val.get("id").and_then(|v| v.as_u64()),
+                    uuid: None,
+                    name: None,
+                    title: val.get("title").and_then(|v| v.as_str()).map(String::from),
+                    picture: None,
+                    artwork_id: None,
+                    selected_album_cover_fallback: None,
+                    cover: val.get("cover").and_then(|v| v.as_str()).map(String::from),
+                    image: None,
+                    artist_name,
+                    album_id: None,
+                    album_title: None,
+                    album_cover: None,
+                    duration: val
+                        .get("duration")
+                        .and_then(|v| v.as_u64())
+                        .map(|d| d as u32),
+                    number_of_tracks: val
+                        .get("numberOfTracks")
+                        .and_then(|v| v.as_u64())
+                        .map(|n| n as u32),
+                    ai: val.get("ai").and_then(|v| v.as_bool()),
+                    track: None,
+                    video: None,
+                })
+            }
+            "TRACKS" => {
+                let artist_name = val
+                    .get("artists")
+                    .and_then(|a| a.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|a| a.get("name").and_then(|v| v.as_str()))
+                    .or_else(|| {
+                        val.get("artist")
+                            .and_then(|a| a.get("name").and_then(|v| v.as_str()))
+                    })
+                    .map(String::from);
+                let album = val.get("album");
+                // Deserialize the whole entity; the flat fields below stay as a
+                // fallback for a payload too partial to satisfy TidalTrack.
+                let track = serde_json::from_value::<TidalTrack>(val.clone())
+                    .ok()
+                    .map(|mut t| {
+                        t.backfill_artist();
+                        t
+                    });
+                Some(DirectHitItem {
+                    hit_type,
+                    id: val.get("id").and_then(|v| v.as_u64()),
+                    uuid: None,
+                    name: None,
+                    title: val.get("title").and_then(|v| v.as_str()).map(String::from),
+                    picture: None,
+                    artwork_id: None,
+                    selected_album_cover_fallback: None,
+                    cover: None,
+                    image: None,
+                    artist_name,
+                    album_id: album.and_then(|a| a.get("id").and_then(|v| v.as_u64())),
+                    album_title: album
+                        .and_then(|a| a.get("title").and_then(|v| v.as_str()))
+                        .map(String::from),
+                    album_cover: album
+                        .and_then(|a| a.get("cover").and_then(|v| v.as_str()))
+                        .map(String::from),
+                    duration: val
+                        .get("duration")
+                        .and_then(|v| v.as_u64())
+                        .map(|d| d as u32),
+                    number_of_tracks: None,
+                    ai: None,
+                    track,
+                    video: None,
+                })
+            }
+            "VIDEOS" => {
+                let artist_name = val
+                    .get("artists")
+                    .and_then(|a| a.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|a| a.get("name").and_then(|v| v.as_str()))
+                    .or_else(|| {
+                        val.get("artist")
+                            .and_then(|a| a.get("name").and_then(|v| v.as_str()))
+                    })
+                    .map(String::from);
+                // Deserialize the whole entity; the flat fields below stay as a
+                // fallback for a payload too partial to satisfy TidalVideo.
+                let video = serde_json::from_value::<TidalVideo>(val.clone()).ok();
+                Some(DirectHitItem {
+                    hit_type,
+                    id: val.get("id").and_then(|v| v.as_u64()),
+                    uuid: None,
+                    name: None,
+                    title: val.get("title").and_then(|v| v.as_str()).map(String::from),
+                    picture: None,
+                    artwork_id: None,
+                    selected_album_cover_fallback: None,
+                    cover: None,
+                    // Videos carry a thumbnail UUID under `imageId`, not album cover.
+                    image: val
+                        .get("imageId")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    artist_name,
+                    album_id: None,
+                    album_title: None,
+                    album_cover: None,
+                    duration: val
+                        .get("duration")
+                        .and_then(|v| v.as_u64())
+                        .map(|d| d as u32),
+                    number_of_tracks: None,
+                    ai: None,
+                    track: None,
+                    video,
+                })
+            }
+            "PLAYLISTS" => Some(DirectHitItem {
+                hit_type,
+                id: None,
+                uuid: val.get("uuid").and_then(|v| v.as_str()).map(String::from),
+                name: None,
+                title: val.get("title").and_then(|v| v.as_str()).map(String::from),
+                picture: None,
+                artwork_id: None,
+                selected_album_cover_fallback: None,
+                cover: None,
+                image: val
+                    .get("squareImage")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| val.get("image").and_then(|v| v.as_str()))
+                    .map(String::from),
+                artist_name: None,
+                album_id: None,
+                album_title: None,
+                album_cover: None,
+                duration: None,
+                number_of_tracks: val
+                    .get("numberOfTracks")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32),
+                ai: None,
+                track: None,
+                video: None,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Parse an array of typed value items into Vec<DirectHitItem>, preserving order.
+    pub fn parse_array(arr: &[serde_json::Value]) -> Vec<Self> {
+        arr.iter().filter_map(Self::from_typed_value).collect()
+    }
+}
+
+/// A text suggestion item (history or autocomplete).
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestionTextItem {
+    pub query: String,
+    pub source: String, // "history" or "suggestion"
+}
+
+/// Full response from the suggestions endpoint, powering the mini-search dropdown.
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestionsResponse {
+    pub text_suggestions: Vec<SuggestionTextItem>,
+    pub direct_hits: Vec<DirectHitItem>,
+}
+
+// ==================== Home Page / Pages API ====================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalArtistRole {
+    pub category: String,
+    pub category_id: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TidalArtistDetail {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub picture: Option<String>,
+    #[serde(default)]
+    pub artwork_id: Option<String>,
+    #[serde(default)]
+    pub selected_album_cover_fallback: Option<String>,
+    #[serde(default)]
+    pub handle: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<u64>,
+    #[serde(default)]
+    pub popularity: Option<u32>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub spotlighted: Option<bool>,
+    #[serde(default)]
+    pub artist_types: Option<Vec<String>>,
+    #[serde(default)]
+    pub artist_roles: Option<Vec<TidalArtistRole>>,
+    #[serde(default)]
+    pub mixes: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HomePageSection {
+    pub title: String,
+    pub section_type: String,
+    pub items: Value,
+    #[serde(default)]
+    pub has_more: bool,
+    #[serde(default)]
+    pub api_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeTab {
+    pub name: String,
+    /// Raw tab type from the API, e.g. "STATIC", "EDITORIAL", "UPLOADS".
+    /// The feed slug is `tab_type.to_lowercase()`.
+    pub tab_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HomePageResponse {
+    #[serde(default)]
+    pub tabs: Vec<HomeTab>,
+    pub sections: Vec<HomePageSection>,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceAuthResponse {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub verification_uri_complete: Option<String>,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+/// Invoked with freshly refreshed tokens so the caller can persist them.
+pub type TokenPersist = Arc<dyn Fn(&AuthTokens) + Send + Sync>;
+
+pub struct TidalClient {
+    /// The shared cell, not a client: when the proxy plan is blocked there is
+    /// nothing to hand out, and that must stay unrepresentable here.
+    http: crate::proxy_http::ProxiedHttp,
+    pub tokens: Option<AuthTokens>,
+    pub client_id: String,
+    pub client_secret: String,
+    /// The user's country code from their Tidal session (e.g. "US", "GB", "DE").
+    /// Populated after authentication via get_session_info().
+    pub country_code: String,
+    token_persist: Option<TokenPersist>,
+    gate: Arc<crate::rate_gate::RateGate>,
+}
+
+impl TidalClient {
+    pub fn new(http: crate::proxy_http::ProxiedHttp) -> Self {
+        Self {
+            http,
+            tokens: None,
+            client_id: String::new(),
+            client_secret: String::new(),
+            country_code: "US".to_string(),
+            token_persist: None,
+            gate: Arc::new(crate::rate_gate::RateGate::new()),
+        }
+    }
+
+    /// Register the hook that writes refreshed tokens to disk.
+    pub fn set_token_persist(&mut self, persist: TokenPersist) {
+        self.token_persist = Some(persist);
+    }
+
+    pub fn set_credentials(&mut self, client_id: &str, client_secret: &str) {
+        self.client_id = client_id.to_string();
+        self.client_secret = client_secret.to_string();
+    }
+
+    /// The one place a request this client makes is actually sent.
+    ///
+    /// Every `.send()` in this file goes through here, including the auth
+    /// endpoints that bypass the rate gate, because the state it records is
+    /// most needed exactly where the gate is not involved: a login that cannot
+    /// reach the proxy is the failure a user has no way to diagnose and no
+    /// screen to fix.
+    ///
+    /// It only watches. `observe` hands the outcome straight back, so a request
+    /// that failed through the proxy stays failed and is never retried without
+    /// it — there is no unproxied second attempt to be had here or anywhere.
+    async fn dispatch(
+        &self,
+        generation: crate::proxy_http::Generation,
+        req: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, SlateError> {
+        Ok(self.http.observe_at(generation, req.send().await)?)
+    }
+
+    /// Single egress point for API traffic. Consults the cooldown before
+    /// sending and records a new one from any 429. Never sleeps — callers that
+    /// want to wait must do so with the client mutex released.
+    async fn send(
+        &self,
+        generation: crate::proxy_http::Generation,
+        req: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, SlateError> {
+        if let Some(secs) = self.gate.cooling_down() {
+            return Err(rate_limited_error(secs));
+        }
+        let resp = self.dispatch(generation, req).await?;
+        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let secs = crate::rate_gate::retry_after_or_default(resp.headers());
+            self.gate.trip(secs);
+            // Report the gate's own view, not the raw header: `trip` clamps to
+            // MAX_COOLDOWN_SECS, and a concurrent longer cooldown may already
+            // be in force, so `.min(120)` here would under-report instead.
+            let secs = self.gate.cooling_down().unwrap_or(secs);
+            log::warn!("[send] rate limited, cooling down {}s", secs);
+            return Err(rate_limited_error(secs));
+        }
+        Ok(resp)
+    }
+
+    /// Clone the gate out so callers can consult it WITHOUT holding the client
+    /// mutex — mirrors the token_snapshot pattern in tidal_report.
+    pub fn gate(&self) -> Arc<crate::rate_gate::RateGate> {
+        self.gate.clone()
+    }
+
+    /// The shared cell, unmapped, for the tests that assert what it holds.
+    ///
+    /// `#[cfg(test)]` because it has no production callers and `pub` would not
+    /// warn about that: artwork and the scrobble providers read
+    /// `AppState::proxied_http` directly. Leaving a public accessor here is a
+    /// second door onto the one cell, and a second door is how a consumer ends
+    /// up holding a client the plan never sanctioned.
+    #[cfg(test)]
+    pub fn raw_client(&self) -> Result<reqwest::Client, crate::proxy::BlockReason> {
+        self.http.client()
+    }
+
+    /// Same cell, mapped into the error type the API methods return — and the
+    /// generation the client belongs to, because the caller will report what
+    /// the request did and that report has to be about *this* client. Taking
+    /// the two separately would reopen the window `observe_at` exists to close.
+    fn client_at(&self) -> Result<(crate::proxy_http::Generation, reqwest::Client), SlateError> {
+        let (generation, client) = self.http.client_at();
+        let client = client.map_err(|e| SlateError::ProxyBlocked { reason: e.cause })?;
+        Ok((generation, client))
+    }
+
+    pub async fn refresh_token(&mut self) -> Result<AuthTokens, SlateError> {
+        if self.client_id.is_empty() {
+            return Err(SlateError::NotConfigured("Client ID".into()));
+        }
+
+        let current_tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let refresh_tok = current_tokens.refresh_token.clone();
+        let old_user_id = current_tokens.user_id;
+
+        // Build params — include client_secret only if available
+        let mut form_params = vec![
+            ("client_id", self.client_id.as_str()),
+            ("refresh_token", refresh_tok.as_str()),
+            ("grant_type", "refresh_token"),
+            ("scope", "r_usr w_usr w_sub"),
+        ];
+        if !self.client_secret.is_empty() {
+            form_params.push(("client_secret", self.client_secret.as_str()));
+        }
+
+        let (generation, client) = self.client_at()?;
+        let request = client
+            .post(format!("{}/token", TIDAL_AUTH_URL))
+            .form(&form_params);
+        let response = self.dispatch(generation, request).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        // Tidal's refresh response may not include refresh_token, so use a
+        // permissive struct and fall back to the existing refresh token.
+        #[derive(Deserialize)]
+        struct RefreshResponse {
+            access_token: String,
+            #[serde(default)]
+            refresh_token: Option<String>,
+            expires_in: u64,
+            token_type: String,
+            #[serde(default)]
+            user_id: Option<u64>,
+        }
+
+        let parsed = serde_json::from_str::<RefreshResponse>(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+
+        let new_tokens = AuthTokens {
+            access_token: parsed.access_token,
+            refresh_token: parsed.refresh_token.unwrap_or(refresh_tok),
+            expires_in: parsed.expires_in,
+            token_type: parsed.token_type,
+            user_id: parsed.user_id.or(old_user_id),
+        };
+
+        self.tokens = Some(new_tokens.clone());
+        // Persist immediately: the auto-refresh on 401 is the common path, and
+        // without this the stored token stays stale forever.
+        if let Some(persist) = &self.token_persist {
+            persist(&new_tokens);
+        }
+        Ok(new_tokens)
+    }
+
+    /// Perform an authenticated GET, check status, and deserialize the JSON body.
+    /// Use for endpoints where the response maps directly to `T` with no post-processing.
+    async fn api_get<T: serde::de::DeserializeOwned>(
+        &mut self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<T, SlateError> {
+        let body = self.api_get_body(path, query).await?;
+        serde_json::from_str(&body).map_err(|e| {
+            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+        })
+    }
+
+    /// Perform an authenticated GET, check status, and return the raw body string.
+    /// Use for endpoints that need custom post-processing after status validation.
+    async fn api_get_body(
+        &mut self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<String, SlateError> {
+        let url = if path.starts_with("http") {
+            path.to_string()
+        } else {
+            format!("{}{}", TIDAL_API_URL, path)
+        };
+        let response = self.authenticated_get(&url, query).await?;
+        let resp_url = response.url().to_string();
+        if url != resp_url && !resp_url.starts_with(&url) {
+            log::warn!(
+                "[api_get_body] possible redirect: requested={} responded={}",
+                url,
+                resp_url
+            );
+        }
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            let is_account_endpoint = url.contains("/users/") || url.contains("/sessions");
+            if is_account_endpoint {
+                log::error!(
+                    "[api_get_body] {} -> status={} body=<redacted: account endpoint>",
+                    url,
+                    status,
+                );
+            } else {
+                log::error!(
+                    "[api_get_body] {} -> status={} body={}",
+                    url,
+                    status,
+                    &body[..body.len().min(500)]
+                );
+            }
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+        Ok(body)
+    }
+
+    /// Helper to perform an authenticated GET request with automatic token refresh on 401.
+    async fn authenticated_get(
+        &mut self,
+        url: &str,
+        query: &[(&str, &str)],
+    ) -> Result<reqwest::Response, SlateError> {
+        // 1. Get current token (clone to avoid borrow)
+        let access_token = self
+            .tokens
+            .as_ref()
+            .ok_or(SlateError::NotAuthenticated)?
+            .access_token
+            .clone();
+
+        // 2. Make first request
+        let (generation, client) = self.client_at()?;
+        let mut req = client
+            .get(url)
+            .header("Authorization", format!("Bearer {}", access_token));
+        if url.contains("/v2/") {
+            req = req.header("x-tidal-client-version", TIDAL_CLIENT_VERSION);
+        }
+        let response = self.send(generation, req.query(query)).await?;
+
+        // 3. Check 401
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            // A 401 carrying a playbackinfo sub-status is not auth expiry.
+            // Refreshing costs a token round-trip, a settings rewrite and a
+            // second GET, and the answer never changes.
+            let body = response.text().await.unwrap_or_default();
+            if is_playbackinfo_sub_status(&body) {
+                log::warn!(
+                    "[authenticated_get] {} -> 401 playbackinfo sub-status, not retrying: {}",
+                    url,
+                    body.chars().take(200).collect::<String>()
+                );
+                return Err(SlateError::Api { status: 401, body });
+            }
+            log::debug!("Got 401 from {}, attempting refresh...", url);
+            // 4. Refresh token (requires &mut self)
+            let new_tokens = self.refresh_token().await?;
+            log::debug!("Refresh successful, retrying request...");
+
+            // 5. Retry request
+            let (generation, client) = self.client_at()?;
+            let mut req = client.get(url).header(
+                "Authorization",
+                format!("Bearer {}", new_tokens.access_token),
+            );
+            if url.contains("/v2/") {
+                req = req.header("x-tidal-client-version", TIDAL_CLIENT_VERSION);
+            }
+            return self.send(generation, req.query(query)).await;
+        }
+
+        Ok(response)
+    }
+
+    pub async fn start_device_auth(&self) -> Result<DeviceAuthResponse, SlateError> {
+        if self.client_id.is_empty() {
+            return Err(SlateError::NotConfigured("Client ID".into()));
+        }
+
+        let mut form_params = vec![
+            ("client_id", self.client_id.as_str()),
+            ("scope", "r_usr w_usr w_sub"),
+        ];
+        if !self.client_secret.is_empty() {
+            form_params.push(("client_secret", self.client_secret.as_str()));
+        }
+
+        let (generation, client) = self.client_at()?;
+        let request = client
+            .post(format!("{}/device_authorization", TIDAL_AUTH_URL))
+            .form(&form_params);
+        let response = self.dispatch(generation, request).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            // Detect "not a Limited Input Device client" error and give a clear message
+            if body.contains("not a Limited Input Device client")
+                || body.contains("sub_status\":1002")
+            {
+                return Err(SlateError::Api {
+                    status: status.as_u16(),
+                    body: "This Client ID does not support the Device Code flow. \
+                           It is likely a web player Client ID. \
+                           Please use \"Token Import\" instead, or use a native app (Android/desktop) Client ID."
+                        .to_string(),
+                });
+            }
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        serde_json::from_str::<DeviceAuthResponse>(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))
+    }
+
+    pub async fn poll_device_token(
+        &mut self,
+        device_code: &str,
+    ) -> Result<Option<AuthTokens>, SlateError> {
+        if self.client_id.is_empty() {
+            return Err(SlateError::NotConfigured("Client ID".into()));
+        }
+
+        let mut form_params = vec![
+            ("client_id", self.client_id.as_str()),
+            ("device_code", device_code),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ("scope", "r_usr w_usr w_sub"),
+        ];
+        if !self.client_secret.is_empty() {
+            form_params.push(("client_secret", self.client_secret.as_str()));
+        }
+
+        let (generation, client) = self.client_at()?;
+        let request = client
+            .post(format!("{}/token", TIDAL_AUTH_URL))
+            .form(&form_params);
+        let response = self.dispatch(generation, request).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        // 400 with "authorization_pending" or "slow_down" means user hasn't authorized yet
+        if status.as_u16() == 400
+            && (body.contains("authorization_pending") || body.contains("slow_down"))
+        {
+            return Ok(None); // Still waiting -- caller should retry
+        }
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let tokens = serde_json::from_str::<AuthTokens>(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+
+        self.tokens = Some(tokens.clone());
+        Ok(Some(tokens))
+    }
+
+    pub async fn exchange_pkce_code(
+        &mut self,
+        code: &str,
+        code_verifier: &str,
+        redirect_uri: &str,
+        client_unique_key: &str,
+    ) -> Result<AuthTokens, SlateError> {
+        if self.client_id.is_empty() {
+            return Err(SlateError::NotConfigured("Client ID".into()));
+        }
+
+        let (generation, client) = self.client_at()?;
+        let request = client.post(format!("{}/token", TIDAL_AUTH_URL)).form(&[
+            ("code", code),
+            ("client_id", self.client_id.as_str()),
+            ("grant_type", "authorization_code"),
+            ("redirect_uri", redirect_uri),
+            ("scope", "r_usr+w_usr+w_sub"),
+            ("code_verifier", code_verifier),
+            ("client_unique_key", client_unique_key),
+        ]);
+        let response = self.dispatch(generation, request).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let tokens = serde_json::from_str::<AuthTokens>(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+
+        self.tokens = Some(tokens.clone());
+        Ok(tokens)
+    }
+
+    pub async fn get_user_profile(
+        &mut self,
+        user_id: u64,
+    ) -> Result<(String, Option<String>), SlateError> {
+        let cc = self.country_code.clone();
+        let body = self
+            .api_get_body(&format!("/users/{}", user_id), &[("countryCode", &cc)])
+            .await?;
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct UserProfile {
+            #[serde(default)]
+            first_name: Option<String>,
+            #[serde(default)]
+            last_name: Option<String>,
+            #[serde(default)]
+            username: Option<String>,
+            #[serde(default)]
+            profile_name: Option<String>,
+        }
+
+        let data: UserProfile =
+            serde_json::from_str(&body).map_err(|e| SlateError::Parse(e.to_string()))?;
+        let username = data.username.clone();
+        let name = data
+            .profile_name
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| match (&data.first_name, &data.last_name) {
+                (Some(f), Some(l)) if !f.is_empty() => Some(format!("{} {}", f, l)),
+                (Some(f), _) if !f.is_empty() => Some(f.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "TIDAL User".to_string());
+        Ok((name, username))
+    }
+
+    pub async fn get_session_info(&mut self) -> Result<u64, SlateError> {
+        let body = self.api_get_body("/sessions", &[]).await?;
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct SessionResponse {
+            user_id: u64,
+            #[serde(default)]
+            country_code: Option<String>,
+        }
+
+        let data: SessionResponse =
+            serde_json::from_str(&body).map_err(|e| SlateError::Parse(e.to_string()))?;
+
+        // Store the user's country code for all subsequent API calls
+        if let Some(cc) = data.country_code {
+            if !cc.is_empty() {
+                self.country_code = cc;
+            }
+        }
+        Ok(data.user_id)
+    }
+
+    pub async fn get_user_playlists(
+        &mut self,
+        user_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Result<PaginatedResponse<TidalPlaylist>, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let body = self
+            .api_get_body(
+                &format!("/users/{}/playlists", user_id),
+                &[
+                    ("countryCode", &cc),
+                    ("limit", &limit_str),
+                    ("offset", &offset_str),
+                ],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PlaylistResponse {
+            items: Vec<TidalPlaylistRaw>,
+            total_number_of_items: u32,
+        }
+
+        let data: PlaylistResponse = serde_json::from_str(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+        let playlists: Vec<TidalPlaylist> = data.items.into_iter().map(|p| p.into()).collect();
+        Ok(PaginatedResponse {
+            items: playlists,
+            total_number_of_items: data.total_number_of_items,
+            offset,
+            limit,
+        })
+    }
+
+    /// Fetch a flat list of ALL user playlists (v1 endpoint, ignores folder nesting).
+    pub async fn get_all_playlists(
+        &mut self,
+        user_id: u64,
+        offset: u32,
+        limit: u32,
+        order: &str,
+        order_direction: &str,
+    ) -> Result<PaginatedResponse<TidalPlaylist>, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let body = self
+            .api_get_body(
+                &format!("/users/{}/playlists", user_id),
+                &[
+                    ("offset", &offset_str),
+                    ("limit", &limit_str),
+                    ("order", order),
+                    ("orderDirection", order_direction),
+                    ("countryCode", &cc),
+                    ("locale", "en_US"),
+                    ("deviceType", "BROWSER"),
+                ],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Resp {
+            items: Vec<TidalPlaylistRaw>,
+            total_number_of_items: u32,
+        }
+
+        let data: Resp = serde_json::from_str(&body).map_err(|e| {
+            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+        })?;
+        let playlists: Vec<TidalPlaylist> = data.items.into_iter().map(|p| p.into()).collect();
+        Ok(PaginatedResponse {
+            items: playlists,
+            total_number_of_items: data.total_number_of_items,
+            offset,
+            limit,
+        })
+    }
+
+    pub async fn create_playlist(
+        &self,
+        title: &str,
+        description: &str,
+        access_type: &str,
+    ) -> Result<TidalPlaylist, SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        let body = serde_json::json!({
+            "data": {
+                "type": "playlists",
+                "attributes": {
+                    "name": title,
+                    "description": description,
+                    "accessType": access_type
+                }
+            }
+        });
+
+        log::debug!(
+            "[create_playlist]: url={}/playlists, body={}",
+            TIDAL_OPENAPI_URL,
+            body
+        );
+
+        let (generation, client) = self.client_at()?;
+        let request = client
+            .post(format!("{}/playlists", TIDAL_OPENAPI_URL))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())])
+            .json(&body);
+        let response = self.dispatch(generation, request).await?;
+
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[create_playlist]: status={}, response={}",
+            status,
+            &body_text[..body_text.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body: body_text,
+            });
+        }
+
+        let resp = serde_json::from_str::<OpenApiPlaylistResponse>(&body_text)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body_text)))?;
+
+        Ok(resp.into())
+    }
+
+    pub async fn update_playlist(
+        &self,
+        playlist_id: &str,
+        title: &str,
+        description: &str,
+        access_type: &str,
+    ) -> Result<TidalPlaylist, SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        let body = serde_json::json!({
+            "data": {
+                "id": playlist_id,
+                "type": "playlists",
+                "attributes": {
+                    "name": title,
+                    "description": description,
+                    "accessType": access_type
+                }
+            }
+        });
+
+        log::debug!(
+            "[update_playlist]: url={}/playlists/{}, body={}",
+            TIDAL_OPENAPI_URL,
+            playlist_id,
+            body
+        );
+
+        let (generation, client) = self.client_at()?;
+        let request = client
+            .patch(format!("{}/playlists/{}", TIDAL_OPENAPI_URL, playlist_id))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .header("Content-Type", "application/vnd.api+json")
+            .query(&[("countryCode", self.country_code.as_str())])
+            .json(&body);
+        let response = self.dispatch(generation, request).await?;
+
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[update_playlist]: status={}, response={}",
+            status,
+            &body_text[..body_text.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body: body_text,
+            });
+        }
+
+        // 204 No Content — update succeeded but no body returned
+        if body_text.is_empty() {
+            return Ok(TidalPlaylist {
+                uuid: playlist_id.to_string(),
+                title: title.to_string(),
+                description: Some(description.to_string()),
+                image: None,
+                number_of_tracks: None,
+                number_of_videos: None,
+                creator: None,
+                playlist_type: Some("USER".to_string()),
+                duration: None,
+                last_updated: None,
+                access_type: Some(access_type.to_string()),
+            });
+        }
+
+        let resp = serde_json::from_str::<OpenApiPlaylistResponse>(&body_text)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body_text)))?;
+
+        Ok(resp.into())
+    }
+
+    pub async fn add_track_to_playlist(
+        &self,
+        playlist_id: &str,
+        track_id: u64,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        // First, get the playlist ETag which is required for modifications
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!("{}/playlists/{}", TIDAL_API_URL, playlist_id))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())]);
+        let head_response = self.send(generation, req).await?;
+
+        let etag = head_response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("*")
+            .to_string();
+
+        // Add the track
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .post(format!("{}/playlists/{}/items", TIDAL_API_URL, playlist_id))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .header("If-None-Match", &etag)
+            .query(&[("countryCode", self.country_code.as_str())])
+            .form(&[
+                ("trackIds", &track_id.to_string()),
+                ("onDupes", &"FAIL".to_string()),
+                ("onArtifactNotFound", &"FAIL".to_string()),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn remove_track_from_playlist(
+        &self,
+        playlist_id: &str,
+        index: u32,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        // First, get the playlist ETag which is required for modifications
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!("{}/playlists/{}", TIDAL_API_URL, playlist_id))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())]);
+        let head_response = self.send(generation, req).await?;
+
+        let etag = head_response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("*")
+            .to_string();
+
+        // Remove the track at the given index
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .delete(format!(
+                "{}/playlists/{}/items/{}",
+                TIDAL_API_URL, playlist_id, index
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .header("If-None-Match", &etag)
+            .query(&[("countryCode", self.country_code.as_str())]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn delete_playlist(&self, playlist_id: &str) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        // First, get the playlist ETag which is required for modifications
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!("{}/playlists/{}", TIDAL_API_URL, playlist_id))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())]);
+        let head_response = self.send(generation, req).await?;
+
+        let etag = head_response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("*")
+            .to_string();
+
+        // Delete the playlist
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .delete(format!("{}/playlists/{}", TIDAL_API_URL, playlist_id))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .header("If-None-Match", &etag)
+            .query(&[("countryCode", self.country_code.as_str())]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_favorite_playlist_uuids(
+        &self,
+        user_id: u64,
+    ) -> Result<Vec<String>, SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!(
+                "{}/users/{}/favorites/playlists",
+                TIDAL_API_URL, user_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("countryCode", self.country_code.as_str()),
+                ("limit", "2000"),
+                ("offset", "0"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct FavItem {
+            item: TidalPlaylistRaw,
+        }
+        #[derive(Deserialize)]
+        struct FavResponse {
+            #[serde(default)]
+            items: Vec<FavItem>,
+        }
+
+        let data = serde_json::from_str::<FavResponse>(&body)
+            .map_err(|e| SlateError::Parse(e.to_string()))?;
+
+        Ok(data.items.into_iter().map(|f| f.item.uuid).collect())
+    }
+
+    pub async fn get_favorite_playlists(
+        &mut self,
+        user_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Result<PaginatedResponse<TidalPlaylist>, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let body = self
+            .api_get_body(
+                &format!("/users/{}/favorites/playlists", user_id),
+                &[
+                    ("countryCode", &cc),
+                    ("limit", &limit_str),
+                    ("offset", &offset_str),
+                ],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct FavEntry {
+            item: TidalPlaylistRaw,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FavResponse {
+            items: Vec<FavEntry>,
+            total_number_of_items: u32,
+        }
+
+        let data: FavResponse = serde_json::from_str(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+        let playlists: Vec<TidalPlaylist> = data.items.into_iter().map(|e| e.item.into()).collect();
+        Ok(PaginatedResponse {
+            items: playlists,
+            total_number_of_items: data.total_number_of_items,
+            offset,
+            limit,
+        })
+    }
+
+    pub async fn get_playlist_tracks(
+        &mut self,
+        playlist_id: &str,
+    ) -> Result<Vec<TidalTrack>, SlateError> {
+        // `/items` (not `/tracks`) returns the real entries: tracks AND videos,
+        // each wrapped as `{ "item": {...}, "type": "track" | "video" }`.
+        let path = format!("/playlists/{}/items", playlist_id);
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ItemsResponse {
+            items: Vec<Value>,
+            total_number_of_items: u32,
+        }
+
+        let mut all_tracks: Vec<TidalTrack> = Vec::new();
+        let mut offset: u32 = 0;
+        let page_size: u32 = 100;
+
+        loop {
+            let cc = self.country_code.clone();
+            let offset_str = offset.to_string();
+            let limit_str = page_size.to_string();
+            let body = self
+                .api_get_body(
+                    &path,
+                    &[
+                        ("countryCode", &cc),
+                        ("limit", &limit_str),
+                        ("offset", &offset_str),
+                    ],
+                )
+                .await?;
+
+            let data: ItemsResponse = serde_json::from_str(&body)
+                .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+
+            let fetched = data.items.len() as u32;
+            let mut tracks = parse_playlist_items(data.items)?;
+            all_tracks.append(&mut tracks);
+
+            if fetched == 0 || all_tracks.len() as u32 >= data.total_number_of_items {
+                break;
+            }
+            offset += fetched;
+        }
+
+        Ok(all_tracks)
+    }
+
+    pub async fn get_playlist_tracks_page(
+        &mut self,
+        playlist_id: &str,
+        offset: u32,
+        limit: u32,
+        order: Option<&str>,
+        order_direction: Option<&str>,
+    ) -> Result<PaginatedTracks, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let mut params: Vec<(&str, &str)> = vec![
+            ("countryCode", &cc),
+            ("limit", &limit_str),
+            ("offset", &offset_str),
+        ];
+        if let Some(o) = order {
+            params.push(("order", o));
+        }
+        if let Some(od) = order_direction {
+            params.push(("orderDirection", od));
+        }
+        // `/items` returns tracks AND videos, each wrapped as `{ item, type }`.
+        let body = self
+            .api_get_body(&format!("/playlists/{}/items", playlist_id), &params)
+            .await?;
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ItemsResponse {
+            items: Vec<Value>,
+            total_number_of_items: u32,
+            #[serde(default)]
+            offset: u32,
+            #[serde(default)]
+            limit: u32,
+        }
+
+        let data: ItemsResponse = serde_json::from_str(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+        let items = parse_playlist_items(data.items)?;
+        Ok(PaginatedTracks {
+            items,
+            total_number_of_items: data.total_number_of_items,
+            offset: data.offset,
+            limit: data.limit,
+        })
+    }
+
+    /// Fetch playlist recommendations. The API wraps each track in `{ item, type }`.
+    pub async fn get_playlist_recommendations(
+        &mut self,
+        playlist_id: &str,
+        offset: u32,
+        limit: u32,
+    ) -> Result<PaginatedTracks, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let body = self
+            .api_get_body(
+                &format!("/playlists/{}/recommendations/items", playlist_id),
+                &[
+                    ("countryCode", &cc),
+                    ("limit", &limit_str),
+                    ("offset", &offset_str),
+                    ("locale", "en_US"),
+                    ("deviceType", "BROWSER"),
+                ],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct WrappedItem {
+            item: TidalTrack,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RecommendationsResponse {
+            #[serde(default)]
+            items: Vec<WrappedItem>,
+            #[serde(default)]
+            total_number_of_items: u32,
+            #[serde(default)]
+            offset: u32,
+            #[serde(default)]
+            limit: u32,
+        }
+
+        let data: RecommendationsResponse = serde_json::from_str(&body).map_err(|e| {
+            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+        })?;
+
+        let mut tracks: Vec<TidalTrack> = data.items.into_iter().map(|w| w.item).collect();
+        for t in &mut tracks {
+            t.backfill_artist();
+        }
+
+        Ok(PaginatedTracks {
+            items: tracks,
+            total_number_of_items: data.total_number_of_items,
+            offset: data.offset,
+            limit: data.limit,
+        })
+    }
+
+    pub async fn get_album_detail(
+        &mut self,
+        album_id: u64,
+    ) -> Result<TidalAlbumDetail, SlateError> {
+        let cc = self.country_code.clone();
+        self.api_get(&format!("/albums/{}", album_id), &[("countryCode", &cc)])
+            .await
+    }
+
+    pub async fn get_album_tracks(
+        &mut self,
+        album_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Result<PaginatedTracks, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let body = self
+            .api_get_body(
+                &format!("/albums/{}/tracks", album_id),
+                &[
+                    ("countryCode", &cc),
+                    ("limit", &limit_str),
+                    ("offset", &offset_str),
+                ],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct AlbumTracksResponse {
+            items: Vec<TidalTrack>,
+            total_number_of_items: u32,
+            #[serde(default)]
+            offset: u32,
+            #[serde(default)]
+            limit: u32,
+        }
+
+        let mut data: AlbumTracksResponse = serde_json::from_str(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+        for t in &mut data.items {
+            t.backfill_artist();
+        }
+        Ok(PaginatedTracks {
+            items: data.items,
+            total_number_of_items: data.total_number_of_items,
+            offset: data.offset,
+            limit: data.limit,
+        })
+    }
+
+    pub async fn get_favorite_tracks(
+        &mut self,
+        user_id: u64,
+        offset: u32,
+        limit: u32,
+        order: &str,
+        order_direction: &str,
+    ) -> Result<PaginatedTracks, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let body = self
+            .api_get_body(
+                &format!("/users/{}/favorites/tracks", user_id),
+                &[
+                    ("countryCode", &cc),
+                    ("limit", &limit_str),
+                    ("offset", &offset_str),
+                    ("order", order),
+                    ("orderDirection", order_direction),
+                ],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct FavoriteTrackItem {
+            item: TidalTrack,
+            created: String,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FavoriteTracksResponse {
+            items: Vec<FavoriteTrackItem>,
+            total_number_of_items: u32,
+            #[serde(default)]
+            offset: u32,
+            #[serde(default)]
+            limit: u32,
+        }
+
+        let data: FavoriteTracksResponse = serde_json::from_str(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+        Ok(PaginatedTracks {
+            items: data
+                .items
+                .into_iter()
+                .map(|f| {
+                    let mut t = f.item;
+                    t.backfill_artist();
+                    t.date_added = Some(f.created);
+                    t
+                })
+                .collect(),
+            total_number_of_items: data.total_number_of_items,
+            offset: data.offset,
+            limit: data.limit,
+        })
+    }
+
+    pub async fn is_track_favorited(
+        &self,
+        user_id: u64,
+        track_id: u64,
+    ) -> Result<bool, SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!(
+                "{}/users/{}/favorites/tracks",
+                TIDAL_API_URL, user_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("countryCode", self.country_code.as_str()),
+                ("limit", "2000"),
+                ("offset", "0"),
+                ("order", "DATE"),
+                ("orderDirection", "DESC"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct FavoriteTrackItem {
+            #[serde(default)]
+            id: Option<u64>,
+            #[serde(default)]
+            item: Option<TidalTrack>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FavoriteTracksResponse {
+            #[serde(default)]
+            items: Vec<FavoriteTrackItem>,
+        }
+
+        let data = serde_json::from_str::<FavoriteTracksResponse>(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+
+        Ok(data.items.iter().any(|entry| {
+            entry.id == Some(track_id)
+                || entry
+                    .item
+                    .as_ref()
+                    .is_some_and(|track| track.id == track_id)
+        }))
+    }
+
+    pub async fn get_favorite_track_ids(&self, user_id: u64) -> Result<Vec<u64>, SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!(
+                "{}/users/{}/favorites/tracks",
+                TIDAL_API_URL, user_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("countryCode", self.country_code.as_str()),
+                ("limit", "2000"),
+                ("offset", "0"),
+                ("order", "DATE"),
+                ("orderDirection", "DESC"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct FavItem {
+            item: TidalTrack,
+        }
+
+        #[derive(Deserialize)]
+        struct FavResponse {
+            #[serde(default)]
+            items: Vec<FavItem>,
+        }
+
+        let data = serde_json::from_str::<FavResponse>(&body)
+            .map_err(|e| SlateError::Parse(e.to_string()))?;
+
+        Ok(data.items.into_iter().map(|f| f.item.id).collect())
+    }
+
+    pub async fn add_favorite_track(&self, user_id: u64, track_id: u64) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let track_id_str = track_id.to_string();
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .post(format!(
+                "{}/users/{}/favorites/tracks",
+                TIDAL_API_URL, user_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())])
+            .form(&[("trackId", track_id_str.as_str())]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn remove_favorite_track(
+        &self,
+        user_id: u64,
+        track_id: u64,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .delete(format!(
+                "{}/users/{}/favorites/tracks/{}",
+                TIDAL_API_URL, user_id, track_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn add_favorite_video(&self, user_id: u64, video_id: u64) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let video_id_str = video_id.to_string();
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .post(format!(
+                "{}/users/{}/favorites/videos",
+                TIDAL_API_URL, user_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())])
+            .form(&[
+                ("videoIds", video_id_str.as_str()),
+                ("onArtifactNotFound", "FAIL"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn remove_favorite_video(
+        &self,
+        user_id: u64,
+        video_id: u64,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .delete(format!(
+                "{}/users/{}/favorites/videos/{}",
+                TIDAL_API_URL, user_id, video_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_favorite_video_ids(&self, user_id: u64) -> Result<Vec<u64>, SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        // The favorites/videos content endpoint caps page size (a single
+        // limit=10000 request is rejected — which left every video heart empty on
+        // startup). Page through it at the known-good size and accumulate the ids.
+        const PAGE: u32 = 50;
+        let mut ids: Vec<u64> = Vec::new();
+        let mut offset: u32 = 0;
+        loop {
+            let limit_str = PAGE.to_string();
+            let offset_str = offset.to_string();
+            let (generation, client) = self.client_at()?;
+            let req = client
+                .get(format!(
+                    "{}/users/{}/favorites/videos",
+                    TIDAL_API_URL, user_id
+                ))
+                .header("Authorization", format!("Bearer {}", tokens.access_token))
+                .query(&[
+                    ("countryCode", self.country_code.as_str()),
+                    ("limit", limit_str.as_str()),
+                    ("offset", offset_str.as_str()),
+                    ("order", "DATE"),
+                    ("orderDirection", "DESC"),
+                ]);
+            let response = self.send(generation, req).await?;
+
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return Err(SlateError::Api {
+                    status: status.as_u16(),
+                    body,
+                });
+            }
+
+            // Parse leniently: pull each item's id directly. Deserializing the full
+            // TidalVideo would fail the whole page if any one favorite is missing a
+            // required field.
+            let json: serde_json::Value =
+                serde_json::from_str(&body).map_err(|e| SlateError::Parse(e.to_string()))?;
+            let items = json.get("items").and_then(|i| i.as_array());
+            let count = items.map(|a| a.len()).unwrap_or(0);
+            if let Some(items) = items {
+                ids.extend(
+                    items
+                        .iter()
+                        .filter_map(|it| it.get("item")?.get("id")?.as_u64()),
+                );
+            }
+
+            if count < PAGE as usize {
+                break;
+            }
+            offset += PAGE;
+            if offset >= 10_000 {
+                break; // safety cap — never loop unbounded
+            }
+        }
+
+        log::debug!("[get_favorite_video_ids] collected {} ids", ids.len());
+        Ok(ids)
+    }
+
+    pub async fn get_favorite_videos(
+        &self,
+        user_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Vec<TidalVideo>, SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!(
+                "{}/users/{}/favorites/videos",
+                TIDAL_API_URL, user_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("countryCode", self.country_code.as_str()),
+                ("limit", limit_str.as_str()),
+                ("offset", offset_str.as_str()),
+                ("order", "DATE"),
+                ("orderDirection", "DESC"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct FavItem {
+            #[serde(default)]
+            item: Option<serde_json::Value>,
+        }
+
+        #[derive(Deserialize)]
+        struct FavResponse {
+            #[serde(default)]
+            items: Vec<FavItem>,
+        }
+
+        let data = serde_json::from_str::<FavResponse>(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+
+        Ok(data
+            .items
+            .into_iter()
+            .filter_map(|f| f.item)
+            .filter_map(|v| serde_json::from_value::<TidalVideo>(v).ok())
+            .collect())
+    }
+
+    pub async fn is_album_favorited(
+        &self,
+        user_id: u64,
+        album_id: u64,
+    ) -> Result<bool, SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!(
+                "{}/users/{}/favorites/albums",
+                TIDAL_API_URL, user_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("countryCode", self.country_code.as_str()),
+                ("limit", "2000"),
+                ("offset", "0"),
+                ("order", "DATE"),
+                ("orderDirection", "DESC"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct FavoriteAlbumItem {
+            #[serde(default)]
+            id: Option<u64>,
+            #[serde(default)]
+            item: Option<TidalAlbum>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FavoriteAlbumsResponse {
+            #[serde(default)]
+            items: Vec<FavoriteAlbumItem>,
+        }
+
+        let data = serde_json::from_str::<FavoriteAlbumsResponse>(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+
+        Ok(data.items.iter().any(|entry| {
+            entry.id == Some(album_id)
+                || entry
+                    .item
+                    .as_ref()
+                    .is_some_and(|album| album.id == album_id)
+        }))
+    }
+
+    pub async fn get_favorite_album_ids(&self, user_id: u64) -> Result<Vec<u64>, SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!(
+                "{}/users/{}/favorites/albums",
+                TIDAL_API_URL, user_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("countryCode", self.country_code.as_str()),
+                ("limit", "2000"),
+                ("offset", "0"),
+                ("order", "DATE"),
+                ("orderDirection", "DESC"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct FavAlbumItem {
+            #[serde(default)]
+            item: Option<TidalAlbum>,
+        }
+
+        #[derive(Deserialize)]
+        struct FavAlbumResponse {
+            #[serde(default)]
+            items: Vec<FavAlbumItem>,
+        }
+
+        let data = serde_json::from_str::<FavAlbumResponse>(&body)
+            .map_err(|e| SlateError::Parse(e.to_string()))?;
+
+        Ok(data
+            .items
+            .into_iter()
+            .filter_map(|f| f.item.map(|a| a.id))
+            .collect())
+    }
+
+    pub async fn add_favorite_album(&self, user_id: u64, album_id: u64) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let album_id_str = album_id.to_string();
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .post(format!(
+                "{}/users/{}/favorites/albums",
+                TIDAL_API_URL, user_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())])
+            .form(&[("albumId", album_id_str.as_str())]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn remove_favorite_album(
+        &self,
+        user_id: u64,
+        album_id: u64,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .delete(format!(
+                "{}/users/{}/favorites/albums/{}",
+                TIDAL_API_URL, user_id, album_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn add_favorite_playlist(
+        &self,
+        user_id: u64,
+        playlist_uuid: &str,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .post(format!(
+                "{}/users/{}/favorites/playlists",
+                TIDAL_API_URL, user_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())])
+            .form(&[("uuid", playlist_uuid)]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn remove_favorite_playlist(
+        &self,
+        user_id: u64,
+        playlist_uuid: &str,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .delete(format!(
+                "{}/users/{}/favorites/playlists/{}",
+                TIDAL_API_URL, user_id, playlist_uuid
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_favorite_artist_ids(&self, user_id: u64) -> Result<Vec<u64>, SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!(
+                "{}/users/{}/favorites/artists",
+                TIDAL_API_URL, user_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("countryCode", self.country_code.as_str()),
+                ("limit", "2000"),
+                ("offset", "0"),
+                ("order", "DATE"),
+                ("orderDirection", "DESC"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct FavItem {
+            item: TidalArtistDetail,
+        }
+        #[derive(Deserialize)]
+        struct FavResponse {
+            #[serde(default)]
+            items: Vec<FavItem>,
+        }
+
+        let data = serde_json::from_str::<FavResponse>(&body)
+            .map_err(|e| SlateError::Parse(e.to_string()))?;
+
+        Ok(data.items.into_iter().map(|f| f.item.id).collect())
+    }
+
+    pub async fn get_all_favorite_ids(&self, user_id: u64) -> Result<AllFavoriteIds, SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!("{}/users/{}/favorites/ids", TIDAL_API_URL, user_id))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("countryCode", self.country_code.as_str()),
+                ("locale", "en_US"),
+                ("deviceType", "BROWSER"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let raw: std::collections::HashMap<String, Vec<String>> =
+            serde_json::from_str(&body).map_err(|e| SlateError::Parse(e.to_string()))?;
+
+        let parse_u64s = |key: &str| -> Vec<u64> {
+            raw.get(key)
+                .map(|v| v.iter().filter_map(|s| s.parse::<u64>().ok()).collect())
+                .unwrap_or_default()
+        };
+
+        Ok(AllFavoriteIds {
+            tracks: parse_u64s("TRACK"),
+            albums: parse_u64s("ALBUM"),
+            artists: parse_u64s("ARTIST"),
+            playlists: raw.get("PLAYLIST").cloned().unwrap_or_default(),
+        })
+    }
+
+    pub async fn add_favorite_artist(
+        &self,
+        user_id: u64,
+        artist_id: u64,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let artist_id_str = artist_id.to_string();
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .post(format!(
+                "{}/users/{}/favorites/artists",
+                TIDAL_API_URL, user_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())])
+            .form(&[("artistId", artist_id_str.as_str())]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn remove_favorite_artist(
+        &self,
+        user_id: u64,
+        artist_id: u64,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .delete(format!(
+                "{}/users/{}/favorites/artists/{}",
+                TIDAL_API_URL, user_id, artist_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn add_favorite_mix(&self, mix_id: &str) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        log::debug!("[add_favorite_mix]: mix_id={}", mix_id);
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .put(format!("{}/favorites/mixes/add", TIDAL_API_V2_URL))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("countryCode", self.country_code.as_str()),
+                ("mixIds", mix_id),
+                ("onArtifactNotFound", "FAIL"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[add_favorite_mix]: status={}, body={}",
+            status,
+            &body[..body.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn remove_favorite_mix(&self, mix_id: &str) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        log::debug!("[remove_favorite_mix]: mix_id={}", mix_id);
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .put(format!("{}/favorites/mixes/remove", TIDAL_API_V2_URL))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("countryCode", self.country_code.as_str()),
+                ("mixIds", mix_id),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[remove_favorite_mix]: status={}, body={}",
+            status,
+            &body[..body.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Fetch favorite mix IDs from api.tidal.com/v2/favorites/mixes.
+    pub async fn get_favorite_mix_ids(&mut self) -> Result<Vec<String>, SlateError> {
+        let response = self.get_favorite_mixes(0, 50, "DATE", "DESC").await?;
+        let ids: Vec<String> = response.items.iter().map(|m| m.id.clone()).collect();
+        log::debug!("[get_favorite_mix_ids]: found {} mix IDs", ids.len());
+        Ok(ids)
+    }
+
+    /// Fetch full favorite mix objects from api.tidal.com/v2/favorites/mixes.
+    pub async fn get_favorite_mixes(
+        &mut self,
+        offset: u32,
+        limit: u32,
+        order: &str,
+        order_direction: &str,
+    ) -> Result<PaginatedResponse<TidalFavoriteMix>, SlateError> {
+        let url = format!("{}/favorites/mixes", TIDAL_API_V2_URL);
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let body = self
+            .api_get_body(
+                &url,
+                &[
+                    ("countryCode", &cc),
+                    ("locale", "en_US"),
+                    ("deviceType", "BROWSER"),
+                    ("limit", &limit_str),
+                    ("offset", &offset_str),
+                    ("order", order),
+                    ("orderDirection", order_direction),
+                ],
+            )
+            .await?;
+
+        log::debug!(
+            "[get_favorite_mixes]: body_preview={}",
+            &body[..body.len().min(500)]
+        );
+
+        // v2 response is a wrapper object { items: [...] }; extract the inner array as raw Values first
+        let raw_items: Vec<serde_json::Value> =
+            if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&body) {
+                arr
+            } else if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&body) {
+                obj.get("items")
+                    .or_else(|| obj.get("data"))
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                log::warn!(
+                    "[get_favorite_mixes]: parse failed - body: {}",
+                    &body[..body.len().min(500)]
+                );
+                Vec::new()
+            };
+
+        // Deserialize each item, skipping any that fail to parse
+        let items: Vec<TidalFavoriteMix> = raw_items
+            .into_iter()
+            .filter_map(|v| serde_json::from_value::<TidalFavoriteMix>(v).ok())
+            .collect();
+
+        let count = items.len() as u32;
+        log::debug!("[get_favorite_mixes]: found {} mixes", count);
+        // v2 API doesn't return totalNumberOfItems — this is a synthetic sentinel for hasMore logic only, not a displayable count
+        let estimated_total = if count == limit {
+            offset + count + 1
+        } else {
+            offset + count
+        };
+        Ok(PaginatedResponse {
+            items,
+            total_number_of_items: estimated_total,
+            offset,
+            limit,
+        })
+    }
+
+    /// Fetch playlist folders from v2/my-collection/playlists/folders.
+    /// Returns raw JSON so we can capture the full response shape.
+    pub async fn get_playlist_folders(
+        &mut self,
+        folder_id: &str,
+        include_only: &str,
+        offset: u32,
+        limit: u32,
+        order: &str,
+        order_direction: &str,
+        cursor: &str,
+    ) -> Result<serde_json::Value, SlateError> {
+        let url = format!("{}/my-collection/playlists/folders", TIDAL_API_V2_URL);
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let mut params: Vec<(&str, &str)> = vec![
+            ("folderId", folder_id),
+            ("offset", &offset_str),
+            ("limit", &limit_str),
+            ("order", order),
+            ("orderDirection", order_direction),
+            ("countryCode", &cc),
+            ("locale", "en_US"),
+            ("deviceType", "BROWSER"),
+        ];
+        if !include_only.is_empty() {
+            params.push(("includeOnly", include_only));
+        }
+        if !cursor.is_empty() {
+            params.push(("cursor", cursor));
+        }
+        let body = self.api_get_body(&url, &params).await?;
+
+        log::debug!(
+            "[get_playlist_folders]: body_preview={}",
+            &body[..body.len().min(1000)]
+        );
+
+        serde_json::from_str(&body).map_err(|e| {
+            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+        })
+    }
+
+    /// Fetch ALL playlists across every folder via the flattened endpoint,
+    /// paginating with the response `cursor` until exhausted. Returns the raw
+    /// folder items (same shape `normalizeFolderItem` consumes).
+    pub async fn get_all_flattened_playlists(
+        &mut self,
+    ) -> Result<Vec<serde_json::Value>, SlateError> {
+        let url = format!(
+            "{}/my-collection/playlists/folders/flattened",
+            TIDAL_API_V2_URL
+        );
+        let cc = self.country_code.clone();
+        let mut accumulated: Vec<serde_json::Value> = Vec::new();
+        let mut cursor = String::new();
+        const MAX_PAGES: u32 = 40;
+
+        for _ in 0..MAX_PAGES {
+            let mut params: Vec<(&str, &str)> = vec![
+                ("offset", "0"),
+                ("limit", "50"),
+                ("order", "DATE"),
+                ("orderDirection", "DESC"),
+                ("countryCode", &cc),
+                ("locale", "en_US"),
+                ("deviceType", "BROWSER"),
+            ];
+            if !cursor.is_empty() {
+                params.push(("cursor", &cursor));
+            }
+
+            let body = self.api_get_body(&url, &params).await?;
+            let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+                SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+            })?;
+
+            if let Some(items) = value.get("items").and_then(|v| v.as_array()) {
+                accumulated.extend(items.iter().cloned());
+            }
+
+            match value.get("cursor").and_then(|c| c.as_str()) {
+                Some(next) if !next.is_empty() => cursor = next.to_string(),
+                _ => break,
+            }
+        }
+
+        log::debug!(
+            "[get_all_flattened_playlists]: accumulated {} items",
+            accumulated.len()
+        );
+        Ok(accumulated)
+    }
+
+    pub async fn create_playlist_folder(
+        &self,
+        folder_id: &str,
+        name: &str,
+        trns: &str,
+    ) -> Result<serde_json::Value, SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        log::debug!(
+            "[create_playlist_folder]: folder_id={}, name={}, trns={}",
+            folder_id,
+            name,
+            trns
+        );
+
+        let mut params: Vec<(&str, &str)> = vec![
+            ("folderId", folder_id),
+            ("name", name),
+            ("countryCode", self.country_code.as_str()),
+            ("locale", "en_US"),
+            ("deviceType", "BROWSER"),
+        ];
+        if !trns.is_empty() {
+            params.push(("trns", trns));
+        }
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .put(format!(
+                "{}/my-collection/playlists/folders/create-folder",
+                TIDAL_API_V2_URL
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&params);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[create_playlist_folder]: status={}, body={}",
+            status,
+            &body[..body.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(serde_json::from_str(&body).unwrap_or(serde_json::Value::Null))
+    }
+
+    pub async fn rename_playlist_folder(
+        &self,
+        folder_trn: &str,
+        name: &str,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        log::debug!(
+            "[rename_playlist_folder]: folder_trn={}, name={}",
+            folder_trn,
+            name
+        );
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .put(format!(
+                "{}/my-collection/playlists/folders/rename",
+                TIDAL_API_V2_URL
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("trn", folder_trn),
+                ("name", name),
+                ("countryCode", self.country_code.as_str()),
+                ("locale", "en_US"),
+                ("deviceType", "BROWSER"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[rename_playlist_folder]: status={}, body={}",
+            status,
+            &body[..body.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn delete_playlist_folder(&self, folder_trn: &str) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        log::debug!("[delete_playlist_folder]: folder_trn={}", folder_trn);
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .put(format!(
+                "{}/my-collection/playlists/folders/remove",
+                TIDAL_API_V2_URL
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("trns", folder_trn),
+                ("countryCode", self.country_code.as_str()),
+                ("locale", "en_US"),
+                ("deviceType", "BROWSER"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[delete_playlist_folder]: status={}, body={}",
+            status,
+            &body[..body.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn move_playlist_to_folder(
+        &self,
+        folder_id: &str,
+        playlist_trn: &str,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        log::debug!(
+            "[move_playlist_to_folder]: folder_id={}, playlist_trn={}",
+            folder_id,
+            playlist_trn
+        );
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .put(format!(
+                "{}/my-collection/playlists/folders/move",
+                TIDAL_API_V2_URL
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[
+                ("folderId", folder_id),
+                ("trns", playlist_trn),
+                ("countryCode", self.country_code.as_str()),
+                ("locale", "en_US"),
+                ("deviceType", "BROWSER"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[move_playlist_to_folder]: status={}, body={}",
+            status,
+            &body[..body.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn add_tracks_to_playlist(
+        &self,
+        playlist_id: &str,
+        track_ids: &[u64],
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        // Get the playlist ETag which is required for modifications
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!("{}/playlists/{}", TIDAL_API_URL, playlist_id))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())]);
+        let head_response = self.send(generation, req).await?;
+
+        let etag = head_response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("*")
+            .to_string();
+
+        let ids_str = track_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .post(format!("{}/playlists/{}/items", TIDAL_API_URL, playlist_id))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .header("If-None-Match", &etag)
+            .query(&[("countryCode", self.country_code.as_str())])
+            .form(&[
+                ("trackIds", ids_str.as_str()),
+                ("onDupes", "SKIP"),
+                ("onArtifactNotFound", "FAIL"),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_stream_url(
+        &mut self,
+        track_id: u64,
+        quality: &str,
+    ) -> Result<StreamInfo, SlateError> {
+        let cc = self.country_code.clone();
+        let body = self
+            .api_get_body(
+                &format!("/tracks/{}/playbackinfopostpaywall", track_id),
+                &[
+                    ("countryCode", &cc),
+                    ("audioquality", quality),
+                    ("playbackmode", "STREAM"),
+                    ("assetpresentation", "FULL"),
+                ],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PlaybackInfo {
+            manifest_mime_type: String,
+            manifest: String,
+            #[serde(default)]
+            audio_quality: Option<String>,
+            #[serde(default)]
+            bit_depth: Option<u32>,
+            #[serde(default)]
+            sample_rate: Option<u32>,
+            #[serde(default)]
+            album_replay_gain: Option<f64>,
+            #[serde(default)]
+            album_peak_amplitude: Option<f64>,
+            #[serde(default)]
+            track_replay_gain: Option<f64>,
+            #[serde(default)]
+            track_peak_amplitude: Option<f64>,
+        }
+
+        let data = serde_json::from_str::<PlaybackInfo>(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+
+        use base64::Engine;
+        let manifest_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&data.manifest)
+            .map_err(|e| SlateError::Parse(format!("Failed to decode manifest: {}", e)))?;
+        let manifest_str = String::from_utf8(manifest_bytes)
+            .map_err(|e| SlateError::Parse(format!("Invalid manifest encoding: {}", e)))?;
+
+        let mut codec: Option<String> = None;
+
+        // Handle BTS format (JSON with urls array)
+        let url = if data.manifest_mime_type.contains("vnd.tidal.bts") {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            #[allow(dead_code)]
+            struct BtsManifest {
+                urls: Vec<String>,
+                codecs: Option<String>,
+                mime_type: Option<String>,
+                encryption_type: Option<String>,
+            }
+
+            let manifest_data = serde_json::from_str::<BtsManifest>(&manifest_str)
+                .map_err(|e| SlateError::Parse(format!("{} - Manifest: {}", e, manifest_str)))?;
+
+            codec = manifest_data
+                .codecs
+                .map(|c| c.to_uppercase().split('.').next().unwrap_or("").to_string());
+
+            manifest_data
+                .urls
+                .into_iter()
+                .next()
+                .ok_or(SlateError::Parse("No URL in BTS manifest".into()))?
+        }
+        // Handle DASH/MPD format — return raw manifest for GStreamer
+        else if data.manifest_mime_type.contains("dash+xml") {
+            // Extract codec from manifest
+            if let Some(codecs_start) = manifest_str.find("codecs=\"") {
+                let start = codecs_start + 8;
+                if let Some(codecs_end) = manifest_str[start..].find("\"") {
+                    let raw = &manifest_str[start..start + codecs_end];
+                    codec = Some(if raw.contains("flac") {
+                        "FLAC".to_string()
+                    } else {
+                        raw.to_uppercase()
+                    });
+                }
+            }
+
+            return Ok(StreamInfo {
+                url: String::new(),
+                codec,
+                bit_depth: data.bit_depth,
+                sample_rate: data.sample_rate,
+                audio_quality: data.audio_quality.clone(),
+                audio_mode: None,
+                asset_presentation: None,
+                manifest: Some(manifest_str),
+                manifest_mime_type: None,
+                manifest_hash: None,
+                track_id: None,
+                album_replay_gain: data.album_replay_gain,
+                album_peak_amplitude: data.album_peak_amplitude,
+                track_replay_gain: data.track_replay_gain,
+                track_peak_amplitude: data.track_peak_amplitude,
+            });
+        }
+        // JSON fallback
+        else {
+            #[derive(Deserialize)]
+            struct JsonManifest {
+                urls: Option<Vec<String>>,
+            }
+
+            if let Ok(manifest_data) = serde_json::from_str::<JsonManifest>(&manifest_str) {
+                if let Some(urls) = manifest_data.urls {
+                    if let Some(u) = urls.into_iter().next() {
+                        u
+                    } else {
+                        return Err(SlateError::Parse("Empty URL list in manifest".into()));
+                    }
+                } else {
+                    return Err(SlateError::Parse("No urls in JSON manifest".into()));
+                }
+            } else {
+                return Err(SlateError::Parse(format!(
+                    "Unknown manifest format '{}': {}",
+                    data.manifest_mime_type,
+                    &manifest_str[..manifest_str.len().min(300)]
+                )));
+            }
+        };
+
+        Ok(StreamInfo {
+            url,
+            codec,
+            bit_depth: data.bit_depth,
+            sample_rate: data.sample_rate,
+            audio_quality: data.audio_quality.clone(),
+            audio_mode: None,
+            asset_presentation: None,
+            manifest: None,
+            manifest_mime_type: None,
+            manifest_hash: None,
+            track_id: None,
+            album_replay_gain: data.album_replay_gain,
+            album_peak_amplitude: data.album_peak_amplitude,
+            track_replay_gain: data.track_replay_gain,
+            track_peak_amplitude: data.track_peak_amplitude,
+        })
+    }
+
+    pub async fn get_video_stream_url(
+        &mut self,
+        video_id: u64,
+        video_quality: &str,
+    ) -> Result<VideoStreamInfo, SlateError> {
+        let cc = self.country_code.clone();
+        let body = self
+            .api_get_body(
+                &format!("/videos/{}/playbackinfopostpaywall", video_id),
+                &[
+                    ("countryCode", &cc),
+                    ("videoquality", video_quality),
+                    ("playbackmode", "STREAM"),
+                    ("assetpresentation", "FULL"),
+                ],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PlaybackInfo {
+            video_id: u64,
+            video_quality: String,
+            manifest_mime_type: String,
+            manifest: String,
+        }
+
+        let data = serde_json::from_str::<PlaybackInfo>(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+
+        use base64::Engine;
+        let manifest_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&data.manifest)
+            .map_err(|e| SlateError::Parse(format!("Failed to decode manifest: {}", e)))?;
+        let manifest_str = String::from_utf8(manifest_bytes)
+            .map_err(|e| SlateError::Parse(format!("Invalid manifest encoding: {}", e)))?;
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct EmuManifest {
+            urls: Vec<String>,
+        }
+
+        let manifest_data = serde_json::from_str::<EmuManifest>(&manifest_str)
+            .map_err(|e| SlateError::Parse(format!("{} - Manifest: {}", e, manifest_str)))?;
+
+        let url = manifest_data
+            .urls
+            .into_iter()
+            .next()
+            .ok_or(SlateError::Parse("No URL in video manifest".into()))?;
+
+        Ok(VideoStreamInfo {
+            url,
+            video_quality: data.video_quality,
+            manifest_mime_type: data.manifest_mime_type,
+            video_id: data.video_id,
+        })
+    }
+
+    pub async fn get_video(&mut self, video_id: u64) -> Result<TidalVideo, SlateError> {
+        let cc = self.country_code.clone();
+        self.api_get(
+            &format!("/videos/{}", video_id),
+            &[
+                ("countryCode", &cc),
+                ("locale", "en_US"),
+                ("deviceType", "BROWSER"),
+            ],
+        )
+        .await
+    }
+
+    pub async fn get_track_lyrics(&mut self, track_id: u64) -> Result<TidalLyrics, SlateError> {
+        let cc = self.country_code.clone();
+        self.api_get(
+            &format!("/tracks/{}/lyrics", track_id),
+            &[("countryCode", &cc)],
+        )
+        .await
+    }
+
+    pub async fn get_playlist_details(
+        &mut self,
+        playlist_id: &str,
+    ) -> Result<serde_json::Value, SlateError> {
+        let cc = self.country_code.clone();
+        self.api_get(
+            &format!("/playlists/{}", playlist_id),
+            &[("countryCode", &cc)],
+        )
+        .await
+    }
+
+    pub async fn get_track(&mut self, track_id: u64) -> Result<serde_json::Value, SlateError> {
+        let cc = self.country_code.clone();
+        self.api_get(&format!("/tracks/{}", track_id), &[("countryCode", &cc)])
+            .await
+    }
+
+    pub async fn get_track_credits(
+        &mut self,
+        track_id: u64,
+    ) -> Result<Vec<TidalCredit>, SlateError> {
+        let cc = self.country_code.clone();
+        self.api_get(
+            &format!("/tracks/{}/credits", track_id),
+            &[("countryCode", &cc)],
+        )
+        .await
+    }
+
+    pub async fn search(
+        &mut self,
+        query: &str,
+        limit: u32,
+    ) -> Result<TidalSearchResults, SlateError> {
+        // Try the v2 API first (web app uses this, returns playlists properly)
+        if let Ok(v2) = self.search_v2(query, limit).await {
+            return Ok(v2);
+        }
+
+        // Fallback to v1 API
+        self.search_v1(query, limit).await
+    }
+
+    async fn search_v2(
+        &mut self,
+        query: &str,
+        limit: u32,
+    ) -> Result<TidalSearchResults, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        // v2 uses a different base URL, so pass the full URL
+        let body = self
+            .api_get_body(
+                &format!("{}/search", TIDAL_API_V2_URL),
+                &[
+                    ("query", query),
+                    ("countryCode", &cc),
+                    ("limit", &limit_str),
+                    ("types", "ARTISTS,ALBUMS,TRACKS,PLAYLISTS,VIDEOS"),
+                    ("includeContributors", "true"),
+                    ("includeUserPlaylists", "true"),
+                    ("includeDidYouMean", "true"),
+                    ("supportsUserData", "true"),
+                    ("locale", "en_US"),
+                    ("deviceType", "BROWSER"),
+                ],
+            )
+            .await?;
+        Self::parse_search_response(&body, query, "v2")
+    }
+
+    async fn search_v1(
+        &mut self,
+        query: &str,
+        limit: u32,
+    ) -> Result<TidalSearchResults, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let body = self
+            .api_get_body(
+                "/search",
+                &[
+                    ("query", query),
+                    ("countryCode", &cc),
+                    ("limit", &limit_str),
+                    ("offset", "0"),
+                    ("types", "ARTISTS,ALBUMS,TRACKS,PLAYLISTS,VIDEOS"),
+                    ("includeContributors", "true"),
+                    ("includeUserPlaylists", "true"),
+                    ("supportsUserData", "true"),
+                ],
+            )
+            .await?;
+        Self::parse_search_response(&body, query, "v1")
+    }
+
+    fn parse_search_response(
+        body: &str,
+        query: &str,
+        tag: &str,
+    ) -> Result<TidalSearchResults, SlateError> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Sec<T> {
+            items: Vec<T>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct SR {
+            #[serde(default)]
+            artists: Option<Sec<TidalArtist>>,
+            #[serde(default)]
+            albums: Option<Sec<TidalAlbumDetail>>,
+            #[serde(default)]
+            tracks: Option<Sec<TidalTrack>>,
+            #[serde(default)]
+            playlists: Option<Sec<TidalPlaylistRaw>>,
+            #[serde(default)]
+            videos: Option<Sec<TidalVideo>>,
+        }
+
+        let data: SR = serde_json::from_str(body)
+            .map_err(|e| SlateError::Parse(format!("search ({}): {}", tag, e)))?;
+
+        // Parse topHits from the raw JSON (v2 returns an array of typed entities)
+        let top_hits = serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|json| {
+                json.get("topHits")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| DirectHitItem::parse_array(arr))
+            })
+            .unwrap_or_default();
+
+        log::debug!(
+            "search [{}]: t={} al={} ar={} pl={} v={} th={} [{}] for '{}'",
+            tag,
+            data.tracks.as_ref().map(|s| s.items.len()).unwrap_or(0),
+            data.albums.as_ref().map(|s| s.items.len()).unwrap_or(0),
+            data.artists.as_ref().map(|s| s.items.len()).unwrap_or(0),
+            data.playlists.as_ref().map(|s| s.items.len()).unwrap_or(0),
+            data.videos.as_ref().map(|s| s.items.len()).unwrap_or(0),
+            top_hits.len(),
+            top_hits
+                .iter()
+                .map(|h| h.hit_type.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            query
+        );
+
+        let mut tracks = data.tracks.map(|s| s.items).unwrap_or_default();
+        for t in &mut tracks {
+            t.backfill_artist();
+        }
+
+        let mut albums = data.albums.map(|s| s.items).unwrap_or_default();
+        for a in &mut albums {
+            a.backfill_artist();
+        }
+
+        Ok(TidalSearchResults {
+            artists: data.artists.map(|s| s.items).unwrap_or_default(),
+            albums,
+            tracks,
+            playlists: data
+                .playlists
+                .map(|s| s.items.into_iter().map(|p| p.into()).collect())
+                .unwrap_or_default(),
+            videos: data.videos.map(|s| s.items).unwrap_or_default(),
+            top_hit_type: None,
+            top_hits,
+        })
+    }
+
+    /// Fetch suggestions from Tidal's v2 /suggestions/ endpoint.
+    /// Returns a SuggestionsResponse with text suggestions AND direct hit entities,
+    /// exactly as the webapp's mini-search dropdown uses.
+    pub async fn get_suggestions(&mut self, query: &str, limit: u32) -> SuggestionsResponse {
+        let empty = SuggestionsResponse {
+            text_suggestions: vec![],
+            direct_hits: vec![],
+        };
+        let url = format!("{}/suggestions/", TIDAL_API_V2_URL);
+        let country_code = self.country_code.clone();
+
+        let resp = self
+            .authenticated_get(
+                &url,
+                &[
+                    ("query", query),
+                    ("countryCode", &country_code),
+                    ("explicit", "true"),
+                    ("hybrid", "true"),
+                ],
+            )
+            .await;
+
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                let body = r.text().await.unwrap_or_default();
+                if let Some(result) = Self::parse_v2_suggestions_full(&body, limit) {
+                    log::debug!(
+                        "suggestions v2: {} text, {} hits for '{}'",
+                        result.text_suggestions.len(),
+                        result.direct_hits.len(),
+                        query
+                    );
+                    return result;
+                }
+            }
+            Ok(r) => log::debug!("suggestions v2: HTTP {} for '{}'", r.status(), query),
+            Err(e) => log::debug!("suggestions v2: error: {} for '{}'", e, query),
+        }
+
+        empty
+    }
+
+    /// Parse the full v2 /suggestions/ response into SuggestionsResponse.
+    /// Preserves directHits in exact API order (mixed entity types).
+    fn parse_v2_suggestions_full(body: &str, limit: u32) -> Option<SuggestionsResponse> {
+        let json: serde_json::Value = serde_json::from_str(body).ok()?;
+
+        let mut text_suggestions = Vec::new();
+
+        // Extract history items (source = "history")
+        if let Some(arr) = json.get("history").and_then(|v| v.as_array()) {
+            for item in arr {
+                if let Some(q) = item.get("query").and_then(|v| v.as_str()) {
+                    text_suggestions.push(SuggestionTextItem {
+                        query: q.to_string(),
+                        source: "history".to_string(),
+                    });
+                }
+            }
+        }
+
+        // Extract suggestion items (source = "suggestion")
+        if let Some(arr) = json.get("suggestions").and_then(|v| v.as_array()) {
+            for item in arr {
+                if let Some(q) = item.get("query").and_then(|v| v.as_str()) {
+                    text_suggestions.push(SuggestionTextItem {
+                        query: q.to_string(),
+                        source: "suggestion".to_string(),
+                    });
+                }
+            }
+        }
+
+        text_suggestions.truncate(limit as usize);
+
+        // Extract directHits in exact API order using the shared helper
+        let direct_hits = json
+            .get("directHits")
+            .and_then(|v| v.as_array())
+            .map(|arr| DirectHitItem::parse_array(arr))
+            .unwrap_or_default();
+
+        Some(SuggestionsResponse {
+            text_suggestions,
+            direct_hits,
+        })
+    }
+
+    // ==================== Home Page (Pages API) ====================
+
+    /// Fetch the v2 home feed from api.tidal.com/v2/home/feed/{slug}.
+    ///
+    /// Errors are returned, never flattened into an empty feed: callers cache
+    /// what comes back, and a silent empty is indistinguishable from "this
+    /// account has no home content" — which is how one failed request used to
+    /// blank Home for hours.
+    pub async fn fetch_v2_home_feed(
+        &mut self,
+        feed_slug: &str,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<HomeTab>, Vec<HomePageSection>, Option<String>), SlateError> {
+        let url = format!("{}/home/feed/{}", TIDAL_API_V2_URL, feed_slug);
+        let country_code = self.country_code.clone();
+
+        let mut params: Vec<(&str, &str)> = vec![
+            ("countryCode", &country_code),
+            ("locale", "en_US"),
+            ("deviceType", "BROWSER"),
+            ("platform", "WEB"),
+        ];
+        let cursor_owned;
+        if let Some(c) = cursor {
+            cursor_owned = c.to_string();
+            params.push(("cursor", &cursor_owned));
+        }
+
+        let resp = self.authenticated_get(&url, &params).await;
+
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                let body = r.text().await.unwrap_or_default();
+                match serde_json::from_str::<Value>(&body) {
+                    Ok(json) => {
+                        let next_cursor = json
+                            .get("page")
+                            .and_then(|p| p.get("cursor"))
+                            .and_then(|c| c.as_str())
+                            .map(|s| s.to_string());
+                        let raw_count = json
+                            .get("items")
+                            .and_then(|i| i.as_array())
+                            .map(|a| a.len())
+                            .unwrap_or(0);
+                        let result = Self::parse_page_response(&json).unwrap_or_default();
+                        log::debug!("v2 home feed: cursor={:?}, raw items={}, parsed sections={}, next_cursor={:?}",
+                            cursor.is_some(), raw_count, result.sections.len(), next_cursor.is_some());
+                        if result.sections.len() < raw_count {
+                            log::debug!(
+                                "v2 home feed: {} sections dropped during parsing",
+                                raw_count - result.sections.len()
+                            );
+                        }
+                        Ok((result.tabs, result.sections, next_cursor))
+                    }
+                    Err(e) => {
+                        log::warn!("v2 home feed: parse error: {}", e);
+                        Err(SlateError::Parse(format!("home feed JSON: {}", e)))
+                    }
+                }
+            }
+            Ok(r) => {
+                let status = r.status().as_u16();
+                let body = r.text().await.unwrap_or_default();
+                log::warn!("v2 home feed: HTTP {}", status);
+                Err(SlateError::Api { status, body })
+            }
+            Err(e) => {
+                log::warn!("v2 home feed: request error: {}", e.log_safe());
+                Err(e)
+            }
+        }
+    }
+
+    /// Fetch a single page endpoint. Handles both V1 and V2 response formats.
+    async fn fetch_page_endpoint(
+        &mut self,
+        endpoint: &str,
+    ) -> Result<Vec<HomePageSection>, SlateError> {
+        let cc = self.country_code.clone();
+        let body = match self
+            .api_get_body(
+                &format!("/{}", endpoint),
+                &[
+                    ("countryCode", &cc),
+                    ("deviceType", "BROWSER"),
+                    ("locale", "en_US"),
+                ],
+            )
+            .await
+        {
+            Ok(b) => b,
+            Err(e) => {
+                log::warn!("Page endpoint {} failed: {}", endpoint, e);
+                return Ok(vec![]); // Don't fail the whole home page for one endpoint
+            }
+        };
+
+        let json: Value = serde_json::from_str(&body)
+            .map_err(|e| SlateError::Parse(format!("{} JSON: {}", endpoint, e)))?;
+
+        let result = Self::parse_page_response(&json)?;
+        log::debug!(
+            "[{}]: parsed {} sections: {:?}",
+            endpoint,
+            result.sections.len(),
+            result
+                .sections
+                .iter()
+                .map(|s| format!("\"{}\" ({})", s.title, s.section_type))
+                .collect::<Vec<_>>()
+        );
+
+        if result.sections.is_empty() {
+            if let Some(obj) = json.as_object() {
+                log::debug!(
+                    "[{}]: 0 sections parsed, top-level keys: {:?}",
+                    endpoint,
+                    obj.keys().collect::<Vec<_>>()
+                );
+            }
+        }
+
+        Ok(result.sections)
+    }
+
+    /// Build a dedup key from a section: uses title + first 3 item IDs.
+    /// This ensures sections with the same title but different content are kept.
+    fn section_dedup_key(s: &HomePageSection) -> String {
+        let mut key = s.title.clone();
+        if let Some(items) = s.items.as_array() {
+            for item in items.iter().take(3) {
+                let id = item
+                    .get("id")
+                    .and_then(|i| i.as_u64())
+                    .map(|i| i.to_string())
+                    .or_else(|| {
+                        item.get("uuid")
+                            .and_then(|u| u.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .or_else(|| {
+                        item.get("mixId")
+                            .and_then(|m| m.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_default();
+                key.push('|');
+                key.push_str(&id);
+            }
+        }
+        key
+    }
+
+    /// Helper: add sections to the collection, deduplicating smartly.
+    /// Skips sections with empty titles.
+    /// Uses title + item IDs for dedup key so same-title sections with different content are kept.
+    fn add_unique_sections(
+        all: &mut Vec<HomePageSection>,
+        seen: &mut std::collections::HashSet<String>,
+        new_sections: Vec<HomePageSection>,
+    ) {
+        for s in new_sections {
+            // Skip sections with empty/blank titles
+            if s.title.trim().is_empty() {
+                continue;
+            }
+            // Skip PAGE_LINKS navigation sections on the home page
+            if s.section_type == "PAGE_LINKS_CLOUD" || s.section_type == "PAGE_LINKS" {
+                continue;
+            }
+            let key = Self::section_dedup_key(&s);
+            if seen.insert(key) {
+                all.push(s);
+            }
+        }
+    }
+
+    /// Fetch the home page. Tries the v2 home/feed/static endpoint first
+    /// (what the Tidal web app uses). Falls back to multi-endpoint v1 approach.
+    /// Trusts Tidal's section ordering — no manual resorting.
+    pub async fn get_home_page(&mut self, feed_slug: &str) -> Result<HomePageResponse, SlateError> {
+        // Try v2 home feed first (single endpoint, personalized). A failure here
+        // is held rather than raised: the v1 fallback below may still have
+        // content, and only if that comes up empty too does the error stand.
+        let (tabs, mut all_sections, cursor, v2_error) =
+            match self.fetch_v2_home_feed(feed_slug, None).await {
+                Ok((tabs, sections, cursor)) => (tabs, sections, cursor, None),
+                Err(e) => {
+                    log::warn!(
+                        "[home v2]: home/feed/{} failed: {}",
+                        feed_slug,
+                        e.log_safe()
+                    );
+                    (vec![], vec![], None, Some(e))
+                }
+            };
+
+        if !all_sections.is_empty() {
+            log::debug!(
+                "[home v2]: got {} sections from home/feed/{}",
+                all_sections.len(),
+                feed_slug
+            );
+
+            // Filter out non-content section types
+            all_sections.retain(|s| {
+                !s.title.trim().is_empty()
+                    && s.section_type != "PAGE_LINKS_CLOUD"
+                    && s.section_type != "PAGE_LINKS"
+            });
+
+            for s in &all_sections {
+                log::debug!(
+                    "[home v2] section: '{}' type={} items={}",
+                    s.title,
+                    s.section_type,
+                    s.items.as_array().map(|a| a.len()).unwrap_or(0)
+                );
+            }
+            log::debug!(
+                "[home v2]: returning {} sections, cursor={:?}",
+                all_sections.len(),
+                cursor.is_some()
+            );
+            return Ok(HomePageResponse {
+                tabs,
+                sections: all_sections,
+                cursor,
+            });
+        }
+
+        // v1 fallback only applies to the default static feed; other tabs are
+        // v2-only, so a v2 failure is the whole story for them.
+        if feed_slug != "static" {
+            if let Some(e) = v2_error {
+                return Err(e);
+            }
+            return Ok(HomePageResponse {
+                tabs,
+                sections: all_sections,
+                cursor,
+            });
+        }
+
+        // v2 unavailable — fall back to v1 multi-endpoint approach
+        log::debug!("[home v1]: v2 empty, falling back to v1 endpoints");
+        let mut seen_titles = std::collections::HashSet::new();
+
+        let home_sections = self.fetch_page_endpoint("pages/home").await?;
+        Self::add_unique_sections(&mut all_sections, &mut seen_titles, home_sections);
+
+        if let Ok(sections) = self.fetch_page_endpoint("pages/for_you").await {
+            Self::add_unique_sections(&mut all_sections, &mut seen_titles, sections);
+        }
+
+        if let Ok(sections) = self
+            .fetch_page_endpoint("pages/my_collection_my_mixes")
+            .await
+        {
+            Self::add_unique_sections(&mut all_sections, &mut seen_titles, sections);
+        }
+
+        if let Ok(sections) = self.fetch_page_endpoint("pages/explore").await {
+            Self::add_unique_sections(&mut all_sections, &mut seen_titles, sections);
+        }
+
+        if let Ok(sections) = self.fetch_page_endpoint("pages/rising").await {
+            Self::add_unique_sections(&mut all_sections, &mut seen_titles, sections);
+        }
+
+        // Nothing anywhere. If v2 told us why, say so — an error gives the UI
+        // something to show and a retry to offer, where a blank success does not.
+        if all_sections.is_empty() {
+            if let Some(e) = v2_error {
+                log::warn!("[home]: v2 failed and the v1 fallback found nothing");
+                return Err(e);
+            }
+        }
+
+        log::debug!("[home v1]: returning {} sections", all_sections.len());
+        Ok(HomePageResponse {
+            tabs: vec![],
+            sections: all_sections,
+            cursor: None,
+        })
+    }
+
+    /// Extract the tab list from a v2 home feed response: `header.vibes.items[]`.
+    fn parse_home_tabs(json: &Value) -> Vec<HomeTab> {
+        json.get("header")
+            .and_then(|h| h.get("vibes"))
+            .and_then(|v| v.get("items"))
+            .and_then(|i| i.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|it| {
+                        let name = it.get("name").and_then(|n| n.as_str())?;
+                        let tab_type = it.get("type").and_then(|t| t.as_str())?;
+                        Some(HomeTab {
+                            name: name.to_string(),
+                            tab_type: tab_type.to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Parse a pages API response, supporting V1, V2, and tab/category formats.
+    fn parse_page_response(json: &Value) -> Result<HomePageResponse, SlateError> {
+        let tabs = Self::parse_home_tabs(json);
+        let mut sections = Vec::new();
+
+        // ---- V1 format: { rows: [ { modules: [ { type, title, pagedList, ... } ] } ] }
+        if let Some(rows) = json.get("rows").and_then(|r| r.as_array()) {
+            for row in rows {
+                if let Some(modules) = row.get("modules").and_then(|m| m.as_array()) {
+                    for module in modules {
+                        if let Some(sec) = Self::parse_v1_module(module) {
+                            sections.push(sec);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- V2 format: { items: [ { type, title, items: [...], viewAll, ... } ] }
+        if sections.is_empty() {
+            if let Some(top_items) = json.get("items").and_then(|i| i.as_array()) {
+                // Check if ANY item looks like a V2 section (objects with type/title/items)
+                // vs just being raw content items (e.g. flat track/album objects)
+                let looks_like_sections = top_items.iter().any(|f| {
+                    f.get("items").is_some()
+                        || f.get("type")
+                            .and_then(|t| t.as_str())
+                            .map(|t| {
+                                t.contains("LIST")
+                                    || t.contains("GRID")
+                                    || t.contains("SHORTCUT")
+                                    || t == "PAGE_LINKS_CLOUD"
+                                    || t == "PAGE_LINKS"
+                                    || t == "HIGHLIGHT_MODULE"
+                            })
+                            .unwrap_or(false)
+                        || f.get("titleTextInfo").is_some()
+                });
+
+                if looks_like_sections {
+                    for item in top_items {
+                        if let Some(sec) = Self::parse_v2_section(item) {
+                            sections.push(sec);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Tab format: { tabs: [ { title, items: [...] } ] }
+        // The explore page often uses a tabs-based structure
+        if sections.is_empty() {
+            if let Some(tabs) = json.get("tabs").and_then(|t| t.as_array()) {
+                for tab in tabs {
+                    // Each tab may contain rows (V1) or items (V2) inside it
+                    if let Some(rows) = tab.get("rows").and_then(|r| r.as_array()) {
+                        for row in rows {
+                            if let Some(modules) = row.get("modules").and_then(|m| m.as_array()) {
+                                for module in modules {
+                                    if let Some(sec) = Self::parse_v1_module(module) {
+                                        sections.push(sec);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(items) = tab.get("items").and_then(|i| i.as_array()) {
+                        for item in items {
+                            if let Some(sec) = Self::parse_v2_section(item) {
+                                sections.push(sec);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Categories format: { categories: [...] } or { sections: [...] }
+        if sections.is_empty() {
+            let containers = [
+                json.get("categories").and_then(|c| c.as_array()),
+                json.get("sections").and_then(|s| s.as_array()),
+            ];
+            for container in containers.into_iter().flatten() {
+                for item in container {
+                    // Try V1 module parsing first, then V2
+                    if let Some(sec) = Self::parse_v1_module(item) {
+                        sections.push(sec);
+                    } else if let Some(sec) = Self::parse_v2_section(item) {
+                        sections.push(sec);
+                    }
+                }
+            }
+        }
+
+        // ---- Fallback: if the response itself looks like a single section
+        //      e.g. { title, items: [...] } from a "view all" endpoint
+        if sections.is_empty() {
+            if let Some(items) = json.get("items").and_then(|i| i.as_array()) {
+                let page_title = json
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("Results")
+                    .to_string();
+                // Unwrap {type, data} wrappers (v2 view-all format)
+                let unwrapped: Vec<Value> = items.iter().map(Self::unwrap_v2_item).collect();
+                sections.push(HomePageSection {
+                    title: page_title,
+                    section_type: "MIXED_LIST".to_string(),
+                    items: Value::Array(unwrapped),
+                    has_more: false,
+                    api_path: None,
+                    header: None,
+                });
+            }
+        }
+
+        Ok(HomePageResponse {
+            tabs,
+            sections,
+            cursor: None,
+        })
+    }
+
+    /// Parse a V1 module (from rows/modules format).
+    fn parse_v1_module(module: &Value) -> Option<HomePageSection> {
+        let section_type = module
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Only skip truly non-content promotional types. MULTIPLE_TOP_PROMOTIONS
+        // is content (a "Featured" row of playlist/video promos handled by the
+        // frontend). FEATURED_PROMOTIONS is a distinct type the UI does not render —
+        // letting it through emits id-less cards, so skip it.
+        if section_type == "TEXT_BLOCK"
+            || section_type == "SOCIAL"
+            || section_type == "ARTICLE_LIST"
+            || section_type == "FEATURED_PROMOTIONS"
+        {
+            return None;
+        }
+
+        // Get title - check multiple possible fields
+        let title = module
+            .get("title")
+            .and_then(|t| t.as_str())
+            .or_else(|| module.get("header").and_then(|h| h.as_str()))
+            .unwrap_or("")
+            .to_string();
+
+        // PAGE_LINKS are navigation sections (explore categories) — allow them through
+        // so the explore page can use them. The home page filters them out in add_unique_sections.
+
+        // Allow sections even with empty titles if they have items
+        // (some sections have descriptions but no title)
+
+        // Extract items from pagedList, highlights, listItems, or other containers
+        let items = if let Some(paged_list) = module.get("pagedList") {
+            paged_list
+                .get("items")
+                .cloned()
+                .unwrap_or(Value::Array(vec![]))
+        } else if let Some(highlights) = module.get("highlights") {
+            if let Some(arr) = highlights.as_array() {
+                let unwrapped: Vec<Value> =
+                    arr.iter().filter_map(|h| h.get("item").cloned()).collect();
+                Value::Array(unwrapped)
+            } else {
+                Value::Array(vec![])
+            }
+        } else if let Some(list_items) = module.get("listItems").and_then(|l| l.as_array()) {
+            // Some modules use "listItems" instead of "pagedList"
+            Value::Array(list_items.clone())
+        } else if module.get("mix").is_some() {
+            // MIX_HEADER type - single mix as an item
+            Value::Array(vec![module.get("mix").cloned().unwrap_or(Value::Null)])
+        } else {
+            // Last resort: look for any array field that looks like items
+            let mut found = Value::Array(vec![]);
+            if let Some(obj) = module.as_object() {
+                for (key, val) in obj {
+                    if key == "type"
+                        || key == "title"
+                        || key == "header"
+                        || key == "showMore"
+                        || key == "viewAll"
+                        || key == "description"
+                        || key == "id"
+                        || key == "selfLink"
+                    {
+                        continue;
+                    }
+                    if let Some(arr) = val.as_array() {
+                        if !arr.is_empty() && arr[0].is_object() {
+                            found = val.clone();
+                            break;
+                        }
+                    }
+                }
+            }
+            found
+        };
+
+        // Skip truly empty sections
+        if items.as_array().map(|a| a.is_empty()).unwrap_or(true) {
+            return None;
+        }
+
+        // Extract "showMore" or "viewAll" api path - check multiple locations
+        let api_path = module
+            .get("showMore")
+            .and_then(|sm| sm.get("apiPath"))
+            .and_then(|p| p.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                module
+                    .get("pagedList")
+                    .and_then(|pl| pl.get("dataApiPath"))
+                    .and_then(|p| p.as_str())
+                    .map(|s| s.to_string())
+            })
+            .or_else(|| {
+                module.get("viewAll").and_then(|va| {
+                    if let Some(s) = va.as_str() {
+                        Some(s.to_string())
+                    } else {
+                        va.get("apiPath")
+                            .and_then(|p| p.as_str())
+                            .map(|s| s.to_string())
+                    }
+                })
+            });
+
+        let has_more = api_path.is_some();
+
+        Some(HomePageSection {
+            title,
+            section_type,
+            items,
+            has_more,
+            api_path,
+            header: None,
+        })
+    }
+
+    /// `{ type, data }` -> `data` with the wrapper type kept as `_itemType`.
+    /// Items without a `data` wrapper are already flat.
+    fn unwrap_v2_item(item: &Value) -> Value {
+        let Some(data) = item.get("data") else {
+            return item.clone();
+        };
+        let mut merged = data.clone();
+        if let Some(obj) = merged.as_object_mut() {
+            if let Some(item_type) = item.get("type").and_then(|t| t.as_str()) {
+                obj.entry("_itemType".to_string())
+                    .or_insert(Value::String(item_type.to_string()));
+            }
+        }
+        merged
+    }
+
+    /// Parse a V2 section (from the flat items format).
+    /// V2 sections look like:
+    /// { "type": "HORIZONTAL_LIST", "moduleId": "...", "title": "...",
+    ///   "items": [ { "type": "ALBUM", "data": { ... } }, ... ],
+    ///   "viewAll": "pages/..." }
+    fn parse_v2_section(section: &Value) -> Option<HomePageSection> {
+        let section_type = section
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Get title — v2 may use string, object {"text": "..."}, or titleTextInfo
+        let title = section
+            .get("title")
+            .and_then(|t| {
+                t.as_str().map(|s| s.to_string()).or_else(|| {
+                    t.get("text")
+                        .and_then(|tx| tx.as_str())
+                        .map(|s| s.to_string())
+                })
+            })
+            .or_else(|| {
+                section
+                    .get("titleTextInfo")
+                    .and_then(|ti| ti.get("text"))
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_default();
+
+        if title.is_empty() {
+            log::debug!(
+                "parse_v2_section: dropping section with empty title, type={}",
+                section_type
+            );
+            return None;
+        }
+
+        // V2 items can be in "items" array, where each has { type, data }
+        let raw_items = section.get("items").and_then(|i| i.as_array());
+
+        let items = Value::Array(
+            raw_items
+                .map(|raw| raw.iter().map(Self::unwrap_v2_item).collect())
+                .unwrap_or_default(),
+        );
+
+        // HORIZONTAL_LIST_WITH_CONTEXT carries the item the row is based on
+        // ("Because you listened to" <album>).
+        let header = section
+            .get("header")
+            .filter(|h| h.is_object())
+            .map(Self::unwrap_v2_item);
+
+        // V2 viewAll is either a string or an object
+        let api_path = section
+            .get("viewAll")
+            .and_then(|va| {
+                if let Some(s) = va.as_str() {
+                    Some(s.to_string())
+                } else {
+                    va.get("apiPath")
+                        .and_then(|p| p.as_str())
+                        .map(|s| s.to_string())
+                }
+            })
+            .or_else(|| {
+                section
+                    .get("showMore")
+                    .and_then(|sm| sm.get("apiPath"))
+                    .and_then(|p| p.as_str())
+                    .map(|s| s.to_string())
+            });
+
+        let has_more = api_path.is_some();
+
+        // Map V2 section types to something our frontend understands
+        let mapped_type = match section_type.as_str() {
+            "SHORTCUT_LIST" => "SHORTCUT_LIST",
+            "HORIZONTAL_LIST" | "HORIZONTAL_LIST_WITH_CONTEXT" => {
+                // Try to detect the content type from items
+                if let Some(arr) = items.as_array() {
+                    if let Some(first) = arr.first() {
+                        let item_type = first
+                            .get("_itemType")
+                            .or_else(|| first.get("type"))
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+                        match item_type {
+                            "MIX" => "MIX_LIST",
+                            "ALBUM" => "ALBUM_LIST",
+                            "PLAYLIST" => "PLAYLIST_LIST",
+                            "ARTIST" => "ARTIST_LIST",
+                            "TRACK" => "TRACK_LIST",
+                            _ => {
+                                // Detect by data shape
+                                if first.get("mixType").is_some()
+                                    || first.get("mixImages").is_some()
+                                {
+                                    "MIX_LIST"
+                                } else if first.get("uuid").is_some() {
+                                    "PLAYLIST_LIST"
+                                } else if first.get("cover").is_some()
+                                    || first.get("numberOfTracks").is_some()
+                                {
+                                    "ALBUM_LIST"
+                                } else if first.get("picture").is_some()
+                                    && first.get("cover").is_none()
+                                {
+                                    "ARTIST_LIST"
+                                } else {
+                                    "MIXED_TYPES_LIST"
+                                }
+                            }
+                        }
+                    } else {
+                        "MIXED_TYPES_LIST"
+                    }
+                } else {
+                    "MIXED_TYPES_LIST"
+                }
+            }
+            "TRACK_LIST" => "TRACK_LIST",
+            other => other,
+        };
+
+        Some(HomePageSection {
+            title,
+            section_type: mapped_type.to_string(),
+            items,
+            has_more,
+            api_path,
+            header,
+        })
+    }
+
+    pub async fn get_favorite_artists(
+        &mut self,
+        user_id: u64,
+        offset: u32,
+        limit: u32,
+        order: &str,
+        order_direction: &str,
+    ) -> Result<PaginatedResponse<TidalArtistDetail>, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let body = self
+            .api_get_body(
+                &format!("/users/{}/favorites/artists", user_id),
+                &[
+                    ("countryCode", &cc),
+                    ("limit", &limit_str),
+                    ("offset", &offset_str),
+                    ("order", order),
+                    ("orderDirection", order_direction),
+                ],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct FavEntry {
+            item: TidalArtistDetail,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FavResponse {
+            items: Vec<FavEntry>,
+            total_number_of_items: u32,
+        }
+
+        let data: FavResponse = serde_json::from_str(&body).map_err(|e| {
+            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+        })?;
+        let artists: Vec<TidalArtistDetail> = data.items.into_iter().map(|f| f.item).collect();
+        log::debug!(
+            "[get_favorite_artists]: got {} artists (total={})",
+            artists.len(),
+            data.total_number_of_items
+        );
+        Ok(PaginatedResponse {
+            items: artists,
+            total_number_of_items: data.total_number_of_items,
+            offset,
+            limit,
+        })
+    }
+
+    /// Fetch user's favorite albums as structured data for the sidebar.
+    pub async fn get_favorite_albums(
+        &mut self,
+        user_id: u64,
+        offset: u32,
+        limit: u32,
+        order: &str,
+        order_direction: &str,
+    ) -> Result<PaginatedResponse<TidalAlbumDetail>, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let body = self
+            .api_get_body(
+                &format!("/users/{}/favorites/albums", user_id),
+                &[
+                    ("countryCode", &cc),
+                    ("limit", &limit_str),
+                    ("offset", &offset_str),
+                    ("order", order),
+                    ("orderDirection", order_direction),
+                ],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct FavEntry {
+            item: TidalAlbumDetail,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FavResponse {
+            items: Vec<FavEntry>,
+            total_number_of_items: u32,
+        }
+
+        let data: FavResponse = serde_json::from_str(&body)
+            .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
+        let albums: Vec<TidalAlbumDetail> = data.items.into_iter().map(|e| e.item).collect();
+        log::debug!(
+            "[get_favorite_albums]: got {} albums (total={})",
+            albums.len(),
+            data.total_number_of_items
+        );
+        Ok(PaginatedResponse {
+            items: albums,
+            total_number_of_items: data.total_number_of_items,
+            offset,
+            limit,
+        })
+    }
+
+    // ==================== Artist Detail ====================
+
+    /// Fetch full artist detail (name, picture, etc.)
+    pub async fn get_artist_detail(
+        &mut self,
+        artist_id: u64,
+    ) -> Result<TidalArtistDetail, SlateError> {
+        let cc = self.country_code.clone();
+        self.api_get(&format!("/artists/{}", artist_id), &[("countryCode", &cc)])
+            .await
+    }
+
+    // ==================== Mix / Radio Items ====================
+
+    /// Parse a `pages/mix` JSON response body into a `MixPageResult`.
+    /// Extracts mix metadata from `MIX_HEADER` and tracks from `TRACK_LIST`.
+    fn parse_mix_page(mix_id: &str, body: &str) -> Option<MixPageResult> {
+        let json: Value = serde_json::from_str(body).ok()?;
+        let rows = json.get("rows")?.as_array()?;
+
+        let mut title: Option<String> = None;
+        let mut subtitle: Option<String> = None;
+        let mut mix_type: Option<String> = None;
+        let mut image: Option<String> = None;
+        let mut tracks: Vec<TidalTrack> = Vec::new();
+
+        for row in rows {
+            let modules = row.get("modules").and_then(|m| m.as_array());
+            let Some(modules) = modules else { continue };
+            for module in modules {
+                let mod_type = module.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                match mod_type {
+                    "MIX_HEADER" => {
+                        if let Some(mix) = module.get("mix") {
+                            title = mix.get("title").and_then(|t| t.as_str()).map(String::from);
+                            subtitle = mix
+                                .get("subTitle")
+                                .and_then(|s| s.as_str())
+                                .map(String::from);
+                            mix_type = mix
+                                .get("mixType")
+                                .and_then(|t| t.as_str())
+                                .map(String::from);
+                            // Extract image URL from images.LARGE.url (or MEDIUM, SMALL)
+                            if let Some(images) = mix.get("images") {
+                                image = images
+                                    .get("LARGE")
+                                    .or_else(|| images.get("MEDIUM"))
+                                    .or_else(|| images.get("SMALL"))
+                                    .and_then(|img| img.get("url"))
+                                    .and_then(|u| u.as_str())
+                                    .map(String::from);
+                            }
+                        }
+                    }
+                    "TRACK_LIST" => {
+                        if let Some(items) = module
+                            .get("pagedList")
+                            .and_then(|p| p.get("items"))
+                            .and_then(|i| i.as_array())
+                        {
+                            tracks = items
+                                .iter()
+                                .filter_map(|item| {
+                                    serde_json::from_value::<TidalTrack>(item.clone()).ok()
+                                })
+                                .collect();
+                            for t in &mut tracks {
+                                t.backfill_artist();
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if tracks.is_empty() {
+            return None;
+        }
+
+        Some(MixPageResult {
+            mix_id: mix_id.to_string(),
+            mix_type,
+            title,
+            subtitle,
+            image,
+            tracks,
+        })
+    }
+
+    /// Fetch the tracks in a mix (custom mixes, radio stations, etc.)
+    /// Tries `pages/mix` first, falls back to legacy `/mixes/{id}/items`.
+    pub async fn get_mix_items(&mut self, mix_id: &str) -> Result<MixPageResult, SlateError> {
+        let cc = self.country_code.clone();
+
+        // Primary: pages/mix endpoint
+        if let Ok(body) = self
+            .api_get_body(
+                "/pages/mix",
+                &[
+                    ("mixId", mix_id),
+                    ("countryCode", &cc),
+                    ("deviceType", "BROWSER"),
+                    ("locale", "en_US"),
+                ],
+            )
+            .await
+        {
+            if let Some(result) = Self::parse_mix_page(mix_id, &body) {
+                return Ok(result);
+            }
+        }
+
+        // Fallback: legacy /mixes/{id}/items (no metadata available)
+        let tracks = self.get_mix_items_legacy(mix_id).await?;
+        Ok(MixPageResult {
+            mix_id: mix_id.to_string(),
+            mix_type: None,
+            title: None,
+            subtitle: None,
+            image: None,
+            tracks,
+        })
+    }
+
+    /// Legacy mix endpoint: `/mixes/{id}/items`
+    async fn get_mix_items_legacy(&mut self, mix_id: &str) -> Result<Vec<TidalTrack>, SlateError> {
+        let cc = self.country_code.clone();
+        let body = self
+            .api_get_body(&format!("/mixes/{}/items", mix_id), &[("countryCode", &cc)])
+            .await?;
+
+        let json: Value =
+            serde_json::from_str(&body).map_err(|e| SlateError::Parse(e.to_string()))?;
+        if let Some(items) = json.get("items").and_then(|i| i.as_array()) {
+            let mut tracks: Vec<TidalTrack> = items
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .get("item")
+                        .and_then(|item| serde_json::from_value::<TidalTrack>(item.clone()).ok())
+                })
+                .collect();
+            for t in &mut tracks {
+                t.backfill_artist();
+            }
+            Ok(tracks)
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    // ==================== Artist Page ====================
+
+    /// Fetch an artist's top tracks
+    pub async fn get_artist_top_tracks(
+        &mut self,
+        artist_id: u64,
+        limit: u32,
+    ) -> Result<Vec<TidalTrack>, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let body = self
+            .api_get_body(
+                &format!("/artists/{}/toptracks", artist_id),
+                &[("countryCode", &cc), ("limit", &limit_str), ("offset", "0")],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct Resp {
+            items: Vec<TidalTrack>,
+        }
+
+        let mut data: Resp = serde_json::from_str(&body).map_err(|e| {
+            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+        })?;
+        for t in &mut data.items {
+            t.backfill_artist();
+        }
+        Ok(data.items)
+    }
+
+    /// Fetch an artist's albums
+    pub async fn get_artist_albums(
+        &mut self,
+        artist_id: u64,
+        limit: u32,
+    ) -> Result<Vec<TidalAlbumDetail>, SlateError> {
+        let cc = self.country_code.clone();
+        let limit_str = limit.to_string();
+        let body = self
+            .api_get_body(
+                &format!("/artists/{}/albums", artist_id),
+                &[("countryCode", &cc), ("limit", &limit_str), ("offset", "0")],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct Resp {
+            items: Vec<TidalAlbumDetail>,
+        }
+
+        let data: Resp = serde_json::from_str(&body).map_err(|e| {
+            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+        })?;
+        Ok(data.items)
+    }
+
+    /// Fetch artist bio text
+    pub async fn get_artist_bio(&mut self, artist_id: u64) -> Result<String, SlateError> {
+        let cc = self.country_code.clone();
+        match self
+            .api_get_body(
+                &format!("/artists/{}/bio", artist_id),
+                &[("countryCode", &cc)],
+            )
+            .await
+        {
+            Ok(body) => {
+                let json: Value = serde_json::from_str(&body).unwrap_or_default();
+                Ok(json
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string())
+            }
+            Err(_) => Ok(String::new()), // Bio not always available
+        }
+    }
+
+    pub async fn get_artist_page(&mut self, artist_id: u64) -> Result<Value, SlateError> {
+        let cc = self.country_code.clone();
+        // Try v2 first
+        let v2_url = format!("{}/artist/{}", TIDAL_API_V2_URL, artist_id);
+        match self
+            .api_get_body(
+                &v2_url,
+                &[
+                    ("countryCode", &cc),
+                    ("locale", "en_US"),
+                    ("deviceType", "BROWSER"),
+                    ("platform", "WEB"),
+                ],
+            )
+            .await
+        {
+            Ok(body) => {
+                return serde_json::from_str(&body)
+                    .map_err(|e| SlateError::Parse(format!("artist page v2 JSON: {}", e)));
+            }
+            Err(e) => {
+                log::warn!(
+                    "[get_artist_page] v2 failed for artist {}: {:?}, falling back to v1",
+                    artist_id,
+                    e
+                );
+            }
+        }
+        // Fallback to v1
+        let body = self
+            .api_get_body(
+                &format!("/pages/artist?artistId={}", artist_id),
+                &[
+                    ("countryCode", &cc),
+                    ("deviceType", "BROWSER"),
+                    ("locale", "en_US"),
+                ],
+            )
+            .await?;
+        serde_json::from_str(&body)
+            .map_err(|e| SlateError::Parse(format!("artist page v1 JSON: {}", e)))
+    }
+
+    pub async fn get_artist_top_tracks_all(
+        &mut self,
+        artist_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Value, SlateError> {
+        let url = format!("{}/artist/ARTIST_TOP_TRACKS/view-all", TIDAL_API_V2_URL);
+        let cc = self.country_code.clone();
+        let id_str = artist_id.to_string();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        let body = self
+            .api_get_body(
+                &url,
+                &[
+                    ("artistId", &id_str),
+                    ("locale", "en_US"),
+                    ("countryCode", &cc),
+                    ("deviceType", "BROWSER"),
+                    ("platform", "WEB"),
+                    ("limit", &limit_str),
+                    ("offset", &offset_str),
+                ],
+            )
+            .await?;
+        serde_json::from_str(&body)
+            .map_err(|e| SlateError::Parse(format!("artist top tracks JSON: {}", e)))
+    }
+
+    pub async fn get_artist_view_all(
+        &mut self,
+        artist_id: u64,
+        view_all_path: &str,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Value, SlateError> {
+        let cc = self.country_code.clone();
+        let id_str = artist_id.to_string();
+        let limit_str = limit.to_string();
+        let offset_str = offset.to_string();
+        // viewAll paths from v2 API are relative like "artist/ARTIST_ALBUMS/view-all?artistId=123"
+        // They need the v2 base URL, and may already contain query params
+        let url = if view_all_path.starts_with("http") {
+            view_all_path.to_string()
+        } else {
+            let path = view_all_path.trim_start_matches('/');
+            format!("{}/{}", TIDAL_API_V2_URL, path)
+        };
+        // The path may already contain ?artistId=... — reqwest .query() appends correctly
+        let body = self
+            .api_get_body(
+                &url,
+                &[
+                    ("artistId", &id_str),
+                    ("locale", "en_US"),
+                    ("countryCode", &cc),
+                    ("deviceType", "BROWSER"),
+                    ("platform", "WEB"),
+                    ("limit", &limit_str),
+                    ("offset", &offset_str),
+                ],
+            )
+            .await?;
+        serde_json::from_str(&body)
+            .map_err(|e| SlateError::Parse(format!("artist view-all JSON: {}", e)))
+    }
+
+    pub fn parse_album_page(&self, body: &str) -> Result<AlbumPageResponse, SlateError> {
+        let json: Value = serde_json::from_str(body)
+            .map_err(|e| SlateError::Parse(format!("album page JSON: {}", e)))?;
+
+        let rows = json
+            .get("rows")
+            .and_then(|r| r.as_array())
+            .ok_or_else(|| SlateError::Parse("album page: missing rows".into()))?;
+
+        let mut album: Option<TidalAlbumDetail> = None;
+        let mut tracks: Vec<TidalTrack> = Vec::new();
+        let mut total_tracks: u32 = 0;
+        let mut credits: Vec<TidalCredit> = Vec::new();
+        let mut review: Option<TidalReview> = None;
+        let mut sections: Vec<AlbumPageSection> = Vec::new();
+        let mut vibrant_color: Option<String> = None;
+        let mut copyright: Option<String> = None;
+
+        for row in rows {
+            let modules = match row.get("modules").and_then(|m| m.as_array()) {
+                Some(m) => m,
+                None => continue,
+            };
+
+            for module in modules {
+                let mtype = module.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+                match mtype {
+                    "ALBUM_HEADER" => {
+                        if let Some(album_val) = module.get("album") {
+                            if let Ok(mut detail) =
+                                serde_json::from_value::<TidalAlbumDetail>(album_val.clone())
+                            {
+                                detail.backfill_artist();
+                                copyright = detail.copyright.clone();
+                                album = Some(detail);
+                            }
+                        }
+                        // Credits
+                        if let Some(creds) = module.get("credits").and_then(|c| c.as_array()) {
+                            for c in creds {
+                                if let Ok(credit) = serde_json::from_value::<TidalCredit>(c.clone())
+                                {
+                                    credits.push(credit);
+                                }
+                            }
+                        }
+                        // Review
+                        if let Some(rev) = module.get("review") {
+                            if let Ok(r) = serde_json::from_value::<TidalReview>(rev.clone()) {
+                                if r.text.is_some() {
+                                    review = Some(r);
+                                }
+                            }
+                        }
+                    }
+                    "ALBUM_ITEMS" => {
+                        if let Some(paged) = module.get("pagedList") {
+                            total_tracks = paged
+                                .get("totalNumberOfItems")
+                                .and_then(|n| n.as_u64())
+                                .unwrap_or(0) as u32;
+
+                            if let Some(items) = paged.get("items").and_then(|i| i.as_array()) {
+                                for item_wrapper in items {
+                                    // Items are wrapped as {item: {...}, type: "track"}
+                                    let track_val =
+                                        item_wrapper.get("item").unwrap_or(item_wrapper);
+                                    if let Ok(mut track) =
+                                        serde_json::from_value::<TidalTrack>(track_val.clone())
+                                    {
+                                        track.backfill_artist();
+                                        // Extract vibrant color from first track's album
+                                        if vibrant_color.is_none() {
+                                            if let Some(ref alb) = track.album {
+                                                vibrant_color = alb.vibrant_color.clone();
+                                            }
+                                        }
+                                        tracks.push(track);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "ALBUM_LIST" | "ARTIST_LIST" => {
+                        let title = module
+                            .get("title")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let mut items: Vec<Value> = Vec::new();
+
+                        if let Some(paged) = module.get("pagedList") {
+                            if let Some(arr) = paged.get("items").and_then(|i| i.as_array()) {
+                                items = arr.clone();
+                            }
+                        }
+
+                        let api_path = module
+                            .get("showMore")
+                            .and_then(|sm| sm.get("apiPath"))
+                            .and_then(|p| p.as_str())
+                            .map(|s| s.to_string());
+
+                        if !items.is_empty() {
+                            sections.push(AlbumPageSection {
+                                title,
+                                section_type: mtype.to_string(),
+                                items,
+                                api_path,
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let album =
+            album.ok_or_else(|| SlateError::Parse("album page: no ALBUM_HEADER found".into()))?;
+
+        let video_cover = album.video_cover.clone();
+
+        Ok(AlbumPageResponse {
+            album,
+            tracks,
+            total_tracks,
+            vibrant_color,
+            video_cover,
+            copyright,
+            credits,
+            review,
+            sections,
+        })
+    }
+
+    pub async fn get_album_page(&mut self, album_id: u64) -> Result<AlbumPageResponse, SlateError> {
+        let cc = self.country_code.clone();
+        let id_str = album_id.to_string();
+        let body = self
+            .api_get_body(
+                "/pages/album",
+                &[
+                    ("albumId", &id_str),
+                    ("countryCode", &cc),
+                    ("deviceType", "BROWSER"),
+                ],
+            )
+            .await?;
+        self.parse_album_page(&body)
+    }
+
+    pub async fn get_page(&mut self, api_path: &str) -> Result<HomePageResponse, SlateError> {
+        let cc = self.country_code.clone();
+        // Route v2 paths (home/*, artist/*, feed/*) through v2 base URL,
+        // v1 paths (pages/*) through v1
+        let path = if api_path.starts_with("http") {
+            api_path.to_string()
+        } else {
+            let trimmed = api_path.trim_start_matches('/');
+            if trimmed.starts_with("pages/") {
+                format!("/{}", trimmed)
+            } else {
+                format!("{}/{}", TIDAL_API_V2_URL, trimmed)
+            }
+        };
+        let is_v2 = path.contains("/v2/");
+        let body = if is_v2 {
+            self.api_get_body(
+                &path,
+                &[
+                    ("countryCode", &cc),
+                    ("locale", "en_US"),
+                    ("deviceType", "BROWSER"),
+                    ("platform", "WEB"),
+                ],
+            )
+            .await?
+        } else {
+            self.api_get_body(&path, &[("countryCode", &cc), ("deviceType", "BROWSER")])
+                .await?
+        };
+
+        let json: Value =
+            serde_json::from_str(&body).map_err(|e| SlateError::Parse(e.to_string()))?;
+        Self::parse_page_response(&json)
+    }
+
+    /// Resolve the user's artistId from `/v1/users/{id}`. Returns `Ok(None)`
+    /// when the account has no associated artist profile.
+    pub async fn get_user_artist_id(&mut self, user_id: u64) -> Result<Option<u64>, SlateError> {
+        let cc = self.country_code.clone();
+        let body = self
+            .api_get_body(&format!("/users/{}", user_id), &[("countryCode", &cc)])
+            .await?;
+        let json: Value =
+            serde_json::from_str(&body).map_err(|e| SlateError::Parse(e.to_string()))?;
+        Ok(json.get("artistId").and_then(|v| v.as_u64()))
+    }
+
+    /// Full read-only profile. Falls back to a minimal profile (name/handle from
+    /// the user record, no artist data) when the account has no artistId.
+    pub async fn get_profile(&mut self, user_id: u64) -> Result<Profile, SlateError> {
+        let cc = self.country_code.clone();
+
+        let Some(artist_id) = self.get_user_artist_id(user_id).await? else {
+            let (name, username) = self.get_user_profile(user_id).await?;
+            return Ok(Profile {
+                user_id,
+                artist_id: None,
+                name,
+                handle: username,
+                bio: None,
+                bio_id: None,
+                picture_files: Vec::new(),
+                artwork_id: None,
+                blur_hash: None,
+                palette: Vec::new(),
+                external_links: Vec::new(),
+                fan_count: None,
+                public_playlists: Vec::new(),
+            });
+        };
+
+        let artist_id_str = artist_id.to_string();
+        let artist_body = self
+            .api_get_body(
+                &format!("{}/artists/{}", TIDAL_OPENAPI_URL, artist_id),
+                &[
+                    ("include", "profileArt,biography,owners"),
+                    ("countryCode", &cc),
+                ],
+            )
+            .await?;
+        let parts = parse_artist_profile(&artist_body)?;
+
+        let playlists_body = self
+            .api_get_body(
+                &format!("{}/playlists", TIDAL_OPENAPI_URL),
+                &[
+                    ("filter[owners.id]", &user_id.to_string()),
+                    ("include", "coverArt"),
+                    ("countryCode", &cc),
+                ],
+            )
+            .await?;
+        let public_playlists = parse_public_playlists(&playlists_body)?;
+
+        let fan_count = self.fetch_fan_count(user_id, &artist_id_str).await.ok();
+
+        Ok(Profile {
+            user_id,
+            artist_id: Some(artist_id),
+            name: parts.name,
+            handle: parts.handle,
+            bio: parts.bio,
+            bio_id: parts.bio_id,
+            picture_files: parts.picture_files,
+            artwork_id: parts.artwork_id,
+            blur_hash: parts.blur_hash,
+            palette: parts.palette,
+            external_links: parts.external_links,
+            fan_count,
+            public_playlists,
+        })
+    }
+
+    /// Best-effort follower/fan count. Tries the social-host profile endpoint
+    /// first, then the openapi followers relationship.
+    async fn fetch_fan_count(&mut self, user_id: u64, artist_id: &str) -> Result<u32, SlateError> {
+        let primary = self
+            .api_get_body(
+                &format!("https://api.tidal.com/v2/profiles/{}", user_id),
+                &[],
+            )
+            .await;
+        if let Ok(body) = primary {
+            if let Ok(json) = serde_json::from_str::<Value>(&body) {
+                if let Some(n) = json.get("numberOfFollowers").and_then(|v| v.as_u64()) {
+                    return Ok(n as u32);
+                }
+            }
+        }
+
+        let body = self
+            .api_get_body(
+                &format!(
+                    "{}/artists/{}/relationships/followers",
+                    TIDAL_OPENAPI_URL, artist_id
+                ),
+                &[("countryCode", &self.country_code.clone())],
+            )
+            .await?;
+        let json: Value =
+            serde_json::from_str(&body).map_err(|e| SlateError::Parse(e.to_string()))?;
+        let count = json
+            .get("data")
+            .and_then(|d| d.as_array())
+            .map(|a| a.len() as u32)
+            .ok_or_else(|| SlateError::Parse("followers: missing data array".into()))?;
+        Ok(count)
+    }
+
+    pub async fn update_artist_meta(
+        &self,
+        artist_id: u64,
+        name: Option<&str>,
+        handle: Option<&str>,
+        dry_run: bool,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let body = build_artist_meta_body(artist_id, name, handle, dry_run);
+        let (generation, client) = self.client_at()?;
+        let request = client
+            .patch(format!("{}/artists/{}", TIDAL_OPENAPI_URL, artist_id))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .header("Content-Type", "application/vnd.api+json")
+            .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
+            .query(&[("countryCode", self.country_code.as_str())])
+            .json(&body);
+        let response = self.dispatch(generation, request).await?;
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body: body_text,
+            });
+        }
+        Ok(())
+    }
+
+    pub async fn update_bio(&self, bio_id: &str, text: &str) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let body = serde_json::json!({
+            "data": { "type": "artistBiographies", "id": bio_id, "attributes": { "text": text } }
+        });
+        let (generation, client) = self.client_at()?;
+        let request = client
+            .patch(format!(
+                "{}/artistBiographies/{}",
+                TIDAL_OPENAPI_URL, bio_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .header("Content-Type", "application/vnd.api+json")
+            .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
+            .query(&[("countryCode", self.country_code.as_str())])
+            .json(&body);
+        let response = self.dispatch(generation, request).await?;
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body: body_text,
+            });
+        }
+        Ok(())
+    }
+
+    pub async fn update_external_links(
+        &self,
+        artist_id: u64,
+        links: Vec<ExternalLink>,
+    ) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let body = build_external_links_body(artist_id, &links);
+        let (generation, client) = self.client_at()?;
+        let request = client
+            .patch(format!("{}/artists/{}", TIDAL_OPENAPI_URL, artist_id))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .header("Content-Type", "application/vnd.api+json")
+            .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
+            .query(&[("countryCode", self.country_code.as_str())])
+            .json(&body);
+        let response = self.dispatch(generation, request).await?;
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body: body_text,
+            });
+        }
+        Ok(())
+    }
+
+    pub async fn upload_profile_picture(
+        &self,
+        artist_id: u64,
+        jpeg_bytes: Vec<u8>,
+    ) -> Result<(), SlateError> {
+        use base64::Engine;
+
+        let bytes = normalize_square_jpeg(&jpeg_bytes)?;
+        let digest = md5::compute(&bytes);
+        let hex = format!("{:x}", digest);
+        let content_md5 = base64::engine::general_purpose::STANDARD.encode(digest.0);
+        let size = bytes.len();
+
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let bearer = format!("Bearer {}", tokens.access_token);
+
+        // (1) POST /artworks
+        let create_body = serde_json::json!({
+            "data": {
+                "type": "artworks",
+                "attributes": {
+                    "mediaType": "IMAGE",
+                    "sourceFile": { "md5Hash": hex, "size": size }
+                }
+            }
+        });
+        let (generation, client) = self.client_at()?;
+        let request = client
+            .post(format!("{}/artworks", TIDAL_OPENAPI_URL))
+            .header("Authorization", &bearer)
+            .header("Content-Type", "application/vnd.api+json")
+            .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
+            .query(&[("countryCode", self.country_code.as_str())])
+            .json(&create_body);
+        let resp = self.dispatch(generation, request).await?;
+        let status = resp.status();
+        let create_text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body: create_text,
+            });
+        }
+        let create_json: Value =
+            serde_json::from_str(&create_text).map_err(|e| SlateError::Parse(e.to_string()))?;
+        let artwork_id = create_json
+            .get("data")
+            .and_then(|d| d.get("id"))
+            .and_then(|i| i.as_str())
+            .ok_or_else(|| SlateError::Parse("artworks: missing data.id".into()))?
+            .to_string();
+        let upload_href = create_json
+            .pointer("/data/attributes/sourceFile/uploadLink/href")
+            .and_then(|h| h.as_str())
+            .ok_or_else(|| SlateError::Parse("artworks: missing uploadLink.href".into()))?
+            .to_string();
+
+        // (2) S3 PUT — NO Authorization; Content-Type: image/jpeg is REQUIRED.
+        let (generation, client) = self.client_at()?;
+        let request = client
+            .put(&upload_href)
+            .header("content-md5", &content_md5)
+            .header("Content-Type", "image/jpeg")
+            .body(bytes);
+        let put = self.dispatch(generation, request).await?;
+        let put_status = put.status();
+        if !put_status.is_success() {
+            let body = put.text().await.unwrap_or_default();
+            return Err(SlateError::Api {
+                status: put_status.as_u16(),
+                body,
+            });
+        }
+
+        // (3) poll GET /artworks/{id}
+        self.poll_artwork_ok(&artwork_id).await?;
+
+        // (4) PATCH /artists/{id}/relationships/profileArt
+        let link_body = serde_json::json!({
+            "data": [ { "type": "artworks", "id": artwork_id } ]
+        });
+        let (generation, client) = self.client_at()?;
+        let request = client
+            .patch(format!(
+                "{}/artists/{}/relationships/profileArt",
+                TIDAL_OPENAPI_URL, artist_id
+            ))
+            .header("Authorization", &bearer)
+            .header("Content-Type", "application/vnd.api+json")
+            .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
+            .query(&[("countryCode", self.country_code.as_str())])
+            .json(&link_body);
+        let patch = self.dispatch(generation, request).await?;
+        let patch_status = patch.status();
+        let patch_text = patch.text().await.unwrap_or_default();
+        if !patch_status.is_success() {
+            return Err(SlateError::Api {
+                status: patch_status.as_u16(),
+                body: patch_text,
+            });
+        }
+        Ok(())
+    }
+
+    async fn poll_artwork_ok(&self, artwork_id: &str) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let bearer = format!("Bearer {}", tokens.access_token);
+        for _ in 0..20 {
+            let (generation, client) = self.client_at()?;
+            let request = client
+                .get(format!("{}/artworks/{}", TIDAL_OPENAPI_URL, artwork_id))
+                .header("Authorization", &bearer)
+                .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
+                .query(&[("countryCode", self.country_code.as_str())]);
+            let resp = self.dispatch(generation, request).await?;
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return Err(SlateError::Api {
+                    status: status.as_u16(),
+                    body,
+                });
+            }
+            match artwork_status_from_body(&body)? {
+                ArtworkPollOutcome::Ok => return Ok(()),
+                ArtworkPollOutcome::Pending => {
+                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                }
+                ArtworkPollOutcome::Failed(s) => {
+                    return Err(SlateError::Parse(format!(
+                        "artwork processing failed: technicalFileStatus={}",
+                        s
+                    )));
+                }
+            }
+        }
+        Err(SlateError::Parse("artwork processing timed out".into()))
+    }
+
+    pub async fn delete_profile_picture(&self, artist_id: u64) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+        let body = serde_json::json!({ "data": [] });
+        let (generation, client) = self.client_at()?;
+        let request = client
+            .patch(format!(
+                "{}/artists/{}/relationships/profileArt",
+                TIDAL_OPENAPI_URL, artist_id
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .header("Content-Type", "application/vnd.api+json")
+            .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
+            .query(&[("countryCode", self.country_code.as_str())])
+            .json(&body);
+        let response = self.dispatch(generation, request).await?;
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body: body_text,
+            });
+        }
+        Ok(())
+    }
+
+    /// Fetch the activity feed. `user_id` comes from the caller — `self.tokens`
+    /// may carry `None` on the token-import path.
+    pub async fn fetch_feed(&mut self, user_id: u64) -> Result<FeedResponse, SlateError> {
+        let url = format!("{}/feed/activities", TIDAL_API_V2_URL);
+        let country_code = self.country_code.clone();
+        let user_id_str = user_id.to_string();
+
+        let body = self
+            .api_get_body(
+                &url,
+                &[
+                    ("userId", user_id_str.as_str()),
+                    ("countryCode", country_code.as_str()),
+                    ("locale", "en_US"),
+                    ("deviceType", "BROWSER"),
+                    ("platform", "WEB"),
+                ],
+            )
+            .await?;
+
+        let feed = parse_feed_body(&body).map_err(|e| {
+            log::error!("[fetch_feed] parse error: {}", e);
+            SlateError::Parse(format!("feed parse error: {}", e))
+        })?;
+
+        log::debug!(
+            "[fetch_feed] items={} unseen={}",
+            feed.items.len(),
+            feed.unseen_count
+        );
+
+        Ok(feed)
+    }
+
+    /// Mark every feed activity as seen.
+    ///
+    /// Hand-rolled because no authenticated PUT helper exists. Two things the GET
+    /// path gives for free must be done manually: the v2 client-version header
+    /// (v2 returns 400/404 without it), and routing through `self.send` so the
+    /// rate gate still applies. An expired token hard-401s with no refresh retry —
+    /// callers treat failure as non-fatal.
+    pub async fn mark_feed_seen(&self, user_id: u64) -> Result<(), SlateError> {
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        log::debug!("[mark_feed_seen] user_id={}", user_id);
+
+        let user_id_str = user_id.to_string();
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .put(format!("{}/feed/activities/seen", TIDAL_API_V2_URL))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
+            .query(&[
+                ("userId", user_id_str.as_str()),
+                ("countryCode", self.country_code.as_str()),
+            ]);
+        let response = self.send(generation, req).await?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        log::debug!(
+            "[mark_feed_seen] status={}, body={}",
+            status,
+            &body[..body.len().min(500)]
+        );
+
+        if !status.is_success() {
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        Ok(())
+    }
+}
+
+// ==================== Profile ====================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileArtFile {
+    pub href: String,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalLink {
+    pub href: String,
+    pub link_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfilePlaylist {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub access_type: Option<String>,
+    #[serde(default)]
+    pub number_of_tracks: Option<u32>,
+    #[serde(default)]
+    pub cover_url: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    pub user_id: u64,
+    #[serde(default)]
+    pub artist_id: Option<u64>,
+    pub name: String,
+    #[serde(default)]
+    pub handle: Option<String>,
+    #[serde(default)]
+    pub bio: Option<String>,
+    #[serde(default)]
+    pub bio_id: Option<String>,
+    pub picture_files: Vec<ProfileArtFile>,
+    #[serde(default)]
+    pub artwork_id: Option<String>,
+    #[serde(default)]
+    pub blur_hash: Option<String>,
+    pub palette: Vec<String>,
+    pub external_links: Vec<ExternalLink>,
+    #[serde(default)]
+    pub fan_count: Option<u32>,
+    pub public_playlists: Vec<ProfilePlaylist>,
+}
+
+/// Parsed pieces of the openapi `/artists/{id}` JSON:API response, before they
+/// are merged into a `Profile`.
+#[derive(Debug, Clone)]
+pub struct ArtistProfileParts {
+    pub name: String,
+    pub handle: Option<String>,
+    pub bio: Option<String>,
+    pub bio_id: Option<String>,
+    pub picture_files: Vec<ProfileArtFile>,
+    pub artwork_id: Option<String>,
+    pub blur_hash: Option<String>,
+    pub palette: Vec<String>,
+    pub external_links: Vec<ExternalLink>,
+}
+
+/// Find an entry in a JSON:API `included[]` array matching `type` + `id`.
+fn resolve_included<'a>(included: &'a [Value], typ: &str, id: &str) -> Option<&'a Value> {
+    included.iter().find(|e| {
+        e.get("type").and_then(|t| t.as_str()) == Some(typ)
+            && e.get("id").and_then(|i| i.as_str()) == Some(id)
+    })
+}
+
+/// Pull `{href, meta:{width,height}}` art files out of an `artworks` included
+/// object, sorted DESC by width.
+fn art_files_from_artwork(artwork: &Value) -> Vec<ProfileArtFile> {
+    let mut files: Vec<ProfileArtFile> = artwork
+        .get("attributes")
+        .and_then(|a| a.get("files"))
+        .and_then(|f| f.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|f| {
+                    let href = f.get("href").and_then(|h| h.as_str())?.to_string();
+                    let meta = f.get("meta");
+                    let width = meta
+                        .and_then(|m| m.get("width"))
+                        .and_then(|w| w.as_u64())
+                        .map(|w| w as u32);
+                    let height = meta
+                        .and_then(|m| m.get("height"))
+                        .and_then(|h| h.as_u64())
+                        .map(|h| h as u32);
+                    Some(ProfileArtFile {
+                        href,
+                        width,
+                        height,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort_by_key(|f| std::cmp::Reverse(f.width.unwrap_or(0)));
+    files
+}
+
+fn parse_artist_profile(body: &str) -> Result<ArtistProfileParts, SlateError> {
+    let json: Value = serde_json::from_str(body).map_err(|e| SlateError::Parse(e.to_string()))?;
+    let data = json
+        .get("data")
+        .ok_or_else(|| SlateError::Parse("artist profile: missing data".into()))?;
+    let attrs = data.get("attributes");
+
+    let name = attrs
+        .and_then(|a| a.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let handle = attrs
+        .and_then(|a| a.get("handle"))
+        .and_then(|h| h.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    let external_links = attrs
+        .and_then(|a| a.get("externalLinks"))
+        .and_then(|l| l.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    let href = item.get("href").and_then(|h| h.as_str())?.to_string();
+                    let link_type = item
+                        .get("meta")
+                        .and_then(|m| m.get("type"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    Some(ExternalLink { href, link_type })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let empty: Vec<Value> = Vec::new();
+    let included = json
+        .get("included")
+        .and_then(|i| i.as_array())
+        .unwrap_or(&empty);
+
+    let relationships = data.get("relationships");
+
+    // profileArt is to-many: take data[0].
+    let (picture_files, artwork_id, blur_hash, palette) = relationships
+        .and_then(|r| r.get("profileArt"))
+        .and_then(|p| p.get("data"))
+        .and_then(|d| d.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|first| {
+            let id = first.get("id").and_then(|i| i.as_str())?;
+            let artwork = resolve_included(included, "artworks", id)?;
+            let aid = Some(id.to_string());
+            let bh = artwork
+                .get("attributes")
+                .and_then(|a| a.get("blurHash"))
+                .and_then(|b| b.as_str())
+                .map(String::from);
+            let pal = artwork
+                .get("attributes")
+                .and_then(|a| a.get("palette"))
+                .and_then(|p| p.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|c| c.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some((art_files_from_artwork(artwork), aid, bh, pal))
+        })
+        .unwrap_or((Vec::new(), None, None, Vec::new()));
+
+    // biography is to-one.
+    let (bio, bio_id) = relationships
+        .and_then(|r| r.get("biography"))
+        .and_then(|b| b.get("data"))
+        .and_then(|d| {
+            let id = d.get("id").and_then(|i| i.as_str())?;
+            let bio_obj = resolve_included(included, "artistBiographies", id)?;
+            let text = bio_obj
+                .get("attributes")
+                .and_then(|a| a.get("text"))
+                .and_then(|t| t.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            Some((text, Some(id.to_string())))
+        })
+        .unwrap_or((None, None));
+
+    Ok(ArtistProfileParts {
+        name,
+        handle,
+        bio,
+        bio_id,
+        picture_files,
+        artwork_id,
+        blur_hash,
+        palette,
+        external_links,
+    })
+}
+
+fn build_artist_meta_body(
+    artist_id: u64,
+    name: Option<&str>,
+    handle: Option<&str>,
+    dry_run: bool,
+) -> Value {
+    let mut attributes = serde_json::Map::new();
+    if let Some(n) = name {
+        attributes.insert("name".into(), Value::String(n.to_string()));
+    }
+    if let Some(h) = handle {
+        attributes.insert("handle".into(), Value::String(h.to_string()));
+    }
+    let mut body = serde_json::json!({
+        "data": {
+            "type": "artists",
+            "id": artist_id.to_string(),
+            "attributes": Value::Object(attributes),
+        }
+    });
+    if dry_run {
+        body["meta"] = serde_json::json!({ "dryRun": true });
+    }
+    body
+}
+
+fn build_external_links_body(artist_id: u64, links: &[ExternalLink]) -> Value {
+    let items: Vec<Value> = links
+        .iter()
+        .map(|l| serde_json::json!({ "href": l.href, "meta": { "type": l.link_type } }))
+        .collect();
+    serde_json::json!({
+        "data": {
+            "type": "artists",
+            "id": artist_id.to_string(),
+            "attributes": { "externalLinks": items },
+        }
+    })
+}
+
+#[derive(Debug)]
+enum ArtworkPollOutcome {
+    Ok,
+    Pending,
+    Failed(String),
+}
+
+fn artwork_status_from_body(body: &str) -> Result<ArtworkPollOutcome, SlateError> {
+    let json: Value = serde_json::from_str(body).map_err(|e| SlateError::Parse(e.to_string()))?;
+    let status = json
+        .get("data")
+        .and_then(|d| d.get("attributes"))
+        .and_then(|a| a.get("sourceFile"))
+        .and_then(|s| s.get("status"))
+        .and_then(|s| s.get("technicalFileStatus"))
+        .and_then(|s| s.as_str())
+        .ok_or_else(|| SlateError::Parse("artwork: missing technicalFileStatus".into()))?;
+    match status {
+        "OK" => Ok(ArtworkPollOutcome::Ok),
+        "UPLOAD_REQUESTED" | "PROCESSING" => Ok(ArtworkPollOutcome::Pending),
+        other => Ok(ArtworkPollOutcome::Failed(other.to_string())),
+    }
+}
+
+fn normalize_square_jpeg(bytes: &[u8]) -> Result<Vec<u8>, SlateError> {
+    let img = image::load_from_memory(bytes)
+        .map_err(|e| SlateError::Parse(format!("decode image: {}", e)))?;
+    let (w, h) = (img.width(), img.height());
+    let side = w.min(h);
+    let x = (w - side) / 2;
+    let y = (h - side) / 2;
+    let mut square = img.crop_imm(x, y, side, side);
+    if side > 1280 {
+        square = square.resize(1280, 1280, image::imageops::FilterType::Lanczos3);
+    }
+    let mut out = std::io::Cursor::new(Vec::new());
+    square
+        .to_rgb8()
+        .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut out, 90,
+        ))
+        .map_err(|e| SlateError::Parse(format!("encode jpeg: {}", e)))?;
+    Ok(out.into_inner())
+}
+
+/// Pick the file href closest to ~320px wide from an `artworks` included object.
+fn cover_url_320(artwork: &Value) -> Option<String> {
+    let files = art_files_from_artwork(artwork);
+    files
+        .iter()
+        .min_by_key(|f| (f.width.unwrap_or(0) as i64 - 320).abs())
+        .map(|f| f.href.clone())
+}
+
+fn parse_public_playlists(body: &str) -> Result<Vec<ProfilePlaylist>, SlateError> {
+    let json: Value = serde_json::from_str(body).map_err(|e| SlateError::Parse(e.to_string()))?;
+    let empty: Vec<Value> = Vec::new();
+    let data = json
+        .get("data")
+        .and_then(|d| d.as_array())
+        .unwrap_or(&empty);
+    let included = json
+        .get("included")
+        .and_then(|i| i.as_array())
+        .unwrap_or(&empty);
+
+    let mut out = Vec::new();
+    for pl in data {
+        let attrs = pl.get("attributes");
+        let access_type = attrs
+            .and_then(|a| a.get("accessType"))
+            .and_then(|t| t.as_str())
+            .map(String::from);
+        if access_type.as_deref() != Some("PUBLIC") {
+            continue;
+        }
+        let id = pl
+            .get("id")
+            .and_then(|i| i.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let title = attrs
+            .and_then(|a| a.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let number_of_tracks = attrs
+            .and_then(|a| a.get("numberOfItems"))
+            .and_then(|n| n.as_u64())
+            .map(|n| n as u32);
+        let cover_url = pl
+            .get("relationships")
+            .and_then(|r| r.get("coverArt"))
+            .and_then(|c| c.get("data"))
+            .and_then(|d| d.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|first| first.get("id").and_then(|i| i.as_str()))
+            .and_then(|aid| resolve_included(included, "artworks", aid))
+            .and_then(cover_url_320);
+        out.push(ProfilePlaylist {
+            id,
+            title,
+            access_type,
+            number_of_tracks,
+            cover_url,
+        });
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod home_tab_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn search_parses_video_section() {
+        let body = json!({
+            "tracks": { "items": [] },
+            "videos": { "items": [
+                { "id": 111, "title": "A Music Video", "duration": 215,
+                  "imageId": "abc", "artists": [{ "id": 5, "name": "Some Artist" }] },
+                { "id": 222, "title": "Another" }
+            ]}
+        })
+        .to_string();
+        let res = TidalClient::parse_search_response(&body, "q", "test").expect("parses");
+        assert_eq!(res.videos.len(), 2);
+        assert_eq!(res.videos[0].id, 111);
+        assert_eq!(res.videos[0].title, "A Music Video");
+        // A missing videos section yields an empty vec, never an error.
+        let none = TidalClient::parse_search_response(
+            &json!({ "tracks": { "items": [] } }).to_string(),
+            "q",
+            "test",
+        )
+        .expect("parses");
+        assert!(none.videos.is_empty());
+    }
+
+    #[test]
+    fn direct_hit_parses_video_type() {
+        let item = json!({
+            "type": "VIDEOS",
+            "value": { "id": 999, "title": "Top Video", "duration": 180,
+                       "imageId": "img-uuid", "artists": [{ "id": 1, "name": "Star" }] }
+        });
+        let hit = DirectHitItem::from_typed_value(&item).expect("video hit parses");
+        assert_eq!(hit.hit_type, "VIDEOS");
+        assert_eq!(hit.id, Some(999));
+        assert_eq!(hit.title.as_deref(), Some("Top Video"));
+        assert_eq!(hit.image.as_deref(), Some("img-uuid"));
+        assert_eq!(hit.artist_name.as_deref(), Some("Star"));
+        assert_eq!(hit.duration, Some(180));
+    }
+
+    #[test]
+    fn parses_tabs_from_vibes() {
+        let body = json!({
+            "header": { "vibes": { "items": [
+                { "name": "For you", "type": "STATIC" },
+                { "name": "Staff Picks", "type": "EDITORIAL" },
+                { "name": "Uploads", "type": "UPLOADS" }
+            ]}},
+            "items": []
+        });
+        let tabs = TidalClient::parse_home_tabs(&body);
+        assert_eq!(tabs.len(), 3);
+        assert_eq!(tabs[0].name, "For you");
+        assert_eq!(tabs[0].tab_type, "STATIC");
+        assert_eq!(tabs[2].tab_type, "UPLOADS");
+    }
+
+    #[test]
+    fn returns_empty_when_no_vibes() {
+        let body = json!({ "items": [] });
+        assert!(TidalClient::parse_home_tabs(&body).is_empty());
+    }
+
+    #[test]
+    fn parse_playlist_items_tolerates_null_or_missing_duration() {
+        let items = vec![
+            serde_json::json!({ "type": "track", "item": { "id": 1, "title": "A", "duration": 100 } }),
+            serde_json::json!({ "type": "video", "item": { "id": 2, "title": "V", "duration": null } }),
+            serde_json::json!({ "type": "video", "item": { "id": 3, "title": "V2" } }),
+        ];
+        let out = super::parse_playlist_items(items).expect("must not abort on null duration");
+        assert_eq!(out.len(), 3, "no item should be dropped");
+        assert_eq!(out[1].duration, 0);
+        assert_eq!(out[2].duration, 0);
+    }
+
+    #[test]
+    fn parse_v1_module_skips_featured_promotions() {
+        let module = serde_json::json!({
+            "type": "FEATURED_PROMOTIONS",
+            "pagedList": { "items": [ { "header": "X", "artifactId": "1", "type": "PLAYLIST" } ] }
+        });
+        assert!(
+            super::TidalClient::parse_v1_module(&module).is_none(),
+            "FEATURED_PROMOTIONS must be skipped, not rendered as cards"
+        );
+    }
+
+    #[test]
+    fn parse_v1_module_keeps_multiple_top_promotions() {
+        let module = serde_json::json!({
+            "type": "MULTIPLE_TOP_PROMOTIONS",
+            "title": "Featured",
+            "pagedList": { "items": [ { "header": "X", "artifactId": "1", "type": "PLAYLIST" } ] }
+        });
+        assert!(super::TidalClient::parse_v1_module(&module).is_some());
+    }
+
+    #[test]
+    fn artist_structs_carry_artwork_fallback_fields() {
+        let body = json!({
+            "id": 42,
+            "name": "Killigrew",
+            "picture": null,
+            "artworkId": "art-1",
+            "selectedAlbumCoverFallback": "cover-1"
+        })
+        .to_string();
+
+        let artist: TidalArtist = serde_json::from_str(&body).expect("parses");
+        assert_eq!(artist.picture, None);
+        assert_eq!(artist.artwork_id.as_deref(), Some("art-1"));
+        assert_eq!(
+            artist.selected_album_cover_fallback.as_deref(),
+            Some("cover-1")
+        );
+
+        let detail: TidalArtistDetail = serde_json::from_str(&body).expect("parses");
+        assert_eq!(detail.artwork_id.as_deref(), Some("art-1"));
+        assert_eq!(
+            detail.selected_album_cover_fallback.as_deref(),
+            Some("cover-1")
+        );
+
+        // Absent fields must not fail the parse.
+        let bare = json!({ "id": 1, "name": "Bare" }).to_string();
+        let bare_artist: TidalArtist = serde_json::from_str(&bare).expect("parses");
+        assert_eq!(bare_artist.artwork_id, None);
+        assert_eq!(bare_artist.selected_album_cover_fallback, None);
+    }
+
+    #[test]
+    fn direct_hit_artist_carries_artwork_fallback() {
+        let item = json!({
+            "type": "ARTISTS",
+            "value": {
+                "id": 7,
+                "name": "Jacoo",
+                "picture": null,
+                "artworkId": "art-9",
+                "selectedAlbumCoverFallback": "cover-9"
+            }
+        });
+        let hit = DirectHitItem::from_typed_value(&item).expect("artist hit parses");
+        assert_eq!(hit.picture, None);
+        assert_eq!(hit.artwork_id.as_deref(), Some("art-9"));
+        assert_eq!(
+            hit.selected_album_cover_fallback.as_deref(),
+            Some("cover-9")
+        );
+    }
+
+    #[test]
+    fn v2_section_keeps_context_header_unwrapped() {
+        let section = json!({
+            "type": "HORIZONTAL_LIST_WITH_CONTEXT",
+            "moduleId": "BECAUSE_YOU_LISTENED_TO_ALBUM",
+            "title": "Because you listened to",
+            "header": { "type": "ALBUM", "data": { "id": 7, "title": "Source Album" } },
+            "items": [{ "type": "ALBUM", "data": { "id": 8, "title": "Suggestion" } }]
+        });
+        let sec = TidalClient::parse_v2_section(&section).expect("section parses");
+        let header = sec.header.expect("header kept");
+        assert_eq!(header["id"], 7);
+        assert_eq!(header["title"], "Source Album");
+        assert_eq!(header["_itemType"], "ALBUM");
+        assert_eq!(sec.items[0]["_itemType"], "ALBUM");
+
+        let plain = json!({ "type": "HORIZONTAL_LIST", "title": "Row", "items": [] });
+        assert!(TidalClient::parse_v2_section(&plain)
+            .unwrap()
+            .header
+            .is_none());
+    }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn artist_body_full() -> String {
+        json!({
+            "data": {
+                "type": "artists",
+                "id": "12345",
+                "attributes": { "name": "Test Artist", "handle": "testartist" },
+                "relationships": {
+                    "profileArt": { "data": [{ "type": "artworks", "id": "art-1" }] },
+                    "biography": { "data": { "type": "artistBiographies", "id": "bio-1" } },
+                    "owners": { "data": [{ "type": "users", "id": "999" }] }
+                }
+            },
+            "included": [
+                {
+                    "type": "artworks",
+                    "id": "art-1",
+                    "attributes": {
+                        "blurHash": "L6Pj0^jE.AyE_3t7t7R**0o#DgR4",
+                        "palette": ["#112233", "#445566"],
+                        "files": [
+                            { "href": "https://img/320.jpg", "meta": { "width": 320, "height": 320 } },
+                            { "href": "https://img/1280.jpg", "meta": { "width": 1280, "height": 1280 } },
+                            { "href": "https://img/640.jpg", "meta": { "width": 640, "height": 640 } }
+                        ]
+                    }
+                },
+                {
+                    "type": "artistBiographies",
+                    "id": "bio-1",
+                    "attributes": { "text": "A short bio." }
+                }
+            ]
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn parse_artist_profile_full() {
+        let parts = parse_artist_profile(&artist_body_full()).unwrap();
+        assert_eq!(parts.name, "Test Artist");
+        assert_eq!(parts.handle.as_deref(), Some("testartist"));
+        assert_eq!(parts.bio.as_deref(), Some("A short bio."));
+        assert_eq!(parts.bio_id.as_deref(), Some("bio-1"));
+        assert_eq!(parts.artwork_id.as_deref(), Some("art-1"));
+        assert_eq!(
+            parts.blur_hash.as_deref(),
+            Some("L6Pj0^jE.AyE_3t7t7R**0o#DgR4")
+        );
+        assert_eq!(parts.palette, vec!["#112233", "#445566"]);
+        let widths: Vec<u32> = parts
+            .picture_files
+            .iter()
+            .map(|f| f.width.unwrap())
+            .collect();
+        assert_eq!(widths, vec![1280, 640, 320]);
+    }
+
+    #[test]
+    fn parse_artist_profile_no_bio_no_handle() {
+        let body = json!({
+            "data": {
+                "type": "artists",
+                "id": "12345",
+                "attributes": { "name": "No Bio Artist" },
+                "relationships": {
+                    "profileArt": { "data": [] }
+                }
+            },
+            "included": []
+        })
+        .to_string();
+        let parts = parse_artist_profile(&body).unwrap();
+        assert_eq!(parts.name, "No Bio Artist");
+        assert_eq!(parts.handle, None);
+        assert_eq!(parts.bio, None);
+        assert_eq!(parts.bio_id, None);
+        assert!(parts.picture_files.is_empty());
+    }
+
+    #[test]
+    fn parse_public_playlists_filters_to_public() {
+        let body = json!({
+            "data": [
+                {
+                    "type": "playlists",
+                    "id": "pub-uuid",
+                    "attributes": { "name": "My Public Mix", "accessType": "PUBLIC", "numberOfItems": 17 },
+                    "relationships": {
+                        "coverArt": { "data": [{ "type": "artworks", "id": "cover-pub" }] }
+                    }
+                },
+                {
+                    "type": "playlists",
+                    "id": "unlisted-uuid",
+                    "attributes": { "name": "Secret", "accessType": "UNLISTED", "numberOfItems": 3 },
+                    "relationships": {
+                        "coverArt": { "data": [{ "type": "artworks", "id": "cover-unl" }] }
+                    }
+                }
+            ],
+            "included": [
+                {
+                    "type": "artworks",
+                    "id": "cover-pub",
+                    "attributes": {
+                        "files": [
+                            { "href": "https://cov/160.jpg", "meta": { "width": 160 } },
+                            { "href": "https://cov/320.jpg", "meta": { "width": 320 } },
+                            { "href": "https://cov/750.jpg", "meta": { "width": 750 } }
+                        ]
+                    }
+                }
+            ]
+        })
+        .to_string();
+        let playlists = parse_public_playlists(&body).unwrap();
+        assert_eq!(playlists.len(), 1);
+        let p = &playlists[0];
+        assert_eq!(p.id, "pub-uuid");
+        assert_eq!(p.title, "My Public Mix");
+        assert_eq!(p.access_type.as_deref(), Some("PUBLIC"));
+        assert_eq!(p.number_of_tracks, Some(17));
+        assert_eq!(p.cover_url.as_deref(), Some("https://cov/320.jpg"));
+    }
+
+    #[test]
+    fn resolve_included_matches_type_and_id() {
+        let included = vec![
+            json!({ "type": "artworks", "id": "a1", "attributes": {} }),
+            json!({ "type": "artistBiographies", "id": "b1", "attributes": {} }),
+        ];
+        let found = resolve_included(&included, "artistBiographies", "b1");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().get("id").unwrap(), "b1");
+        assert!(resolve_included(&included, "artworks", "missing").is_none());
+    }
+
+    #[test]
+    fn build_artist_meta_body_dry_run_with_both_fields() {
+        let body = build_artist_meta_body(12345, Some("New Name"), Some("newhandle"), true);
+        assert_eq!(body["data"]["type"], "artists");
+        assert_eq!(body["data"]["id"], "12345");
+        assert_eq!(body["data"]["attributes"]["name"], "New Name");
+        assert_eq!(body["data"]["attributes"]["handle"], "newhandle");
+        assert_eq!(body["meta"]["dryRun"], true);
+    }
+
+    #[test]
+    fn build_artist_meta_body_commit_omits_meta_and_absent_fields() {
+        let body = build_artist_meta_body(7, None, Some("onlyhandle"), false);
+        assert_eq!(body["data"]["attributes"]["handle"], "onlyhandle");
+        assert!(body["data"]["attributes"].get("name").is_none());
+        assert!(body.get("meta").is_none());
+    }
+
+    #[test]
+    fn build_external_links_body_maps_href_and_type() {
+        let links = vec![
+            ExternalLink {
+                href: "https://instagram.com/me".into(),
+                link_type: "INSTAGRAM".into(),
+            },
+            ExternalLink {
+                href: "https://me.com".into(),
+                link_type: "OFFICIAL_HOMEPAGE".into(),
+            },
+        ];
+        let body = build_external_links_body(42, &links);
+        assert_eq!(body["data"]["type"], "artists");
+        assert_eq!(body["data"]["id"], "42");
+        let arr = body["data"]["attributes"]["externalLinks"]
+            .as_array()
+            .unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["href"], "https://instagram.com/me");
+        assert_eq!(arr[0]["meta"]["type"], "INSTAGRAM");
+        assert_eq!(arr[1]["meta"]["type"], "OFFICIAL_HOMEPAGE");
+    }
+
+    #[test]
+    fn build_external_links_body_empty_clears() {
+        let body = build_external_links_body(42, &[]);
+        let arr = body["data"]["attributes"]["externalLinks"]
+            .as_array()
+            .unwrap();
+        assert!(arr.is_empty());
+    }
+
+    #[test]
+    fn parse_artist_profile_reads_external_links() {
+        let body = json!({
+            "data": {
+                "type": "artists",
+                "id": "12345",
+                "attributes": {
+                    "name": "Linked Artist",
+                    "externalLinks": [
+                        { "href": "https://instagram.com/me", "meta": { "type": "INSTAGRAM" } },
+                        { "href": "https://me.com", "meta": { "type": "OFFICIAL_HOMEPAGE" } }
+                    ]
+                },
+                "relationships": { "profileArt": { "data": [] } }
+            },
+            "included": []
+        })
+        .to_string();
+        let parts = parse_artist_profile(&body).unwrap();
+        assert_eq!(parts.external_links.len(), 2);
+        assert_eq!(parts.external_links[0].href, "https://instagram.com/me");
+        assert_eq!(parts.external_links[0].link_type, "INSTAGRAM");
+        assert_eq!(parts.external_links[1].link_type, "OFFICIAL_HOMEPAGE");
+    }
+}
+
+#[cfg(test)]
+mod profile_upload_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn status_body(s: &str) -> String {
+        json!({
+            "data": { "attributes": { "sourceFile": { "status": { "technicalFileStatus": s } } } }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn artwork_status_ok() {
+        assert!(matches!(
+            artwork_status_from_body(&status_body("OK")).unwrap(),
+            ArtworkPollOutcome::Ok
+        ));
+    }
+
+    #[test]
+    fn artwork_status_pending_states() {
+        for s in ["UPLOAD_REQUESTED", "PROCESSING"] {
+            assert!(matches!(
+                artwork_status_from_body(&status_body(s)).unwrap(),
+                ArtworkPollOutcome::Pending
+            ));
+        }
+    }
+
+    #[test]
+    fn artwork_status_hard_fail_states() {
+        for s in ["ERROR", "DELETED"] {
+            assert!(matches!(
+                artwork_status_from_body(&status_body(s)).unwrap(),
+                ArtworkPollOutcome::Failed(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn normalize_square_jpeg_produces_square_capped_jpeg() {
+        // a 200x100 red PNG, decoded by the image crate
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let img = image::RgbImage::from_pixel(200, 100, image::Rgb([200, 30, 30]));
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        let out = normalize_square_jpeg(&buf.into_inner()).unwrap();
+        let decoded = image::load_from_memory(&out).unwrap();
+        assert_eq!(decoded.width(), decoded.height());
+        assert!(decoded.width() <= 1280);
+        // JPEG SOI marker
+        assert_eq!(&out[0..2], &[0xFF, 0xD8]);
+    }
+
+    #[test]
+    fn normalize_square_jpeg_rejects_garbage() {
+        assert!(normalize_square_jpeg(b"not an image").is_err());
+    }
+}
+
+#[cfg(test)]
+mod rate_limit_error_tests {
+    use super::rate_limited_error;
+    use crate::SlateError;
+
+    /// Pins the wire contract that src/lib/trackAvailability.ts parses:
+    /// status 429, a numeric `retryAfterSecs`, and a non-empty `userMessage`.
+    #[test]
+    fn synthesized_429_carries_retry_after_and_a_human_message() {
+        match rate_limited_error(7) {
+            SlateError::Api { status, body } => {
+                assert_eq!(status, 429);
+                let v: serde_json::Value =
+                    serde_json::from_str(&body).expect("body must be valid JSON");
+                assert_eq!(v["status"].as_u64(), Some(429));
+                assert_eq!(v["retryAfterSecs"].as_u64(), Some(7));
+                assert!(!v["userMessage"].as_str().unwrap_or_default().is_empty());
+            }
+            other => panic!("expected SlateError::Api, got {:?}", other),
+        }
+    }
+}
+
+#[cfg(test)]
+mod sub_status_tests {
+    use super::{is_playbackinfo_sub_status, is_terminal_sub_status};
+
+    #[test]
+    fn terminal_codes_are_terminal() {
+        for code in [4005u64, 4010, 4030, 4031, 4032, 4034, 4035] {
+            let body = format!(r#"{{"status":401,"subStatus":{}}}"#, code);
+            assert!(is_terminal_sub_status(&body), "{} should be terminal", code);
+            assert!(is_playbackinfo_sub_status(&body));
+        }
+    }
+
+    #[test]
+    fn retryable_playbackinfo_codes_are_not_terminal() {
+        // 4006 = privileges lost, 4033 = subscription up-sell. Both recover.
+        for code in [4006u64, 4033] {
+            let body = format!(r#"{{"status":401,"subStatus":{}}}"#, code);
+            assert!(
+                !is_terminal_sub_status(&body),
+                "{} must not be terminal",
+                code
+            );
+            // …but still must NOT trigger a token refresh.
+            assert!(is_playbackinfo_sub_status(&body));
+        }
+    }
+
+    #[test]
+    fn auth_sub_statuses_and_junk_are_neither() {
+        for body in [
+            r#"{"status":401,"subStatus":11003}"#,
+            r#"{"status":401,"subStatus":6001}"#,
+            r#"{"subStatus":"4005"}"#, // string-typed, not a number
+            "",
+            "not json",
+        ] {
+            assert!(!is_playbackinfo_sub_status(body), "{body}");
+            assert!(!is_terminal_sub_status(body), "{body}");
+        }
+    }
+
+    #[test]
+    fn float_encoded_sub_status_is_terminal() {
+        // serde_json reads 4005.0 as f64, so as_u64() alone says None while the
+        // frontend's `typeof sub === "number"` accepts it. Keep the two agreeing.
+        let body = r#"{"status":401,"subStatus":4005.0}"#;
+        assert!(is_terminal_sub_status(body));
+        assert!(is_playbackinfo_sub_status(body));
+    }
+}
+
+#[cfg(test)]
+mod direct_hit_tests {
+    use super::*;
+
+    /// A real `directHits` entry captured from the suggestions endpoint. The
+    /// value is a complete track entity, which is why the flat projection alone
+    /// silently dropped the second artist, the explicit flag and the album's
+    /// vibrant color.
+    fn tv_off_hit() -> serde_json::Value {
+        serde_json::json!({
+            "type": "TRACKS",
+            "value": {
+                "id": 401317294,
+                "title": "tv off",
+                "duration": 221,
+                "explicit": true,
+                "artists": [
+                    { "id": 3816041, "name": "Kendrick Lamar", "type": "MAIN",
+                      "picture": "84d81b7a-a12e-4a3e-bda4-d0527cb1c8cf" },
+                    { "id": 40179705, "name": "Lefty Gunplay", "type": "FEATURED",
+                      "picture": null }
+                ],
+                "album": {
+                    "id": 401317276,
+                    "title": "GNX",
+                    "cover": "faef7f4f-e362-484b-a46b-4e633c2a1ca3",
+                    "vibrantColor": "#FFFFFF",
+                    "releaseDate": "2024-11-22"
+                },
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": { "tags": ["LOSSLESS", "HIRES_LOSSLESS"] },
+                "mixes": { "TRACK_MIX": "001d13d399e86e948d03c21bcd15db" },
+                "replayGain": -7.92,
+                "peak": 0.959098,
+                "trackNumber": 7,
+                "volumeNumber": 1,
+                "isrc": "USUG12408493"
+            }
+        })
+    }
+
+    #[test]
+    fn track_hit_carries_every_artist() {
+        let hit = DirectHitItem::from_typed_value(&tv_off_hit()).expect("TRACKS hit must parse");
+        let artists = hit
+            .track
+            .as_ref()
+            .and_then(|t| t.artists.as_ref())
+            .expect("full track must carry artists[]");
+        let names: Vec<&str> = artists.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["Kendrick Lamar", "Lefty Gunplay"]);
+        assert_eq!(artists[1].artist_type.as_deref(), Some("FEATURED"));
+    }
+
+    #[test]
+    fn track_hit_carries_explicit_flag() {
+        let hit = DirectHitItem::from_typed_value(&tv_off_hit()).expect("TRACKS hit must parse");
+        assert_eq!(hit.track.and_then(|t| t.explicit), Some(true));
+    }
+
+    #[test]
+    fn track_hit_carries_album_vibrant_color() {
+        let hit = DirectHitItem::from_typed_value(&tv_off_hit()).expect("TRACKS hit must parse");
+        let album = hit
+            .track
+            .and_then(|t| t.album)
+            .expect("full track must carry its album");
+        assert_eq!(album.vibrant_color.as_deref(), Some("#FFFFFF"));
+    }
+
+    /// The payload has no singular `artist`, so it must be backfilled the same
+    /// way every other track parse path does it.
+    #[test]
+    fn track_hit_backfills_the_singular_artist() {
+        let hit = DirectHitItem::from_typed_value(&tv_off_hit()).expect("TRACKS hit must parse");
+        let artist = hit
+            .track
+            .and_then(|t| t.artist)
+            .expect("artist must be backfilled from artists[0]");
+        assert_eq!(artist.name, "Kendrick Lamar");
+    }
+
+    /// The flat fields stay populated so the frontend fallback keeps working.
+    #[test]
+    fn track_hit_still_populates_the_flat_projection() {
+        let hit = DirectHitItem::from_typed_value(&tv_off_hit()).expect("TRACKS hit must parse");
+        assert_eq!(hit.artist_name.as_deref(), Some("Kendrick Lamar"));
+        assert_eq!(hit.album_id, Some(401317276));
+        assert_eq!(hit.album_title.as_deref(), Some("GNX"));
+        assert_eq!(hit.duration, Some(221));
+    }
+
+    /// A value too partial to satisfy TidalTrack must not abort the hit — the
+    /// flat projection is the fallback.
+    #[test]
+    fn partial_track_value_falls_back_to_the_flat_projection() {
+        let partial = serde_json::json!({
+            "type": "TRACKS",
+            "value": { "id": 1, "title": "No Duration Here" }
+        });
+        let hit = DirectHitItem::from_typed_value(&partial).expect("hit must still parse");
+        assert!(hit.track.is_none(), "TidalTrack needs a duration");
+        assert_eq!(hit.title.as_deref(), Some("No Duration Here"));
+    }
+
+    /// The wire contract src/types.ts DirectHitItem.track relies on: the
+    /// serialized hit must actually expose the three fields the flat projection
+    /// dropped, under the camelCase names the frontend reads.
+    #[test]
+    fn serialized_hit_exposes_the_recovered_fields_to_the_frontend() {
+        let hit = DirectHitItem::from_typed_value(&tv_off_hit()).expect("TRACKS hit must parse");
+        let wire: serde_json::Value =
+            serde_json::to_value(&hit).expect("hit must serialize for the frontend");
+
+        let track = &wire["track"];
+        assert_eq!(track["explicit"], serde_json::json!(true));
+        assert_eq!(track["album"]["vibrantColor"], serde_json::json!("#FFFFFF"));
+        let artists = track["artists"]
+            .as_array()
+            .expect("artists[] must survive to the wire");
+        assert_eq!(artists.len(), 2);
+        assert_eq!(artists[1]["name"], serde_json::json!("Lefty Gunplay"));
+        // TidalArtist renames artist_type to `type`, so the wire carries `type`
+        // (not `artistType`) — matching every other track path in the app.
+        assert_eq!(artists[1]["type"], serde_json::json!("FEATURED"));
+    }
+
+    /// Non-track hits must not pay for a `track` key on the wire.
+    #[test]
+    fn serialized_non_track_hit_omits_the_track_key() {
+        let album = serde_json::json!({
+            "type": "ALBUMS",
+            "value": { "id": 401317276, "title": "GNX", "cover": "faef7f4f" }
+        });
+        let hit = DirectHitItem::from_typed_value(&album).expect("ALBUMS hit must parse");
+        let wire: serde_json::Value = serde_json::to_value(&hit).expect("must serialize");
+        assert!(wire.get("track").is_none());
+    }
+
+    /// Shape recorded in docs/superpowers/plans/2026-07-13-video-search.md. Only
+    /// `id`/`title` are required by TidalVideo, so a leaner payload still parses.
+    fn video_hit(extra: serde_json::Value) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "id": 12345678,
+            "title": "Not Like Us",
+            "duration": 274,
+            "imageId": "aabbccdd-1122-3344-5566-778899aabbcc",
+            "artists": [
+                { "id": 3816041, "name": "Kendrick Lamar", "type": "MAIN" },
+                { "id": 40179705, "name": "Someone Else", "type": "FEATURED" }
+            ]
+        });
+        if let (Some(base), Some(more)) = (value.as_object_mut(), extra.as_object()) {
+            for (k, v) in more {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+        serde_json::json!({ "type": "VIDEOS", "value": value })
+    }
+
+    #[test]
+    fn video_hit_carries_every_artist() {
+        let hit = DirectHitItem::from_typed_value(&video_hit(serde_json::json!({})))
+            .expect("VIDEOS hit must parse");
+        let artists = hit
+            .video
+            .as_ref()
+            .and_then(|v| v.artists.as_ref())
+            .expect("full video must carry artists[]");
+        let names: Vec<&str> = artists.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["Kendrick Lamar", "Someone Else"]);
+    }
+
+    /// The plan doc lists `artists` but not `explicit` for VIDEOS top-hits, so
+    /// both cases must behave: present means carried, absent means simply None.
+    #[test]
+    fn video_hit_carries_explicit_when_the_payload_has_it() {
+        let hit = DirectHitItem::from_typed_value(&video_hit(serde_json::json!({
+            "explicit": true
+        })))
+        .expect("VIDEOS hit must parse");
+        assert_eq!(hit.video.and_then(|v| v.explicit), Some(true));
+    }
+
+    #[test]
+    fn video_hit_without_explicit_still_parses() {
+        let hit = DirectHitItem::from_typed_value(&video_hit(serde_json::json!({})))
+            .expect("VIDEOS hit must parse");
+        let video = hit.video.expect("video entity must still be carried");
+        assert!(video.explicit.is_none());
+        assert_eq!(video.title, "Not Like Us");
+    }
+
+    #[test]
+    fn video_hit_still_populates_the_flat_projection() {
+        let hit = DirectHitItem::from_typed_value(&video_hit(serde_json::json!({})))
+            .expect("VIDEOS hit must parse");
+        assert_eq!(hit.hit_type, "VIDEOS");
+        assert_eq!(hit.artist_name.as_deref(), Some("Kendrick Lamar"));
+        assert_eq!(
+            hit.image.as_deref(),
+            Some("aabbccdd-1122-3344-5566-778899aabbcc")
+        );
+        assert_eq!(hit.duration, Some(274));
+        assert!(hit.track.is_none(), "a video is not a track");
+    }
+
+    /// The wire contract src/types.ts DirectHitItem.video relies on.
+    #[test]
+    fn serialized_video_hit_exposes_artists_and_explicit() {
+        let hit = DirectHitItem::from_typed_value(&video_hit(serde_json::json!({
+            "explicit": true
+        })))
+        .expect("VIDEOS hit must parse");
+        let wire: serde_json::Value = serde_json::to_value(&hit).expect("must serialize");
+        let video = &wire["video"];
+        assert_eq!(video["explicit"], serde_json::json!(true));
+        assert_eq!(
+            video["imageId"],
+            serde_json::json!("aabbccdd-1122-3344-5566-778899aabbcc")
+        );
+        let artists = video["artists"].as_array().expect("artists[] on the wire");
+        assert_eq!(artists.len(), 2);
+        assert_eq!(artists[1]["name"], serde_json::json!("Someone Else"));
+        assert!(wire.get("track").is_none(), "a video carries no track key");
+    }
+
+    /// A value too partial to satisfy TidalVideo must not abort the hit.
+    #[test]
+    fn partial_video_value_falls_back_to_the_flat_projection() {
+        let partial = serde_json::json!({
+            "type": "VIDEOS",
+            "value": { "title": "No Id Here", "artists": [{ "id": 1, "name": "A" }] }
+        });
+        let hit = DirectHitItem::from_typed_value(&partial).expect("hit must still parse");
+        assert!(hit.video.is_none(), "TidalVideo needs an id");
+        assert_eq!(hit.artist_name.as_deref(), Some("A"));
+    }
+
+    /// Non-track hit types have no track entity to carry.
+    #[test]
+    fn non_track_hits_carry_no_track() {
+        let album = serde_json::json!({
+            "type": "ALBUMS",
+            "value": { "id": 401317276, "title": "GNX", "cover": "faef7f4f" }
+        });
+        let hit = DirectHitItem::from_typed_value(&album).expect("ALBUMS hit must parse");
+        assert!(hit.track.is_none());
+    }
+
+    #[test]
+    fn track_deserializes_ai_flag() {
+        let t: TidalTrack = serde_json::from_value(serde_json::json!({
+            "id": 440427618, "title": "Dust on the Wind", "duration": 174, "ai": true
+        }))
+        .unwrap();
+        assert_eq!(t.ai, Some(true));
+    }
+
+    #[test]
+    fn track_without_ai_flag_stays_none() {
+        let t: TidalTrack = serde_json::from_value(serde_json::json!({
+            "id": 1, "title": "x", "duration": 1
+        }))
+        .unwrap();
+        assert_eq!(t.ai, None);
+    }
+
+    #[test]
+    fn track_serializes_ai_for_the_frontend() {
+        let t: TidalTrack = serde_json::from_value(serde_json::json!({
+            "id": 1, "title": "x", "duration": 1, "ai": false
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&t).unwrap()["ai"],
+            serde_json::json!(false)
+        );
+    }
+
+    #[test]
+    fn album_detail_deserializes_ai_flag() {
+        let a: TidalAlbumDetail = serde_json::from_value(serde_json::json!({
+            "id": 446783288, "title": "Paper Sun Rebellion", "ai": true
+        }))
+        .unwrap();
+        assert_eq!(a.ai, Some(true));
+    }
+
+    #[test]
+    fn track_hit_carries_ai_flag() {
+        let mut hit = tv_off_hit();
+        hit["value"]["ai"] = serde_json::json!(true);
+        let hit = DirectHitItem::from_typed_value(&hit).expect("TRACKS hit must parse");
+        assert_eq!(hit.track.and_then(|t| t.ai), Some(true));
+    }
+
+    #[test]
+    fn album_hit_carries_ai_flag() {
+        let hit = DirectHitItem::from_typed_value(&serde_json::json!({
+            "type": "ALBUMS",
+            "value": { "id": 442725737, "title": "Dust and Silence", "ai": true }
+        }))
+        .expect("ALBUMS hit must parse");
+        assert_eq!(hit.ai, Some(true));
+        let json = serde_json::to_value(&hit).unwrap();
+        assert_eq!(json["ai"], serde_json::json!(true));
+    }
+}
+
+#[cfg(test)]
+mod feed_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn feed_item_kind_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&FeedItemKind::Mix).unwrap(),
+            "\"mix\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FeedItemKind::Album).unwrap(),
+            "\"album\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FeedItemKind::Unknown).unwrap(),
+            "\"unknown\""
+        );
+    }
+
+    #[test]
+    fn flattens_history_mix_activity() {
+        let activity = json!({
+            "historyMix": {
+                "id": "0011112222333344445555666677",
+                "mixType": "HISTORY_MONTHLY_MIX",
+                "title": "July 2026",
+                "subTitle": "Some Artist and more",
+                "images": {
+                    "MEDIUM": { "width": 533, "height": 533, "url": "https://example.invalid/a.jpg" }
+                }
+            },
+            "activityType": "NEW_HISTORY_MIX",
+            "occurredAt": "2026-08-01T00:00:00.000Z"
+        });
+
+        let item = flatten_feed_activity(true, &activity).expect("should flatten");
+
+        assert!(matches!(item.kind, FeedItemKind::Mix));
+        assert_eq!(item.activity_type, "NEW_HISTORY_MIX");
+        assert_eq!(item.occurred_at, "2026-08-01T00:00:00.000Z");
+        assert!(item.seen);
+        assert_eq!(item.item["mixType"], "HISTORY_MONTHLY_MIX");
+        assert_eq!(
+            item.item["images"]["MEDIUM"]["url"],
+            "https://example.invalid/a.jpg"
+        );
+    }
+
+    #[test]
+    fn flattens_album_activity() {
+        let activity = json!({
+            "album": {
+                "id": 1234,
+                "title": "Some Single",
+                "type": "SINGLE",
+                "cover": "00000000-1111-2222-3333-444444444444",
+                "artists": [ { "id": 9, "name": "Some Artist" } ]
+            },
+            "activityType": "NEW_ALBUM_RELEASE",
+            "occurredAt": "2026-06-05T00:00:00.000Z"
+        });
+
+        let item = flatten_feed_activity(false, &activity).expect("should flatten");
+
+        assert!(matches!(item.kind, FeedItemKind::Album));
+        assert!(!item.seen);
+        assert_eq!(item.item["id"], 1234);
+        assert_eq!(item.item["artists"][0]["name"], "Some Artist");
+    }
+
+    #[test]
+    fn unrecognized_payload_key_becomes_unknown() {
+        let activity = json!({
+            "somethingNew": { "id": 7, "title": "Mystery" },
+            "activityType": "NEW_MYSTERY_THING",
+            "occurredAt": "2026-01-01T00:00:00.000Z"
+        });
+
+        let item = flatten_feed_activity(true, &activity).expect("should still flatten");
+
+        assert!(matches!(item.kind, FeedItemKind::Unknown));
+        assert_eq!(item.item["title"], "Mystery");
+    }
+
+    #[test]
+    fn activity_without_payload_object_is_dropped() {
+        let activity = json!({
+            "activityType": "NEW_NOTHING",
+            "occurredAt": "2026-01-01T00:00:00.000Z"
+        });
+
+        assert!(flatten_feed_activity(true, &activity).is_none());
+    }
+
+    #[test]
+    fn parses_envelope_with_both_kinds_and_unseen_count() {
+        let body = json!({
+            "activities": [
+                {
+                    "followableActivity": {
+                        "historyMix": { "id": "abc", "mixType": "HISTORY_MONTHLY_MIX" },
+                        "activityType": "NEW_HISTORY_MIX",
+                        "occurredAt": "2026-08-01T00:00:00.000Z"
+                    },
+                    "seen": false
+                },
+                {
+                    "followableActivity": {
+                        "album": { "id": 1, "title": "T" },
+                        "activityType": "NEW_ALBUM_RELEASE",
+                        "occurredAt": "2026-06-05T00:00:00.000Z"
+                    },
+                    "seen": true
+                }
+            ],
+            "stats": { "totalNotSeenActivities": 3 }
+        })
+        .to_string();
+
+        let feed = parse_feed_body(&body).expect("should parse");
+
+        assert_eq!(feed.items.len(), 2);
+        assert_eq!(feed.unseen_count, 3);
+        assert!(matches!(feed.items[0].kind, FeedItemKind::Mix));
+        assert!(!feed.items[0].seen);
+        assert!(matches!(feed.items[1].kind, FeedItemKind::Album));
+    }
+
+    #[test]
+    fn missing_stats_yields_zero_unseen() {
+        let body = json!({ "activities": [] }).to_string();
+        let feed = parse_feed_body(&body).expect("should parse");
+        assert_eq!(feed.unseen_count, 0);
+        assert!(feed.items.is_empty());
+    }
+
+    /// A feed parse failure must surface as `SlateError::Parse`, whose wire
+    /// `message` is a plain string. `SlateError::Api` serializes `message` as a
+    /// `{status, body}` object, which the frontend cannot render as text.
+    #[test]
+    fn parse_failure_serializes_message_as_a_string() {
+        let err = parse_feed_body("not json").expect_err("should fail to parse");
+        let parse_err = SlateError::Parse(format!("feed parse error: {}", err));
+
+        let wire = serde_json::to_value(&parse_err).unwrap();
+        assert_eq!(wire["kind"], "Parse");
+        assert!(wire["message"].is_string());
+
+        let api_wire = serde_json::to_value(SlateError::Api {
+            status: 200,
+            body: "x".to_string(),
+        })
+        .unwrap();
+        assert!(api_wire["message"].is_object());
+    }
+}
+
+#[cfg(test)]
+mod proxy_routing_tests {
+    use super::*;
+    use crate::proxy::{plan, HostCaps};
+    use crate::proxy_http::ProxiedHttp;
+    use crate::{ProxySettings, ProxyType};
+
+    /// `TidalClient` holds the shared cell, not its own client, so there is no
+    /// longer a field that could hold an unproxied one.
+    #[test]
+    fn a_blocked_cell_leaves_the_client_with_nothing_to_send_with() {
+        let caps = HostCaps::assume_all_present();
+        let blocked = plan(
+            &ProxySettings {
+                enabled: true,
+                proxy_type: ProxyType::Socks5,
+                host: "no-such-host.invalid".into(),
+                port: 3128,
+                username: None,
+                password: None,
+            },
+            &caps,
+        )
+        .unwrap();
+
+        let tc = TidalClient::new(ProxiedHttp::from_plan(&blocked, &caps));
+        assert!(tc.raw_client().is_err(), "artwork/scrobble path must block");
+        assert!(
+            matches!(tc.client_at(), Err(SlateError::ProxyBlocked { .. })),
+            "the API path must block as ProxyBlocked, not as a network error"
+        );
+    }
+
+    /// One cell, many consumers: a central swap must reach a `TidalClient` that
+    /// was constructed before it, because nothing re-creates the client now
+    /// that `rebuild_client` is gone.
+    #[test]
+    fn replacing_the_shared_cell_reaches_an_already_built_client() {
+        let caps = HostCaps::assume_all_present();
+        let cell = ProxiedHttp::from_plan(&crate::proxy::ProxyPlan::Direct, &caps);
+        let tc = TidalClient::new(cell.clone());
+        assert!(tc.raw_client().is_ok());
+
+        cell.block("proxy port must not be 0");
+        assert!(
+            tc.raw_client().is_err(),
+            "a client built earlier must observe the swap"
+        );
+    }
+}
