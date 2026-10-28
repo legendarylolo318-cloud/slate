@@ -1,0 +1,14 @@
+export component AppWindow inherits Window {
+    title: "SONE";
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    min-width: 640px;
+    min-height: 480px;
+    in property <string> status: "Starting…";
+
+    Text {
+        text: root.status;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}

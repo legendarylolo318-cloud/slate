@@ -90,6 +90,8 @@ fn rust_sources() -> Vec<PathBuf> {
     }
     let mut out = Vec::new();
     walk(Path::new("src"), &mut out);
+    // The launch-time environment handling lives in the app binary.
+    walk(Path::new("../sone-app/src"), &mut out);
     out
 }
 
@@ -338,7 +340,9 @@ fn the_startup_proxy_scrub_stays_gated_on_the_launch_sidecar() {
     // and the same one `the_proxy_hook_is_attached_once_per_pipeline` was
     // defeated through. It also removes the only text `block_of` could have
     // miscounted braces in.
-    let body = without_comments(&fs::read_to_string("src/main.rs").expect("src/main.rs"));
+    let body = without_comments(
+        &fs::read_to_string("../sone-app/src/main.rs").expect("../sone-app/src/main.rs"),
+    );
     let body = body.as_str();
 
     let removals = body.match_indices("env::remove_var").count();
@@ -388,13 +392,13 @@ fn the_startup_proxy_scrub_stays_gated_on_the_launch_sidecar() {
         });
 
     assert!(
-        block_of(&body, gate).contains(&removal),
+        block_of(body, gate).contains(&removal),
         "src/main.rs: `env::remove_var` is not inside the \
          `if should_scrub_proxy_env(...)` block. Sitting beside the gate is not \
          being gated — it scrubs on every launch."
     );
     assert!(
-        block_of(&body, loop_at).contains(&removal),
+        block_of(body, loop_at).contains(&removal),
         "src/main.rs: `env::remove_var` is not inside the `for v in \
          SCRUBBED_PROXY_ENV_VARS` loop, so it is removing something other \
          than the audited list"
@@ -417,7 +421,7 @@ fn the_startup_proxy_scrub_stays_gated_on_the_launch_sidecar() {
             )
         });
     assert!(
-        block_of(&body, gate).contains(&capture),
+        block_of(body, gate).contains(&capture),
         "src/main.rs: `remember_scrubbed_env` is outside the \
          `if should_scrub_proxy_env(...)` block, so it records an environment \
          nothing is about to remove"

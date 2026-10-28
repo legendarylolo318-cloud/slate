@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/sone-core"]
+members = ["crates/sone-core", "crates/sone-app"]
 
 [workspace.package]
 version = "0.22.1"
