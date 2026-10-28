@@ -164,6 +164,10 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_add_to_playlist, |b, t, u| b.add_to_playlist(t, &u));
     bind!(on_create_playlist, |b, t, n| b.create_playlist(t, &n));
     bind!(on_create_folder, |b, n| b.create_folder(&n));
+    bind!(on_dialog_accepted, |b, k, t, x| b
+        .dialog_accepted(&k, &t, &x));
+    bind!(on_open_signal_path, |b| b.open_signal_path());
+    bind!(on_open_miniplayer, |b| b.open_miniplayer());
     bind!(on_toggle_play, |b| b.toggle_play());
     bind!(on_next, |b| b.next());
     bind!(on_previous, |b| b.previous());

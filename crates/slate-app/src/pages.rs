@@ -300,6 +300,11 @@ impl Backend {
         }
     }
 
+    /// Re-renders `route` without adding a history entry.
+    pub fn navigate_refresh(&self, route: Route) {
+        self.render(route);
+    }
+
     fn render(&self, route: Route) {
         let (back, fwd) = self
             .nav

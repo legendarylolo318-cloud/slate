@@ -1,0 +1,76 @@
+import { Theme } from "theme.slint";
+import { IconButton, Bar } from "widgets.slint";
+
+/// Small always-available player in its own window. The layout adapts to the
+/// window size: wide shows cover + info + controls, narrow drops the cover,
+/// short hides the seek bar.
+export component MiniPlayerWindow inherits Window {
+    title: "Slate — Mini player";
+    preferred-width: 420px;
+    preferred-height: 120px;
+    min-width: 200px;
+    min-height: 64px;
+    background: Theme.background;
+
+    in property <string> track-title;
+    in property <string> track-artist;
+    in property <image> track-cover;
+    in property <bool> playing;
+    in property <bool> has-track;
+    in property <float> progress;
+    in property <string> position-text: "0:00";
+    in property <string> duration-text: "0:00";
+    callback toggle-play();
+    callback next();
+    callback previous();
+    callback seek(float);
+    callback expand();
+
+    // Absolute positioning on purpose: layouts here would make the window's own
+    // size constraints depend on its size (a binding loop).
+    property <bool> wide: root.width >= 340px;
+    property <bool> tall: root.height >= 96px;
+    property <length> pad: 8px;
+    property <length> cover-side: min(root.height - (root.tall ? 36px : 16px), 110px);
+    property <length> controls-w: root.wide ? 138px : 102px;
+    property <length> text-x: root.wide ? root.cover-side + 18px : root.pad;
+    property <length> row-h: root.tall ? root.height - 28px : root.height;
+
+    if root.wide: Rectangle {
+        x: root.pad;
+        y: root.pad;
+        width: root.cover-side;
+        height: root.cover-side;
+        border-radius: 6px;
+        clip: true;
+        background: Theme.surface-raised;
+        Image { source: root.track-cover; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
+    }
+    Text {
+        x: root.text-x;
+        y: root.row-h / 2 - 20px;
+        width: max(0px, root.width - root.text-x - root.controls-w - 2 * root.pad);
+        height: 20px;
+        text: root.track-title == "" ? "Nothing playing" : root.track-title;
+        color: Theme.text;
+        font-weight: 700;
+        overflow: elide;
+    }
+    Text {
+        x: root.text-x;
+        y: root.row-h / 2;
+        width: max(0px, root.width - root.text-x - root.controls-w - 2 * root.pad);
+        height: 18px;
+        text: root.track-artist;
+        color: Theme.text-muted;
+        font-size: 12px;
+        overflow: elide;
+    }
+    IconButton { x: root.width - root.controls-w - root.pad; y: root.row-h / 2 - 15px; glyph: "⏮"; side: 30px; enabled: root.has-track; clicked => { root.previous(); } }
+    IconButton { x: root.width - root.controls-w - root.pad + 32px; y: root.row-h / 2 - 18px; glyph: root.playing ? "⏸" : "▶"; primary: true; side: 36px; enabled: root.has-track; clicked => { root.toggle-play(); } }
+    IconButton { x: root.width - root.controls-w - root.pad + 70px; y: root.row-h / 2 - 15px; glyph: "⏭"; side: 30px; enabled: root.has-track; clicked => { root.next(); } }
+    if root.wide: IconButton { x: root.width - 38px; y: root.row-h / 2 - 15px; glyph: "⤢"; side: 30px; clicked => { root.expand(); } }
+    if root.tall: Text { x: root.pad; y: root.height - 24px; width: 40px; text: root.position-text; color: Theme.text-muted; font-size: 11px; }
+    if root.tall: Bar { x: root.pad + 44px; y: root.height - 26px; width: max(0px, root.width - 2 * root.pad - 88px); fraction: root.progress; picked(f) => { root.seek(f); } }
+    if root.tall: Text { x: root.width - root.pad - 40px; y: root.height - 24px; width: 40px; text: root.duration-text; color: Theme.text-muted; font-size: 11px; horizontal-alignment: right; }
+}

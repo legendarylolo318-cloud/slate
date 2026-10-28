@@ -8,11 +8,13 @@ mod favorites;
 mod images;
 mod imgcache;
 mod library;
+mod mini;
 mod models;
 mod pages;
 mod panels;
 mod platform;
 mod settings;
+mod signal;
 mod themes;
 mod uiprefs;
 

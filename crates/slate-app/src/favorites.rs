@@ -326,6 +326,95 @@ impl Backend {
         });
     }
 
+    // ---------- management ----------
+
+    /// Rename / delete / move from the sidebar dialog. `target` is a playlist
+    /// uuid, or `folder:ID` for a folder.
+    pub fn dialog_accepted(&self, kind: &str, target: &str, text: &str) {
+        let (kind, target, text) = (
+            kind.to_string(),
+            target.to_string(),
+            text.trim().to_string(),
+        );
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let (Some(state), Some(uid)) = (this.state(), this.user_id().await) else {
+                return;
+            };
+            let folder = target.strip_prefix("folder:").map(str::to_string);
+            let result: Result<&str, String> = match (kind.as_str(), &folder) {
+                ("rename", Some(id)) => {
+                    lib_cmds::rename_playlist_folder(&state, format!("trn:folder:{id}"), text)
+                        .await
+                        .map(|()| "Folder renamed")
+                        .map_err(|e| e.log_safe())
+                }
+                ("rename", None) => rename_playlist(&state, &target, &text)
+                    .await
+                    .map(|()| "Playlist renamed"),
+                ("delete", Some(id)) => {
+                    lib_cmds::delete_playlist_folder(&state, format!("trn:folder:{id}"))
+                        .await
+                        .map(|()| "Folder deleted")
+                        .map_err(|e| e.log_safe())
+                }
+                ("delete", None) => lib_cmds::delete_playlist(&state, uid, target.clone())
+                    .await
+                    .map(|()| "Playlist deleted")
+                    .map_err(|e| e.log_safe()),
+                ("move", None) => {
+                    let dest = text.strip_prefix("folder:").unwrap_or(&text).to_string();
+                    lib_cmds::move_playlist_to_folder(
+                        &state,
+                        dest,
+                        format!("trn:playlist:{target}"),
+                    )
+                    .await
+                    .map(|()| "Moved")
+                    .map_err(|e| e.log_safe())
+                }
+                _ => return,
+            };
+            match result {
+                Ok(msg) => {
+                    this.notify(msg);
+                    this.load_library();
+                    // A deleted page must not stay on screen.
+                    if kind == "delete" {
+                        this.navigate(crate::pages::Route::Home);
+                    }
+                }
+                Err(e) => {
+                    let msg = format!("Could not {kind}: {e}");
+                    this.ui(move |w| w.set_error(msg.into()));
+                }
+            }
+        });
+    }
+
+    /// Removes row `index` from the playlist being shown.
+    pub fn remove_from_playlist(&self, index: usize) {
+        let Some(SourceKind::Playlist(uuid)) = self.lib.active_kind_pub() else {
+            self.notify("Open one of your playlists to remove tracks from it.");
+            return;
+        };
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let Some(state) = this.state() else { return };
+            let idx = u32::try_from(index).unwrap_or(u32::MAX);
+            match lib_cmds::remove_track_from_playlist(&state, uuid.clone(), idx).await {
+                Ok(()) => {
+                    this.notify("Removed from playlist");
+                    this.navigate_refresh(crate::pages::Route::Playlist(uuid));
+                }
+                Err(e) => {
+                    let msg = format!("Could not remove: {}", e.log_safe());
+                    this.ui(move |w| w.set_error(msg.into()));
+                }
+            }
+        });
+    }
+
     // ---------- folders ----------
 
     pub fn create_folder(&self, name: &str) {
@@ -398,6 +487,32 @@ impl Backend {
         .map_err(|e| e.log_safe())?;
         Ok(parse_folder_items(&v).playlists)
     }
+}
+
+/// Keeps the playlist's description and visibility while changing its title.
+async fn rename_playlist(
+    state: &slate_core::AppState,
+    uuid: &str,
+    title: &str,
+) -> Result<(), String> {
+    let details = slate_core::commands::metadata::get_playlist_details(state, uuid.to_string())
+        .await
+        .map_err(|e| e.log_safe())?;
+    let description = details["description"].as_str().unwrap_or("").to_string();
+    let access =
+        details["publicPlaylist"]
+            .as_bool()
+            .map_or("PRIVATE", |p| if p { "PUBLIC" } else { "PRIVATE" });
+    lib_cmds::update_playlist(
+        state,
+        uuid.to_string(),
+        title.to_string(),
+        description,
+        access.into(),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| e.log_safe())
 }
 
 #[cfg(test)]

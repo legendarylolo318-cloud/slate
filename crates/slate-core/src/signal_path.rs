@@ -285,3 +285,174 @@ impl SignalPathTracker {
         self.emit(snap);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Verdict
+// ---------------------------------------------------------------------------
+
+/// Tolerance for treating a gain as unity.
+const UNITY_EPS: f32 = 1e-3;
+
+/// Canonical GStreamer spelling of a PCM format (ALSA, GStreamer and pactl
+/// naming all accepted). Ported from the original `toGstreamerFormat`.
+pub fn canonical_format(s: &str) -> String {
+    let upper = s.to_uppercase().replace('-', "_");
+    match upper.as_str() {
+        "S16_LE" => "S16LE",
+        "S24_LE" => "S24_32LE",
+        "S24_3LE" => "S24LE",
+        "S32_LE" => "S32LE",
+        "FLOAT_LE" => "F32LE",
+        "S16_BE" => "S16BE",
+        "S24_BE" => "S24_32BE",
+        "S24_3BE" => "S24BE",
+        "S32_BE" => "S32BE",
+        "FLOAT_BE" => "F32BE",
+        "FLOAT" | "FLOAT32" | "FLOAT32LE" => "F32LE",
+        "FLOAT64" | "FLOAT64LE" => "F64LE",
+        _ => return upper,
+    }
+    .to_string()
+}
+
+/// Audio bits per sample, endianness ignored; float counts as 24.
+fn audio_bit_depth(fmt: Option<&str>) -> u32 {
+    match fmt.map(canonical_format).as_deref() {
+        Some("S16LE" | "S16BE") => 16,
+        Some("S24LE" | "S24BE" | "S24_32LE" | "S24_32BE" | "F32LE" | "F32BE") => 24,
+        Some("S32LE" | "S32BE") => 32,
+        _ => 0,
+    }
+}
+
+fn formats_equivalent(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => canonical_format(a) == canonical_format(b),
+        _ => false,
+    }
+}
+
+/// What the signal path did to the audio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Verdict {
+    pub pristine: bool,
+    pub direct_alsa: bool,
+    pub user_volume_altered: bool,
+    pub normalization_altered: bool,
+    pub lossy_format_change: bool,
+    pub lossless_promotion: bool,
+}
+
+/// "Pristine" means every sample the decoder produced reaches the DAC with all
+/// its bits: exclusive direct ALSA, no resampling or format fallback, unity
+/// volume and gain, no bit-depth narrowing, and a DAC that matches the pipeline.
+pub fn verdict(sp: &SignalPath) -> Verdict {
+    let direct = sp.backend.as_deref() == Some("DirectAlsa");
+    let user_altered = (sp.user_volume - 1.0).abs() > UNITY_EPS;
+    let norm_altered = sp.volume_normalization && (sp.norm_gain_factor - 1.0).abs() > UNITY_EPS;
+
+    let (up_fmt, up_rate) = if direct {
+        (sp.output_format.as_deref(), sp.output_rate)
+    } else {
+        match &sp.os_mixer {
+            Some(m) => (Some(m.sink_format.as_str()), m.sink_rate.or(sp.output_rate)),
+            None => (sp.output_format.as_deref(), sp.output_rate),
+        }
+    };
+    let dac_matches = match &sp.dac {
+        None => true,
+        Some(d) if d.state != crate::pipeline_probe::HwParamsState::Active => true,
+        Some(d) => formats_equivalent(Some(&d.format), up_fmt) && Some(d.rate) == up_rate,
+    };
+
+    let format_changed = sp.decoded_format.is_some()
+        && sp.output_format.is_some()
+        && !formats_equivalent(sp.decoded_format.as_deref(), sp.output_format.as_deref());
+    let lossy = format_changed
+        && audio_bit_depth(sp.output_format.as_deref())
+            < audio_bit_depth(sp.decoded_format.as_deref());
+
+    let pristine = direct
+        && sp.exclusive_mode
+        && sp.resampled_from.is_none()
+        && sp.format_fallback_from.is_none()
+        && !user_altered
+        && !norm_altered
+        && !lossy
+        && dac_matches;
+
+    Verdict {
+        pristine,
+        direct_alsa: direct,
+        user_volume_altered: user_altered,
+        normalization_altered: norm_altered,
+        lossy_format_change: lossy,
+        lossless_promotion: format_changed && !lossy,
+    }
+}
+
+#[cfg(test)]
+mod verdict_tests {
+    use super::*;
+
+    fn pristine_path() -> SignalPath {
+        SignalPath {
+            backend: Some("DirectAlsa".into()),
+            decoded_format: Some("S24_32LE".into()),
+            output_format: Some("S24_LE".into()),
+            exclusive_mode: true,
+            user_volume: 1.0,
+            norm_gain_factor: 1.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn canonical_names_match_across_conventions() {
+        assert_eq!(canonical_format("S24_LE"), "S24_32LE");
+        assert_eq!(canonical_format("s32-le"), "S32LE");
+        assert_eq!(canonical_format("float32le"), "F32LE");
+        assert_eq!(canonical_format("S16LE"), "S16LE");
+    }
+
+    #[test]
+    fn exclusive_untouched_path_is_pristine() {
+        let v = verdict(&pristine_path());
+        assert!(v.pristine && v.direct_alsa);
+        assert!(!v.lossless_promotion, "same format under another name");
+    }
+
+    #[test]
+    fn each_alteration_breaks_pristine() {
+        let mut sp = pristine_path();
+        sp.user_volume = 0.5;
+        assert!(!verdict(&sp).pristine);
+        let mut sp = pristine_path();
+        sp.exclusive_mode = false;
+        assert!(!verdict(&sp).pristine);
+        let mut sp = pristine_path();
+        sp.resampled_from = Some(96_000);
+        assert!(!verdict(&sp).pristine);
+        let mut sp = pristine_path();
+        sp.backend = Some("Normal".into());
+        assert!(!verdict(&sp).pristine);
+        let mut sp = pristine_path();
+        sp.volume_normalization = true;
+        sp.norm_gain_factor = 0.8;
+        assert!(verdict(&sp).normalization_altered && !verdict(&sp).pristine);
+    }
+
+    #[test]
+    fn narrowing_is_lossy_but_widening_is_a_lossless_promotion() {
+        let mut sp = pristine_path();
+        sp.decoded_format = Some("S32LE".into());
+        sp.output_format = Some("S16LE".into());
+        let v = verdict(&sp);
+        assert!(v.lossy_format_change && !v.pristine);
+        let mut sp = pristine_path();
+        sp.decoded_format = Some("S16LE".into());
+        sp.output_format = Some("S32LE".into());
+        let v = verdict(&sp);
+        assert!(v.lossless_promotion && v.pristine);
+    }
+}

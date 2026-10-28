@@ -4,11 +4,12 @@ import { PlayerBar } from "player_bar.slint";
 import { Sidebar, TrackPage } from "library.slint";
 import { CardsPage, QueuePanel, LyricsPanel } from "pages.slint";
 import { FullscreenPlayer } from "fullscreen.slint";
+import { MiniPlayerWindow } from "mini.slint";
 import { SettingsPage, SettingsState } from "settings.slint";
 import { IconButton, TextField, Button } from "widgets.slint";
 import { ListView } from "std-widgets.slint";
-import { TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile } from "types.slint";
-export { TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile, SettingsState, Theme }
+import { TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile, KeyValue } from "types.slint";
+export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile, KeyValue, SettingsState, Theme }
 
 export enum Screen { loading, login, main }
 
@@ -30,6 +31,17 @@ export component AppWindow inherits Window {
     property <int> focus-tick: 0;
     // Playlist picker: -1 = just create, -2 = current track, >=0 = list row.
     in-out property <bool> fullscreen: false;
+    in-out property <bool> sp-open: false;
+    in property <bool> sp-pristine;
+    in property <string> sp-headline;
+    in property <[KeyValue]> sp-rows;
+    callback open-signal-path();
+    callback open-miniplayer();
+    // Generic dialog: kind = rename | delete | move; target = playlist uuid or "folder:ID".
+    in-out property <bool> dialog-open: false;
+    in-out property <string> dialog-kind;
+    in-out property <string> dialog-target;
+    in-out property <string> dialog-text;
     in-out property <bool> picker-open: false;
     in-out property <int> picker-target: -1;
     in-out property <string> picker-name;
@@ -81,6 +93,7 @@ export component AppWindow inherits Window {
     callback toggle-page-favorite();
     callback toggle-hero-favorite();
     callback toggle-favorite();
+    callback dialog-accepted(string, string, string);
     callback add-to-playlist(int, string);
     callback create-playlist(int, string);
     callback create-folder(string);
@@ -183,6 +196,11 @@ export component AppWindow inherits Window {
                     collapsed: root.narrow;
                     go(id) => { root.go(id); }
                     open-playlist(id) => { root.open-playlist(id); }
+                    entry-action(id, a) => {
+                        if (a == "delete") { root.dialog-kind = "delete"; root.dialog-target = id; root.dialog-open = true; }
+                        else if (a == "rename") { root.dialog-kind = "rename"; root.dialog-target = id; root.dialog-text = ""; root.dialog-open = true; }
+                        else if (a == "move") { root.dialog-kind = "move"; root.dialog-target = id; root.dialog-open = true; }
+                    }
                     new-playlist => { root.picker-target = -1; root.picker-open = true; }
                     logout => { root.logout(); }
                 }
@@ -318,6 +336,8 @@ export component AppWindow inherits Window {
                 toggle-mute => { root.toggle-mute(); }
                 seek(f) => { root.seek(f); }
                 set-volume(v) => { root.set-volume(v); }
+                open-signal-path => { root.open-signal-path(); }
+                open-miniplayer => { root.open-miniplayer(); }
                 toggle-fullscreen => { root.fullscreen = true; }
                 toggle-queue => { root.panel = root.panel == "queue" ? "" : "queue"; }
                 toggle-lyrics => { root.panel = root.panel == "lyrics" ? "" : "lyrics"; }
@@ -408,6 +428,104 @@ export component AppWindow inherits Window {
                             pk := TouchArea {
                                 mouse-cursor: MouseCursor.pointer;
                                 clicked => { root.add-to-playlist(root.picker-target, p.uuid); root.picker-open = false; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.dialog-open: Rectangle {
+            background: #000000a0;
+            TouchArea { clicked => { root.dialog-open = false; } }
+            Rectangle {
+                width: min(400px, parent.width - 32px);
+                height: root.dialog-kind == "move" ? min(420px, parent.height - 48px) : 190px;
+                border-radius: 12px;
+                background: Theme.surface;
+                TouchArea { }
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+                    Text {
+                        text: root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : "Move to folder";
+                        font-size: 18px; font-weight: 700; color: Theme.text;
+                    }
+                    if root.dialog-kind == "delete": Text {
+                        text: "This cannot be undone.";
+                        color: Theme.text-muted;
+                    }
+                    if root.dialog-kind == "rename": TextField {
+                        text <=> root.dialog-text;
+                        placeholder: "New name";
+                        field-width: 340px;
+                        accepted(t) => { root.dialog-accepted("rename", root.dialog-target, t); root.dialog-open = false; }
+                    }
+                    if root.dialog-kind == "move": Flickable {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                        Rectangle {
+                            height: 40px;
+                            border-radius: 6px;
+                            background: mr.has-hover ? Theme.surface-raised : transparent;
+                            Text { x: 10px; text: "Top level (no folder)"; color: Theme.text; vertical-alignment: center; }
+                            mr := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.dialog-accepted("move", root.dialog-target, "root"); root.dialog-open = false; } }
+                        }
+                        for p in root.playlists: Rectangle {
+                            height: p.folder ? 40px : 0px;
+                            visible: p.folder;
+                            border-radius: 6px;
+                            background: mf.has-hover ? Theme.surface-raised : transparent;
+                            Text { x: 10px; text: "📁  " + p.title; color: Theme.text; vertical-alignment: center; }
+                            mf := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.dialog-accepted("move", root.dialog-target, p.uuid); root.dialog-open = false; } }
+                        }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+                        Button { label: "Cancel"; clicked => { root.dialog-open = false; } }
+                        if root.dialog-kind == "rename": Button { label: "Rename"; primary: true; enabled: root.dialog-text != ""; clicked => { root.dialog-accepted("rename", root.dialog-target, root.dialog-text); root.dialog-open = false; } }
+                        if root.dialog-kind == "delete": Button { label: "Delete"; danger: true; clicked => { root.dialog-accepted("delete", root.dialog-target, ""); root.dialog-open = false; } }
+                    }
+                }
+            }
+        }
+
+        if root.sp-open: Rectangle {
+            background: #000000a0;
+            TouchArea { clicked => { root.sp-open = false; } }
+            Rectangle {
+                width: min(520px, parent.width - 32px);
+                height: min(560px, parent.height - 48px);
+                border-radius: 12px;
+                background: Theme.surface;
+                border-width: 2px;
+                border-color: root.sp-pristine ? #4ade80 : #fbbf24;
+                TouchArea { }
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 10px;
+                    HorizontalLayout {
+                        Text { text: "Signal path"; font-size: 18px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; }
+                        IconButton { glyph: "✕"; side: 28px; clicked => { root.sp-open = false; } }
+                    }
+                    Text {
+                        text: root.sp-pristine ? "PRISTINE" : "MODIFIED";
+                        font-size: 32px;
+                        font-weight: 800;
+                        color: root.sp-pristine ? #4ade80 : #fbbf24;
+                    }
+                    Text { text: root.sp-headline; color: Theme.text; wrap: word-wrap; }
+                    Flickable {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 2px;
+                            for r in root.sp-rows: HorizontalLayout {
+                                spacing: 12px;
+                                height: 28px;
+                                Text { text: r.key; color: Theme.text-muted; width: 120px; vertical-alignment: center; }
+                                Text { text: r.value; color: Theme.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                             }
                         }
                     }

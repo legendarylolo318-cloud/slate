@@ -70,6 +70,7 @@ component PlaylistItem inherits Rectangle {
     in property <bool> collapsed: false;
     in property <bool> active;
     callback clicked();
+    callback action(string);
     height: 52px;
     border-radius: 6px;
     background: root.active ? Theme.surface-raised : (pt.has-hover ? Theme.background : transparent);
@@ -95,6 +96,13 @@ component PlaylistItem inherits Rectangle {
         }
     }
     pt := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+    ContextMenuArea {
+        Menu {
+            MenuItem { title: "Rename…"; activated => { root.action("rename"); } }
+            MenuItem { title: "Move to folder…"; enabled: !root.entry.folder; activated => { root.action("move"); } }
+            MenuItem { title: "Delete…"; activated => { root.action("delete"); } }
+        }
+    }
 }
 
 export component Sidebar inherits Rectangle {
@@ -105,6 +113,7 @@ export component Sidebar inherits Rectangle {
     callback go(string);
     callback open-playlist(string);
     callback new-playlist();
+    callback entry-action(string, string);
     callback logout();
 
     background: Theme.surface;
@@ -173,6 +182,7 @@ export component Sidebar inherits Rectangle {
                 collapsed: root.collapsed;
                 active: root.selected == p.uuid;
                 clicked => { root.open-playlist(p.uuid); }
+                action(a) => { root.entry-action(p.uuid, a); }
             }
         }
         NavItem {
@@ -208,6 +218,7 @@ component Row inherits Rectangle {
             MenuItem { title: "Play"; activated => { root.play(); } }
             MenuItem { title: root.item.favorite ? "Remove from Loved Tracks" : "Add to Loved Tracks"; activated => { root.action("favorite"); } }
             MenuItem { title: "Add to playlist…"; activated => { root.action("add-to-playlist"); } }
+            MenuItem { title: "Remove from this playlist"; activated => { root.action("remove-from-playlist"); } }
             MenuItem { title: "Play next"; activated => { root.action("play-next"); } }
             MenuItem { title: "Add to queue"; activated => { root.action("queue"); } }
             MenuItem { title: "Go to album"; activated => { root.action("album"); } }

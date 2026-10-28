@@ -27,6 +27,8 @@ export component PlayerBar inherits Rectangle {
     callback toggle-mute();
     callback toggle-favorite();
     callback add-to-playlist();
+    callback open-signal-path();
+    callback open-miniplayer();
     callback toggle-fullscreen();
     callback toggle-queue();
     callback toggle-lyrics();
@@ -89,6 +91,8 @@ export component PlayerBar inherits Rectangle {
                 IconButton { glyph: root.favorite ? "♥" : "♡"; active: root.favorite; enabled: root.has-track; clicked => { root.toggle-favorite(); } }
                 IconButton { glyph: "＋"; enabled: root.has-track; clicked => { root.add-to-playlist(); } }
                 IconButton { glyph: "♪"; active: root.lyrics-open; enabled: root.has-track; clicked => { root.toggle-lyrics(); } }
+                IconButton { glyph: "▣"; clicked => { root.open-miniplayer(); } }
+                IconButton { glyph: "◎"; clicked => { root.open-signal-path(); } }
                 IconButton { glyph: "⛶"; enabled: root.has-track; clicked => { root.toggle-fullscreen(); } }
                 IconButton { glyph: "☰"; active: root.queue-open; clicked => { root.toggle-queue(); } }
                 if !root.compact: IconButton { glyph: root.volume == 0 ? "🔇" : "🔊"; clicked => { root.toggle-mute(); } }

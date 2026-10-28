@@ -145,7 +145,12 @@ impl Backend {
     }
 
     pub(crate) fn ui<F: FnOnce(AppWindow) + Send + 'static>(&self, f: F) {
-        if self.ui.upgrade_in_event_loop(f).is_err() {
+        let with_sync = move |w: AppWindow| {
+            let handle = w.clone_strong();
+            f(w);
+            crate::mini::sync(&handle);
+        };
+        if self.ui.upgrade_in_event_loop(with_sync).is_err() {
             tracing::debug!("UI already closed; dropping update");
         }
     }
