@@ -1,0 +1,51 @@
+import { Theme } from "theme.slint";
+import { IconButton, Bar } from "widgets.slint";
+
+/// Music-video overlay: frames arrive as images from the GStreamer appsink.
+export component VideoView inherits Rectangle {
+    in property <image> frame;
+    in property <string> title;
+    in property <bool> playing;
+    in property <float> progress;
+    in property <string> position-text;
+    in property <string> duration-text;
+    in property <string> status;
+    callback toggle();
+    callback seek(float);
+    callback close();
+    background: #000000;
+    property <bool> idle: false;
+
+    Timer {
+        interval: 3s;
+        running: !root.idle;
+        triggered => { root.idle = true; self.running = false; }
+    }
+    Image { source: root.frame; width: parent.width; height: parent.height; image-fit: ImageFit.contain; }
+    if root.status != "": Text { text: root.status; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+    TouchArea {
+        mouse-cursor: root.idle ? MouseCursor.none : MouseCursor.default;
+        moved => { root.idle = false; }
+        clicked => { root.toggle(); }
+    }
+    Rectangle {
+        y: 0;
+        height: 56px;
+        opacity: root.idle ? 0.0 : 1.0;
+        animate opacity { duration: 250ms; }
+        background: #00000099;
+        Text { x: 16px; text: root.title; color: #ffffff; font-size: 16px; font-weight: 700; vertical-alignment: center; overflow: elide; width: parent.width - 80px; }
+        IconButton { x: parent.width - 48px; y: 8px; glyph: "✕"; clicked => { root.close(); } }
+    }
+    Rectangle {
+        y: parent.height - 64px;
+        height: 64px;
+        opacity: root.idle ? 0.0 : 1.0;
+        animate opacity { duration: 250ms; }
+        background: #00000099;
+        IconButton { x: 12px; y: 10px; primary: true; glyph: root.playing ? "⏸" : "▶"; clicked => { root.toggle(); } }
+        Text { x: 68px; y: 22px; text: root.position-text; color: #ffffff; font-size: 12px; width: 44px; }
+        Bar { x: 116px; y: 22px; width: parent.width - 116px - 64px; fraction: root.progress; picked(f) => { root.seek(f); } }
+        Text { x: parent.width - 56px; y: 22px; text: root.duration-text; color: #ffffff; font-size: 12px; width: 44px; }
+    }
+}

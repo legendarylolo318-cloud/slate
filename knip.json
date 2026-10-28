@@ -1,5 +1,0 @@
-{
-  "ignore": ["src-tauri/**"],
-  "ignoreDependencies": ["autoprefixer"],
-  "entry": ["src/hooks/usePlayback.ts"]
-}

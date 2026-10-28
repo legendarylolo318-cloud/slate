@@ -393,6 +393,11 @@ impl Backend {
             "playlist" => self.navigate(Route::Playlist(id.to_string())),
             "mix" => self.navigate(Route::Mix(id.to_string())),
             "track" => self.play_track_id(id),
+            "video" => {
+                if let Ok(n) = id.parse() {
+                    self.play_video(n);
+                }
+            }
             _ => {}
         }
     }
@@ -802,6 +807,23 @@ impl Backend {
                                     &a.picture,
                                     &a.selected_album_cover_fallback,
                                 )
+                            })
+                            .collect(),
+                    );
+                    push(
+                        "Videos",
+                        r.videos
+                            .iter()
+                            .map(|v| CardData {
+                                kind: "video",
+                                id: v.id.to_string(),
+                                title: v.title.clone(),
+                                subtitle: v
+                                    .artist
+                                    .as_ref()
+                                    .map(|a| a.name.clone())
+                                    .unwrap_or_default(),
+                                image: v.image_id.clone(),
                             })
                             .collect(),
                     );

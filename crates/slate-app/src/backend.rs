@@ -97,6 +97,7 @@ pub struct Backend {
     pub(crate) pending_scrobble: Arc<Mutex<Option<(String, String)>>>,
     pub(crate) favs: Arc<Mutex<crate::favorites::Favs>>,
     pub(crate) theme: crate::themes::SharedTheme,
+    pub(crate) video: crate::video::SharedVideo,
     pub(crate) theme_watcher: Arc<Mutex<Option<slate_core::theme_config::ThemeWatcher>>>,
 }
 
@@ -126,6 +127,7 @@ impl Backend {
             pending_scrobble: Arc::new(Mutex::new(None)),
             favs: Arc::new(Mutex::new(crate::favorites::Favs::default())),
             theme: Arc::new(Mutex::new(initial_theme)),
+            video: Arc::new(Mutex::new(None)),
             theme_watcher: Arc::new(Mutex::new(None)),
         };
         let finished = backend.clone();
@@ -426,6 +428,10 @@ impl Backend {
         }
         self.refresh_queue_info().await;
         self.save().await;
+    }
+
+    pub(crate) fn shared_set_playing(&self, playing: bool) {
+        self.set_playing(playing);
     }
 
     fn set_playing(&self, playing: bool) {

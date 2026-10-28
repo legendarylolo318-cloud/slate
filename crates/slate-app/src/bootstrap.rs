@@ -168,6 +168,9 @@ fn wire(window: &AppWindow, backend: &Backend) {
         .dialog_accepted(&k, &t, &x));
     bind!(on_open_signal_path, |b| b.open_signal_path());
     bind!(on_open_miniplayer, |b| b.open_miniplayer());
+    bind!(on_video_toggle, |b| b.video_toggle());
+    bind!(on_video_seek, |b, f| b.video_seek(f));
+    bind!(on_video_close, |b| b.close_video());
     bind!(on_toggle_play, |b| b.toggle_play());
     bind!(on_next, |b| b.next());
     bind!(on_previous, |b| b.previous());

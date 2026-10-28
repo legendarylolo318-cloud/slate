@@ -17,6 +17,7 @@ mod settings;
 mod signal;
 mod themes;
 mod uiprefs;
+mod video;
 
 fn main() -> anyhow::Result<()> {
     // Environment surgery must happen before any thread exists: `set_var` and

@@ -5,6 +5,7 @@ import { Sidebar, TrackPage } from "library.slint";
 import { CardsPage, QueuePanel, LyricsPanel } from "pages.slint";
 import { FullscreenPlayer } from "fullscreen.slint";
 import { MiniPlayerWindow } from "mini.slint";
+import { VideoView } from "video.slint";
 import { SettingsPage, SettingsState } from "settings.slint";
 import { IconButton, TextField, Button } from "widgets.slint";
 import { ListView } from "std-widgets.slint";
@@ -31,6 +32,17 @@ export component AppWindow inherits Window {
     property <int> focus-tick: 0;
     // Playlist picker: -1 = just create, -2 = current track, >=0 = list row.
     in-out property <bool> fullscreen: false;
+    in-out property <bool> video-open: false;
+    in property <image> video-frame;
+    in property <string> video-title;
+    in property <bool> video-playing;
+    in property <float> video-progress;
+    in property <string> video-position-text: "0:00";
+    in property <string> video-duration-text: "0:00";
+    in property <string> video-status;
+    callback video-toggle();
+    callback video-seek(float);
+    callback video-close();
     in-out property <bool> sp-open: false;
     in property <bool> sp-pristine;
     in property <string> sp-headline;
@@ -490,6 +502,20 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+        }
+
+
+        if root.video-open: VideoView {
+            frame: root.video-frame;
+            title: root.video-title;
+            playing: root.video-playing;
+            progress: root.video-progress;
+            position-text: root.video-position-text;
+            duration-text: root.video-duration-text;
+            status: root.video-status;
+            toggle => { root.video-toggle(); }
+            seek(f) => { root.video-seek(f); }
+            close => { root.video-open = false; root.video-close(); }
         }
 
         if root.sp-open: Rectangle {
