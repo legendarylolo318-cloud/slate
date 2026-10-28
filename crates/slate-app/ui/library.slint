@@ -204,6 +204,9 @@ component Row inherits Rectangle {
     in property <bool> playing;
     in property <bool> show-album: true;
     in property <bool> show-artist: true;
+    in property <length> title-w;
+    in property <length> artist-w;
+    in property <length> album-w;
     callback play();
     callback action(string);
     height: 48px;
@@ -250,8 +253,7 @@ component Row inherits Rectangle {
             }
         }
         HorizontalLayout {
-            horizontal-stretch: 3;
-            min-width: 120px;
+            width: root.title-w;
             spacing: 10px;
             VerticalLayout {
                 alignment: center;
@@ -271,10 +273,9 @@ component Row inherits Rectangle {
             }
         }
         if root.show-artist: Rectangle {
-            // A bare Text in a layout shrinks to its text and gets centred in its
-            // cell; a full-width Text inside a Rectangle stays left-aligned.
-            horizontal-stretch: 2;
-            min-width: 80px;
+            // Fixed width from the page: stretch factors add to each cell's own
+            // text width, so columns would drift from row to row.
+            width: root.artist-w;
             Text {
                 x: 0;
                 width: parent.width;
@@ -287,10 +288,9 @@ component Row inherits Rectangle {
             }
         }
         if root.show-album: Rectangle {
-            // A bare Text in a layout shrinks to its text and gets centred in its
-            // cell; a full-width Text inside a Rectangle stays left-aligned.
-            horizontal-stretch: 2;
-            min-width: 80px;
+            // Fixed width from the page: stretch factors add to each cell's own
+            // text width, so columns would drift from row to row.
+            width: root.album-w;
             Text {
                 x: 0;
                 width: parent.width;
@@ -336,6 +336,13 @@ export component TrackPage inherits Rectangle {
     in property <bool> can-favorite: false;
     in property <bool> page-favorite: false;
     callback toggle-page-favorite();
+    property <bool> show-artist: root.width > 520px;
+    property <bool> show-album: root.width > 760px;
+    // Column layout shared by the header and every row (padding 12, spacing 12,
+    // index 28 + heart 24 + time 52 fixed; title:artist:album = 3:2:2).
+    property <int> cols: 4 + (root.show-artist ? 1 : 0) + (root.show-album ? 1 : 0);
+    property <length> flex: max(0px, root.width - (root.compact ? 24px : 48px) - 24px - 104px - 12px * (root.cols - 1) - 14px);
+    property <length> share: root.flex / (3 + (root.show-artist ? 2 : 0) + (root.show-album ? 2 : 0));
     in property <bool> compact: false;
     callback row-action(int, string);
     callback play-row(int);
@@ -377,27 +384,24 @@ export component TrackPage inherits Rectangle {
             padding-right: 12px;
             spacing: 12px;
             height: 24px;
-            Text { width: 28px; text: "#"; color: Theme.text-muted; horizontal-alignment: right; }
+            Text { width: 28px; text: "#"; color: Theme.text-muted; horizontal-alignment: right; vertical-alignment: center; }
             HorizontalLayout {
-                horizontal-stretch: 3;
-                min-width: 120px;
+                width: 3 * root.share;
                 spacing: 10px;
                 // same offset as the cover thumbnail in each row
                 Rectangle { width: 34px; }
-                Text { text: "TITLE"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: left; }
+                Text { text: "TITLE"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: left; vertical-alignment: center; }
             }
-            if root.width > 520px: Rectangle {
-                horizontal-stretch: 2;
-                min-width: 80px;
+            if root.show-artist: Rectangle {
+                width: 2 * root.share;
                 Text { x: 0; width: parent.width; height: parent.height; text: "ARTIST"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: left; vertical-alignment: center; }
             }
-            if root.width > 760px: Rectangle {
-                horizontal-stretch: 2;
-                min-width: 80px;
+            if root.show-album: Rectangle {
+                width: 2 * root.share;
                 Text { x: 0; width: parent.width; height: parent.height; text: "ALBUM"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: left; vertical-alignment: center; }
             }
             Rectangle { width: 24px; }
-            Text { width: 52px; text: "TIME"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: right; }
+            Text { width: 52px; text: "TIME"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: right; vertical-alignment: center; }
         }
         ListView {
             vertical-stretch: 1;
@@ -405,8 +409,11 @@ export component TrackPage inherits Rectangle {
                 item: r;
                 index: i;
                 playing: r.id != "" && r.id == root.playing-id;
-                show-artist: root.width > 520px;
-                show-album: root.width > 760px;
+                show-artist: root.show-artist;
+                show-album: root.show-album;
+                title-w: 3 * root.share;
+                artist-w: 2 * root.share;
+                album-w: 2 * root.share;
                 play => { root.play-row(i); }
                 action(a) => { root.row-action(i, a); }
             }
