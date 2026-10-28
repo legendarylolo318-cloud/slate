@@ -4,6 +4,7 @@
 mod backend;
 mod bootstrap;
 mod control;
+mod favorites;
 mod images;
 mod imgcache;
 mod library;
@@ -12,6 +13,7 @@ mod pages;
 mod panels;
 mod platform;
 mod settings;
+mod themes;
 mod uiprefs;
 
 fn main() -> anyhow::Result<()> {

@@ -14,6 +14,7 @@ export component PlayerBar inherits Rectangle {
     in property <bool> shuffle;
     in property <int> repeat;
     in property <bool> compact: false;
+    in property <bool> favorite: false;
     in property <bool> queue-open: false;
     in property <bool> lyrics-open: false;
     callback next();
@@ -24,6 +25,9 @@ export component PlayerBar inherits Rectangle {
     callback seek(float);
     callback set-volume(float);
     callback toggle-mute();
+    callback toggle-favorite();
+    callback add-to-playlist();
+    callback toggle-fullscreen();
     callback toggle-queue();
     callback toggle-lyrics();
 
@@ -82,7 +86,10 @@ export component PlayerBar inherits Rectangle {
                 alignment: end;
                 spacing: 4px;
                 if root.compact: IconButton { primary: true; enabled: root.has-track; glyph: root.playing ? "⏸" : "▶"; clicked => { root.toggle-play(); } }
+                IconButton { glyph: root.favorite ? "♥" : "♡"; active: root.favorite; enabled: root.has-track; clicked => { root.toggle-favorite(); } }
+                IconButton { glyph: "＋"; enabled: root.has-track; clicked => { root.add-to-playlist(); } }
                 IconButton { glyph: "♪"; active: root.lyrics-open; enabled: root.has-track; clicked => { root.toggle-lyrics(); } }
+                IconButton { glyph: "⛶"; enabled: root.has-track; clicked => { root.toggle-fullscreen(); } }
                 IconButton { glyph: "☰"; active: root.queue-open; clicked => { root.toggle-queue(); } }
                 if !root.compact: IconButton { glyph: root.volume == 0 ? "🔇" : "🔊"; clicked => { root.toggle-mute(); } }
                 if !root.compact: VerticalLayout {

@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
-import { Toggle, Button, Segmented, TextField } from "widgets.slint";
+import { Toggle, Button, Segmented, TextField, ColorPicker } from "widgets.slint";
+import { PresetTile } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
 /// Everything the settings page shows. Rust fills it from the core and handles
@@ -8,6 +9,14 @@ export global SettingsState {
     in-out property <int> tab: 0;
     in-out property <string> status;
 
+    // Appearance
+    in-out property <[PresetTile]> presets;
+    in-out property <string> theme-name;
+    in-out property <color> accent-color: #A855F7;
+    in-out property <color> bg-color: #130F1A;
+    in-out property <string> accent-hex;
+    in-out property <string> bg-hex;
+    in-out property <int> picking: 0;
     // General
     in-out property <bool> minimize-to-tray;
     in-out property <int> ui-scale-index;
@@ -53,6 +62,10 @@ export global SettingsState {
     callback changed-int(string, int);
     callback changed-str(string, string);
     callback action(string);
+    callback theme-preset(int);
+    callback theme-color(int, color);
+    callback theme-color-final(int, color);
+    callback theme-hex(int, string);
 }
 
 component Row inherits Rectangle {
@@ -80,7 +93,7 @@ component Row inherits Rectangle {
 export component SettingsPage inherits Rectangle {
     in property <bool> compact: false;
     background: Theme.background;
-    property <[string]> tabs: ["General", "Playback", "Scrobbling", "Network", "Integrations", "About"];
+    property <[string]> tabs: ["General", "Appearance", "Playback", "Scrobbling", "Network", "Integrations", "About"];
 
     VerticalLayout {
         padding: root.compact ? 12px : 24px;
@@ -107,11 +120,6 @@ export component SettingsPage inherits Rectangle {
                 alignment: start;
 
                 if SettingsState.tab == 0: VerticalLayout {
-                    Row {
-                        label: "Dark theme";
-                        hint: "Switch between the dark and light palette.";
-                        Toggle { checked: Theme.dark; toggled(v) => { Theme.dark = v; SettingsState.changed-bool("dark", v); } }
-                    }
                     Row {
                         label: "Interface size";
                         hint: "Applies the next time Slate starts.";
@@ -142,7 +150,65 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
+
                 if SettingsState.tab == 1: VerticalLayout {
+                    spacing: 12px;
+                    padding-top: 8px;
+                    Text { text: "Theme: " + SettingsState.theme-name; color: Theme.text; font-weight: 700; }
+                    Rectangle {
+                        height: ceil(SettingsState.presets.length / 3) * 56px;
+                        for p[i] in SettingsState.presets: Rectangle {
+                            x: mod(i, 3) * (parent.width / 3);
+                            y: floor(i / 3) * 56px;
+                            width: parent.width / 3 - 8px;
+                            height: 48px;
+                            border-radius: 8px;
+                            background: p.bg;
+                            border-width: p.name == SettingsState.theme-name ? 2px : 1px;
+                            border-color: p.name == SettingsState.theme-name ? p.accent : Theme.surface-raised;
+                            HorizontalLayout {
+                                padding: 8px;
+                                spacing: 8px;
+                                Rectangle { width: 20px; height: 20px; border-radius: 10px; background: p.accent; y: 4px; }
+                                Text { text: p.name; color: p.bg.to-hsv().value > 0.5 ? #111111 : #ffffff; vertical-alignment: center; overflow: elide; }
+                            }
+                            TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { SettingsState.theme-preset(i); } }
+                        }
+                    }
+                    Text { text: "Custom colours"; color: Theme.text; font-weight: 700; }
+                    Segmented {
+                        options: ["Accent", "Background"];
+                        index <=> SettingsState.picking;
+                    }
+                    HorizontalLayout {
+                        spacing: 16px;
+                        alignment: start;
+                        ColorPicker {
+                            value: SettingsState.picking == 0 ? SettingsState.accent-color : SettingsState.bg-color;
+                            changed(c) => { SettingsState.theme-color(SettingsState.picking, c); }
+                            released(c) => { SettingsState.theme-color-final(SettingsState.picking, c); }
+                        }
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 8px;
+                            Text { text: SettingsState.picking == 0 ? "Accent" : "Background"; color: Theme.text-muted; }
+                            TextField {
+                                text: SettingsState.picking == 0 ? SettingsState.accent-hex : SettingsState.bg-hex;
+                                placeholder: "#RRGGBB";
+                                field-width: 140px;
+                                accepted(t) => { SettingsState.theme-hex(SettingsState.picking, t); }
+                            }
+                            Text { text: "Press Enter to apply a hex value."; color: Theme.text-muted; font-size: 11px; }
+                        }
+                    }
+                    Text {
+                        text: "Themes are stored in theme.json and reload when the file changes.";
+                        color: Theme.text-muted;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                }
+                if SettingsState.tab == 2: VerticalLayout {
                     Row {
                         label: "Maximum quality";
                         hint: "Slate falls back automatically when a track is not available at this level.";
@@ -182,7 +248,7 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                if SettingsState.tab == 2: VerticalLayout {
+                if SettingsState.tab == 3: VerticalLayout {
                     Row {
                         label: "Report plays to TIDAL";
                         hint: "Feeds Recently Played and recommendations.";
@@ -247,7 +313,7 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                if SettingsState.tab == 3: VerticalLayout {
+                if SettingsState.tab == 4: VerticalLayout {
                     Row {
                         label: "Use a proxy";
                         hint: "All Slate traffic goes through it, or nothing is sent.";
@@ -266,7 +332,7 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                if SettingsState.tab == 4: VerticalLayout {
+                if SettingsState.tab == 5: VerticalLayout {
                     Row {
                         label: "MCP server";
                         hint: SettingsState.mcp-enabled ? SettingsState.mcp-url : "Lets AI assistants control playback. Local only (127.0.0.1:5577).";
@@ -284,7 +350,7 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                if SettingsState.tab == 5: VerticalLayout {
+                if SettingsState.tab == 6: VerticalLayout {
                     spacing: 8px;
                     padding-top: 12px;
                     Text { text: "Slate " + SettingsState.version; font-size: 22px; font-weight: 700; color: Theme.text; }

@@ -183,6 +183,7 @@ impl Backend {
         self.rt.spawn(async move {
             let Some(ctl) = this.controller() else { return };
             match action.as_str() {
+                "favorite" => this.toggle_track_favorite(track.id),
                 "play-next" => {
                     ctl.play_next_in_queue(track, None).await;
                     this.after_queue_edit("Will play next").await;

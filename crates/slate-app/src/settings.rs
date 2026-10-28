@@ -8,7 +8,7 @@ use slate_core::{AppState, ProxySettings, ProxyType};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::backend::Backend;
-use crate::bootstrap::{AppWindow, SettingsState, Theme};
+use crate::bootstrap::{AppWindow, SettingsState};
 use crate::uiprefs::UiPrefs;
 
 const QUALITIES: [&str; 3] = ["HI_RES_LOSSLESS", "LOSSLESS", "HIGH"];
@@ -157,11 +157,6 @@ impl Backend {
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
             let result: Result<(), String> = match key.as_str() {
-                "dark" => {
-                    let mut p = UiPrefs::load();
-                    p.dark = v;
-                    p.save().map_err(|e| e.to_string())
-                }
                 "minimize-to-tray" => {
                     utility::set_minimize_to_tray(&state, v).map_err(|e| e.log_safe())
                 }
@@ -378,11 +373,6 @@ impl Backend {
             let _ = tx.send(f(w));
         });
         rx.await.unwrap_or_default()
-    }
-
-    /// Applies the saved theme mode to the window.
-    pub fn apply_theme(w: &AppWindow, prefs: &UiPrefs) {
-        w.global::<Theme>().set_dark(prefs.dark);
     }
 }
 

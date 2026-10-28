@@ -8,25 +8,10 @@ use serde::{Deserialize, Serialize};
 /// Index → scale factor; 0 means "let the toolkit decide".
 pub const SCALES: [f32; 6] = [0.0, 1.0, 1.25, 1.5, 1.75, 2.0];
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct UiPrefs {
     #[serde(default)]
     pub scale_index: usize,
-    #[serde(default = "yes")]
-    pub dark: bool,
-}
-
-fn yes() -> bool {
-    true
-}
-
-impl Default for UiPrefs {
-    fn default() -> Self {
-        Self {
-            scale_index: 0,
-            dark: true,
-        }
-    }
 }
 
 fn path() -> Option<PathBuf> {
@@ -71,26 +56,11 @@ mod tests {
         assert_eq!(UiPrefs::parse("{}"), UiPrefs::default());
         assert_eq!(UiPrefs::parse("not json"), UiPrefs::default());
         assert_eq!(UiPrefs::parse(r#"{"scale_index":99}"#).scale_index, 0);
-        assert!(!UiPrefs::parse(r#"{"dark":false}"#).dark);
     }
 
     #[test]
     fn scale_factor_maps_index() {
-        assert_eq!(
-            UiPrefs {
-                scale_index: 0,
-                dark: true
-            }
-            .scale_factor(),
-            None
-        );
-        assert_eq!(
-            UiPrefs {
-                scale_index: 3,
-                dark: true
-            }
-            .scale_factor(),
-            Some(1.5)
-        );
+        assert_eq!(UiPrefs { scale_index: 0 }.scale_factor(), None);
+        assert_eq!(UiPrefs { scale_index: 3 }.scale_factor(), Some(1.5));
     }
 }

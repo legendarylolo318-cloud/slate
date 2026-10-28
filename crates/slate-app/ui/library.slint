@@ -36,6 +36,7 @@ component NavItem inherits Rectangle {
 component CoverTile inherits Rectangle {
     in property <image> source;
     in property <bool> loved;
+    in property <string> glyph;
     in property <length> side: 40px;
     in property <length> radius: 4px;
     width: root.side;
@@ -45,12 +46,18 @@ component CoverTile inherits Rectangle {
     background: root.loved ? Theme.accent : Theme.surface-raised;
     if root.loved: Text {
         text: "♥";
-        color: #000000;
+        color: Theme.on-accent;
         font-size: root.side * 0.5;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    if !root.loved: Image {
+    if root.glyph != "": Text {
+        text: root.glyph;
+        font-size: root.side * 0.45;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if !root.loved && root.glyph == "": Image {
         source: root.source;
         width: parent.width;
         height: parent.height;
@@ -69,7 +76,7 @@ component PlaylistItem inherits Rectangle {
     HorizontalLayout {
         padding: 6px;
         spacing: 10px;
-        CoverTile { source: root.entry.cover; }
+        CoverTile { source: root.entry.cover; glyph: root.entry.folder ? "📁" : ""; }
         if !root.collapsed: VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;
@@ -97,6 +104,7 @@ export component Sidebar inherits Rectangle {
     in property <bool> collapsed: false;
     callback go(string);
     callback open-playlist(string);
+    callback new-playlist();
     callback logout();
 
     background: Theme.surface;
@@ -125,12 +133,20 @@ export component Sidebar inherits Rectangle {
             active: root.selected == item.id;
             clicked => { root.go(item.id); }
         }
-        if !root.collapsed: Text {
-            text: "PLAYLISTS";
-            font-size: 11px;
-            color: Theme.text-muted;
+        HorizontalLayout {
             height: 28px;
-            vertical-alignment: bottom;
+            if !root.collapsed: Text {
+                text: "PLAYLISTS";
+                font-size: 11px;
+                color: Theme.text-muted;
+                vertical-alignment: bottom;
+                horizontal-stretch: 1;
+            }
+            Rectangle {
+                width: 24px;
+                Text { text: "＋"; color: np.has-hover ? Theme.accent : Theme.text-muted; horizontal-alignment: center; vertical-alignment: bottom; }
+                np := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.new-playlist(); } }
+            }
         }
         Rectangle {
             height: 52px;
@@ -190,6 +206,8 @@ component Row inherits Rectangle {
     ContextMenuArea {
         Menu {
             MenuItem { title: "Play"; activated => { root.play(); } }
+            MenuItem { title: root.item.favorite ? "Remove from Loved Tracks" : "Add to Loved Tracks"; activated => { root.action("favorite"); } }
+            MenuItem { title: "Add to playlist…"; activated => { root.action("add-to-playlist"); } }
             MenuItem { title: "Play next"; activated => { root.action("play-next"); } }
             MenuItem { title: "Add to queue"; activated => { root.action("queue"); } }
             MenuItem { title: "Go to album"; activated => { root.action("album"); } }
@@ -256,6 +274,17 @@ component Row inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
+        Rectangle {
+            width: 24px;
+            Text {
+                text: root.item.favorite ? "♥" : "♡";
+                color: root.item.favorite ? Theme.accent : Theme.text-muted;
+                visible: root.item.favorite || ta.has-hover;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.action("favorite"); } }
+        }
         Text {
             width: 52px;
             text: root.item.duration;
@@ -276,6 +305,9 @@ export component TrackPage inherits Rectangle {
     in property <image> cover;
     in property <bool> loved;
     in property <string> kind-label: "PLAYLIST";
+    in property <bool> can-favorite: false;
+    in property <bool> page-favorite: false;
+    callback toggle-page-favorite();
     in property <bool> compact: false;
     callback row-action(int, string);
     callback play-row(int);
@@ -310,6 +342,7 @@ export component TrackPage inherits Rectangle {
             alignment: start;
             Button { label: "▶  Play"; primary: true; clicked => { root.play-all(); } }
             Button { label: "🔀  Shuffle"; clicked => { root.shuffle-all(); } }
+            if root.can-favorite: Button { label: root.page-favorite ? "♥  Saved" : "♡  Save"; clicked => { root.toggle-page-favorite(); } }
         }
         HorizontalLayout {
             padding-left: 12px;
@@ -320,6 +353,7 @@ export component TrackPage inherits Rectangle {
             Text { horizontal-stretch: 3; min-width: 120px; text: "TITLE"; color: Theme.text-muted; font-size: 11px; }
             if root.width > 520px: Text { horizontal-stretch: 2; min-width: 80px; text: "ARTIST"; color: Theme.text-muted; font-size: 11px; }
             if root.width > 760px: Text { horizontal-stretch: 2; min-width: 80px; text: "ALBUM"; color: Theme.text-muted; font-size: 11px; }
+            Rectangle { width: 24px; }
             Text { width: 52px; text: "TIME"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: right; }
         }
         ListView {

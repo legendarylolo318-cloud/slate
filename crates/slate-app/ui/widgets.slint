@@ -17,7 +17,7 @@ export component Toggle inherits Rectangle {
         width: 16px;
         height: 16px;
         border-radius: 8px;
-        background: root.checked ? #000000 : Theme.text-muted;
+        background: root.checked ? Theme.on-accent : Theme.text-muted;
         animate x { duration: 120ms; }
     }
     ta := TouchArea {
@@ -40,7 +40,7 @@ export component Button inherits Rectangle {
     height: 34px;
     border-radius: 17px;
     background: !root.enabled ? Theme.surface
-        : root.primary ? (ta.pressed ? Theme.accent.darker(0.2) : ta.has-hover ? Theme.accent.brighter(0.15) : Theme.accent)
+        : root.primary ? (ta.has-hover ? Theme.accent-hover : Theme.accent)
         : (ta.pressed ? Theme.surface : ta.has-hover ? Theme.surface-raised.brighter(0.15) : Theme.surface-raised);
     opacity: root.enabled ? 1.0 : 0.5;
     HorizontalLayout {
@@ -48,7 +48,7 @@ export component Button inherits Rectangle {
         padding-right: 16px;
         Text {
             text: root.label;
-            color: root.primary ? #000000 : (root.danger ? Theme.danger : Theme.text);
+            color: root.primary ? Theme.on-accent : (root.danger ? Theme.danger : Theme.text);
             font-weight: 600;
             vertical-alignment: center;
             horizontal-alignment: center;
@@ -212,6 +212,111 @@ export component Bar inherits Rectangle {
             if (root.dragging) {
                 root.drag-fraction = clamp(self.mouse-x / self.width, 0, 1);
                 if (root.live) { root.changed(root.drag-fraction); }
+            }
+        }
+    }
+}
+
+/// HSV colour picker: hue strip + saturation/value square. `changed` fires live
+/// while dragging, `released` once when the pointer is lifted.
+export component ColorPicker inherits Rectangle {
+    in-out property <color> value: #A855F7;
+    callback changed(color);
+    callback released(color);
+    property <float> hue: 0.75;
+    property <float> sat: 0.67;
+    property <float> val: 0.97;
+    property <bool> dragging: false;
+    width: 240px;
+    height: 200px;
+
+    function current() -> color { return Colors.hsv(root.hue * 360, root.sat, root.val); }
+    // Follow external changes (preset clicks, hex entry) when not being dragged.
+    changed value => {
+        if (!root.dragging) {
+            root.hue = root.value.to-hsv().hue / 360;
+            root.sat = root.value.to-hsv().saturation;
+            root.val = root.value.to-hsv().value;
+        }
+    }
+
+    VerticalLayout {
+        spacing: 12px;
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: 6px;
+            clip: true;
+            background: @linear-gradient(90deg, #ffffff 0%, Colors.hsv(root.hue * 360, 1, 1) 100%);
+            Rectangle { background: @linear-gradient(180deg, #00000000 0%, #000000 100%); }
+            Rectangle {
+                x: parent.width * root.sat - self.width / 2;
+                y: parent.height * (1 - root.val) - self.height / 2;
+                width: 14px;
+                height: 14px;
+                border-radius: 7px;
+                border-width: 2px;
+                border-color: #ffffff;
+                background: root.current();
+            }
+            sv := TouchArea {
+                mouse-cursor: MouseCursor.crosshair;
+                pointer-event(e) => {
+                    if (e.button == PointerEventButton.left) {
+                        if (e.kind == PointerEventKind.down) {
+                            root.dragging = true;
+                            root.sat = clamp(self.mouse-x / self.width, 0, 1);
+                            root.val = 1 - clamp(self.mouse-y / self.height, 0, 1);
+                            root.value = root.current();
+                            root.changed(root.value);
+                        } else if (e.kind == PointerEventKind.up) {
+                            root.dragging = false;
+                            root.released(root.current());
+                        }
+                    }
+                }
+                moved => {
+                    if (root.dragging) {
+                        root.sat = clamp(self.mouse-x / self.width, 0, 1);
+                        root.val = 1 - clamp(self.mouse-y / self.height, 0, 1);
+                        root.value = root.current();
+                        root.changed(root.value);
+                    }
+                }
+            }
+        }
+        Rectangle {
+            height: 16px;
+            border-radius: 8px;
+            clip: true;
+            background: @linear-gradient(90deg, #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%, #0000ff 67%, #ff00ff 83%, #ff0000 100%);
+            Rectangle {
+                x: parent.width * root.hue - self.width / 2;
+                width: 6px;
+                background: #ffffff;
+                border-radius: 3px;
+            }
+            hs := TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                pointer-event(e) => {
+                    if (e.button == PointerEventButton.left) {
+                        if (e.kind == PointerEventKind.down) {
+                            root.dragging = true;
+                            root.hue = clamp(self.mouse-x / self.width, 0, 0.999);
+                            root.value = root.current();
+                            root.changed(root.value);
+                        } else if (e.kind == PointerEventKind.up) {
+                            root.dragging = false;
+                            root.released(root.current());
+                        }
+                    }
+                }
+                moved => {
+                    if (root.dragging) {
+                        root.hue = clamp(self.mouse-x / self.width, 0, 0.999);
+                        root.value = root.current();
+                        root.changed(root.value);
+                    }
+                }
             }
         }
     }

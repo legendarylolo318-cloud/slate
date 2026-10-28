@@ -6,6 +6,7 @@ export struct TrackRow {
     duration: string,
     explicit: bool,
     loaded: bool,
+    favorite: bool,
     cover: image,
 }
 
@@ -13,6 +14,7 @@ export struct PlaylistEntry {
     uuid: string,
     title: string,
     subtitle: string,
+    folder: bool,
     cover: image,
 }
 
@@ -40,4 +42,10 @@ export struct QueueRow {
 export struct LyricLine {
     text: string,
     active: bool,
+}
+
+export struct PresetTile {
+    name: string,
+    accent: color,
+    bg: color,
 }

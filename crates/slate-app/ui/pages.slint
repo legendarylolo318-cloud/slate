@@ -33,7 +33,7 @@ component Card inherits Rectangle {
                 border-radius: 20px;
                 background: pt.has-hover ? Theme.accent.brighter(0.2) : Theme.accent;
                 visible: ta.has-hover;
-                Text { text: "▶"; color: #000000; horizontal-alignment: center; vertical-alignment: center; }
+                Text { text: "▶"; color: Theme.on-accent; horizontal-alignment: center; vertical-alignment: center; }
                 pt := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.play(); } }
             }
         }
@@ -81,12 +81,14 @@ export component CardsPage inherits Rectangle {
     in property <bool> has-hero;
     in property <image> hero-image;
     in property <string> hero-label;
+    in property <bool> hero-favorite: false;
     in property <bool> compact: false;
     in property <string> empty-text: "Nothing here yet.";
     callback open(string, string);
     callback play(string, string);
     callback hero-play();
     callback hero-shuffle();
+    callback toggle-hero-favorite();
     background: Theme.background;
 
     ScrollView {
@@ -113,6 +115,7 @@ export component CardsPage inherits Rectangle {
                         alignment: start;
                         Button { label: "▶  Play top tracks"; primary: true; clicked => { root.hero-play(); } }
                         Button { label: "🔀  Shuffle"; clicked => { root.hero-shuffle(); } }
+                        Button { label: root.hero-favorite ? "♥  Following" : "♡  Follow"; clicked => { root.toggle-hero-favorite(); } }
                     }
                 }
             }

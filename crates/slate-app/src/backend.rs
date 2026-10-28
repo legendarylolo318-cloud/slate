@@ -32,6 +32,7 @@ pub(crate) struct Shared {
     controller: OnceLock<Arc<Controller>>,
     /// Set once the backend exists; invoked when a track ends by itself.
     on_finished: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    on_theme_file: OnceLock<Box<dyn Fn(serde_json::Value) + Send + Sync>>,
     #[cfg(target_os = "linux")]
     tray: tokio::sync::Mutex<Option<crate::platform::tray::TrayHandle>>,
     /// Track length in seconds, stored as `f32` bits.
@@ -66,6 +67,11 @@ impl EventSink for UiSink {
                     w.set_playing(false);
                 });
             }
+            "theme-file-changed" => {
+                if let Some(cb) = self.shared.on_theme_file.get() {
+                    cb(payload);
+                }
+            }
             "track-finished" => {
                 // Queue advance decides whether playback continues.
                 if let Some(cb) = self.shared.on_finished.get() {
@@ -89,11 +95,18 @@ pub struct Backend {
     pub(crate) lyrics: Arc<Mutex<Vec<slate_core::lyrics::Line>>>,
     pub(crate) lyric_index: Arc<AtomicI32>,
     pub(crate) pending_scrobble: Arc<Mutex<Option<(String, String)>>>,
+    pub(crate) favs: Arc<Mutex<crate::favorites::Favs>>,
+    pub(crate) theme: crate::themes::SharedTheme,
+    pub(crate) theme_watcher: Arc<Mutex<Option<slate_core::theme_config::ThemeWatcher>>>,
 }
 
 impl Backend {
     /// Creates the backend and starts core initialisation in the background.
-    pub fn start(rt: tokio::runtime::Handle, window: &AppWindow) -> Self {
+    pub fn start(
+        rt: tokio::runtime::Handle,
+        window: &AppWindow,
+        initial_theme: slate_core::theme::Theme,
+    ) -> Self {
         let shared = Arc::new(Shared::default());
         let sink = UiSink {
             ui: window.as_weak(),
@@ -111,12 +124,20 @@ impl Backend {
             lyrics: Arc::new(Mutex::new(Vec::new())),
             lyric_index: Arc::new(AtomicI32::new(-1)),
             pending_scrobble: Arc::new(Mutex::new(None)),
+            favs: Arc::new(Mutex::new(crate::favorites::Favs::default())),
+            theme: Arc::new(Mutex::new(initial_theme)),
+            theme_watcher: Arc::new(Mutex::new(None)),
         };
         let finished = backend.clone();
         let _ = backend
             .shared
             .on_finished
             .set(Box::new(move || finished.advance(false)));
+        let themed = backend.clone();
+        let _ = backend
+            .shared
+            .on_theme_file
+            .set(Box::new(move |v| themed.theme_file_changed(v)));
         backend.init();
         backend.spawn_ticker();
         backend.install_platform(&backend.rt);
@@ -159,6 +180,7 @@ impl Backend {
             this.ui(move |w| w.set_volume(volume));
 
             slate_core::startup::run_startup(&this.app).await;
+            this.start_theme_watcher();
 
             let controller = Arc::new(Controller::new(Arc::clone(&state)));
             let (shuffle, repeat, autoplay) = controller.load_modes().await;
@@ -414,6 +436,7 @@ impl Backend {
     fn show_track(&self, track: &Track, playing: bool) {
         let id = track.id.to_string();
         self.shared.current_id.store(track.id, Ordering::Relaxed);
+        self.refresh_favorite_ui();
         self.load_lyrics(track.id);
         let title = track.title().to_string();
         let artist = track.artist_name().to_string();
@@ -673,6 +696,7 @@ impl Backend {
 
     /// Entering the main screen: sidebar, then the landing page.
     pub fn enter_main(&self) {
+        self.load_favorites();
         self.load_library();
         self.navigate(crate::pages::Route::Home);
     }

@@ -3,10 +3,12 @@ import { LoginScreen } from "login.slint";
 import { PlayerBar } from "player_bar.slint";
 import { Sidebar, TrackPage } from "library.slint";
 import { CardsPage, QueuePanel, LyricsPanel } from "pages.slint";
+import { FullscreenPlayer } from "fullscreen.slint";
 import { SettingsPage, SettingsState } from "settings.slint";
-import { IconButton, TextField } from "widgets.slint";
-import { TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine } from "types.slint";
-export { TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, SettingsState, Theme }
+import { IconButton, TextField, Button } from "widgets.slint";
+import { ListView } from "std-widgets.slint";
+import { TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile } from "types.slint";
+export { TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile, SettingsState, Theme }
 
 export enum Screen { loading, login, main }
 
@@ -17,6 +19,7 @@ export component AppWindow inherits Window {
     min-width: 360px;
     min-height: 420px;
     background: Theme.background;
+    full-screen: root.fullscreen;
 
     in property <Screen> screen: Screen.loading;
 
@@ -25,6 +28,12 @@ export component AppWindow inherits Window {
     property <bool> narrow: self.width < 900px;
     property <bool> compact: self.width < 600px;
     property <int> focus-tick: 0;
+    // Playlist picker: -1 = just create, -2 = current track, >=0 = list row.
+    in-out property <bool> fullscreen: false;
+    in-out property <bool> picker-open: false;
+    in-out property <int> picker-target: -1;
+    in-out property <string> picker-name;
+    in-out property <string> folder-name;
 
     // ---- login ----
     in property <string> login-code;
@@ -65,6 +74,16 @@ export component AppWindow inherits Window {
     in property <bool> page-loading;
     in property <[TrackRow]> tracks;
     in property <string> playing-id;
+    in property <bool> can-favorite;
+    in property <bool> page-favorite;
+    in property <bool> hero-favorite;
+    in property <bool> track-favorite;
+    callback toggle-page-favorite();
+    callback toggle-hero-favorite();
+    callback toggle-favorite();
+    callback add-to-playlist(int, string);
+    callback create-playlist(int, string);
+    callback create-folder(string);
     callback play-row(int);
     callback row-action(int, string);
     callback play-all();
@@ -125,6 +144,8 @@ export component AppWindow inherits Window {
             if (e.modifiers.control && e.text == Key.LeftArrow) { root.previous(); return accept; }
             if (e.text == Key.RightArrow) { root.seek-relative(5); return accept; }
             if (e.text == Key.LeftArrow) { root.seek-relative(-5); return accept; }
+            if (e.text == Key.Escape && root.fullscreen) { root.fullscreen = false; return accept; }
+            if (e.text == "f") { root.fullscreen = !root.fullscreen; return accept; }
             if (e.text == "m") { root.toggle-mute(); return accept; }
             if (e.text == "s") { root.toggle-shuffle(); return accept; }
             if (e.text == "r") { root.cycle-repeat(); return accept; }
@@ -162,6 +183,7 @@ export component AppWindow inherits Window {
                     collapsed: root.narrow;
                     go(id) => { root.go(id); }
                     open-playlist(id) => { root.open-playlist(id); }
+                    new-playlist => { root.picker-target = -1; root.picker-open = true; }
                     logout => { root.logout(); }
                 }
                 VerticalLayout {
@@ -198,12 +220,12 @@ export component AppWindow inherits Window {
                     if root.notice != "": Rectangle {
                         height: 28px;
                         background: Theme.accent;
-                        Text { text: root.notice; color: #000000; overflow: elide; horizontal-alignment: center; }
+                        Text { text: root.notice; color: Theme.on-accent; overflow: elide; horizontal-alignment: center; }
                     }
                     if root.error != "": Rectangle {
                         height: 32px;
                         background: Theme.danger;
-                        Text { text: root.error; color: #000000; overflow: elide; }
+                        Text { text: root.error; color: Theme.on-accent; overflow: elide; }
                     }
                     if root.view == "tracks": TrackPage {
                         vertical-stretch: 1;
@@ -218,7 +240,13 @@ export component AppWindow inherits Window {
                         tracks: root.tracks;
                         playing-id: root.playing-id;
                         play-row(i) => { root.play-row(i); }
-                        row-action(i, a) => { root.row-action(i, a); }
+                        can-favorite: root.can-favorite;
+                        page-favorite: root.page-favorite;
+                        toggle-page-favorite => { root.toggle-page-favorite(); }
+                        row-action(i, a) => {
+                            if (a == "add-to-playlist") { root.picker-target = i; root.picker-open = true; }
+                            else { root.row-action(i, a); }
+                        }
                         play-all => { root.play-all(); }
                         shuffle-all => { root.shuffle-all(); }
                     }
@@ -234,6 +262,8 @@ export component AppWindow inherits Window {
                         hero-label: root.hero-label;
                         open(k, id) => { root.open-card(k, id); }
                         play(k, id) => { root.play-card(k, id); }
+                        hero-favorite: root.hero-favorite;
+                        toggle-hero-favorite => { root.toggle-hero-favorite(); }
                         hero-play => { root.hero-play(); }
                         hero-shuffle => { root.hero-shuffle(); }
                     }
@@ -275,7 +305,10 @@ export component AppWindow inherits Window {
                 volume: root.volume;
                 shuffle: root.shuffle;
                 repeat: root.repeat;
+                favorite: root.track-favorite;
                 queue-open: root.panel == "queue";
+                toggle-favorite => { root.toggle-favorite(); }
+                add-to-playlist => { root.picker-target = -2; root.picker-open = true; }
                 lyrics-open: root.panel == "lyrics";
                 next => { root.next(); }
                 previous => { root.previous(); }
@@ -285,8 +318,100 @@ export component AppWindow inherits Window {
                 toggle-mute => { root.toggle-mute(); }
                 seek(f) => { root.seek(f); }
                 set-volume(v) => { root.set-volume(v); }
+                toggle-fullscreen => { root.fullscreen = true; }
                 toggle-queue => { root.panel = root.panel == "queue" ? "" : "queue"; }
                 toggle-lyrics => { root.panel = root.panel == "lyrics" ? "" : "lyrics"; }
+            }
+        }
+
+        if root.fullscreen && root.screen == Screen.main: FullscreenPlayer {
+            compact: root.compact;
+            title: root.track-title;
+            artist: root.track-artist;
+            cover: root.track-cover;
+            playing: root.playing;
+            has-track: root.has-track;
+            position-text: root.position-text;
+            duration-text: root.duration-text;
+            progress: root.progress;
+            shuffle: root.shuffle;
+            repeat: root.repeat;
+            favorite: root.track-favorite;
+            lyric-lines: root.lyric-lines;
+            lyrics-synced: root.lyrics-synced;
+            lyric-current: root.lyric-current;
+            lyrics-status: root.lyrics-status;
+            close => { root.fullscreen = false; }
+            toggle-play => { root.toggle-play(); }
+            next => { root.next(); }
+            previous => { root.previous(); }
+            toggle-shuffle => { root.toggle-shuffle(); }
+            cycle-repeat => { root.cycle-repeat(); }
+            toggle-favorite => { root.toggle-favorite(); }
+            seek(f) => { root.seek(f); }
+            lyric-seek(i) => { root.lyric-seek(i); }
+        }
+
+        if root.picker-open: Rectangle {
+            background: #000000a0;
+            TouchArea { clicked => { root.picker-open = false; } }
+            Rectangle {
+                width: min(420px, parent.width - 32px);
+                height: min(520px, parent.height - 48px);
+                border-radius: 12px;
+                background: Theme.surface;
+                TouchArea { }
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 8px;
+                    HorizontalLayout {
+                        Text { text: root.picker-target == -1 ? "New playlist or folder" : "Add to playlist"; font-size: 18px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; }
+                        IconButton { glyph: "✕"; side: 28px; clicked => { root.picker-open = false; } }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        TextField {
+                            text <=> root.picker-name;
+                            placeholder: "New playlist name";
+                            field-width: 260px;
+                            accepted(t) => { root.create-playlist(root.picker-target, t); root.picker-name = ""; root.picker-open = false; }
+                        }
+                        Button {
+                            label: "Create";
+                            primary: true;
+                            enabled: root.picker-name != "";
+                            clicked => { root.create-playlist(root.picker-target, root.picker-name); root.picker-name = ""; root.picker-open = false; }
+                        }
+                    }
+                    if root.picker-target == -1: HorizontalLayout {
+                        spacing: 8px;
+                        TextField {
+                            text <=> root.folder-name;
+                            placeholder: "New folder name";
+                            field-width: 260px;
+                        }
+                        Button {
+                            label: "Create";
+                            enabled: root.folder-name != "";
+                            clicked => { root.create-folder(root.folder-name); root.folder-name = ""; root.picker-open = false; }
+                        }
+                    }
+                    if root.picker-target != -1: Text { text: "OR PICK ONE"; font-size: 11px; color: Theme.text-muted; }
+                    if root.picker-target != -1: ListView {
+                        vertical-stretch: 1;
+                        for p in root.playlists: Rectangle {
+                            height: 40px;
+                            visible: !p.folder;
+                            border-radius: 6px;
+                            background: pk.has-hover ? Theme.surface-raised : transparent;
+                            Text { x: 10px; text: p.title; color: Theme.text; vertical-alignment: center; overflow: elide; width: parent.width - 20px; }
+                            pk := TouchArea {
+                                mouse-cursor: MouseCursor.pointer;
+                                clicked => { root.add-to-playlist(root.picker-target, p.uuid); root.picker-open = false; }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

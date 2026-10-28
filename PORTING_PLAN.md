@@ -184,3 +184,14 @@ Still todo / known gaps:
 - Full-screen player, miniplayer, music video (step 8); signal-path panel; shortcut overlay; update toast.
 - Gapless arming and scrobble `notify_track_started` payload (see §3).
 - Interface size needs a restart (Slint reads the override at startup).
+
+## 10. Status after favourites / folders / themes / full-screen pass
+
+Done (builds, clippy-clean; 400 core + 34 app tests; not all exercised live):
+- Favourites: hearts on rows, player bar, album/playlist header ("Save"), artist ("Follow"); state loaded from `get_all_favorite_ids`.
+- Add to playlist (row menu + player bar `＋`), create playlist, create folder; picker dialog.
+- Playlist folders: shown at the top of the sidebar, open as a grid of the folder's playlists. **Folder response parsing is defensive and unverified against live data** (`favorites::parse_folder_items`, unit-tested on synthetic JSON).
+- Themes: all 15 presets and derivation ported to `slate-core::theme` (7 tests incl. round-trip with `theme.json` validation), `Theme` Slint global driven from Rust, Appearance tab with preset tiles, HSV colour picker (Slint) and hex entry, saved to `theme.json`; external edits and deletion handled via the core file watcher (the original reloaded on window focus; Slint exposes no focus callback, so the watcher is used instead).
+- Full-screen player: window full-screen, auto-hiding controls, optional synced lyrics (`F` / ⛶, Esc exits).
+
+Still todo: move playlist to folder / rename / delete folder and playlist; remove-from-playlist; miniplayer window; music video; signal-path panel; shortcut overlay; profile; explore sub-pages; loved videos; gapless arming; scrobble `notify_track_started`; Windows media controls/tray; final cleanup of the JS tree.

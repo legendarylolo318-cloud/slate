@@ -23,6 +23,7 @@ pub struct RowData {
     pub album: String,
     pub duration: String,
     pub explicit: bool,
+    pub favorite: bool,
 }
 
 pub struct LazyTracks {
@@ -66,6 +67,7 @@ impl LazyTracks {
                     duration: r.duration.into(),
                     explicit: r.explicit,
                     loaded: true,
+                    favorite: r.favorite,
                     cover: Image::default(),
                 },
             );
@@ -88,6 +90,20 @@ impl LazyTracks {
         }
     }
 
+    /// Updates the heart on every loaded row of `track_id`.
+    pub fn set_favorite(&self, track_id: &str, on: bool) {
+        let mut changed = Vec::new();
+        for (i, row) in self.rows.borrow_mut().iter_mut() {
+            if row.id == track_id && row.favorite != on {
+                row.favorite = on;
+                changed.push(*i);
+            }
+        }
+        for i in changed {
+            self.notify.row_changed(i);
+        }
+    }
+
     /// Lets a failed fetch be retried the next time the rows scroll into view.
     pub fn forget_request(&self, page: usize) {
         self.requested.borrow_mut().remove(&page);
@@ -102,6 +118,7 @@ impl LazyTracks {
             duration: "".into(),
             explicit: false,
             loaded: false,
+            favorite: false,
             cover: Image::default(),
         }
     }

@@ -112,8 +112,9 @@ fn launch(forced: Option<&str>, index: usize) -> anyhow::Result<()> {
     window.show().context("showing main window")?;
     tracing::info!(renderer = %active, "UI renderer active");
 
-    Backend::apply_theme(&window, &crate::uiprefs::UiPrefs::load());
-    let backend = Backend::start(runtime.handle().clone(), &window);
+    let initial_theme = crate::themes::load_saved();
+    crate::themes::apply(&window, &initial_theme);
+    let backend = Backend::start(runtime.handle().clone(), &window, initial_theme);
     wire(&window, &backend);
     let b = backend.clone();
     window
@@ -157,6 +158,12 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_queue_clear, |b| b.queue_clear());
     bind!(on_lyric_seek, |b, i| b
         .lyric_seek(usize::try_from(i).unwrap_or(0)));
+    bind!(on_toggle_favorite, |b| b.toggle_current_favorite());
+    bind!(on_toggle_page_favorite, |b| b.toggle_page_favorite());
+    bind!(on_toggle_hero_favorite, |b| b.toggle_hero_favorite());
+    bind!(on_add_to_playlist, |b, t, u| b.add_to_playlist(t, &u));
+    bind!(on_create_playlist, |b, t, n| b.create_playlist(t, &n));
+    bind!(on_create_folder, |b, n| b.create_folder(&n));
     bind!(on_toggle_play, |b| b.toggle_play());
     bind!(on_next, |b| b.next());
     bind!(on_previous, |b| b.previous());
@@ -168,6 +175,14 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_set_volume, |b, v| b.set_volume(v));
 
     let g = window.global::<SettingsState>();
+    let b = backend.clone();
+    g.on_theme_preset(move |i| b.theme_preset(usize::try_from(i).unwrap_or(0)));
+    let b = backend.clone();
+    g.on_theme_color(move |t, c| b.theme_color(t, c, false));
+    let b = backend.clone();
+    g.on_theme_color_final(move |t, c| b.theme_color(t, c, true));
+    let b = backend.clone();
+    g.on_theme_hex(move |t, s| b.theme_hex(t, &s));
     let b = backend.clone();
     g.on_changed_bool(move |k, v| b.setting_bool(&k, v));
     let b = backend.clone();

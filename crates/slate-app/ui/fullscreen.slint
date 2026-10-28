@@ -1,0 +1,128 @@
+import { Theme } from "theme.slint";
+import { IconButton, Bar } from "widgets.slint";
+import { LyricLine } from "types.slint";
+import { ListView } from "std-widgets.slint";
+
+/// Full-window player. Controls fade out after a few idle seconds and return on
+/// any pointer movement; Esc or the ✕ button leaves.
+export component FullscreenPlayer inherits Rectangle {
+    in property <string> title;
+    in property <string> artist;
+    in property <image> cover;
+    in property <bool> playing;
+    in property <bool> has-track;
+    in property <string> position-text;
+    in property <string> duration-text;
+    in property <float> progress;
+    in property <bool> shuffle;
+    in property <int> repeat;
+    in property <bool> favorite;
+    in property <[LyricLine]> lyric-lines;
+    in property <bool> lyrics-synced;
+    in property <int> lyric-current: -1;
+    in property <string> lyrics-status;
+    in property <bool> compact: false;
+    in-out property <bool> show-lyrics: false;
+    callback close();
+    callback toggle-play();
+    callback next();
+    callback previous();
+    callback toggle-shuffle();
+    callback cycle-repeat();
+    callback toggle-favorite();
+    callback seek(float);
+    callback lyric-seek(int);
+
+    property <bool> idle: false;
+    background: Theme.background;
+
+    // Auto-hide: any movement shows the controls and restarts the countdown.
+    idle-timer := Timer {
+        interval: 3s;
+        running: !root.idle;
+        triggered => { root.idle = true; self.running = false; }
+    }
+    TouchArea {
+        mouse-cursor: root.idle ? MouseCursor.none : MouseCursor.default;
+        moved => {
+            root.idle = false;
+            idle-timer.running = true;
+        }
+    }
+
+    HorizontalLayout {
+        padding: root.compact ? 16px : 48px;
+        spacing: 48px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 16px;
+            HorizontalLayout {
+                alignment: center;
+            Rectangle {
+                width: max(120px, min(root.width * (root.show-lyrics ? 0.38 : 0.6), root.height - 260px));
+                height: self.width;
+                border-radius: 12px;
+                clip: true;
+                background: Theme.surface-raised;
+                Image { source: root.cover; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
+            }
+            }
+            Text { text: root.title; font-size: 28px; font-weight: 800; color: Theme.text; overflow: elide; horizontal-alignment: center; }
+            Text { text: root.artist; font-size: 18px; color: Theme.text-muted; overflow: elide; horizontal-alignment: center; }
+            VerticalLayout {
+                opacity: root.idle ? 0.0 : 1.0;
+                animate opacity { duration: 250ms; }
+                spacing: 4px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: root.position-text; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; width: 44px; horizontal-alignment: right; }
+                    Bar { horizontal-stretch: 1; fraction: root.progress; picked(f) => { root.seek(f); } }
+                    Text { text: root.duration-text; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; width: 44px; }
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 10px;
+                    IconButton { glyph: "🔀"; active: root.shuffle; clicked => { root.toggle-shuffle(); } }
+                    IconButton { glyph: "⏮"; enabled: root.has-track; clicked => { root.previous(); } }
+                    IconButton { primary: true; glyph: root.playing ? "⏸" : "▶"; enabled: root.has-track; clicked => { root.toggle-play(); } }
+                    IconButton { glyph: "⏭"; enabled: root.has-track; clicked => { root.next(); } }
+                    IconButton { glyph: root.repeat == 2 ? "🔂" : "🔁"; active: root.repeat != 0; clicked => { root.cycle-repeat(); } }
+                    IconButton { glyph: root.favorite ? "♥" : "♡"; active: root.favorite; clicked => { root.toggle-favorite(); } }
+                    IconButton { glyph: "♪"; active: root.show-lyrics; clicked => { root.show-lyrics = !root.show-lyrics; } }
+                }
+            }
+        }
+        if root.show-lyrics && !root.compact: VerticalLayout {
+            horizontal-stretch: 1;
+            if root.lyrics-status != "": Text { text: root.lyrics-status; color: Theme.text-muted; }
+            ListView {
+                vertical-stretch: 1;
+                for l[i] in root.lyric-lines: Rectangle {
+                    height: 44px;
+                    TouchArea { mouse-cursor: root.lyrics-synced ? MouseCursor.pointer : MouseCursor.default; clicked => { if (root.lyrics-synced) { root.lyric-seek(i); } } }
+                    Text {
+                        text: l.text;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                        color: l.active ? Theme.accent : Theme.text-muted;
+                        font-size: l.active ? 26px : 20px;
+                        font-weight: l.active ? 800 : 500;
+                        animate color { duration: 150ms; }
+                    }
+                }
+            }
+        }
+    }
+
+    // Close button, hidden together with the other controls.
+    Rectangle {
+        x: parent.width - 52px;
+        y: 12px;
+        width: 40px;
+        height: 40px;
+        opacity: root.idle ? 0.0 : 1.0;
+        animate opacity { duration: 250ms; }
+        IconButton { glyph: "✕"; clicked => { root.close(); } }
+    }
+}

@@ -32,6 +32,7 @@ pub enum Route {
     Artist(u64),
     Mix(String),
     Search(String),
+    Folder(String),
     Settings,
 }
 
@@ -317,6 +318,7 @@ impl Backend {
             Route::Artists => self.show_library_artists(),
             Route::Mixes => self.show_library_mixes(),
             Route::Search(q) => self.show_search(q),
+            Route::Folder(id) => self.show_folder(id),
             Route::Artist(id) => self.show_artist(id),
             Route::Loved => self.open(SourceKind::Loved, "loved".into()),
             Route::Playlist(u) => self.open(SourceKind::Playlist(u.clone()), u),
@@ -330,7 +332,37 @@ impl Backend {
     }
 
     pub fn open_playlist(&self, uuid: &str) {
-        self.navigate(Route::Playlist(uuid.to_string()));
+        match uuid.strip_prefix("folder:") {
+            Some(folder) => self.navigate(Route::Folder(folder.to_string())),
+            None => self.navigate(Route::Playlist(uuid.to_string())),
+        }
+    }
+
+    fn show_folder(&self, id: String) {
+        let generation = self.begin_cards("Folder");
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let res = this.fetch_folder_playlists(&id).await;
+            if this.lib.cards_generation() != generation {
+                return;
+            }
+            match res {
+                Ok(cards) => {
+                    let n = cards.len();
+                    this.show_cards(
+                        "Folder".into(),
+                        format!("{n} playlists"),
+                        vec![SectionData {
+                            title: String::new(),
+                            wrap: true,
+                            cards,
+                        }],
+                        None,
+                    );
+                }
+                Err(e) => this.fail_cards(format!("Could not open folder: {e}")),
+            }
+        });
     }
 
     pub fn search(&self, query: &str) {
@@ -781,6 +813,7 @@ impl Backend {
 
     fn show_artist(&self, id: u64) {
         let generation = self.begin_cards("Artist");
+        self.lib.set_artist(Some(id));
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };

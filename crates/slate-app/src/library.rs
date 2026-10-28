@@ -62,6 +62,7 @@ pub struct LibState {
     /// Artist page "Play top tracks" list.
     pub hero_tracks: Mutex<Vec<Track>>,
     cards_gen: AtomicU64,
+    artist: Mutex<Option<u64>>,
 }
 
 fn to_track(t: &TidalTrack) -> Option<Track> {
@@ -94,6 +95,7 @@ fn row_of(t: &Track) -> RowData {
         album: album.to_string(),
         duration: format_time(t.duration_secs()),
         explicit: t.extra.get("explicit").and_then(|v| v.as_bool()) == Some(true),
+        favorite: false,
     }
 }
 
@@ -112,6 +114,20 @@ fn set_playlist_cover(w: &AppWindow, i: usize, uuid: &str, cover: Image) {
 }
 
 impl LibState {
+    pub fn active_kind_pub(&self) -> Option<SourceKind> {
+        self.active.lock().ok()?.as_ref().map(|a| a.kind.clone())
+    }
+
+    pub fn artist_id(&self) -> Option<u64> {
+        self.artist.lock().ok().and_then(|a| *a)
+    }
+
+    pub fn set_artist(&self, id: Option<u64>) {
+        if let Ok(mut a) = self.artist.lock() {
+            *a = id;
+        }
+    }
+
     /// Invalidates in-flight card-page work and returns the new generation.
     pub fn bump_cards(&self) -> u64 {
         self.cards_gen.fetch_add(1, Ordering::SeqCst) + 1
@@ -198,20 +214,32 @@ impl Backend {
                     m.insert(uuid.clone(), img.clone());
                 }
             }
+            let folders = this.fetch_folders().await;
+            let offset = folders.len();
             let ids: Vec<(usize, String, Option<String>)> = data
                 .iter()
                 .enumerate()
-                .map(|(i, (u, _, _, img))| (i, u.clone(), img.clone()))
+                .map(|(i, (u, _, _, img))| (i + offset, u.clone(), img.clone()))
                 .collect();
             this.ui(move |w| {
-                let entries: Vec<PlaylistEntry> = data
-                    .into_iter()
-                    .map(|(uuid, title, subtitle, _)| PlaylistEntry {
-                        uuid: uuid.into(),
-                        title: title.into(),
-                        subtitle: subtitle.into(),
-                        cover: Image::default(),
-                    })
+                let folder_entries = folders.into_iter().map(|(id, name, n)| PlaylistEntry {
+                    uuid: format!("folder:{id}").into(),
+                    title: name.into(),
+                    subtitle: format!("{n} items").into(),
+                    folder: true,
+                    cover: Image::default(),
+                });
+                let entries: Vec<PlaylistEntry> = folder_entries
+                    .chain(
+                        data.into_iter()
+                            .map(|(uuid, title, subtitle, _)| PlaylistEntry {
+                                uuid: uuid.into(),
+                                title: title.into(),
+                                subtitle: subtitle.into(),
+                                folder: false,
+                                cover: Image::default(),
+                            }),
+                    )
                     .collect();
                 w.set_playlists(ModelRc::new(VecModel::from(entries)));
                 w.set_playlists_loading(false);
@@ -294,6 +322,7 @@ impl Backend {
                 w.set_page_subtitle(subtitle.into());
                 w.set_page_loved(loved);
             });
+            this.refresh_favorite_ui();
             if let (Some(image), Some(state)) = (header.cover, this.state()) {
                 let this2 = this.clone();
                 this.rt.spawn(async move {
@@ -473,7 +502,9 @@ impl Backend {
             for (i, t) in tracks.iter().enumerate() {
                 if let Some(track) = to_track(t) {
                     let index = page * PAGE_SIZE + i;
-                    rows.push(row_of(&track));
+                    let mut row = row_of(&track);
+                    row.favorite = self.is_favorite_track(track.id);
+                    rows.push(row);
                     if let Some(c) = track.cover_id() {
                         covers.entry(c.to_string()).or_default().push(index);
                     }
