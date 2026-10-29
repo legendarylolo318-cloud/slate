@@ -181,15 +181,31 @@ fn ca_bundle_override(exists: impl Fn(&str) -> bool) -> Option<&'static str> {
 
 /// Point a souphttpsrc at the distribution's CA bundle when GnuTLS's built-in
 /// path is missing (see [`ca_bundle_override`]). Public for `slate --self-test`.
+///
+/// Uses `tls-database`, not `ssl-ca-file`: with libsoup 3 (GStreamer 1.20 in
+/// the AppImage) the CA-file property is not applied to the session, while a
+/// database set on the element is.
 pub fn apply_ca_bundle(source: &gst::Element) {
     #[cfg(target_os = "linux")]
     {
+        use gio::prelude::*;
         let is_soup = source.factory().is_some_and(|f| f.name() == "souphttpsrc");
-        if is_soup && source.find_property("ssl-ca-file").is_some() {
+        if is_soup && source.find_property("tls-database").is_some() {
+            // The path is decided once; the database (not shareable across
+            // threads) is built per source, a few milliseconds of PEM parsing.
             static CA: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
-            let ca = CA.get_or_init(|| ca_bundle_override(|p| std::path::Path::new(p).is_file()));
+            let ca = CA.get_or_init(|| {
+                let path = ca_bundle_override(|p| std::path::Path::new(p).is_file());
+                if let Some(p) = path {
+                    log::info!("[audio] using CA bundle {p} for HTTPS streams");
+                }
+                path
+            });
             if let Some(path) = ca {
-                source.set_property("ssl-ca-file", *path);
+                match gio::TlsFileDatabase::new(path) {
+                    Ok(db) => source.set_property("tls-database", db.upcast::<gio::TlsDatabase>()),
+                    Err(e) => log::warn!("[audio] CA bundle {path} unusable: {e}"),
+                }
             }
         }
     }
@@ -4337,11 +4353,11 @@ mod proxy_source_tests {
         }
 
         #[test]
-        fn soup_source_accepts_the_ca_file_property() {
+        fn soup_source_accepts_a_tls_database() {
             let _ = gst::init();
             let src = gst::ElementFactory::make("souphttpsrc").build().unwrap();
-            assert!(src.find_property("ssl-ca-file").is_some());
-            src.set_property("ssl-ca-file", "/etc/pki/tls/certs/ca-bundle.crt");
+            assert!(src.find_property("tls-database").is_some());
+            apply_ca_bundle(&src);
         }
     }
 

@@ -45,6 +45,8 @@ futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# A TLS database from the distro's CA bundle for souphttpsrc (audio.rs).
+gio = "0.20"
 alsa = "0.10"
 libc = "0.2"
 x11rb = { version = "0.13.2", features = ["screensaver", "dpms"] }
