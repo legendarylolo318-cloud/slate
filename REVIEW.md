@@ -37,6 +37,8 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | 21 | Low | Closing the music video dropped the pipeline (`set_state(Null)`, joins streaming threads) on the UI thread while holding a mutex | Teardown moved to a blocking worker outside the lock |
 | 22 | Low | Workspace `repository` pointed at upstream SONE; crates publishable by accident | Points at Slate; `publish = false` |
 | 23 | Low | Settings and state files were created with the default umask (0644); contents encrypted, but the files disclosed account presence and usage times to other local users | `write_atomic` creates the temp file 0600 (Unix); test |
+| 24 | Low | A local client that connected to the single-instance socket and sent nothing blocked all later link forwarding | Each connection read on its own thread, at most 8 at once; verified live with a silent client held open |
+| 25 | Medium | After a renderer fallback, every launch failed over again (about 12 s on a machine without working GL) | The renderer that worked is stored in `ui.json` and used first next time; verified live (#9) |
 
 ## Security verification
 - **Loopback only, off by default:** MCP binds `127.0.0.1` (hard-coded), overlay clamps to loopback; both default off (`defaults::mcp_enabled/overlay_enabled`).
@@ -85,7 +87,7 @@ Idle RAM stays about 47 % below the original (hard requirement met).
 | Also `__EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent` | Skia/OpenGL draws nothing → femtovg draws nothing → software, about 12 s total |
 | `SLINT_BACKEND=winit-software` / `winit-femtovg` | Override honoured, no fallback attempted |
 
-Remaining: links forwarded during a fallback session are dropped, and the working renderer is not remembered (#9).
+The working renderer is remembered after a fallback (#25). Remaining: links forwarded during the fallback session itself are dropped (#9).
 
 ## Feature parity (original README → Slate)
 "Code" = implemented and unit-tested, not exercised live in this review. Live tests were stopped after the TIDAL account was rate-limited.
@@ -107,7 +109,7 @@ Remaining: links forwarded during a fallback session are dropped, and the workin
 | Queue persistence | Works |
 | MPRIS | Works (play, pause, next, volume via `playerctl`) |
 | Tray | Linux code; Windows #2 |
-| Keyboard shortcuts | In-app work; overlay missing (#13); global #5 |
+| Keyboard shortcuts | In-app work; `?` opens the shortcut sheet (a test checks it lists every bound key); global #5 |
 | Library + folders | Works; sorting missing (#14) |
 | Share links | Code (copy link to clipboard) |
 | Deep links + single instance | Works (`tidal://album/…`, `tidal://playlist/…`) |
@@ -121,7 +123,7 @@ Remaining: links forwarded during a fallback session are dropped, and the workin
 | Auth: device code, PKCE browser, expiry, logout | Device code works (existing session); wiremock tests cover refresh/expiry; logout wipe tested |
 
 ## Windows status
-CI builds, lints and tests pass. Packaging dry run: the AppImage job passes (including the bundled-plugins/HTTPS self-test with host libraries hidden); Windows packaging is being iterated. Known gaps, all filed: SMTC (#1), tray (#2), WASAPI exclusive (#3), sleep inhibit (#4), global shortcuts (#5), pipe ACL (#8).
+CI builds, lints and tests pass. Packaging dry run: the AppImage job passes (including the bundled-plugins/HTTPS self-test with host libraries hidden); Windows packaging is being iterated. Sleep inhibit is implemented with `SetThreadExecutionState` on a dedicated thread (#4; compiled in CI, `powercfg /requests` not yet checked on a Windows machine). Known gaps, all filed: SMTC (#1), tray (#2), WASAPI exclusive (#3), global shortcuts (#5), pipe ACL (#8).
 
 ## Open issues
 #1–#15 on GitHub; see the tables above for which finding each one tracks.

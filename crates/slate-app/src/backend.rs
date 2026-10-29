@@ -789,6 +789,10 @@ impl Backend {
 
     /// A message from a later launch: "raise", or a link to open.
     pub fn handle_message(&self, msg: &str) {
+        tracing::debug!(
+            raise_only = msg == crate::ipc::RAISE,
+            "message from another launch"
+        );
         self.handle_control(Control::Raise);
         if msg == crate::ipc::RAISE {
             return;

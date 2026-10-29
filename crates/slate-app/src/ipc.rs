@@ -11,6 +11,9 @@ use interprocess::local_socket::{
     ListenerOptions, Name, Stream,
 };
 
+/// Connections read at once; more are closed unread.
+const MAX_READERS: usize = 8;
+
 /// What the first process receives from later launches.
 pub const RAISE: &str = "RAISE";
 
@@ -94,15 +97,33 @@ pub fn claim(link_arg: Option<&str>) -> Claim {
     let spawned = std::thread::Builder::new()
         .name("slate-ipc".into())
         .spawn(move || {
+            // Each connection is read on its own thread so a client that
+            // connects and never writes cannot hold up later links; the cap
+            // keeps a flood of idle connections from costing more than that.
+            let busy = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             for conn in listener.incoming().flatten() {
-                let mut line = String::new();
-                // One short line per connection; cap it so a rogue client cannot balloon memory.
-                let mut reader = BufReader::new(conn).take_line_limited();
-                if reader.read_line(&mut line).is_ok() {
-                    let msg = line.trim().to_string();
-                    if !msg.is_empty() && tx.send(msg).is_err() {
-                        return;
-                    }
+                use std::sync::atomic::Ordering;
+                if busy.fetch_add(1, Ordering::SeqCst) >= MAX_READERS {
+                    busy.fetch_sub(1, Ordering::SeqCst);
+                    continue; // dropped: the sender sees the connection close
+                }
+                let (tx, held) = (tx.clone(), std::sync::Arc::clone(&busy));
+                let reader = std::thread::Builder::new()
+                    .name("slate-ipc-read".into())
+                    .spawn(move || {
+                        let mut line = String::new();
+                        // One short line per connection; capped so a rogue client cannot balloon memory.
+                        let mut reader = BufReader::new(conn).take_line_limited();
+                        if reader.read_line(&mut line).is_ok() {
+                            let msg = line.trim().to_string();
+                            if !msg.is_empty() {
+                                let _ = tx.send(msg);
+                            }
+                        }
+                        held.fetch_sub(1, Ordering::SeqCst);
+                    });
+                if reader.is_err() {
+                    busy.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                 }
             }
         });

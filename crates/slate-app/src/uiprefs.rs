@@ -12,6 +12,10 @@ pub const SCALES: [f32; 6] = [0.0, 1.0, 1.25, 1.5, 1.75, 2.0];
 pub struct UiPrefs {
     #[serde(default)]
     pub scale_index: usize,
+    /// Renderer that worked after a startup fallback; the next launch starts
+    /// there instead of failing over again (see `bootstrap::run`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renderer: Option<String>,
 }
 
 fn path() -> Option<PathBuf> {
@@ -52,6 +56,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn remembered_renderer_round_trips_and_is_optional() {
+        let p = UiPrefs::parse(r#"{"scale_index":2,"renderer":"software"}"#);
+        assert_eq!(p.renderer.as_deref(), Some("software"));
+        let json = serde_json::to_string(&UiPrefs::default()).unwrap();
+        assert!(!json.contains("renderer"), "{json}");
+        assert_eq!(UiPrefs::parse(&serde_json::to_string(&p).unwrap()), p);
+    }
+
+    #[test]
     fn defaults_and_clamping() {
         assert_eq!(UiPrefs::parse("{}"), UiPrefs::default());
         assert_eq!(UiPrefs::parse("not json"), UiPrefs::default());
@@ -60,7 +73,21 @@ mod tests {
 
     #[test]
     fn scale_factor_maps_index() {
-        assert_eq!(UiPrefs { scale_index: 0 }.scale_factor(), None);
-        assert_eq!(UiPrefs { scale_index: 3 }.scale_factor(), Some(1.5));
+        assert_eq!(
+            UiPrefs {
+                scale_index: 0,
+                ..UiPrefs::default()
+            }
+            .scale_factor(),
+            None
+        );
+        assert_eq!(
+            UiPrefs {
+                scale_index: 3,
+                ..UiPrefs::default()
+            }
+            .scale_factor(),
+            Some(1.5)
+        );
     }
 }

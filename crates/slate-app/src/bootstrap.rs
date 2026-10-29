@@ -100,7 +100,7 @@ pub fn run(
     let index: usize = std::env::var(INDEX_ENV)
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+        .unwrap_or_else(|| remembered_index(forced.is_some()));
 
     // Skia creates its Vulkan surface lazily, after `launch` has already
     // reported success, so a missing driver would leave an invisible window
@@ -140,6 +140,36 @@ pub fn run(
         }
         other => other,
     }
+}
+
+/// Where to start the renderer chain: the renderer a previous fallback ended
+/// on, if any, so a machine whose GPU path fails does not wait through the
+/// failing renderers on every launch.
+fn remembered_index(forced: bool) -> usize {
+    if forced {
+        return 0;
+    }
+    crate::uiprefs::UiPrefs::load()
+        .renderer
+        .and_then(|name| CHAIN.iter().position(|r| r.name() == name))
+        .unwrap_or(0)
+}
+
+/// After a fallback relaunch, record the renderer once it has proved itself.
+fn remember_renderer(name: &'static str, no_frame: std::rc::Rc<std::cell::Cell<bool>>) {
+    slint::Timer::single_shot(FIRST_FRAME_TIMEOUT + Duration::from_secs(1), move || {
+        if no_frame.get() {
+            return;
+        }
+        let mut prefs = crate::uiprefs::UiPrefs::load();
+        if prefs.renderer.as_deref() != Some(name) {
+            prefs.renderer = Some(name.to_string());
+            match prefs.save() {
+                Ok(()) => tracing::info!(renderer = name, "remembered the working renderer"),
+                Err(e) => tracing::warn!("could not remember the renderer: {e}"),
+            }
+        }
+    });
 }
 
 /// True when the Vulkan loader is present, an instance can be created and it
@@ -240,6 +270,9 @@ fn launch(
     // the rendering notifier; Vulkan is probed before selection instead).
     let watch = matches!(chosen, Some(Renderer::SkiaOpenGl | Renderer::FemtoVg));
     let no_frame = first_frame_watchdog(&window, watch);
+    if let Some(r) = chosen.filter(|_| std::env::var_os(INDEX_ENV).is_some()) {
+        remember_renderer(r.name(), std::rc::Rc::clone(&no_frame));
+    }
     let looped = slint::run_event_loop_until_quit();
     backend.shutdown();
     // A renderer that never drew may also make the loop itself fail on the

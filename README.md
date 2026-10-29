@@ -41,12 +41,12 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
   interface scale setting.
 - MPRIS and tray on Linux. Keyboard shortcuts: `Space` play/pause, `←/→` seek, `Ctrl+←/→`
   previous/next, `M` mute, `S` shuffle, `R` repeat, `Q` queue, `L` lyrics, `F` full screen,
-  `/` search.
+  `/` search, `?` shortcut sheet.
 
 - Gapless playback, single-instance with `tidal://` links, profile editing.
 
 Not yet done: Windows media controls, tray, exclusive output and sleep inhibit; Explore;
-loved videos; shortcut overlay; global shortcuts; library sorting. Each is a
+loved videos; global shortcuts; library sorting. Each is a
 [GitHub issue](https://github.com/legendarylolo318-cloud/slate/issues). Security and
 performance review results are in [REVIEW.md](REVIEW.md).
 

@@ -14,9 +14,8 @@ foreach ($p in $plugins | Select-Object -Unique) {
 }
 # The scanner runs as its own process; next to slate.exe it finds the GStreamer DLLs.
 Copy-Item "$root\libexec\gstreamer-1.0\gst-plugin-scanner.exe" $Out
-# Loaded at runtime, so invisible to the dumpbin walk below:
-#  - gstsoup dlopens libsoup;
-#  - GIO loads its TLS backend (HTTPS) from GIO_MODULE_DIR, which main.rs sets.
+# GIO loads its TLS backend (HTTPS) at runtime from GIO_MODULE_DIR, which
+# main.rs sets, so the dumpbin walk below cannot see it.
 # Where gstsoup links libsoup directly the dumpbin walk below finds it anyway;
 # copy any libsoup DLL so a dlopen-ing build works too. Whether HTTPS really
 # works is decided by the smoke test's `slate --self-test --network`.

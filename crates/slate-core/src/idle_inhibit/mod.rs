@@ -6,6 +6,8 @@
 
 #[cfg(target_os = "linux")]
 mod dbus;
+#[cfg(windows)]
+mod windows;
 #[cfg(target_os = "linux")]
 mod x11;
 
@@ -43,6 +45,8 @@ pub struct IdleInhibitor {
     dbus: dbus::DbusInhibitor,
     #[cfg(target_os = "linux")]
     x11: Option<x11::X11Inhibitor>,
+    #[cfg(windows)]
+    win: windows::WinInhibitor,
 }
 
 impl IdleInhibitor {
@@ -53,6 +57,8 @@ impl IdleInhibitor {
             dbus: dbus::DbusInhibitor::new(),
             #[cfg(target_os = "linux")]
             x11: None,
+            #[cfg(windows)]
+            win: windows::WinInhibitor::new(),
         }
     }
 
@@ -60,13 +66,22 @@ impl IdleInhibitor {
     /// the detected display server — no short-circuit.
     #[cfg(not(target_os = "linux"))]
     pub async fn inhibit(&mut self) {
-        // No idle inhibition outside Linux yet.
+        if self.active {
+            return;
+        }
         self.active = true;
+        #[cfg(windows)]
+        self.win.set(true);
     }
 
     #[cfg(not(target_os = "linux"))]
     pub async fn uninhibit(&mut self) {
+        if !self.active {
+            return;
+        }
         self.active = false;
+        #[cfg(windows)]
+        self.win.set(false);
     }
 
     #[cfg(target_os = "linux")]

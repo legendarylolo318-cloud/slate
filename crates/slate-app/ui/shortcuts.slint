@@ -1,0 +1,61 @@
+import { Theme } from "theme.slint";
+import { IconButton } from "widgets.slint";
+
+export struct Shortcut {
+    keys: string,
+    action: string,
+}
+
+export global Shortcuts {
+    // Every key bound in app.slint's FocusScope; `shortcut_overlay_lists_every_bound_key`
+    // (src/main.rs tests) fails if one is missing here.
+    out property <[Shortcut]> list: [
+        { keys: "Space", action: "Play / pause" },
+        { keys: "← / →", action: "Seek back / forward 5 s" },
+        { keys: "Ctrl + ← / →", action: "Previous / next track" },
+        { keys: "M", action: "Mute" },
+        { keys: "S", action: "Shuffle" },
+        { keys: "R", action: "Repeat (off, all, one)" },
+        { keys: "Q", action: "Queue panel" },
+        { keys: "L", action: "Lyrics panel" },
+        { keys: "F", action: "Full-screen player" },
+        { keys: "Esc", action: "Leave full screen / close this sheet" },
+        { keys: "/", action: "Search" },
+        { keys: "?", action: "Show these shortcuts" },
+    ];
+}
+
+export component ShortcutOverlay inherits Rectangle {
+    callback close();
+    background: #000000a0;
+    TouchArea { clicked => { root.close(); } }
+    Rectangle {
+        width: min(460px, parent.width - 32px);
+        height: min(520px, parent.height - 48px);
+        border-radius: 12px;
+        background: Theme.surface;
+        TouchArea { }
+        VerticalLayout {
+            padding: 20px;
+            spacing: 4px;
+            HorizontalLayout {
+                padding-bottom: 8px;
+                Text { text: "Keyboard shortcuts"; font-size: 18px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; }
+                IconButton { glyph: "✕"; side: 28px; clicked => { root.close(); } }
+            }
+            Flickable {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 2px;
+                    for s in Shortcuts.list: HorizontalLayout {
+                        height: 30px;
+                        spacing: 16px;
+                        Text { text: s.keys; width: 130px; color: Theme.text; font-weight: 600; vertical-alignment: center; }
+                        Text { text: s.action; color: Theme.text-muted; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    }
+                }
+            }
+            Text { text: "Shortcuts work whenever no text field has focus."; color: Theme.text-muted; font-size: 12px; }
+        }
+    }
+}

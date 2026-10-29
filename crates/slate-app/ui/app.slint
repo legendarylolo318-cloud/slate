@@ -9,6 +9,7 @@ import { VideoView } from "video.slint";
 import { SettingsPage, SettingsState } from "settings.slint";
 import { ProfilePage, ProfileState } from "profile.slint";
 import { IconButton, TextField, Button } from "widgets.slint";
+import { ShortcutOverlay } from "shortcuts.slint";
 import { ListView } from "std-widgets.slint";
 import { TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile, KeyValue } from "types.slint";
 export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile, KeyValue, SettingsState, ProfileState, Theme }
@@ -162,6 +163,7 @@ export component AppWindow inherits Window {
     callback seek(float);
     callback set-volume(float);
     callback seek-relative(float);
+    in-out property <bool> shortcuts-open;
 
     // Global shortcuts (ignored while a text field has focus, since fields consume keys).
     fs := FocusScope {
@@ -171,6 +173,8 @@ export component AppWindow inherits Window {
             if (e.modifiers.control && e.text == Key.LeftArrow) { root.previous(); return accept; }
             if (e.text == Key.RightArrow) { root.seek-relative(5); return accept; }
             if (e.text == Key.LeftArrow) { root.seek-relative(-5); return accept; }
+            if (e.text == "?") { root.shortcuts-open = !root.shortcuts-open; return accept; }
+            if (e.text == Key.Escape && root.shortcuts-open) { root.shortcuts-open = false; return accept; }
             if (e.text == Key.Escape && root.fullscreen) { root.fullscreen = false; return accept; }
             if (e.text == "f") { root.fullscreen = !root.fullscreen; return accept; }
             if (e.text == "m") { root.toggle-mute(); return accept; }
@@ -565,6 +569,10 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+        }
+    
+        if root.shortcuts-open: ShortcutOverlay {
+            close => { root.shortcuts-open = false; }
         }
     }
 }

@@ -399,3 +399,38 @@ mod tests {
         assert_eq!(gst_plugin_path_choice(None, None, None, &[]), None);
     }
 }
+
+#[cfg(test)]
+mod shortcut_overlay_tests {
+    /// Every key the window's FocusScope handles must appear in the overlay.
+    #[test]
+    fn shortcut_overlay_lists_every_bound_key() {
+        let app = include_str!("../ui/app.slint");
+        let overlay = include_str!("../ui/shortcuts.slint");
+        let start = app.find("key-pressed(e)").unwrap();
+        let handler = &app[start..start + app[start..].find("reject").unwrap()];
+        let label = |key: &str| -> String {
+            match key {
+                " " => "Space".into(),
+                "Key.RightArrow" | "Key.LeftArrow" => "←".into(),
+                "Key.Escape" => "Esc".into(),
+                k => k.to_uppercase(),
+            }
+        };
+        let mut checked = 0;
+        for part in handler.split("e.text == ").skip(1) {
+            let key = if let Some(rest) = part.strip_prefix('"') {
+                &rest[..rest.find('"').unwrap()]
+            } else {
+                &part[..part.find([')', ' ']).unwrap()]
+            };
+            let want = format!("keys: \"{}", label(key));
+            let found = overlay.contains(&want)
+                || overlay.contains(&format!("{} / ", label(key)))
+                || overlay.contains(&format!("+ {}", label(key)));
+            assert!(found, "key {key:?} is bound but not in shortcuts.slint");
+            checked += 1;
+        }
+        assert!(checked >= 12, "parsed only {checked} bindings");
+    }
+}

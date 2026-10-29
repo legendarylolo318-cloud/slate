@@ -56,3 +56,6 @@ wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 tempfile = "3"
 proptest = "1"
 wiremock = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Power"] }
