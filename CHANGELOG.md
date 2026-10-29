@@ -2,33 +2,42 @@
 
 ## [0.1.0] - 2026-10-28
 
-First release of Slate, a Rust + Slint port of SONE.
+First release of Slate: a native TIDAL client written in Rust with a Slint UI, ported
+from [SONE](https://github.com/lullabyX/sone) by lullabyX. No webview, about half the
+memory of the original.
 
-### Renamed
-- Project renamed from SONE to Slate (crates, binary, config dir, identifiers). Update checker disabled until Slate has its own release feed.
+### Listening
+- Lossless and Hi-Res streaming with a quality cap and automatic fallback; gapless playback
+  (GStreamer 1.24+); ReplayGain; autoplay radio when the queue ends.
+- Exclusive and bit-perfect output: direct ALSA with DAC format/rate matching on Linux,
+  WASAPI exclusive on Windows. Signal Path panel shows what touches the audio.
+- Synced lyrics, full-screen player, mini player, music videos (can shrink into the player
+  bar), queue with shuffle/repeat/history that survives restarts.
 
-### Added
-- Gapless playback, scrobble/play-report submission, single-instance with `tidal://` deep links, profile page.
-- Slint UI: login (QR), library, search, home, album/artist/playlist/mix pages, queue and lyrics panels,
-  full-screen player, mini-player, settings, 15 themes with a colour picker, signal-path panel, music video.
-- Playlist and folder management, favourites, add-to-playlist.
-- Core: `theme` (presets + derivation), `lyrics` (LRC), `signal_path::verdict`, `startup` tasks.
-- Queue model (manual + context queues, shuffle with order restore, repeat, history, autoplay, snapshot persistence) and playback controller in `slate-core`.
-- MPRIS server and StatusNotifier tray (Linux); previous/next/shuffle/repeat in the player bar.
+### Library
+- Home, Explore (genres, moods, new releases), search, albums, artists, mixes, playlists
+  and folders; Loved Tracks and Loved Videos; sorting on every library list.
+- Playlist and folder management, favourites, add to playlist, share links, profile editing.
+- `tidal://` and tidal.com links open in the running Slate.
 
-### Changed
-- Cargo workspace: `crates/slate-core` (UI-free logic, extracted from `src-tauri`) and
-  `crates/slate-app` (Slint application).
-- Tauri `AppHandle` replaced by `slate_core::AppHandle` / `EventSink`; Tauri commands are
-  plain functions over `&AppState`.
-- OS media controls abstracted behind `slate_core::media::MediaSink`.
-- `cargo fmt` and `cargo clippy --all-targets -- -D warnings` clean.
+### Desktop
+- Linux: MPRIS media controls, tray, sleep prevention. Windows: media keys and the volume
+  flyout (SMTC), tray, sleep prevention, installer with Start Menu entry and `tidal://` handler.
+- Optional global shortcuts (Ctrl+Alt+Space / → / ←), keyboard shortcut sheet (`?`),
+  15 themes with a colour picker, interface scale.
+- Scrobbling (Last.fm, Libre.fm, ListenBrainz), TIDAL play reporting, Discord Rich Presence.
+- HTTP/HTTPS/SOCKS5 proxy that fails closed; MCP server and OBS overlay (both local-only,
+  off by default).
+- Renderer falls back automatically from Vulkan to OpenGL to software when a GPU driver is
+  missing or broken, and remembers what worked.
 
-### Removed
-- Tauri shell, webview-bound code (PKCE login window, WebKit proxy-auth, tray, MPRIS thread,
-  Wayland idle-inhibit surface). Each is tracked in PORTING_PLAN.md for reimplementation.
+### Security and privacy
+- Settings encrypted with AES-256-GCM, key in the OS keyring (Windows Credential Manager,
+  Secret Service on Linux); config files owner-only.
+- Local servers bind to 127.0.0.1, reject foreign `Host` headers (DNS rebinding), and the
+  overlay page runs under a strict content security policy.
+- Single-instance socket private to the user on both platforms; no tokens or proxy
+  passwords in logs.
 
-Upstream history prior to the port: see https://github.com/lullabyX/sone/releases.
-
-### Removed
-- The React/TypeScript frontend and all JS tooling (reference: upstream commit a34fd6f).
+Known: Windows builds are unsigned. Upstream history before the port:
+https://github.com/lullabyX/sone/releases.
