@@ -22,3 +22,11 @@ Audio bit-perfect caps, renderer fallback, memory/CPU measurement, packaging (Ap
 
 ## UI bug found while taking screenshots
 | 7 | Medium | A failed page load (e.g. a 404 album) left its red error banner up on every later page, even healthy ones, until restart | The banner is cleared whenever the user navigates (`pages.rs`, `render`) |
+
+## Memory and CPU (measured 2026-10-29, Linux/Wayland, logged in, Home page idle, ~1 min after start)
+| App | Proportional (PSS) | Resident (RSS) sum | CPU idle |
+|---|---|---|---|
+| Original SONE 0.22.1 (Tauri + WebKit: main + web + network processes) | ~343 MB | ~609 MB | ~1.5–2.6 % |
+| Slate | ~175 MB | ~243 MB | ~2 % |
+
+Slate uses about half the memory of the original. Its decoded-image cache is capped at 96 MiB. Not yet measured: a 5,000-track playlist and long sessions.
