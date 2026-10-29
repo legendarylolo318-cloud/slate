@@ -639,8 +639,9 @@ mod tests {
         // Name the failure, not just its existence: without reqwest's `socks`
         // feature `Proxy::all` still errors here, with "unknown proxy scheme",
         // and this test would stay green while real SOCKS5 support was gone.
+        // glibc/musl wording, and Windows' WSAHOST_NOT_FOUND.
         assert!(
-            err.cause.contains("failed to lookup address"),
+            err.cause.contains("failed to lookup address") || err.cause.contains("os error 11001"),
             "expected an eager resolution failure, got: {}",
             err.cause
         );

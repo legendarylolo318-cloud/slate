@@ -23,7 +23,8 @@ jobs:
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
             gstreamer1.0-libav gstreamer1.0-alsa gstreamer1.0-pulseaudio gstreamer1.0-pipewire \
             libasound2-dev libdbus-1-dev libssl-dev libfontconfig1-dev \
-            libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libvulkan-dev
+            libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libvulkan-dev \
+            libsoup-3.0-0 glib-networking
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p slate
@@ -40,12 +41,17 @@ jobs:
           install -Dm644 assets/icons/128x128.png AppDir/usr/share/icons/hicolor/128x128/apps/slate.png
           install -Dm644 data/io.github.legendarylolo318_cloud.slate.metainfo.xml AppDir/usr/share/metainfo/io.github.legendarylolo318_cloud.slate.metainfo.xml
           install -Dm755 packaging/appimage/gst-registry-hook.sh AppDir/apprun-hooks/gst-registry-hook.sh
+          # Loaded at runtime, so linuxdeploy cannot see them: libsoup (dlopened by
+          # gstsoup) and GIO's TLS module (HTTPS for souphttpsrc).
+          install -Dm644 /usr/lib/x86_64-linux-gnu/gio/modules/libgiognutls.so AppDir/usr/lib/gio/modules/libgiognutls.so
           # Host GPU stack stays on the host; never bundle it.
           printf '%s\n' libvulkan.so.1 libGL.so.1 libEGL.so.1 libGLX.so.0 libGLdispatch.so.0 libdrm.so.2 libgbm.so.1 > excludelist.txt
           export EXTRA_PLATFORM_PLUGINS=""
           for l in $(cat excludelist.txt); do export LINUXDEPLOY_EXCLUDE="$LINUXDEPLOY_EXCLUDE $l"; done
           ./linuxdeploy --appdir AppDir --plugin gstreamer \
             --executable target/release/slate \
+            --library /usr/lib/x86_64-linux-gnu/libsoup-3.0.so.0 \
+            --deploy-deps-only AppDir/usr/lib/gio/modules \
             --desktop-file data/slate.desktop \
             --icon-file assets/icons/128x128.png --icon-filename slate \
             --exclude-library 'libvulkan*' --exclude-library 'libGL.so*' --exclude-library 'libEGL*' \
@@ -53,11 +59,23 @@ jobs:
             --output appimage
           mkdir -p dist
           mv Slate*.AppImage "dist/slate-$VERSION-x86_64.AppImage" 2>/dev/null || mv *.AppImage "dist/slate-$VERSION-x86_64.AppImage"
-      - name: Check no GPU libs were bundled
+      - name: Check no GPU libs were bundled, MimeType present
         run: |
           chmod +x dist/*.AppImage
           dist/*.AppImage --appimage-extract >/dev/null
-          ! find squashfs-root -name 'libvulkan*' -o -name 'libEGL*' -o -name 'libGL.so*' | grep .
+          ! find squashfs-root \( -name 'libvulkan*' -o -name 'libEGL*' -o -name 'libGL.so*' -o -name 'libGLX*' \) | grep .
+          grep -q '^MimeType=.*x-scheme-handler/tidal' squashfs-root/*.desktop
+      - name: Self-test AppImage (bundled GStreamer plugins, HTTPS)
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          # Only what the bundle carries: hide the runner's GStreamer plugins,
+          # GIO modules and libsoup.
+          L=/usr/lib/x86_64-linux-gnu
+          sudo mv $L/gstreamer-1.0 $L/gstreamer-1.0.hidden
+          sudo mv $L/gio/modules $L/gio/modules.hidden
+          for f in $L/libsoup-3.0.so* $L/libsoup-2.4.so*; do [ -e "$f" ] && sudo mv "$f" "$f.hidden"; done
+          dist/slate-$VERSION-x86_64.AppImage --self-test --network
       - uses: actions/upload-artifact@v4
         with: { name: appimage, path: dist/*.AppImage }
 
@@ -96,13 +114,26 @@ jobs:
           Compress-Archive -Path dist/slate-win/* -DestinationPath "dist/slate-$env:VERSION-windows-x86_64-portable.zip"
           $env:SLATE_VERSION = $env:VERSION
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging/windows/slate.iss
-      - name: Smoke test portable build
+      - name: Smoke test portable build (clean PATH)
         shell: pwsh
         run: |
-          $p = Start-Process dist/slate-win/slate.exe -PassThru
-          Start-Sleep 8
-          if ($p.HasExited) { throw "slate.exe exited early with code $($p.ExitCode)" }
-          Stop-Process $p
+          # Hide the build machine's GStreamer so a DLL missing from the bundle fails here.
+          $env:PATH = "$env:SystemRoot\system32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
+          Remove-Item Env:GSTREAMER_1_0_ROOT_MSVC_X86_64, Env:PKG_CONFIG_PATH -ErrorAction SilentlyContinue
+          Rename-Item C:\gstreamer C:\gstreamer.hidden
+          try {
+            $p = Start-Process dist/slate-win/slate.exe -ArgumentList "--self-test","--network" -PassThru -Wait -NoNewWindow `
+              -RedirectStandardOutput selftest.txt -RedirectStandardError selftest-err.txt
+            Get-Content selftest.txt, selftest-err.txt
+            # 0xC0000135 = STATUS_DLL_NOT_FOUND
+            if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
+            $p = Start-Process dist/slate-win/slate.exe -PassThru
+            Start-Sleep 8
+            if ($p.HasExited) { throw "slate.exe exited early with code $($p.ExitCode)" }
+            Stop-Process $p
+          } finally {
+            Rename-Item C:\gstreamer.hidden C:\gstreamer
+          }
       - name: Smoke test installer (install, run, uninstall)
         shell: pwsh
         run: |
@@ -119,21 +150,21 @@ jobs:
             dist/*.zip
             dist/*-setup.exe
 
-  publish:
-    if: startsWith(github.ref, 'refs/tags/v')
+  bundle:
     needs: [appimage, windows]
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { path: artifacts, merge-multiple: true }
       - name: Source tarball, checksums, notes
         run: |
-          TAG="${GITHUB_REF_NAME}"; V="${TAG#v}"
+          V="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$V" ]]; then
+            echo "tag $GITHUB_REF_NAME does not match Cargo version $V"; exit 1
+          fi
           git archive --format=tar.gz --prefix="slate-$V/" -o "artifacts/slate-$V-source.tar.gz" HEAD
-          (cd artifacts && sha256sum * > SHA256SUMS.txt)
+          (cd artifacts && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
           awk -v v="$V" '$0 ~ "^## \\[?"v"\\]?" {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
           cat >> notes.md <<'NOTES'
 
@@ -141,6 +172,26 @@ jobs:
           **Linux:** `chmod +x` the AppImage and run it. Needs a working Vulkan or OpenGL driver; falls back to software rendering.
           Slate is not affiliated with TIDAL. Port of [lullabyX/sone](https://github.com/lullabyX/sone), GPL-3.0-only.
           NOTES
+          test -s notes.md
+          ls -l artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            artifacts/*
+            notes.md
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [bundle]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: release, path: release }
       - name: Create release
         env: { GH_TOKEN: "${{ github.token }}" }
-        run: gh release create "$GITHUB_REF_NAME" artifacts/* --title "Slate $GITHUB_REF_NAME" --notes-file notes.md
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/artifacts/* --repo "$GITHUB_REPOSITORY" \
+            --title "Slate $GITHUB_REF_NAME" --notes-file release/notes.md

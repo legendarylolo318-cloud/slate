@@ -4405,6 +4405,9 @@ mod proxy_source_tests {
         );
     }
 
+    // GStreamer's Windows packages ship no curl plugin; there the souphttpsrc
+    // proxy properties carry credentials (tested above).
+    #[cfg(not(windows))]
     #[test]
     fn the_curl_source_receives_the_uri_byte_exact() {
         let Some(src) = make("curlhttpsrc") else {
@@ -4437,6 +4440,9 @@ mod proxy_source_tests {
             .is_empty());
     }
 
+    // GStreamer's Windows packages ship no curl plugin; there the souphttpsrc
+    // proxy properties carry credentials (tested above).
+    #[cfg(not(windows))]
     #[test]
     fn the_curl_source_gets_a_bounded_timeout_and_retry_count() {
         let Some(src) = make("curlhttpsrc") else {
@@ -4471,6 +4477,9 @@ mod proxy_source_tests {
         );
     }
 
+    // GStreamer's Windows packages ship no curl plugin; there the souphttpsrc
+    // proxy properties carry credentials (tested above).
+    #[cfg(not(windows))]
     #[test]
     fn the_curl_source_is_promoted_only_while_credentials_are_in_use() {
         let _ = gst::init();

@@ -25,6 +25,7 @@ mod pkce;
 mod platform;
 mod profile;
 mod quality;
+mod selftest;
 mod settings;
 mod signal;
 mod themes;
@@ -38,6 +39,9 @@ fn main() -> anyhow::Result<()> {
     scrub_environment();
     #[cfg(windows)]
     point_gstreamer_at_bundle();
+    if std::env::args().any(|a| a == "--self-test") {
+        std::process::exit(selftest::run());
+    }
     apply_ui_scale();
 
     // First argument that is a link, if any (`tidal://…` from the OS handler).
@@ -61,21 +65,28 @@ fn main() -> anyhow::Result<()> {
 
 /// A bundled GStreamer lives next to the executable (`gst-plugins/`); use it
 /// exclusively so a system-wide install cannot mix in incompatible plugins.
+/// The scanner sits beside `slate.exe` so Windows finds the GStreamer DLLs it
+/// links against; GIO's TLS module (HTTPS for souphttpsrc) is in `gio/modules`.
 #[cfg(windows)]
 fn point_gstreamer_at_bundle() {
-    let Some(dir) = std::env::current_exe()
+    let Some(base) = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|p| p.join("gst-plugins")))
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
     else {
         return;
     };
-    if dir.is_dir() {
-        std::env::set_var("GST_PLUGIN_PATH", &dir);
-        std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &dir);
-        std::env::set_var("GST_PLUGIN_SCANNER", dir.join("gst-plugin-scanner.exe"));
+    let plugins = base.join("gst-plugins");
+    if plugins.is_dir() {
+        std::env::set_var("GST_PLUGIN_PATH", &plugins);
+        std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &plugins);
+        std::env::set_var("GST_PLUGIN_SCANNER", base.join("gst-plugin-scanner.exe"));
         if let Some(cache) = dirs_cache() {
             std::env::set_var("GST_REGISTRY", cache);
         }
+    }
+    let gio = base.join("gio").join("modules");
+    if gio.is_dir() {
+        std::env::set_var("GIO_MODULE_DIR", gio);
     }
 }
 
