@@ -33,6 +33,8 @@ pub enum Route {
     Artist(u64),
     Mix(String),
     Search(String),
+    /// A TIDAL editorial page (`pages/explore`, a genre, a mood…) and its title.
+    Page(String, String),
     Folder(String),
     Profile,
     Settings,
@@ -48,6 +50,7 @@ impl Route {
             "mixes" => Self::Mixes,
             "loved" => Self::Loved,
             "loved-videos" => Self::LovedVideos,
+            "explore" => Self::Page("pages/explore".into(), "Explore".into()),
             "settings" => Self::Settings,
             "profile" => Self::Profile,
             _ => return None,
@@ -222,9 +225,60 @@ fn track_card(t: &Track) -> CardData {
 }
 
 /// Best-effort card from an untyped home-feed item. Unknown shapes are skipped.
+/// Sections of an editorial page as card rows. A section with more behind it
+/// ends in a "See all" card that opens its own page.
+fn editorial_sections(sections: &[slate_core::tidal_api::HomePageSection]) -> Vec<SectionData> {
+    sections
+        .iter()
+        .filter_map(|s| {
+            let mut cards: Vec<CardData> = s
+                .items
+                .as_array()?
+                .iter()
+                .filter_map(card_from_value)
+                .collect();
+            if cards.is_empty() {
+                return None;
+            }
+            if let Some(path) = s.api_path.as_deref().filter(|_| s.has_more) {
+                let title = if s.title.is_empty() {
+                    "More"
+                } else {
+                    s.title.as_str()
+                };
+                cards.push(page_card(path, "See all", title));
+            }
+            // Genre and mood links read better as a wrapped grid.
+            let links = s.section_type.starts_with("PAGE_LINKS");
+            Some(SectionData {
+                title: s.title.clone(),
+                wrap: links,
+                cards,
+            })
+        })
+        .collect()
+}
+
+/// A link to another page. The card id carries the path and the page title.
+fn page_card(path: &str, label: &str, page_title: &str) -> CardData {
+    CardData {
+        kind: "page",
+        id: format!("{path}|{page_title}"),
+        title: label.to_string(),
+        subtitle: String::new(),
+        image: None,
+    }
+}
+
 pub fn card_from_value(v: &Value) -> Option<CardData> {
     let s = |k: &str| v.get(k).and_then(Value::as_str);
     let img = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
+    // Explore's genre / mood links: a title and a page path, no id.
+    if let (Some(path), Some(title), None) = (s("apiPath"), s("title"), v.get("id")) {
+        let mut card = page_card(path, title, title);
+        card.image = img("imageId");
+        return Some(card);
+    }
     if let Some(uuid) = s("uuid") {
         return Some(CardData {
             kind: "playlist",
@@ -286,6 +340,23 @@ pub fn card_from_value(v: &Value) -> Option<CardData> {
             image: img("picture"),
         });
     }
+    // Music video: a duration and a still, but no album.
+    if v.get("duration").is_some() && v.get("imageId").is_some() {
+        let by = v
+            .get("artists")
+            .and_then(|a| a.get(0))
+            .or_else(|| v.get("artist"))
+            .and_then(|a| a.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        return Some(CardData {
+            kind: "video",
+            id: id.to_string(),
+            title: s("title")?.to_string(),
+            subtitle: by.to_string(),
+            image: img("imageId"),
+        });
+    }
     None
 }
 
@@ -344,6 +415,7 @@ impl Backend {
             Route::Albums => self.show_library_albums(),
             Route::Artists => self.show_library_artists(),
             Route::Mixes => self.show_library_mixes(),
+            Route::Page(path, title) => self.show_editorial_page(path, title),
             Route::Search(q) => self.show_search(q),
             Route::Folder(id) => self.show_folder(id),
             Route::Artist(id) => self.show_artist(id),
@@ -407,6 +479,10 @@ impl Backend {
     /// A card was clicked.
     pub fn open_card(&self, kind: &str, id: &str) {
         match kind {
+            "page" => {
+                let (path, title) = id.split_once('|').unwrap_or((id, "Explore"));
+                self.navigate(Route::Page(path.to_string(), title.to_string()));
+            }
             "album" => {
                 if let Ok(n) = id.parse() {
                     self.navigate(Route::Album(n));
@@ -657,6 +733,25 @@ impl Backend {
     }
 
     /// Loved → Videos: favourite music videos as a grid; a card plays it.
+    /// An editorial page: its sections as card rows. Genre/mood links and
+    /// "See all" open further pages.
+    pub(crate) fn show_editorial_page(&self, path: String, title: String) {
+        let generation = self.begin_cards(&title);
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let Some(state) = this.state() else { return };
+            match pages::get_page_section(&state, this.app.clone(), path).await {
+                Ok(page) => {
+                    let sections = editorial_sections(&page.sections);
+                    if this.lib.cards_generation() == generation {
+                        this.show_cards(title, String::new(), sections, None);
+                    }
+                }
+                Err(e) => this.fail_cards(format!("Could not load {title}: {}", e.log_safe())),
+            }
+        });
+    }
+
     pub(crate) fn show_loved_videos(&self) {
         let generation = self.begin_cards("Loved Videos");
         self.show_loved_tabs(Some(1));
@@ -1134,5 +1229,55 @@ mod tests {
         let artist = card_from_value(&json!({"id":7,"name":"N","picture":"p-q"}));
         assert_eq!(artist.map(|c| c.kind), Some("artist"));
         assert!(card_from_value(&json!({"foo":1})).is_none());
+    }
+}
+
+#[cfg(test)]
+mod editorial_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn page_links_become_page_cards_carrying_path_and_title() {
+        let c = card_from_value(
+            &json!({ "title": "Pop", "apiPath": "pages/genre_pop", "imageId": "a-b" }),
+        )
+        .expect("a page link");
+        assert_eq!(
+            (c.kind, c.id.as_str(), c.title.as_str()),
+            ("page", "pages/genre_pop|Pop", "Pop")
+        );
+        assert_eq!(c.image.as_deref(), Some("a-b"));
+        // Anything with an id is still content, not a link.
+        let album =
+            card_from_value(&json!({ "id": 7, "title": "A", "numberOfTracks": 3, "apiPath": "x" }));
+        assert_eq!(album.map(|c| c.kind), Some("album"));
+        let video = card_from_value(&json!({ "id": 9, "title": "V", "duration": 200, "imageId": "i-d", "artists": [{ "name": "X" }] }))
+            .expect("a video");
+        assert_eq!((video.kind, video.subtitle.as_str()), ("video", "X"));
+    }
+
+    #[test]
+    fn sections_with_more_end_in_a_see_all_card() {
+        let section = |has_more: bool, kind: &str| slate_core::tidal_api::HomePageSection {
+            title: "New Albums".into(),
+            section_type: kind.into(),
+            items: json!([{ "id": 1, "title": "A", "numberOfTracks": 1 }]),
+            has_more,
+            api_path: Some("pages/new_albums".into()),
+            header: None,
+        };
+        let out = editorial_sections(&[
+            section(true, "ALBUM_LIST"),
+            section(false, "PAGE_LINKS_CLOUD"),
+        ]);
+        assert_eq!(out.len(), 2);
+        let last = out[0].cards.last().expect("cards");
+        assert_eq!(
+            (last.title.as_str(), last.id.as_str()),
+            ("See all", "pages/new_albums|New Albums")
+        );
+        assert_eq!(out[1].cards.len(), 1);
+        assert!(out[1].wrap && !out[0].wrap);
     }
 }
