@@ -65,7 +65,8 @@ impl EventSink for UiSink {
                     .get("kind")
                     .and_then(|k| k.as_str())
                     .unwrap_or("unknown");
-                let msg = format!("Audio error: {kind}");
+                let detail = payload.get("message").and_then(|m| m.as_str());
+                let msg = audio_error_text(kind, detail);
                 self.shared.playing.store(false, Ordering::Relaxed);
                 let _ = self.ui.upgrade_in_event_loop(move |w| {
                     w.set_error(msg.into());
@@ -972,5 +973,65 @@ impl Backend {
                 let _ = playback::stop_track(&state).await;
             }
         });
+    }
+}
+
+/// What the user reads for an `audio-error` event.
+fn audio_error_text(kind: &str, detail: Option<&str>) -> String {
+    let detail = detail.map(str::trim).filter(|d| !d.is_empty());
+    match kind {
+        "device_busy" => "The audio device is in use by another application. Close it, or turn \
+                          off exclusive mode."
+            .into(),
+        "format_unsupported" => "The audio device does not accept this stream as it is. Turn off \
+                                 bit-perfect mode to let Slate convert it."
+            .into(),
+        // The core's message here is already written for people.
+        "format_change_failed" => detail
+            .unwrap_or("The audio device could not switch to this track's format.")
+            .into(),
+        "device_disconnected" => "The audio device was disconnected.".into(),
+        "device_changed" => "The audio device changed; playback stopped.".into(),
+        _ => match detail {
+            Some(d) => format!("Playback failed: {d}"),
+            None => "Playback failed.".into(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod audio_error_tests {
+    use super::audio_error_text;
+
+    #[test]
+    fn every_kind_reads_as_a_sentence() {
+        assert!(audio_error_text("device_busy", Some("EBUSY"))
+            .contains("in use by another application"));
+        assert!(audio_error_text("format_unsupported", None).contains("bit-perfect"));
+        assert_eq!(
+            audio_error_text(
+                "format_change_failed",
+                Some("DAC doesn't support 352.8kHz — turn off bit-perfect mode for compatibility")
+            ),
+            "DAC doesn't support 352.8kHz — turn off bit-perfect mode for compatibility"
+        );
+        assert_eq!(
+            audio_error_text("playback_error", Some("Could not read")),
+            "Playback failed: Could not read"
+        );
+        assert_eq!(audio_error_text("something_new", None), "Playback failed.");
+        for k in [
+            "device_busy",
+            "format_unsupported",
+            "format_change_failed",
+            "device_disconnected",
+            "device_changed",
+            "playback_error",
+        ] {
+            assert!(
+                !audio_error_text(k, None).contains('_'),
+                "{k} leaks its identifier"
+            );
+        }
     }
 }

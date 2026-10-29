@@ -34,6 +34,7 @@ export global SettingsState {
     in-out property <bool> exclusive;
     in-out property <bool> bit-perfect;
     in-out property <bool> show-alsa-options: true;
+    in-out property <string> exclusive-hint: "Take over the audio device (ALSA).";
     in-out property <[string]> devices;
     in-out property <int> device-index;
     // Scrobbling
@@ -250,7 +251,7 @@ export component SettingsPage inherits Rectangle {
                     }
                     if SettingsState.show-alsa-options: Row {
                         label: "Exclusive mode";
-                        hint: "Take over the audio device (ALSA).";
+                        hint: SettingsState.exclusive-hint;
                         Toggle { checked: SettingsState.exclusive; toggled(v) => { SettingsState.exclusive = v; SettingsState.changed-bool("exclusive", v); } }
                     }
                     if SettingsState.show-alsa-options: Row {

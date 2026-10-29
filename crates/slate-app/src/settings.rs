@@ -59,7 +59,7 @@ async fn snapshot(state: &Arc<AppState>) -> Snapshot {
         .iter()
         .position(|q| *q == quality)
         .map_or(0, |i| i as i32);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     if let Ok(devs) = utility::list_audio_devices(state) {
         let current = utility::get_exclusive_device(state);
         s.device_index = devs
@@ -94,7 +94,12 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_quality_index(s.quality_index);
     g.set_exclusive(s.exclusive);
     g.set_bit_perfect(s.bit_perfect);
-    g.set_show_alsa_options(cfg!(target_os = "linux"));
+    g.set_show_alsa_options(cfg!(any(target_os = "linux", windows)));
+    g.set_exclusive_hint(if cfg!(windows) {
+        "Take over the audio device (WASAPI exclusive).".into()
+    } else {
+        "Take over the audio device (ALSA).".into()
+    });
     let names: Vec<SharedString> = s.devices.into_iter().map(Into::into).collect();
     g.set_devices(ModelRc::new(VecModel::from(names)));
     g.set_device_index(s.device_index);

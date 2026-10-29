@@ -179,6 +179,21 @@ fn ca_bundle_override(exists: impl Fn(&str) -> bool) -> Option<&'static str> {
     CA_BUNDLES.into_iter().find(|p| exists(p))
 }
 
+/// The `audio-error` kind for a pipeline error. `device_busy`: another
+/// program holds the device (ALSA `EBUSY`, WASAPI `AUDCLNT_E_DEVICE_IN_USE`,
+/// 0x8889000A). `format_unsupported`: the sink refused every format on offer,
+/// which in bit-perfect mode means the device cannot take the source as is.
+fn classify_output_error(message: &str, debug: &str) -> &'static str {
+    let any = |needle: &str| message.contains(needle) || debug.contains(needle);
+    if any("busy") || any("EBUSY") || any("DEVICE_IN_USE") || any("8889000a") || any("8889000A") {
+        "device_busy"
+    } else if any("not-negotiated") || any("not negotiated") {
+        "format_unsupported"
+    } else {
+        "playback_error"
+    }
+}
+
 /// Point a souphttpsrc at the distribution's CA bundle when GnuTLS's built-in
 /// path is missing (see [`ca_bundle_override`]). Public for `slate --self-test`.
 ///
@@ -2124,6 +2139,9 @@ impl AudioPlayer {
                             *output_cell_thread.lock_safe() = None;
                             signal_path.reset_for_track();
                             if exclusive || bit_perfect {
+                                #[cfg(windows)]
+                                signal_path.set_backend("WASAPI exclusive", device.clone());
+                                #[cfg(not(windows))]
                                 signal_path.set_backend("DirectAlsa", device.clone());
                             } else {
                                 signal_path.set_backend("Normal", None);
@@ -2160,7 +2178,10 @@ impl AudioPlayer {
                             // build with the generation this route came from.
                             pipeline_route_generation = route_generation.load(Ordering::Acquire);
 
-                            if exclusive || bit_perfect {
+                            // Windows does exclusive / bit-perfect inside the normal
+                            // pipeline (WASAPI exclusive sink); only Linux has the
+                            // direct ALSA writer.
+                            if (exclusive || bit_perfect) && cfg!(target_os = "linux") {
                                 // ── DirectAlsa path ──
                                 #[cfg(not(target_os = "linux"))]
                                 return Err("Exclusive/bit-perfect mode requires Linux".into());
@@ -2402,33 +2423,51 @@ impl AudioPlayer {
                                     .property("volume", slider_to_amplitude(current_volume))
                                     .build()
                                     .map_err(|e| format!("Failed to create user volume: {e}"))?;
-                                let sink = gst::ElementFactory::make("autoaudiosink")
-                                    .build()
-                                    .map_err(|e| format!("Failed to create autoaudiosink: {e}"))?;
+                                // Windows exclusive: WASAPI in exclusive mode on the chosen
+                                // device. Bit-perfect also drops the resampler and both
+                                // volume stages, so the device gets the decoded stream
+                                // (audioconvert only repacks when the container differs).
+                                let wasapi_exclusive = cfg!(windows) && (exclusive || bit_perfect);
+                                let untouched = wasapi_exclusive && bit_perfect;
+                                let sink = if wasapi_exclusive {
+                                    let mut b = gst::ElementFactory::make("wasapi2sink")
+                                        .property("exclusive", true);
+                                    if let Some(id) = device.as_deref() {
+                                        b = b.property("device", id);
+                                    }
+                                    b.build()
+                                        .map_err(|e| format!("Failed to create wasapi2sink: {e}"))?
+                                } else {
+                                    gst::ElementFactory::make("autoaudiosink").build().map_err(
+                                        |e| format!("Failed to create autoaudiosink: {e}"),
+                                    )?
+                                };
+                                if untouched {
+                                    audioconvert.set_property_from_str("dithering", "none");
+                                    audioconvert.set_property_from_str("noise-shaping", "none");
+                                }
+                                let chain: Vec<&gst::Element> = if untouched {
+                                    vec![&concat, &audioconvert, &sink]
+                                } else {
+                                    vec![
+                                        &concat,
+                                        &audioconvert,
+                                        &audioresample,
+                                        &norm_vol,
+                                        &user_vol,
+                                        &sink,
+                                    ]
+                                };
 
-                                pipe.add_many([
-                                    &uridecodebin,
-                                    &branch_queue,
-                                    &concat,
-                                    &audioconvert,
-                                    &audioresample,
-                                    &norm_vol,
-                                    &user_vol,
-                                    &sink,
-                                ])
-                                .map_err(|e| format!("Failed to add elements: {e}"))?;
+                                pipe.add_many([&uridecodebin, &branch_queue])
+                                    .map_err(|e| format!("Failed to add elements: {e}"))?;
+                                pipe.add_many(chain.iter().copied())
+                                    .map_err(|e| format!("Failed to add elements: {e}"))?;
                                 // Static chain: concat → audioconvert → … → sink.
                                 // (uridecodebin → branch_queue is dynamic via pad_added;
                                 // branch_queue.src → concat sink_0 is linked below.)
-                                gst::Element::link_many([
-                                    &concat,
-                                    &audioconvert,
-                                    &audioresample,
-                                    &norm_vol,
-                                    &user_vol,
-                                    &sink,
-                                ])
-                                .map_err(|e| format!("Failed to link chain: {e}"))?;
+                                gst::Element::link_many(chain.iter().copied())
+                                    .map_err(|e| format!("Failed to link chain: {e}"))?;
 
                                 // N2: connect notify::active-pad BEFORE requesting sink_0.
                                 // gstconcat fires `notify` synchronously inside
@@ -2704,15 +2743,9 @@ impl AudioPlayer {
 
                                                     eos_flag.store(true, Ordering::SeqCst);
                                                     if !tearing_down_flag.load(Ordering::SeqCst) {
-                                                        let is_busy = err_msg.contains("busy")
-                                                            || debug_str.contains("busy")
-                                                            || err_msg.contains("EBUSY")
-                                                            || debug_str.contains("EBUSY");
-                                                        let kind = if is_busy {
-                                                            "device_busy"
-                                                        } else {
-                                                            "playback_error"
-                                                        };
+                                                        let kind = classify_output_error(
+                                                            &err_msg, &debug_str,
+                                                        );
                                                         app_handle_clone.emit("audio-error",
                                                             serde_json::json!({ "kind": kind, "message": err_msg })
                                                         ).ok();
@@ -2734,8 +2767,9 @@ impl AudioPlayer {
                                 backend = Some(PlaybackBackend::Normal {
                                     pipeline: pipe,
                                     concat,
-                                    user_volume_el: Some(user_vol),
-                                    norm_volume_el: Some(norm_vol),
+                                    // Bit-perfect has no volume stages to drive.
+                                    user_volume_el: (!untouched).then_some(user_vol),
+                                    norm_volume_el: (!untouched).then_some(norm_vol),
                                 });
 
                                 // 2b-A3: this is the sink_0 branch — the currently
@@ -4299,6 +4333,17 @@ fn list_alsa_devices_inner() -> Result<Vec<AudioDevice>, String> {
         };
 
         let api = props.get::<String>("device.api").unwrap_or_default();
+        // Windows: WASAPI endpoints. `device.id` is what wasapi2sink's
+        // `device` property takes.
+        if cfg!(windows) && api == "wasapi2" {
+            if let Ok(id) = props.get::<String>("device.id") {
+                result.push(AudioDevice {
+                    id,
+                    name: dev.display_name().to_string(),
+                });
+            }
+            continue;
+        }
         if api != "alsa" {
             continue;
         }
@@ -4331,6 +4376,45 @@ pub fn gapless_supported() -> bool {
 
 #[cfg(test)]
 mod proxy_source_tests {
+    /// The Windows exclusive path sets these two properties; a GStreamer
+    /// without them would fail every exclusive playback.
+    #[cfg(windows)]
+    #[test]
+    fn wasapi2sink_has_the_exclusive_and_device_properties() {
+        let _ = gst::init();
+        let sink = gst::ElementFactory::make("wasapi2sink")
+            .build()
+            .expect("wasapi2sink ships with GStreamer for Windows");
+        assert!(sink.find_property("exclusive").is_some());
+        assert!(sink.find_property("device").is_some());
+    }
+
+    #[test]
+    fn output_errors_are_classified() {
+        assert_eq!(
+            classify_output_error("Device or resource busy", ""),
+            "device_busy"
+        );
+        assert_eq!(
+            classify_output_error(
+                "Failed to open device",
+                "hr: 0x8889000a, AUDCLNT_E_DEVICE_IN_USE"
+            ),
+            "device_busy"
+        );
+        assert_eq!(
+            classify_output_error(
+                "Internal data stream error.",
+                "streaming stopped, reason not-negotiated (-4)"
+            ),
+            "format_unsupported"
+        );
+        assert_eq!(
+            classify_output_error("Could not read", ""),
+            "playback_error"
+        );
+    }
+
     mod ca_bundle {
         use super::super::*;
 
