@@ -4314,38 +4314,37 @@ pub fn gapless_supported() -> bool {
 }
 
 #[cfg(test)]
-mod ca_bundle_tests {
-    use super::*;
-
-    #[test]
-    fn ubuntu_path_present_means_no_override() {
-        assert_eq!(ca_bundle_override(|_| true), None);
-    }
-
-    #[test]
-    fn fedora_and_opensuse_bundles_are_found() {
-        assert_eq!(
-            ca_bundle_override(|p| p == "/etc/pki/tls/certs/ca-bundle.crt"),
-            Some("/etc/pki/tls/certs/ca-bundle.crt")
-        );
-        assert_eq!(
-            ca_bundle_override(|p| p == "/etc/ssl/ca-bundle.pem"),
-            Some("/etc/ssl/ca-bundle.pem")
-        );
-        assert_eq!(ca_bundle_override(|_| false), None);
-    }
-
-    #[test]
-    fn soup_source_accepts_the_ca_file_property() {
-        let _ = gst::init();
-        let src = gst::ElementFactory::make("souphttpsrc").build().unwrap();
-        assert!(src.find_property("ssl-ca-file").is_some());
-        src.set_property("ssl-ca-file", "/etc/pki/tls/certs/ca-bundle.crt");
-    }
-}
-
-#[cfg(test)]
 mod proxy_source_tests {
+    mod ca_bundle {
+        use super::super::*;
+
+        #[test]
+        fn ubuntu_path_present_means_no_override() {
+            assert_eq!(ca_bundle_override(|_| true), None);
+        }
+
+        #[test]
+        fn fedora_and_opensuse_bundles_are_found() {
+            assert_eq!(
+                ca_bundle_override(|p| p == "/etc/pki/tls/certs/ca-bundle.crt"),
+                Some("/etc/pki/tls/certs/ca-bundle.crt")
+            );
+            assert_eq!(
+                ca_bundle_override(|p| p == "/etc/ssl/ca-bundle.pem"),
+                Some("/etc/ssl/ca-bundle.pem")
+            );
+            assert_eq!(ca_bundle_override(|_| false), None);
+        }
+
+        #[test]
+        fn soup_source_accepts_the_ca_file_property() {
+            let _ = gst::init();
+            let src = gst::ElementFactory::make("souphttpsrc").build().unwrap();
+            assert!(src.find_property("ssl-ca-file").is_some());
+            src.set_property("ssl-ca-file", "/etc/pki/tls/certs/ca-bundle.crt");
+        }
+    }
+
     use super::*;
     use crate::proxy::{BlockReason, Capability, HostCaps, Route};
 
