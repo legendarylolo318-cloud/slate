@@ -4,9 +4,9 @@ use discord_rich_presence::{activity, DiscordIpc};
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Discord shows the name of the application this id belongs to. It is still
-/// upstream SONE's until a Slate application is registered (issue #7).
-const APPLICATION_ID: &str = "1482171472167436308";
+/// Slate's Discord application; Discord shows its name ("Slate") in the
+/// presence.
+const APPLICATION_ID: &str = "1565205779366158388";
 
 /// Slate logo drawn as the small badge over the album art's corner, served
 /// from this repository rather than upstream's.

@@ -125,7 +125,7 @@ The working renderer is remembered after a fallback (#25), links reach the fallb
 | MCP server | Works (integration test) |
 | OBS overlay | Works (tests) |
 | Scrobbling, play reporting | Code; live submission unverified |
-| Discord presence | Works, but under SONE's app ID (#7) |
+| Discord presence | Works; Slate's own Discord application and badge icon (#7) |
 | Proxy (HTTP/HTTPS/SOCKS5, auth, fail-closed) | Code, 135 tests; not tested against a live proxy |
 | Auth: device code, PKCE browser, expiry, logout | Device code works (existing session); wiremock tests cover refresh/expiry; logout wipe tested |
 | Windows media controls (SMTC) | Code (#1, souvlaki on the window HWND); built in CI, not used on Windows |
@@ -137,4 +137,4 @@ CI builds, lints and tests pass, including Windows-only tests. The release dry r
 Live TIDAL testing was paused after the account was rate-limited. With it available again: Explore (#11), Loved Videos (#12), sorting (#14), video in the player bar (#15), rapid skipping and a long playback session for leak checks.
 
 ## Open issues
-#7 Discord Rich Presence still uses SONE's application ID: needs the maintainer to register a Slate application in the Discord developer portal; swapping the id is then one line in `discord.rs`.
+None.

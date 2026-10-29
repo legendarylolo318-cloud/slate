@@ -48,9 +48,7 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 
 - Gapless playback, single-instance with `tidal://` links, profile editing.
 
-Known gap: Discord Rich Presence still shows "SONE" until a Slate Discord application is
-registered ([issue](https://github.com/legendarylolo318-cloud/slate/issues/7)). Security,
-performance and feature-parity review results are in [REVIEW.md](REVIEW.md).
+Security, performance and feature-parity review results are in [REVIEW.md](REVIEW.md).
 
 `slate --self-test --network` checks that GStreamer finds the plugins it needs and can
 stream over HTTPS, then exits (useful for packaged builds).
