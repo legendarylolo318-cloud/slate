@@ -40,7 +40,10 @@ fn captured_system_proxy() -> CapturedProxies {
         match built {
             Ok(obj) => Some(obj),
             Err(e) => {
-                log::warn!("[proxy] captured system proxy unusable ({uri}): {e}");
+                log::warn!(
+                    "[proxy] captured system proxy unusable ({}): {e}",
+                    crate::proxy::redact_userinfo(uri)
+                );
                 None
             }
         }

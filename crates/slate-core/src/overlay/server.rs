@@ -451,8 +451,42 @@ struct AppCtx {
     sse_permits: Arc<Semaphore>,
 }
 
-async fn serve_html() -> Html<&'static str> {
-    Html(OVERLAY_HTML)
+/// The overlay's one script is inline, so the page's CSP allows exactly that
+/// script by hash and nothing else: no other script, no remote connections,
+/// no framing. Images may come from anywhere over HTTPS (cover art).
+fn overlay_csp() -> &'static str {
+    static CSP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CSP.get_or_init(|| {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+        let script = OVERLAY_HTML
+            .split_once("<script>")
+            .and_then(|(_, rest)| rest.split_once("</script>"))
+            .map_or("", |(body, _)| body);
+        let hash = base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(script));
+        format!(
+            "default-src 'none'; script-src 'sha256-{hash}'; style-src 'self' 'unsafe-inline'; \
+             img-src 'self' https: data:; font-src 'self' data:; connect-src 'self'; \
+             base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        )
+    })
+}
+
+async fn serve_html() -> Response {
+    let mut res = axum::response::IntoResponse::into_response(Html(OVERLAY_HTML));
+    let h = res.headers_mut();
+    if let Ok(v) = axum::http::HeaderValue::from_str(overlay_csp()) {
+        h.insert(axum::http::header::CONTENT_SECURITY_POLICY, v);
+    }
+    h.insert(
+        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        axum::http::header::REFERRER_POLICY,
+        axum::http::HeaderValue::from_static("no-referrer"),
+    );
+    res
 }
 
 async fn serve_state(State(ctx): State<AppCtx>) -> Response {
@@ -536,7 +570,10 @@ pub async fn start_server(
         .route("/overlay/state", get(serve_state))
         .route("/overlay/theme.css", get(serve_theme_css))
         .route("/overlay/events", get(serve_sse))
-        .with_state(ctx);
+        .with_state(ctx)
+        .layer(axum::middleware::from_fn(
+            crate::http_util::require_loopback_host,
+        ));
 
     // The overlay has no authentication, so it only ever listens on loopback.
     // A non-loopback host in an older settings file is clamped, not honoured.
@@ -667,6 +704,64 @@ mod tests {
         let n = stream.read(&mut buf).await.unwrap();
         let head = String::from_utf8_lossy(&buf[..n]);
         assert!(head.contains("503"), "expected 503 over cap, got: {head}");
+        handle.shutdown().await;
+    }
+
+    async fn raw_get(port: u16, path: &str, host: &str) -> String {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        stream
+            .write_all(
+                format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut buf)).await;
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    #[tokio::test]
+    async fn dns_rebinding_host_is_refused() {
+        let (handle, _state) = start_on_ephemeral().await;
+        for path in [
+            "/overlay",
+            "/overlay/state",
+            "/overlay/theme.css",
+            "/overlay/events",
+        ] {
+            let res = raw_get(handle.port, path, "attacker.example").await;
+            assert!(res.starts_with("HTTP/1.1 403"), "{path}: {res}");
+        }
+        let res = raw_get(
+            handle.port,
+            "/overlay/state",
+            &format!("127.0.0.1:{}", handle.port),
+        )
+        .await;
+        assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+        assert!(
+            !res.to_ascii_lowercase()
+                .contains("access-control-allow-origin"),
+            "{res}"
+        );
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn overlay_page_ships_a_strict_csp_matching_its_script() {
+        let (handle, _state) = start_on_ephemeral().await;
+        let res = raw_get(handle.port, "/overlay", "localhost").await;
+        let lower = res.to_ascii_lowercase();
+        assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+        assert!(lower.contains("content-security-policy: default-src 'none'; script-src 'sha256-"));
+        assert!(!lower.contains("'unsafe-eval'"));
+        assert!(!lower.contains("script-src 'unsafe-inline'"));
+        assert!(lower.contains("x-content-type-options: nosniff"));
+        // Exactly one inline script, so the single hash covers the page.
+        assert_eq!(OVERLAY_HTML.matches("<script").count(), 1);
         handle.shutdown().await;
     }
 

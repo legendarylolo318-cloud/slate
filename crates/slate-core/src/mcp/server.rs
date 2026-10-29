@@ -68,7 +68,11 @@ pub async fn start_server(
     );
 
     let path = format!("/{}/mcp", token);
-    let app = axum::Router::new().nest_service(&path, service);
+    let app = axum::Router::new()
+        .nest_service(&path, service)
+        .layer(axum::middleware::from_fn(
+            crate::http_util::require_loopback_host,
+        ));
 
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
     let listener = tokio::net::TcpListener::bind(addr)

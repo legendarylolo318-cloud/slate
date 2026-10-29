@@ -5,6 +5,7 @@ description = "Frontend-agnostic core of Slate: TIDAL client, playback engine, s
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
+publish.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

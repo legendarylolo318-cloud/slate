@@ -8,7 +8,7 @@ use std::sync::mpsc;
 
 use interprocess::local_socket::{
     traits::{ListenerExt as _, Stream as _},
-    GenericNamespaced, ListenerOptions, Stream, ToNsName,
+    ListenerOptions, Name, Stream,
 };
 
 /// What the first process receives from later launches.
@@ -23,15 +23,52 @@ pub enum Claim {
     Unavailable,
 }
 
-fn socket_name() -> String {
-    let user = std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
+/// Linux: a socket file in `$XDG_RUNTIME_DIR`, which only this user can enter.
+/// An abstract-namespace socket has no permissions at all: any local account
+/// could send it links, or take the name first and keep Slate from starting.
+#[cfg(target_os = "linux")]
+fn socket_name() -> Option<Name<'static>> {
+    use interprocess::local_socket::{GenericFilePath, ToFsName};
+    socket_path()?.to_fs_name::<GenericFilePath>().ok()
+}
+
+#[cfg(target_os = "linux")]
+fn socket_path() -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?);
+    let meta = std::fs::metadata(&dir).ok()?;
+    let me = std::fs::metadata("/proc/self").ok()?.uid();
+    if !meta.is_dir() || meta.uid() != me || meta.permissions().mode() & 0o077 != 0 {
+        tracing::warn!("XDG_RUNTIME_DIR is not private; single-instance disabled");
+        return None;
+    }
+    Some(dir.join("slate.sock"))
+}
+
+/// Windows: a named pipe in this user's name. (Pipe ACLs are tracked in REVIEW.md.)
+#[cfg(not(target_os = "linux"))]
+fn socket_name() -> Option<Name<'static>> {
+    use interprocess::local_socket::{GenericNamespaced, ToNsName};
+    let user = std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
         .unwrap_or_default();
     format!("slate-{user}.sock")
+        .to_ns_name::<GenericNamespaced>()
+        .ok()
+}
+
+/// A socket file left by a crashed instance refuses connections; remove it so
+/// the listener can bind. Only called after connecting to it failed.
+/// (Windows pipes vanish with their last handle.)
+fn clear_stale() {
+    #[cfg(target_os = "linux")]
+    if let Some(path) = socket_path() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Tries to hand `message` to a running instance.
-fn forward(name: &interprocess::local_socket::Name<'_>, message: &str) -> bool {
+fn forward(name: &Name<'_>, message: &str) -> bool {
     match Stream::connect(name.borrow()) {
         Ok(mut s) => s.write_all(format!("{message}\n").as_bytes()).is_ok(),
         Err(_) => false,
@@ -39,12 +76,13 @@ fn forward(name: &interprocess::local_socket::Name<'_>, message: &str) -> bool {
 }
 
 pub fn claim(link_arg: Option<&str>) -> Claim {
-    let Ok(name) = socket_name().to_ns_name::<GenericNamespaced>() else {
+    let Some(name) = socket_name() else {
         return Claim::Unavailable;
     };
     if forward(&name, link_arg.unwrap_or(RAISE)) {
         return Claim::Forwarded;
     }
+    clear_stale();
     let listener = match ListenerOptions::new().name(name).create_sync() {
         Ok(l) => l,
         Err(e) => {

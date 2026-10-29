@@ -335,7 +335,7 @@ pub async fn get_home_page_more(
     log::debug!(
         "[get_home_page_more]: feed={} cursor={}",
         slug,
-        &cursor[..cursor.len().min(32)]
+        crate::http_util::clip(&cursor, 32)
     );
     let mut client = state.tidal_client.lock().await;
     let result = client.fetch_v2_home_feed(&slug, Some(&cursor)).await;

@@ -7,4 +7,5 @@ version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
 authors = ["lullabyX", "SLATE Slint port contributors"]
-repository = "https://github.com/lullabyX/sone"
+repository = "https://github.com/legendarylolo318-cloud/slate"
+publish = false

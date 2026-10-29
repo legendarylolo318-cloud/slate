@@ -1480,7 +1480,11 @@ impl TidalClient {
     ) -> Result<T, SlateError> {
         let body = self.api_get_body(path, query).await?;
         serde_json::from_str(&body).map_err(|e| {
-            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+            SlateError::Parse(format!(
+                "{} - Body: {}",
+                e,
+                crate::http_util::clip(&body, 500)
+            ))
         })
     }
 
@@ -1520,7 +1524,7 @@ impl TidalClient {
                     "[api_get_body] {} -> status={} body={}",
                     url,
                     status,
-                    &body[..body.len().min(500)]
+                    crate::http_util::clip(&body, 500)
                 );
             }
             return Err(SlateError::Api {
@@ -1856,7 +1860,11 @@ impl TidalClient {
         }
 
         let data: Resp = serde_json::from_str(&body).map_err(|e| {
-            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+            SlateError::Parse(format!(
+                "{} - Body: {}",
+                e,
+                crate::http_util::clip(&body, 500)
+            ))
         })?;
         let playlists: Vec<TidalPlaylist> = data.items.into_iter().map(|p| p.into()).collect();
         Ok(PaginatedResponse {
@@ -1906,7 +1914,7 @@ impl TidalClient {
         log::debug!(
             "[create_playlist]: status={}, response={}",
             status,
-            &body_text[..body_text.len().min(500)]
+            crate::http_util::clip(&body_text, 500)
         );
 
         if !status.is_success() {
@@ -1965,7 +1973,7 @@ impl TidalClient {
         log::debug!(
             "[update_playlist]: status={}, response={}",
             status,
-            &body_text[..body_text.len().min(500)]
+            crate::http_util::clip(&body_text, 500)
         );
 
         if !status.is_success() {
@@ -2362,7 +2370,11 @@ impl TidalClient {
         }
 
         let data: RecommendationsResponse = serde_json::from_str(&body).map_err(|e| {
-            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+            SlateError::Parse(format!(
+                "{} - Body: {}",
+                e,
+                crate::http_util::clip(&body, 500)
+            ))
         })?;
 
         let mut tracks: Vec<TidalTrack> = data.items.into_iter().map(|w| w.item).collect();
@@ -3232,7 +3244,7 @@ impl TidalClient {
         log::debug!(
             "[add_favorite_mix]: status={}, body={}",
             status,
-            &body[..body.len().min(500)]
+            crate::http_util::clip(&body, 500)
         );
 
         if !status.is_success() {
@@ -3266,7 +3278,7 @@ impl TidalClient {
         log::debug!(
             "[remove_favorite_mix]: status={}, body={}",
             status,
-            &body[..body.len().min(500)]
+            crate::http_util::clip(&body, 500)
         );
 
         if !status.is_success() {
@@ -3316,7 +3328,7 @@ impl TidalClient {
 
         log::debug!(
             "[get_favorite_mixes]: body_preview={}",
-            &body[..body.len().min(500)]
+            crate::http_util::clip(&body, 500)
         );
 
         // v2 response is a wrapper object { items: [...] }; extract the inner array as raw Values first
@@ -3332,7 +3344,7 @@ impl TidalClient {
             } else {
                 log::warn!(
                     "[get_favorite_mixes]: parse failed - body: {}",
-                    &body[..body.len().min(500)]
+                    crate::http_util::clip(&body, 500)
                 );
                 Vec::new()
             };
@@ -3395,11 +3407,15 @@ impl TidalClient {
 
         log::debug!(
             "[get_playlist_folders]: body_preview={}",
-            &body[..body.len().min(1000)]
+            crate::http_util::clip(&body, 1000)
         );
 
         serde_json::from_str(&body).map_err(|e| {
-            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+            SlateError::Parse(format!(
+                "{} - Body: {}",
+                e,
+                crate::http_util::clip(&body, 500)
+            ))
         })
     }
 
@@ -3434,7 +3450,11 @@ impl TidalClient {
 
             let body = self.api_get_body(&url, &params).await?;
             let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
-                SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+                SlateError::Parse(format!(
+                    "{} - Body: {}",
+                    e,
+                    crate::http_util::clip(&body, 500)
+                ))
             })?;
 
             if let Some(items) = value.get("items").and_then(|v| v.as_array()) {
@@ -3496,7 +3516,7 @@ impl TidalClient {
         log::debug!(
             "[create_playlist_folder]: status={}, body={}",
             status,
-            &body[..body.len().min(500)]
+            crate::http_util::clip(&body, 500)
         );
 
         if !status.is_success() {
@@ -3544,7 +3564,7 @@ impl TidalClient {
         log::debug!(
             "[rename_playlist_folder]: status={}, body={}",
             status,
-            &body[..body.len().min(500)]
+            crate::http_util::clip(&body, 500)
         );
 
         if !status.is_success() {
@@ -3583,7 +3603,7 @@ impl TidalClient {
         log::debug!(
             "[delete_playlist_folder]: status={}, body={}",
             status,
-            &body[..body.len().min(500)]
+            crate::http_util::clip(&body, 500)
         );
 
         if !status.is_success() {
@@ -3631,7 +3651,7 @@ impl TidalClient {
         log::debug!(
             "[move_playlist_to_folder]: status={}, body={}",
             status,
-            &body[..body.len().min(500)]
+            crate::http_util::clip(&body, 500)
         );
 
         if !status.is_success() {
@@ -3828,7 +3848,7 @@ impl TidalClient {
                 return Err(SlateError::Parse(format!(
                     "Unknown manifest format '{}': {}",
                     data.manifest_mime_type,
-                    &manifest_str[..manifest_str.len().min(300)]
+                    crate::http_util::clip(&manifest_str, 300)
                 )));
             }
         };
@@ -4947,7 +4967,11 @@ impl TidalClient {
         }
 
         let data: FavResponse = serde_json::from_str(&body).map_err(|e| {
-            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+            SlateError::Parse(format!(
+                "{} - Body: {}",
+                e,
+                crate::http_util::clip(&body, 500)
+            ))
         })?;
         let artists: Vec<TidalArtistDetail> = data.items.into_iter().map(|f| f.item).collect();
         log::debug!(
@@ -5191,7 +5215,11 @@ impl TidalClient {
         }
 
         let mut data: Resp = serde_json::from_str(&body).map_err(|e| {
-            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+            SlateError::Parse(format!(
+                "{} - Body: {}",
+                e,
+                crate::http_util::clip(&body, 500)
+            ))
         })?;
         for t in &mut data.items {
             t.backfill_artist();
@@ -5220,7 +5248,11 @@ impl TidalClient {
         }
 
         let data: Resp = serde_json::from_str(&body).map_err(|e| {
-            SlateError::Parse(format!("{} - Body: {}", e, &body[..body.len().min(500)]))
+            SlateError::Parse(format!(
+                "{} - Body: {}",
+                e,
+                crate::http_util::clip(&body, 500)
+            ))
         })?;
         Ok(data.items)
     }
@@ -5973,7 +6005,7 @@ impl TidalClient {
         log::debug!(
             "[mark_feed_seen] status={}, body={}",
             status,
-            &body[..body.len().min(500)]
+            crate::http_util::clip(&body, 500)
         );
 
         if !status.is_success() {

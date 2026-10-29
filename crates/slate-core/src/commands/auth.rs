@@ -205,7 +205,7 @@ pub async fn import_session(
 ) -> Result<AuthTokens, SlateError> {
     log::debug!(
         "[import_session]: client_id={}",
-        &client_id[..client_id.len().min(8)]
+        client_id.chars().take(8).collect::<String>()
     );
     if client_id.is_empty() || refresh_token.is_empty() {
         return Err(SlateError::NotConfigured(

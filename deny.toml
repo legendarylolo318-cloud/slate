@@ -1,0 +1,53 @@
+# cargo-deny configuration. Run: `cargo deny check`.
+# Slate is GPL-3.0-only, so every dependency licence must be GPLv3-compatible.
+
+[graph]
+all-features = true
+
+[advisories]
+# Each ignored advisory is explained in REVIEW.md ("Dependency audit").
+ignore = [
+    # h2 0.3 (via reqwest 0.11): a malicious server can stream empty DATA
+    # frames. Slate only talks to TIDAL and other fixed HTTPS hosts. Removed by
+    # the reqwest 0.12 migration (tracked issue).
+    { id = "RUSTSEC-2026-0258", reason = "client-only exposure; reqwest 0.12 migration tracked" },
+    # Unmaintained, no known vulnerability, all transitive:
+    { id = "RUSTSEC-2024-0436", reason = "paste: unmaintained, via gstreamer-rs" },
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: unmaintained, via reqwest 0.11" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser: unmaintained, via winit/sctk-adwaita" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained, via accesskit/zbus" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained, via accesskit/zbus" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained, via accesskit/zbus" },
+]
+
+[licenses]
+confidence-threshold = 0.9
+# All GPLv3-compatible. Slint is triple-licensed; with only GPL-3.0-only on
+# this list (and not the LicenseRef-Slint-* licences) it is used under GPLv3.
+allow = [
+    "GPL-3.0-only",
+    "LGPL-2.1-or-later",
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+    "NCSA",
+    "Unicode-3.0",
+    "Unlicense",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

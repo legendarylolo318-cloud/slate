@@ -13,6 +13,21 @@ pub struct Creds {
 }
 
 // Hand-written so a stray `{plan:?}` log never prints the proxy password.
+/// `scheme://user:pass@host:port/…` → `scheme://<redacted>@host:port/…`, for
+/// logging a proxy URI that came from the environment.
+pub(crate) fn redact_userinfo(uri: &str) -> String {
+    let Some(start) = uri.find("://").map(|i| i + 3) else {
+        return uri.to_string();
+    };
+    let authority_end = uri[start..]
+        .find(['/', '?', '#'])
+        .map_or(uri.len(), |i| start + i);
+    match uri[start..authority_end].rfind('@') {
+        Some(at) => format!("{}<redacted>{}", &uri[..start], &uri[start + at..]),
+        None => uri.to_string(),
+    }
+}
+
 impl std::fmt::Debug for Creds {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Creds")
@@ -1175,6 +1190,24 @@ mod tests {
                 "expected {bad:?} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn redact_userinfo_hides_credentials_only() {
+        assert_eq!(
+            redact_userinfo("http://bob:hunter2@proxy.corp:3128/x"),
+            "http://<redacted>@proxy.corp:3128/x"
+        );
+        assert_eq!(
+            redact_userinfo("socks5h://p%40ss@h:1080"),
+            "socks5h://<redacted>@h:1080"
+        );
+        assert_eq!(
+            redact_userinfo("http://proxy:3128/a@b"),
+            "http://proxy:3128/a@b"
+        );
+        assert_eq!(redact_userinfo("proxy:3128"), "proxy:3128");
+        assert_eq!(redact_userinfo("http://ü:ß@hôst"), "http://<redacted>@hôst");
     }
 
     #[test]
