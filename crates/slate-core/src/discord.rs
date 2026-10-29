@@ -4,10 +4,14 @@ use discord_rich_presence::{activity, DiscordIpc};
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// Discord shows the name of the application this id belongs to. It is still
+/// upstream SONE's until a Slate application is registered (issue #7).
 const APPLICATION_ID: &str = "1482171472167436308";
 
-/// Slate logo drawn as the small badge over the album art's corner.
-const SLATE_LOGO_URL: &str = "https://raw.githubusercontent.com/lullabyX/sone/master/sone.png";
+/// Slate logo drawn as the small badge over the album art's corner, served
+/// from this repository rather than upstream's.
+const SLATE_LOGO_URL: &str =
+    "https://raw.githubusercontent.com/legendarylolo318-cloud/slate/main/assets/icons/128x128.png";
 
 /// How often an idle Discord thread retries, or re-publishes to notice that
 /// the connection has gone away.

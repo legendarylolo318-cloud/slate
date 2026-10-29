@@ -163,7 +163,7 @@ All UI work is **todo**. Original line counts shown to indicate size.
 ## 8. Final cleanup checklist
 
 - [x] delete `src/`, `package.json`, `pnpm-*`, `vite.config.*`, `tsconfig*`, `eslint*`, `index.html`, `sync-version.mjs`, `knip*` (done)
-- [x] `data/slate.desktop` and CI workflow updated; [ ] `build-scripts/`, `flake.nix`, `data/*.metainfo.xml` and screenshots are still upstream's (Tauri/pnpm) and **stale**
+- [x] `data/io.github.legendarylolo318_cloud.slate.desktop` and CI workflow updated; [ ] `build-scripts/`, `flake.nix`, `data/*.metainfo.xml` and screenshots are still upstream's (Tauri/pnpm) and **stale**
 - [x] README, CHANGELOG, HANDOFF
 
 ## 9. Status after the "scalable UI / pages / settings" pass
