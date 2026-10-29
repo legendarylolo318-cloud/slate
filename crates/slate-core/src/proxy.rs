@@ -659,44 +659,37 @@ impl<T> SystemProxyEnv<T> {
     }
 }
 
-/// Resolve captured variables exactly as **reqwest 0.11.27** would have, so
+/// Resolve captured variables exactly as **reqwest 0.12.28** would have, so
 /// restoring them reproduces the routing the user already had.
 ///
-/// This is a deliberate mirror of one release — `reqwest-0.11.27/src/proxy.rs`,
-/// `get_from_environment` and `NoProxy::from_env` — and not an attempt at a
-/// good rule:
+/// A deliberate mirror of one release — reqwest 0.12.28 reads the environment
+/// through `hyper-util` 0.1.21, `client/proxy/matcher.rs` (`Builder::from_env`,
+/// `get_first_env`, `parse_env_uri`, `Builder::build`) — not an attempt at a
+/// better rule:
 ///
-/// - Per scheme, the uppercase spelling is tried first and the lowercase one
-///   is the fallback, where "tried" means set, non-empty after trimming, and
-///   parseable as a proxy URI. An unparseable `HTTP_PROXY` therefore falls
-///   through to `http_proxy` rather than winning and yielding nothing.
-/// - `ALL_PROXY` (then `all_proxy`) is applied **last and overwrites both
-///   schemes**, because 0.11.27 runs that block after the per-scheme ones and
-///   `insert_proxy` is an unconditional `HashMap::insert`.
-/// - `NO_PROXY` wins over `no_proxy` on *presence*, not on emptiness: 0.11.27
-///   takes `env::var("NO_PROXY").or_else(|_| env::var("no_proxy"))`, so an
-///   exported-but-empty `NO_PROXY` suppresses the lowercase one entirely.
+/// - Per variable, the uppercase spelling wins on **presence**: if
+///   `HTTP_PROXY` is set at all, `http_proxy` is never read, even when the
+///   uppercase value is empty or unparseable (that scheme then gets nothing
+///   from it). This differs from 0.11, which fell through to the lowercase one.
+/// - `HTTP_PROXY` / `HTTPS_PROXY` win over `ALL_PROXY`, which is only the
+///   fallback for a scheme left without a proxy. (0.11 applied `ALL_PROXY`
+///   last and let it overwrite both.)
+/// - `NO_PROXY` wins over `no_proxy` on presence, so an exported-but-empty
+///   `NO_PROXY` suppresses the lowercase one.
 ///
-/// The `ALL_PROXY` rule is the one worth defending, because it is the one a
-/// reviewer will want to "fix": per-scheme-wins is saner and is what reqwest
-/// 0.12+ does. It is still wrong here. With `ALL_PROXY=http://all:1` and
-/// `https_proxy=http://s:2` this user's traffic *was* going to `all:1`; a
-/// better precedence would silently send it somewhere their own configuration
-/// never chose. Restoration must be faithful, not improved. `source_guards.rs`
-/// pins the `reqwest = "0.11"` requirement so a major bump fails the suite
+/// Restoration must be faithful, not improved: with `ALL_PROXY=http://all:1`
+/// and `https_proxy=http://s:2` this user's HTTPS traffic was going to `s:2`.
+/// `source_guards.rs` pins the reqwest version so a bump fails the suite
 /// instead of diverging quietly.
 ///
-/// One documented non-mirror: 0.11.27 ignores `HTTP_PROXY` when `REQUEST_METHOD`
-/// is set, because under CGI that variable is attacker-controlled. Slate is a
-/// desktop application, never a CGI process, and `REQUEST_METHOD` is not among
-/// the variables `main.rs` captures, so there is nothing to reproduce.
+/// One documented non-mirror: hyper-util ignores every proxy variable when
+/// `REQUEST_METHOD` is set (CGI, where they are attacker-controlled). Slate is
+/// a desktop application, never a CGI process, and `REQUEST_METHOD` is not
+/// among the variables `main.rs` captures, so there is nothing to reproduce.
 ///
-/// `parse` is injected rather than called directly for two reasons: deciding
-/// whether a captured string is a usable proxy means building a
-/// `reqwest::Proxy`, and those are confined to `proxy_http.rs`; and returning
-/// the parsed object rather than a yes/no keeps this to one parse per value.
-/// Pure otherwise, because the precedence is the whole of the risk and is not
-/// observable from outside the process.
+/// `parse` is injected rather than called directly: deciding whether a
+/// captured string is a usable proxy means building a `reqwest::Proxy`, and
+/// those are confined to `proxy_http.rs`.
 pub fn system_proxy_from_env<T>(
     vars: &[(String, String)],
     parse: impl Fn(EnvScheme, &str) -> Option<T>,
@@ -706,57 +699,27 @@ pub fn system_proxy_from_env<T>(
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.as_str())
     };
-    // `insert_proxy`: empty or whitespace is rejected before parsing, and an
-    // unparseable value is rejected too — both leave the lowercase fallback to
-    // be tried.
-    let get = |scheme, name: &str| {
-        present(name)
+    // `get_first_env`: the first spelling that is *set* wins, even if empty or
+    // unparseable; the lowercase one is only read when the uppercase is unset.
+    let first = |upper: &str, lower: &str| present(upper).or_else(|| present(lower));
+    // `parse_env_uri`: empty or unparseable yields nothing for that variable.
+    let parsed = |scheme, value: Option<&str>| {
+        value
             .filter(|v| !v.trim().is_empty())
             .and_then(|v| parse(scheme, v))
     };
+    let all = first("ALL_PROXY", "all_proxy");
 
-    let mut resolved = SystemProxyEnv {
-        http: get(EnvScheme::Http, "HTTP_PROXY").or_else(|| get(EnvScheme::Http, "http_proxy")),
-        https: get(EnvScheme::Https, "HTTPS_PROXY")
-            .or_else(|| get(EnvScheme::Https, "https_proxy")),
-        // Presence, not usability: `from_env` reads the variable and hands
-        // whatever it finds to `from_string`, which rejects an empty list on
-        // its own.
-        no_proxy: present("NO_PROXY")
-            .or_else(|| present("no_proxy"))
-            .map(str::to_string),
-    };
-
-    // Last, and overwriting. See the note above before changing this.
-    //
-    // Shaped to match 0.11.27 statement for statement, including two things
-    // that look like slips and are not. The `&&` short-circuits, so the https
-    // insert never runs when the http one failed. And a failed `insert_proxy`
-    // leaves the slot alone rather than clearing it, so a value that parses for
-    // one scheme and not the other keeps whatever the per-scheme name put
-    // there — which is why each assignment is guarded instead of unconditional.
-    let upper = get(EnvScheme::Http, "ALL_PROXY");
-    let both_landed = match upper {
-        Some(http) => {
-            let https = get(EnvScheme::Https, "ALL_PROXY");
-            resolved.http = Some(http);
-            let landed = https.is_some();
-            if https.is_some() {
-                resolved.https = https;
-            }
-            landed
-        }
-        None => false,
-    };
-    if !both_landed {
-        if let Some(http) = get(EnvScheme::Http, "all_proxy") {
-            resolved.http = Some(http);
-        }
-        if let Some(https) = get(EnvScheme::Https, "all_proxy") {
-            resolved.https = Some(https);
-        }
+    SystemProxyEnv {
+        // `Builder::build`: the per-scheme variable first, `ALL_PROXY` only as
+        // the fallback.
+        http: parsed(EnvScheme::Http, first("HTTP_PROXY", "http_proxy"))
+            .or_else(|| parsed(EnvScheme::Http, all)),
+        https: parsed(EnvScheme::Https, first("HTTPS_PROXY", "https_proxy"))
+            .or_else(|| parsed(EnvScheme::Https, all)),
+        // Presence, not usability, as for the proxies.
+        no_proxy: first("NO_PROXY", "no_proxy").map(str::to_string),
     }
-    resolved
 }
 
 /// What the settings screen shows for the proxy as a whole.
@@ -1640,20 +1603,20 @@ mod tests {
         assert_eq!(e.https, None);
     }
 
-    /// An unparseable uppercase value is not a win, it is a miss: 0.11.27's
-    /// `insert_proxy` returns false for anything it cannot turn into a proxy
-    /// scheme, so the lowercase spelling is still tried. Getting this wrong
-    /// leaves the user with no http proxy at all where they had a working one.
+    /// A set uppercase variable wins even when it cannot be used: 0.12.28's
+    /// `get_first_env` stops at the first spelling that is *set*, and
+    /// `parse_env_uri` then yields nothing. The lowercase value is never read,
+    /// so this user's reqwest was sending that scheme direct.
     #[test]
-    fn an_unparseable_uppercase_value_falls_through_to_the_lowercase_one() {
+    fn a_set_uppercase_value_shadows_the_lowercase_one_even_if_unusable() {
         let e = resolve(&[
             ("HTTP_PROXY", "ftp://nope:1"),
             ("http_proxy", "http://ok:1"),
             ("HTTPS_PROXY", "gopher://nope:2"),
             ("https_proxy", "http://ok:2"),
         ]);
-        assert_eq!(e.http.as_deref(), Some("http://ok:1"));
-        assert_eq!(e.https.as_deref(), Some("http://ok:2"));
+        assert_eq!(e.http, None);
+        assert_eq!(e.https, None);
     }
 
     #[test]
@@ -1661,32 +1624,25 @@ mod tests {
         assert!(resolve(&[("HTTP_PROXY", "ftp://nope:1")]).is_empty());
     }
 
-    /// The deliberate mirror of 0.11.27, and the assertion most likely to be
-    /// "corrected" by a future reader: `ALL_PROXY` is applied last and
-    /// **overwrites** the per-scheme names. reqwest 0.12+ reversed this and the
-    /// reversal is saner — but restoring has to reproduce where this user's
-    /// traffic was actually going, which with `all_proxy` set was `all:1`.
+    /// `ALL_PROXY` is the fallback for a scheme with no per-scheme proxy, and
+    /// never overrides one (0.12.28's `Builder::build`). 0.11 did the reverse;
+    /// mirroring the old rule now would route HTTPS somewhere this user's
+    /// reqwest was not sending it.
     #[test]
-    fn all_proxy_is_applied_last_and_overwrites_the_per_scheme_names() {
+    fn per_scheme_proxies_win_and_all_proxy_fills_the_gaps() {
         let e = resolve(&[("ALL_PROXY", "http://all:1")]);
         assert_eq!(e.http.as_deref(), Some("http://all:1"));
         assert_eq!(e.https.as_deref(), Some("http://all:1"));
 
         let e = resolve(&[("all_proxy", "http://all:1"), ("https_proxy", "http://s:2")]);
         assert_eq!(e.http.as_deref(), Some("http://all:1"));
-        assert_eq!(
-            e.https.as_deref(),
-            Some("http://all:1"),
-            "0.11.27 overwrites https_proxy with all_proxy; a per-scheme-wins \
-             rule here would route this user somewhere their own configuration \
-             never chose"
-        );
+        assert_eq!(e.https.as_deref(), Some("http://s:2"));
     }
 
-    /// And uppercase-first applies to the catch-all too, with the lowercase
-    /// spelling tried only when the uppercase one is unusable.
+    /// Uppercase-first applies to the catch-all too, on presence: a set but
+    /// unusable `ALL_PROXY` hides `all_proxy`.
     #[test]
-    fn the_uppercase_catch_all_wins_and_an_unusable_one_falls_through() {
+    fn the_uppercase_catch_all_wins_on_presence() {
         let e = resolve(&[
             ("ALL_PROXY", "http://upper:1"),
             ("all_proxy", "http://lower:1"),
@@ -1697,7 +1653,7 @@ mod tests {
             ("ALL_PROXY", "ftp://nope:1"),
             ("all_proxy", "http://lower:1"),
         ]);
-        assert_eq!(e.http.as_deref(), Some("http://lower:1"));
+        assert_eq!(e.http, None);
     }
 
     /// An exported-but-empty variable is how a shell profile disables one.
@@ -1755,14 +1711,27 @@ mod tests {
         });
 
         assert_eq!(
-            seen.into_inner(),
+            seen.take(),
             vec![
                 (EnvScheme::Http, "http://h:1".to_string()),
                 (EnvScheme::Https, "http://s:2".to_string()),
+            ],
+            "each value must be parsed once, for the slot it fills; ALL_PROXY \
+             is not consulted when both schemes have their own"
+        );
+
+        // With no per-scheme values the catch-all is parsed once per scheme.
+        let vars = owned(&[("ALL_PROXY", "http://a:3")]);
+        let _ = system_proxy_from_env(&vars, |scheme, uri| {
+            seen.borrow_mut().push((scheme, uri.to_string()));
+            Some(uri.to_string())
+        });
+        assert_eq!(
+            seen.into_inner(),
+            vec![
                 (EnvScheme::Http, "http://a:3".to_string()),
                 (EnvScheme::Https, "http://a:3".to_string()),
-            ],
-            "each value must be parsed once, for the slot it fills"
+            ]
         );
     }
 

@@ -32,22 +32,59 @@ pub fn build_client(p: &ProxyPlan, env: &HostCaps) -> Result<reqwest::Client, Bl
 /// only from the `Direct` arm of `build_client_with`, where the result is
 /// actually used.
 fn captured_system_proxy() -> CapturedProxies {
-    crate::proxy::system_proxy_from_env(crate::proxy::scrubbed_env(), |scheme, uri| {
-        let built = match scheme {
+    crate::proxy::system_proxy_from_env(crate::proxy::scrubbed_env(), env_proxy)
+}
+
+/// One captured environment value as a reqwest proxy, or `None` (logged) when
+/// it is not usable.
+fn env_proxy(scheme: EnvScheme, uri: &str) -> Option<reqwest::Proxy> {
+    let built = check_proxy_uri(uri).and_then(|()| {
+        match scheme {
             EnvScheme::Http => reqwest::Proxy::http(uri),
             EnvScheme::Https => reqwest::Proxy::https(uri),
-        };
-        match built {
-            Ok(obj) => Some(obj),
-            Err(e) => {
-                log::warn!(
-                    "[proxy] captured system proxy unusable ({}): {e}",
-                    crate::proxy::redact_userinfo(uri)
-                );
-                None
-            }
         }
-    })
+        .map_err(|e| e.to_string())
+    });
+    match built {
+        Ok(obj) => Some(obj),
+        Err(e) => {
+            log::warn!(
+                "[proxy] captured system proxy unusable ({}): {e}",
+                crate::proxy::redact_userinfo(uri)
+            );
+            None
+        }
+    }
+}
+
+/// reqwest 0.12 accepts any proxy URI and fails only when a request is sent.
+/// Slate decides usability up front, as reqwest 0.11 did, so an unusable proxy
+/// blocks with a named cause instead of failing every request later: the
+/// scheme must be one reqwest can use, and a SOCKS proxy's own host must
+/// resolve. Blocks on `getaddrinfo` for SOCKS (as 0.11's client build did).
+fn check_proxy_uri(uri: &str) -> Result<(), String> {
+    let Some((scheme, rest)) = uri.split_once("://") else {
+        return Ok(()); // a bare `host:port` is taken as http
+    };
+    match scheme.to_ascii_lowercase().as_str() {
+        "http" | "https" => Ok(()),
+        "socks4" | "socks4a" | "socks5" | "socks5h" => {
+            let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+            let host_port = authority.rsplit_once('@').map_or(authority, |(_, hp)| hp);
+            let with_port = if host_port
+                .rsplit_once(':')
+                .is_some_and(|(_, p)| p.parse::<u16>().is_ok())
+            {
+                host_port.to_string()
+            } else {
+                format!("{host_port}:1080")
+            };
+            std::net::ToSocketAddrs::to_socket_addrs(&with_port.as_str())
+                .map(|_| ())
+                .map_err(|e| format!("failed to lookup address information: {e}"))
+        }
+        other => Err(format!("unknown proxy scheme `{other}`")),
+    }
 }
 
 /// The system's configuration arrives as a thunk, for two reasons.
@@ -90,6 +127,8 @@ fn build_client_with(
         Route::Via { uri, creds } => {
             // Credentials never travel in the URI: `Route::Via` keeps them
             // apart and `basic_auth` is the only thing that reunites them.
+            check_proxy_uri(&uri)
+                .map_err(|e| BlockReason::new(format!("proxy unusable ({uri}): {e}")))?;
             let mut obj = reqwest::Proxy::all(&uri)
                 .map_err(|e| BlockReason::new(format!("proxy unusable ({uri}): {e}")))?;
             if let Some(c) = creds {
@@ -433,34 +472,31 @@ mod tests {
         }
     }
 
-    /// The real parser, not the stand-in `proxy.rs` tests use: an unparseable
-    /// uppercase value must fall through to the lowercase one, exactly as
-    /// reqwest 0.11.27's own detection would have. Getting this wrong leaves
-    /// the user with no http proxy where they had a working one.
+    /// The real parser, not the stand-in `proxy.rs` tests use. `ftp://` is
+    /// rejected by `check_proxy_uri` (reqwest 0.12 itself would build it and
+    /// fail every request). As in 0.12.28, a set `HTTP_PROXY` hides
+    /// `http_proxy` even when unusable, so http stays with the system matcher.
     #[test]
-    fn the_real_parser_falls_through_from_an_unparseable_uppercase_value() {
-        // `ftp://` is genuinely rejected by `into_proxy_scheme`, which knows
-        // only http, https and socks5. A bare word would NOT do: reqwest
-        // accepts `garbage` as `http://garbage`, so a test written with one
-        // would pass while asserting something untrue about reqwest.
+    fn the_real_parser_rejects_an_unusable_scheme_without_reading_the_lowercase_one() {
         let vars = [
             ("HTTP_PROXY", "ftp://nope:1"),
             ("http_proxy", "http://ok:1"),
         ]
         .map(|(k, v)| (k.to_string(), v.to_string()));
 
-        let e = crate::proxy::system_proxy_from_env(&vars, |scheme, uri| match scheme {
-            EnvScheme::Http => reqwest::Proxy::http(uri).ok(),
-            EnvScheme::Https => reqwest::Proxy::https(uri).ok(),
-        });
-        assert!(e.http.is_some(), "the lowercase spelling must be used");
+        let e = crate::proxy::system_proxy_from_env(&vars, env_proxy);
+        assert!(e.http.is_none());
 
-        let caps = HostCaps::assume_all_present();
-        let d = format!(
-            "{:?}",
-            build_client_with(&ProxyPlan::Direct, &caps, || e).unwrap()
-        );
-        assert!(d.contains("Http(http://ok:1)"), "{d}");
+        // And the real parser accepts what reqwest uses.
+        for ok in [
+            "http://ok:1",
+            "https://ok:1",
+            "ok:1",
+            "socks5h://127.0.0.1:1080",
+        ] {
+            assert!(env_proxy(EnvScheme::Http, ok).is_some(), "{ok}");
+        }
+        assert!(env_proxy(EnvScheme::Http, "socks5h://no-such-host.invalid:1080").is_none());
     }
 
     /// Producing the captured environment parses URIs, and parsing a
@@ -529,8 +565,14 @@ mod tests {
         let caps = HostCaps::assume_all_present();
         let c = build_client_with(&ProxyPlan::Direct, &caps, corporate).unwrap();
         let d = format!("{c:?}");
-        assert!(d.contains("Http(http://corp:8080)"), "{d}");
-        assert!(d.contains("Https(http://corp:8443)"), "{d}");
+        assert!(
+            crate::proxy_http::debug_view::has_http(&d, "http://corp:8080"),
+            "{d}"
+        );
+        assert!(
+            crate::proxy_http::debug_view::has_https(&d, "http://corp:8443"),
+            "{d}"
+        );
         // The bypass list travels with them, or every intranet host that was
         // meant to go direct starts going through the proxy instead.
         assert!(d.contains("intranet.example"), "{d}");
@@ -546,9 +588,9 @@ mod tests {
         // reqwest's own `System(...)` entry, still doing its own detection —
         // and nothing we put there.
         let d = format!("{c:?}");
-        assert!(d.contains("Proxy(System("), "{d}");
-        assert!(!d.contains("Proxy(Http("), "{d}");
-        assert!(!d.contains("Proxy(Https("), "{d}");
+        assert!(crate::proxy_http::debug_view::has_system(&d), "{d}");
+        assert!(!crate::proxy_http::debug_view::has_any_http(&d), "{d}");
+        assert!(!crate::proxy_http::debug_view::has_any_https(&d), "{d}");
     }
 
     /// While Slate proxies, its own plan is the whole answer. Letting the
@@ -559,7 +601,10 @@ mod tests {
         let caps = HostCaps::assume_all_present();
         let p = plan(&enabled("127.0.0.1", 3128), &caps).unwrap();
         let d = format!("{:?}", build_client_with(&p, &caps, corporate).unwrap());
-        assert!(d.contains("All(http://127.0.0.1:3128)"), "{d}");
+        assert!(
+            crate::proxy_http::debug_view::has_all(&d, "http://127.0.0.1:3128"),
+            "{d}"
+        );
         assert!(
             !d.contains("corp"),
             "Slate's plan must be the only proxy: {d}"
@@ -584,7 +629,10 @@ mod tests {
         let c = build_client_with(&ProxyPlan::Direct, &caps, || sys)
             .expect("a malformed captured value must not block egress");
         let d = format!("{c:?}");
-        assert!(d.contains("Https(http://corp:8443)"), "{d}");
+        assert!(
+            crate::proxy_http::debug_view::has_https(&d, "http://corp:8443"),
+            "{d}"
+        );
         assert!(!d.contains("nope"), "{d}");
     }
 
@@ -656,7 +704,10 @@ mod tests {
         let caps = HostCaps::assume_all_present();
         let p = plan(&enabled("no-such-host.invalid", 3128), &caps).unwrap();
         let c = ProxiedHttp::from_plan(&p, &caps).client().unwrap();
-        assert!(format!("{c:?}").contains("All(http://no-such-host.invalid:3128)"));
+        assert!(crate::proxy_http::debug_view::has_all(
+            &format!("{c:?}"),
+            "http://no-such-host.invalid:3128"
+        ));
     }
 
     /// A client that is guaranteed unproxied, whatever the developer's shell
@@ -889,7 +940,10 @@ mod tests {
         // Reading through the poison: an unrelated panic must not block egress,
         // and must not hand back a client that lost its proxy.
         let c = h.client().expect("a poislated cell must not block egress");
-        assert!(format!("{c:?}").contains("All(http://127.0.0.1:3128)"));
+        assert!(crate::proxy_http::debug_view::has_all(
+            &format!("{c:?}"),
+            "http://127.0.0.1:3128"
+        ));
 
         // Writing through the poison: `replace` still lands, and a clone sees it.
         let observer = h.clone();
@@ -983,7 +1037,7 @@ mod tests {
             .client()
             .expect("a usable plan must still yield a usable client");
         assert!(
-            format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
+            crate::proxy_http::debug_view::has_all(&format!("{c:?}"), "http://127.0.0.1:3128"),
             "a late `Direct` build must not strip the proxy the user re-enabled: {c:?}"
         );
 
@@ -995,7 +1049,7 @@ mod tests {
         h.store(enable, build_client(&proxied, &caps));
         let c = h.client().unwrap();
         assert!(
-            !format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
+            !crate::proxy_http::debug_view::has_all(&format!("{c:?}"), "http://127.0.0.1:3128"),
             "a late proxied build must not outlive the settings that asked for it"
         );
     }
@@ -1025,7 +1079,7 @@ mod tests {
 
         let c = h.client().expect("a usable plan yields a client");
         assert!(
-            format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
+            crate::proxy_http::debug_view::has_all(&format!("{c:?}"), "http://127.0.0.1:3128"),
             "apply_at took a fresh generation instead of the one it was given,              so the older save won the cell: {c:?}"
         );
     }
@@ -1130,7 +1184,10 @@ mod tests {
         let c = observer
             .client()
             .expect("a valid save must unblock the cell");
-        assert!(format!("{c:?}").contains("All(http://127.0.0.1:3128)"));
+        assert!(crate::proxy_http::debug_view::has_all(
+            &format!("{c:?}"),
+            "http://127.0.0.1:3128"
+        ));
     }
 
     #[test]
@@ -1156,5 +1213,107 @@ mod tests {
             h.client().is_err(),
             "and the cell must be blocked, not direct"
         );
+    }
+}
+
+/// Reads the proxy list out of a `reqwest::Client`'s `Debug` text, which is
+/// the only place reqwest exposes it. Each entry is either the system matcher
+/// (printed bare) or our own proxy with its per-scheme intercept URI.
+#[cfg(test)]
+pub(crate) mod debug_view {
+    #[derive(Debug, Default, PartialEq)]
+    pub struct Entry {
+        pub system: bool,
+        pub http: Option<String>,
+        pub https: Option<String>,
+    }
+
+    pub fn entries(debug: &str) -> Vec<Entry> {
+        let Some(start) = debug.find("proxies: [") else {
+            return Vec::new();
+        };
+        // Top-level entries of the list: split at depth-0 commas, stop at the
+        // `]` that closes it (NoProxy prints nested `IpMatcher([])`).
+        let mut items = vec![String::new()];
+        let mut depth = 0i32;
+        for ch in debug[start + "proxies: [".len()..].chars() {
+            match ch {
+                '[' | '{' | '(' => depth += 1,
+                ']' if depth == 0 => break,
+                ']' | '}' | ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    items.push(String::new());
+                    continue;
+                }
+                _ => {}
+            }
+            if let Some(last) = items.last_mut() {
+                last.push(ch);
+            }
+        }
+        items
+            .iter()
+            .map(|i| i.trim())
+            .filter(|i| i.starts_with("Matcher"))
+            .map(|chunk| {
+                let uri = |scheme: &str| {
+                    let key = format!("{scheme}: Intercept {{ uri: ");
+                    let at = chunk.find(&key)? + key.len();
+                    let rest = &chunk[at..];
+                    let end = rest.find(' ').unwrap_or(rest.len());
+                    Some(rest[..end].trim_end_matches('/').to_string())
+                };
+                let (http, https) = (uri("http"), uri("https"));
+                Entry {
+                    system: http.is_none() && https.is_none(),
+                    http,
+                    https,
+                }
+            })
+            .collect()
+    }
+
+    /// `Proxy::all(uri)`: the same proxy for both schemes.
+    pub fn has_all(debug: &str, uri: &str) -> bool {
+        entries(debug)
+            .iter()
+            .any(|e| e.http.as_deref() == Some(uri) && e.https.as_deref() == Some(uri))
+    }
+
+    pub fn has_http(debug: &str, uri: &str) -> bool {
+        entries(debug)
+            .iter()
+            .any(|e| e.http.as_deref() == Some(uri))
+    }
+
+    pub fn has_https(debug: &str, uri: &str) -> bool {
+        entries(debug)
+            .iter()
+            .any(|e| e.https.as_deref() == Some(uri))
+    }
+
+    pub fn has_system(debug: &str) -> bool {
+        entries(debug).iter().any(|e| e.system)
+    }
+
+    pub fn has_any_http(debug: &str) -> bool {
+        entries(debug).iter().any(|e| e.http.is_some())
+    }
+
+    pub fn has_any_https(debug: &str) -> bool {
+        entries(debug).iter().any(|e| e.https.is_some())
+    }
+
+    #[test]
+    fn parses_reqwest_client_debug() {
+        let all = r#"Client { accepts: Accepts, proxies: [Matcher { http: Intercept { uri: http://127.0.0.1:3128/ }, https: Intercept { uri: http://127.0.0.1:3128/ } }], referer: true }"#;
+        assert!(has_all(all, "http://127.0.0.1:3128"));
+        assert!(!has_system(all));
+        let sys = r#"Client { accepts: Accepts, proxies: [Matcher], referer: true }"#;
+        assert!(has_system(sys) && !has_any_http(sys) && !has_any_https(sys));
+        assert!(entries("no proxies here").is_empty());
+        let nested = r#"Client { proxies: [Matcher { http: Intercept { uri: http://corp:8080/ }, no: NoProxy { ips: IpMatcher([]), domains: DomainMatcher(["x"]) } }, Matcher { https: Intercept { uri: http://corp:8443/ }, no: NoProxy { ips: IpMatcher([]) } }], referer: true }"#;
+        assert_eq!(entries(nested).len(), 2);
+        assert!(has_http(nested, "http://corp:8080") && has_https(nested, "http://corp:8443"));
     }
 }

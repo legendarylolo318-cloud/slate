@@ -570,11 +570,10 @@ fn the_proxy_save_claims_its_generation_beside_the_write_not_inside_the_build() 
 }
 
 /// `proxy::system_proxy_from_env` is a deliberate mirror of one reqwest
-/// release. 0.11.27 applies `ALL_PROXY` last and lets it overwrite
-/// `HTTP_PROXY`/`HTTPS_PROXY`; 0.12 reversed that. Our copy reproduces
-/// 0.11.27 on purpose — restoring a scrubbed environment has to send the
-/// user's traffic where their own configuration was already sending it, not
-/// where a better rule would.
+/// release (0.12.28, whose environment rules live in hyper-util 0.1.21).
+/// Restoring a scrubbed environment has to send the user's traffic where
+/// reqwest itself was already sending it, so the mirror tracks the pinned
+/// version exactly.
 ///
 /// So a major bump is a behaviour change in that function, not a dependency
 /// update, and must not land silently. This fails the suite when the pin moves,
@@ -588,11 +587,11 @@ fn the_mirrored_reqwest_major_version_is_still_what_we_pin() {
         .find(|l| l.trim_start().starts_with("reqwest"))
         .expect("no reqwest dependency in Cargo.toml");
     assert!(
-        line.contains("version = \"0.11\"") || line.contains("reqwest = \"0.11\""),
+        line.contains("version = \"0.12\"") || line.contains("reqwest = \"0.12\""),
         "reqwest is pinned as `{}`, but `proxy::system_proxy_from_env` mirrors \
-         0.11.27's `get_from_environment` — including the `ALL_PROXY` \
-         precedence 0.12 reversed. Re-read that function in the new release, \
-         update the mirror and its doc comment, then update this guard.",
+         0.12.28 (hyper-util's `Builder::from_env`). Re-read the environment \
+         handling in the new release, update the mirror and its doc comment, \
+         then update this guard.",
         line.trim()
     );
 }

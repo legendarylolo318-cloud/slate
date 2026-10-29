@@ -1,10 +1,8 @@
 # Same exceptions as deny.toml; reasons are in REVIEW.md ("Dependency audit").
 [advisories]
 ignore = [
-    "RUSTSEC-2026-0258", # h2 0.3 via reqwest 0.11 (migration tracked)
     "RUSTSEC-2025-0141", # bincode, unmaintained
     "RUSTSEC-2024-0436", # paste, unmaintained
-    "RUSTSEC-2025-0134", # rustls-pemfile, unmaintained
     "RUSTSEC-2026-0192", # ttf-parser, unmaintained
     "RUSTSEC-2026-0370", # zvariant, unmaintained
     "RUSTSEC-2026-0371", # zbus_names, unmaintained

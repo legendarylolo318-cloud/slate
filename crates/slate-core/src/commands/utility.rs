@@ -832,7 +832,7 @@ mod tests {
         assert!(same(&on_disk(&file), &good));
         let c = http.client().expect("a usable proxy must yield a client");
         assert!(
-            format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
+            crate::proxy_http::debug_view::has_all(&format!("{c:?}"), "http://127.0.0.1:3128"),
             "the cell must carry the proxy that was just saved: {c:?}"
         );
     }
@@ -980,7 +980,7 @@ mod tests {
         let good = enabled(ProxyType::Http, "127.0.0.1", 3128);
         let c = proxy_test_client(&good, &caps()).expect("a valid proxy must be testable");
         assert!(
-            format!("{c:?}").contains("All(http://127.0.0.1:3128)"),
+            crate::proxy_http::debug_view::has_all(&format!("{c:?}"), "http://127.0.0.1:3128"),
             "the test must go through the proxy it is testing: {c:?}"
         );
     }
