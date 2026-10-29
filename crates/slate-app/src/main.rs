@@ -43,6 +43,32 @@ fn main() -> anyhow::Result<()> {
     if std::env::args().any(|a| a == "--self-test") {
         std::process::exit(selftest::run());
     }
+    // Same as Settings → General → "App menu and panel icon".
+    #[cfg(target_os = "linux")]
+    for (flag, add) in [
+        ("--install-desktop-entry", true),
+        ("--remove-desktop-entry", false),
+    ] {
+        if std::env::args().any(|a| a == flag) {
+            use platform::desktop_entry as de;
+            let result = if add { de::install() } else { de::remove() };
+            match result {
+                Ok(()) => println!(
+                    "{}",
+                    if add {
+                        "Slate added to the app menu."
+                    } else {
+                        "Slate removed from the app menu."
+                    }
+                ),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            std::process::exit(0);
+        }
+    }
     apply_ui_scale();
 
     // First argument that is a link, if any (`tidal://…` from the OS handler).
