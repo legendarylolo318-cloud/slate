@@ -35,8 +35,8 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | 19 | Low | Wayland `app_id` was empty, so docks could not match `slate.desktop` (wrong icon, no grouping) | `slint::set_xdg_app_id("slate")`, also under `SLINT_BACKEND` |
 | 20 | Medium | Long track lists kept a decoded thumbnail (~100 KB) per row ever shown, so scrolling a 9,000-track playlist could pin hundreds of MB beyond the image cache budget | Model keeps covers for the 6 pages nearest the viewport and refetches on return; image cache 96 → 64 MiB. Unit test |
 | 21 | Low | Closing the music video dropped the pipeline (`set_state(Null)`, joins streaming threads) on the UI thread while holding a mutex | Teardown moved to a blocking worker outside the lock |
-| 23 | Low | Settings and state files were created with the default umask (0644); contents encrypted, but the files disclosed account presence and usage times to other local users | `write_atomic` creates the temp file 0600 (Unix); test |
 | 22 | Low | Workspace `repository` pointed at upstream SONE; crates publishable by accident | Points at Slate; `publish = false` |
+| 23 | Low | Settings and state files were created with the default umask (0644); contents encrypted, but the files disclosed account presence and usage times to other local users | `write_atomic` creates the temp file 0600 (Unix); test |
 
 ## Security verification
 - **Loopback only, off by default:** MCP binds `127.0.0.1` (hard-coded), overlay clamps to loopback; both default off (`defaults::mcp_enabled/overlay_enabled`).
