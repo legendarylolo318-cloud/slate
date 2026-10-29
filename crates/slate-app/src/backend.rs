@@ -920,7 +920,14 @@ impl Backend {
                     *this.shared.tray.lock().await = Some(handle);
                 }
             }
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(windows)]
+            {
+                // SMTC needs the window handle; `bootstrap` records it on show.
+                if let Some(sink) = crate::platform::win_smtc::start(this.control_fn()) {
+                    state.media.set_sink(sink);
+                }
+            }
+            #[cfg(not(any(target_os = "linux", windows)))]
             let _ = state;
         });
     }

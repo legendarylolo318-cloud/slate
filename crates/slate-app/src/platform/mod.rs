@@ -6,4 +6,6 @@ pub mod mpris;
 #[cfg(target_os = "linux")]
 pub mod tray;
 #[cfg(windows)]
+pub mod win_smtc;
+#[cfg(windows)]
 pub mod win_tray;

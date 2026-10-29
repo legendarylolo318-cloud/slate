@@ -330,6 +330,8 @@ fn launch(
     }
     let window = AppWindow::new().context("creating main window")?;
     window.show().context("showing main window")?;
+    #[cfg(windows)]
+    crate::platform::win_smtc::remember_window(window.window());
     tracing::info!(renderer = %active, "UI renderer active");
 
     let initial_theme = crate::themes::load_saved();
