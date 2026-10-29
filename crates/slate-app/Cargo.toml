@@ -10,7 +10,10 @@ build = "build.rs"
 [features]
 default = ["renderer-skia-vulkan", "renderer-femtovg", "renderer-software"]
 renderer-skia = ["slint/renderer-skia"]
-renderer-skia-vulkan = ["renderer-skia", "slint/renderer-skia-vulkan"]
+# Skia's Vulkan path is switched on for Linux only (target section below).
+# Windows uses Skia's Direct3D path, and rust-skia publishes no prebuilt
+# Windows binary with both D3D and Vulkan, which would force a source build.
+renderer-skia-vulkan = ["renderer-skia"]
 renderer-femtovg = ["slint/renderer-femtovg"]
 renderer-software = ["slint/renderer-software"]
 
@@ -37,6 +40,7 @@ interprocess = "2"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+slint = { version = "1.18", default-features = false, features = ["renderer-skia-vulkan"] }
 mpris-server = "0.9"
 ksni = "0.3"
 

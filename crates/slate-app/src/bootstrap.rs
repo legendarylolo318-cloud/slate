@@ -19,7 +19,11 @@ const INDEX_ENV: &str = "SLATE_RENDERER_INDEX";
 
 #[derive(Clone, Copy, Debug)]
 enum Renderer {
+    #[cfg(target_os = "linux")]
     SkiaVulkan,
+    /// Skia's platform default; Direct3D on Windows.
+    #[cfg(windows)]
+    SkiaD3d,
     SkiaOpenGl,
     FemtoVg,
     Software,
@@ -28,7 +32,10 @@ enum Renderer {
 impl Renderer {
     const fn name(self) -> &'static str {
         match self {
+            #[cfg(target_os = "linux")]
             Self::SkiaVulkan => "skia-vulkan",
+            #[cfg(windows)]
+            Self::SkiaD3d => "skia-d3d",
             Self::SkiaOpenGl => "skia-opengl",
             Self::FemtoVg => "femtovg",
             Self::Software => "software",
@@ -38,7 +45,10 @@ impl Renderer {
     fn select(self) -> Result<(), slint::PlatformError> {
         let sel = slint::BackendSelector::new().backend_name("winit".into());
         match self {
+            #[cfg(target_os = "linux")]
             Self::SkiaVulkan => sel.renderer_name("skia".into()).require_vulkan(),
+            #[cfg(windows)]
+            Self::SkiaD3d => sel.renderer_name("skia".into()),
             Self::SkiaOpenGl => sel.renderer_name("skia-opengl".into()),
             Self::FemtoVg => sel.renderer_name("femtovg".into()),
             Self::Software => sel.renderer_name("software".into()),
@@ -49,8 +59,10 @@ impl Renderer {
 
 /// Default → most compatible. Which entries exist depends on Cargo features.
 const CHAIN: &[Renderer] = &[
-    #[cfg(feature = "renderer-skia-vulkan")]
+    #[cfg(all(feature = "renderer-skia-vulkan", target_os = "linux"))]
     Renderer::SkiaVulkan,
+    #[cfg(all(feature = "renderer-skia", windows))]
+    Renderer::SkiaD3d,
     #[cfg(feature = "renderer-skia")]
     Renderer::SkiaOpenGl,
     #[cfg(feature = "renderer-femtovg")]

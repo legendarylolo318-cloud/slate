@@ -816,11 +816,13 @@ impl Backend {
 
     // ---- external control (media keys, MPRIS, tray) ----
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn control_fn(&self) -> ControlFn {
         let this = self.clone();
         Arc::new(move |c| this.handle_control(c))
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn position_fn(&self) -> PositionFn {
         let shared = Arc::clone(&self.shared);
         Arc::new(move || {

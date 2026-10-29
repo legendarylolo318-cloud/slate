@@ -1534,6 +1534,7 @@ mod tests {
     /// Not secret, but it discloses that this user proxies and with what,
     /// beside a settings file encrypted so that a reader of the config
     /// directory learns neither.
+    #[cfg(unix)]
     #[test]
     fn the_sidecar_is_owner_only_even_when_it_already_existed() {
         use std::os::unix::fs::PermissionsExt;

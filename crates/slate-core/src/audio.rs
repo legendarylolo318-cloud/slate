@@ -2,6 +2,7 @@ use crate::signal_path::SignalPathTracker;
 use crate::sync::LockExt;
 use gst::prelude::*;
 use gstreamer as gst;
+#[cfg(target_os = "linux")]
 use gstreamer_app as gst_app;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -258,6 +259,7 @@ pub struct AudioDevice {
 // ── PCM types ──────────────────────────────────────────────────────────
 
 /// Raw PCM chunk from GStreamer appsink
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct AudioChunk {
     data: Vec<u8>,
     format: PcmFormat,
@@ -336,7 +338,8 @@ enum AttachJob {
     },
 }
 
-/// Commands to the ALSA writer thread
+/// Commands to the ALSA writer thread (only spawned on Linux)
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 enum WriterCommand {
     Data(AudioChunk),
     EndOfTrack {
@@ -370,6 +373,7 @@ enum PlaybackBackend {
         norm_volume_el: Option<gst::Element>,
     },
     /// Exclusive/Bit-perfect: GStreamer decode → appsink, ALSA writer is external
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     DirectAlsa {
         pipeline: gst::Pipeline,
         user_volume_el: Option<gst::Element>,
@@ -1881,14 +1885,19 @@ impl AudioPlayer {
             // ALSA writer state — lives outside PlaybackBackend so it persists across track changes
             let mut writer_tx: Option<crossbeam_channel::Sender<WriterCommand>> = None;
             let mut writer_thread: Option<JoinHandle<()>> = None;
+            #[cfg_attr(not(target_os = "linux"), allow(unused_mut, unused_variables))]
             let mut writer_fmt: Option<PcmFormat> = None;
+            #[cfg_attr(not(target_os = "linux"), allow(unused_mut, unused_variables))]
             let mut writer_supported_fmts: Option<Vec<&'static str>> = None;
+            #[cfg_attr(not(target_os = "linux"), allow(unused_mut, unused_variables))]
             let mut writer_supported_rates: Option<Vec<u32>> = None;
+            #[cfg_attr(not(target_os = "linux"), allow(unused_mut, unused_variables))]
             let mut writer_device: Option<String> = None;
             // Track the mode the live writer was spawned in. `bit_perfect` is
             // baked into the writer thread at spawn (it drives reopen format
             // negotiation), so a same-device exclusive↔bit-perfect toggle must
             // force a respawn rather than reuse a stale-mode writer.
+            #[cfg_attr(not(target_os = "linux"), allow(unused_mut, unused_variables))]
             let mut writer_bit_perfect: Option<bool> = None;
             let frames_written = Arc::new(AtomicU64::new(0));
             let current_sample_rate = Arc::new(AtomicU32::new(48000));
