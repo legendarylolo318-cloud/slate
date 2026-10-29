@@ -15,6 +15,7 @@ export component VideoView inherits Rectangle {
     callback close();
     in property <bool> favorite;
     callback toggle-favorite();
+    callback minimize();
     background: #000000;
     property <bool> idle: false;
 
@@ -36,7 +37,8 @@ export component VideoView inherits Rectangle {
         opacity: root.idle ? 0.0 : 1.0;
         animate opacity { duration: 250ms; }
         background: #00000099;
-        Text { x: 16px; text: root.title; color: #ffffff; font-size: 16px; font-weight: 700; vertical-alignment: center; overflow: elide; width: parent.width - 120px; }
+        Text { x: 16px; text: root.title; color: #ffffff; font-size: 16px; font-weight: 700; vertical-alignment: center; overflow: elide; width: parent.width - 160px; }
+        IconButton { x: parent.width - 132px; y: 8px; glyph: "▁"; clicked => { root.minimize(); } }
         IconButton { x: parent.width - 90px; y: 8px; glyph: root.favorite ? "♥" : "♡"; active: root.favorite; clicked => { root.toggle-favorite(); } }
         IconButton { x: parent.width - 48px; y: 8px; glyph: "✕"; clicked => { root.close(); } }
     }

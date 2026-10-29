@@ -127,6 +127,7 @@ impl Backend {
             this.refresh_video_favorite(id);
             this.ui(move |w| {
                 w.set_video_favorite(false);
+                w.set_video_minimized(false);
                 w.set_video_title(title.into());
                 w.set_video_frame(Image::default());
                 w.set_video_status("Loading video…".into());

@@ -6,6 +6,11 @@ export component PlayerBar inherits Rectangle {
     in property <string> artist;
     in property <string> quality;
     in property <image> cover;
+    // A minimised music video plays in the artwork slot; click restores it.
+    in property <bool> video-mini;
+    in property <image> video-frame;
+    in property <string> video-title;
+    callback restore-video();
     in property <bool> playing;
     in property <bool> has-track;
     in property <string> position-text: "0:00";
@@ -55,16 +60,19 @@ export component PlayerBar inherits Rectangle {
                 max-width: root.compact ? 100000px : root.side-w;
                 spacing: 12px;
                 Rectangle {
-                    width: root.compact ? 40px : 56px;
-                    height: self.width;
+                    height: root.compact ? 40px : 56px;
+                    // 16:9 while a video plays here.
+                    width: root.video-mini ? self.height * 16 / 9 : self.height;
                     border-radius: 6px;
-                    background: Theme.surface-raised;
+                    background: root.video-mini ? #000000 : Theme.surface-raised;
                     clip: true;
-                    Image { source: root.cover; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
+                    if !root.video-mini: Image { source: root.cover; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
+                    if root.video-mini: Image { source: root.video-frame; width: parent.width; height: parent.height; image-fit: ImageFit.contain; }
+                    if root.video-mini: TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.restore-video(); } }
                 }
                 VerticalLayout {
                     alignment: center;
-                    Text { text: root.title; color: Theme.text; font-weight: 600; overflow: elide; }
+                    Text { text: root.video-mini ? root.video-title : root.title; color: Theme.text; font-weight: 600; overflow: elide; }
                     Text { text: root.artist; color: Theme.text-muted; font-size: 12px; overflow: elide; }
                     if root.quality != "": Text { text: root.quality; color: Theme.accent; font-size: 11px; font-weight: 600; overflow: elide; }
                 }

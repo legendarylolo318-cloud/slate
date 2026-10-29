@@ -38,6 +38,7 @@ export component AppWindow inherits Window {
     in property <image> video-frame;
     in property <string> video-title;
     in property <bool> video-favorite;
+    in-out property <bool> video-minimized;
     callback video-toggle-favorite(bool);
     // Tracks / Videos tabs on the Loved pages.
     in property <bool> loved-tabs;
@@ -367,6 +368,10 @@ export component AppWindow inherits Window {
                 artist: root.track-artist;
                 quality: root.quality-text;
                 cover: root.track-cover;
+                video-mini: root.video-open && root.video-minimized;
+                video-frame: root.video-frame;
+                video-title: root.video-title;
+                restore-video => { root.video-minimized = false; }
                 playing: root.playing;
                 has-track: root.has-track;
                 position-text: root.position-text;
@@ -545,11 +550,12 @@ export component AppWindow inherits Window {
         }
 
 
-        if root.video-open: VideoView {
+        if root.video-open && !root.video-minimized: VideoView {
             frame: root.video-frame;
             title: root.video-title;
             favorite: root.video-favorite;
             toggle-favorite => { root.video-toggle-favorite(root.video-favorite); }
+            minimize => { root.video-minimized = true; }
             playing: root.video-playing;
             progress: root.video-progress;
             position-text: root.video-position-text;
@@ -557,7 +563,7 @@ export component AppWindow inherits Window {
             status: root.video-status;
             toggle => { root.video-toggle(); }
             seek(f) => { root.video-seek(f); }
-            close => { root.video-open = false; root.video-close(); }
+            close => { root.video-open = false; root.video-minimized = false; root.video-close(); }
         }
 
         if root.sp-open: Rectangle {
