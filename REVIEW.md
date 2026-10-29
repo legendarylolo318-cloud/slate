@@ -7,7 +7,7 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 |---|---|---|
 | `cargo fmt --all --check` | pass | pass (CI) |
 | `cargo clippy --workspace --all-targets -- -D warnings` | pass | pass (CI) |
-| `cargo test --workspace` | 509 pass | pass (CI), plus Windows-only tests (keyring persistence, pipe ACL, `wasapi2sink`); 3 `curlhttpsrc` tests skipped, no curl plugin in GStreamer's Windows packages |
+| `cargo test --workspace` | 510 pass | pass (CI), plus Windows-only tests (keyring persistence, pipe ACL, `wasapi2sink`); 3 `curlhttpsrc` tests skipped, no curl plugin in GStreamer's Windows packages |
 | `cargo deny check` (advisories, bans, licenses, sources) | pass | n/a |
 | `cargo audit` | pass, with the exceptions below | n/a |
 | Release dry run (`workflow_dispatch`) | AppImage built and self-tested (host GStreamer/GIO/libsoup hidden; Fedora CA layout) | portable zip + installer built; self-test with a clean PATH; GUI launch; install/run/uninstall |
@@ -48,6 +48,7 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | 31 | Medium | AppImage on Fedora/openSUSE: the bundled GnuTLS (Ubuntu) only knows `/etc/ssl/certs/ca-certificates.crt`, so HTTPS audio could fail certificate checks | souphttpsrc gets a `GTlsFileDatabase` built from the distro's bundle (`ssl-ca-file` is ignored with libsoup 3); CI repeats the self-test with only Fedora's bundle (#10) |
 | 32 | Low | The desktop file was `slate.desktop`, but XDG portals require an app id with a matching installed desktop file | Renamed to `io.github.legendarylolo318_cloud.slate.desktop` (the metainfo id), used as Wayland app_id and MPRIS desktop entry; a test keeps code, desktop file and metainfo in agreement |
 | 33 | Low | Links forwarded to a renderer-fallback session were dropped | The parent (which owns the socket) relays them to the child over stdin; verified across two fallbacks (#9) |
+| 34 | High | Windows exclusive mode set `wasapi2sink`'s `exclusive` property, which GStreamer 1.24 does not have; setting a missing property panics, so the first exclusive playback would have crashed the audio thread (caught by the Windows CI test) | The sink is chosen at runtime: `wasapi2sink` when it supports exclusive mode, else `wasapisink`; devices come from the matching provider; properties are only set after checking they exist; the packaged self-test requires `wasapisink` |
 
 ## Security verification
 - **Loopback only, off by default:** MCP binds `127.0.0.1` (hard-coded), overlay clamps to loopback; both default off (`defaults::mcp_enabled/overlay_enabled`).
