@@ -16,6 +16,8 @@
   AppImage or binary. Settings → General → "App menu and panel icon" → Add installs Slate's
   launcher and icons for your user (and makes global shortcuts available on Linux); the icon
   is also set on the window itself (X11, Windows).
+- The tray icon was an old placeholder; it now uses the Slate icon.
+- `slate --install-desktop-entry` / `--remove-desktop-entry` do the same from the command line.
 
 ## [0.1.0] - 2026-10-28
 
