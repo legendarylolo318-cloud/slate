@@ -38,6 +38,8 @@ export global SettingsState {
     in-out property <bool> show-alsa-options: true;
     in-out property <string> exclusive-hint: "Take over the audio device (ALSA).";
     in-out property <bool> global-shortcuts;
+    in-out property <bool> show-app-menu: false;
+    in-out property <bool> in-app-menu: false;
     in-out property <string> global-shortcuts-hint;
     in-out property <[string]> devices;
     in-out property <int> device-index;
@@ -185,6 +187,12 @@ export component SettingsPage inherits Rectangle {
                         label: "Write log files";
                         hint: "Rotating logs in the Slate config folder.";
                         Toggle { checked: SettingsState.logging; toggled(v) => { SettingsState.logging = v; SettingsState.changed-bool("logging", v); } }
+                    }
+                    if SettingsState.show-app-menu: Row {
+                        label: "App menu and panel icon";
+                        hint: SettingsState.in-app-menu ? "Slate is in your app menu." : "Adds Slate to your app menu so panels show its icon and global shortcuts can work.";
+                        if !SettingsState.in-app-menu: Button { label: "Add"; clicked => { SettingsState.action("app-menu-add"); } }
+                        if SettingsState.in-app-menu: Button { label: "Remove"; clicked => { SettingsState.action("app-menu-remove"); } }
                     }
                     Row {
                         label: "Log folder";

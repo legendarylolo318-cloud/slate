@@ -98,6 +98,11 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_bit_perfect(s.bit_perfect);
     g.set_show_alsa_options(cfg!(any(target_os = "linux", windows)));
     g.set_global_shortcuts(prefs.global_shortcuts);
+    #[cfg(target_os = "linux")]
+    {
+        g.set_show_app_menu(true);
+        g.set_in_app_menu(crate::platform::desktop_entry::installed());
+    }
     g.set_global_shortcuts_hint(crate::platform::global_keys::describe().into());
     g.set_exclusive_hint(if cfg!(windows) {
         "Take over the audio device (WASAPI exclusive).".into()
@@ -292,6 +297,32 @@ impl Backend {
             match name.as_str() {
                 "pkce-start" => this.start_pkce(),
                 "pkce-finish" => this.finish_pkce().await,
+                #[cfg(target_os = "linux")]
+                "app-menu-add" | "app-menu-remove" => {
+                    let adding = name == "app-menu-add";
+                    let done = tokio::task::spawn_blocking(move || {
+                        use crate::platform::desktop_entry as de;
+                        if adding {
+                            de::install()
+                        } else {
+                            de::remove()
+                        }
+                    })
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r);
+                    match done {
+                        Ok(()) => this.settings_status(if adding {
+                            "Added to the app menu. Restart Slate so your panel picks up the icon."
+                        } else {
+                            "Removed from the app menu."
+                        }),
+                        Err(e) => {
+                            this.settings_status(format!("Could not update the app menu: {e}"))
+                        }
+                    }
+                    this.load_settings_ui();
+                }
                 "open-logs" => {
                     if let Err(e) = utility::open_log_folder() {
                         this.settings_status(e);

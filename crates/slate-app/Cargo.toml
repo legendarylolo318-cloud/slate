@@ -46,6 +46,7 @@ slint = { version = "1.18", default-features = false, features = ["renderer-skia
 ash = "0.38"
 mpris-server = "0.9"
 ksni = "0.3"
+dirs = "5"
 # XDG GlobalShortcuts portal (platform/global_keys.rs); already in the tree via rfd.
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
 
@@ -65,3 +66,6 @@ slint = { version = "1.18", default-features = false, features = ["raw-window-ha
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

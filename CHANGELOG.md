@@ -11,6 +11,12 @@
   the window, and long lines wrap instead of being cut off.
 - The seek bar keeps a usable length in narrower windows.
 
+### Fixed
+- Panels and docks showed a placeholder instead of Slate's icon when Slate was run as a plain
+  AppImage or binary. Settings → General → "App menu and panel icon" → Add installs Slate's
+  launcher and icons for your user (and makes global shortcuts available on Linux); the icon
+  is also set on the window itself (X11, Windows).
+
 ## [0.1.0] - 2026-10-28
 
 First release of Slate: a native TIDAL client written in Rust with a Slint UI, ported

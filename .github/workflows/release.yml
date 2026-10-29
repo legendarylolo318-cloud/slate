@@ -38,7 +38,8 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: "1"
           DEPLOY_GTK_VERSION: ""
         run: |
-          install -Dm644 assets/icons/128x128.png AppDir/usr/share/icons/hicolor/128x128/apps/slate.png
+          for s in 64x64 128x128; do install -Dm644 assets/icons/$s.png AppDir/usr/share/icons/hicolor/$s/apps/io.github.legendarylolo318_cloud.slate.png; done
+          install -Dm644 assets/icons/icon.png AppDir/usr/share/icons/hicolor/512x512/apps/io.github.legendarylolo318_cloud.slate.png
           install -Dm644 data/io.github.legendarylolo318_cloud.slate.metainfo.xml AppDir/usr/share/metainfo/io.github.legendarylolo318_cloud.slate.metainfo.xml
           install -Dm755 packaging/appimage/gst-registry-hook.sh AppDir/apprun-hooks/gst-registry-hook.sh
           # Loaded at runtime, so linuxdeploy cannot see them: libsoup (dlopened by
@@ -53,7 +54,7 @@ jobs:
             --library /usr/lib/x86_64-linux-gnu/libsoup-3.0.so.0 \
             --deploy-deps-only AppDir/usr/lib/gio/modules \
             --desktop-file data/io.github.legendarylolo318_cloud.slate.desktop \
-            --icon-file assets/icons/128x128.png --icon-filename slate \
+            --icon-file assets/icons/128x128.png --icon-filename io.github.legendarylolo318_cloud.slate \
             --exclude-library 'libvulkan*' --exclude-library 'libGL.so*' --exclude-library 'libEGL*' \
             --exclude-library 'libGLX*' --exclude-library 'libGLdispatch*' --exclude-library 'libdrm*' --exclude-library 'libgbm*' \
             --output appimage

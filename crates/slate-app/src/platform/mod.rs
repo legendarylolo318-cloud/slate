@@ -6,6 +6,8 @@
 /// portals require. Must match `data/` and the metainfo `<id>`.
 pub const APP_ID: &str = "io.github.legendarylolo318_cloud.slate";
 
+#[cfg(target_os = "linux")]
+pub mod desktop_entry;
 pub mod global_keys;
 #[cfg(target_os = "linux")]
 pub mod mpris;
