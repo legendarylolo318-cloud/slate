@@ -30,3 +30,10 @@ Audio bit-perfect caps, renderer fallback, memory/CPU measurement, packaging (Ap
 | Slate | ~175 MB | ~243 MB | ~2 % |
 
 Slate uses about half the memory of the original. Its decoded-image cache is capped at 96 MiB. Not yet measured: a 5,000-track playlist and long sessions.
+
+## Performance review
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 8 | Medium | Dragging the volume bar spawned one blocking task per pointer event, each decrypting, re-encrypting and rewriting the settings file; tasks could also finish out of order so an older value was persisted last | The audible change stays immediate; persistence is debounced (250 ms) and only the newest value is written |
+
+Checked and fine: no constant redraw at idle (about 0.1 % CPU after startup, measured over 10 s); the only timers are the 500 ms position poll (cheap early-out when paused), the MPRIS 1 s tick (early-out when paused) and 3 s auto-hide timers that stop themselves; lyric highlighting touches only the two changed rows; cover art updates a single row; seek commits on release rather than per move.

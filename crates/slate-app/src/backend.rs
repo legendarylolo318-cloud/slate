@@ -39,6 +39,8 @@ pub(crate) struct Shared {
     /// Track length in seconds, stored as `f32` bits.
     duration: AtomicU32,
     login_url: Mutex<String>,
+    /// Bumped on every volume change so only the last of a drag is persisted.
+    volume_seq: AtomicU64,
 }
 
 impl Shared {
@@ -708,11 +710,23 @@ impl Backend {
         let level = level.clamp(0.0, 1.0);
         self.ui(move |w| w.set_volume(level));
         let Some(state) = self.state() else { return };
-        // `set_volume` persists settings, which is disk I/O.
-        self.rt.spawn_blocking(move || {
-            if let Err(e) = playback::set_volume(&state, level) {
-                tracing::warn!("set_volume: {}", e.log_safe());
+        // Dragging the bar fires this per pointer event. The audible change is
+        // immediate; persisting settings (decrypt, encrypt, write) waits until
+        // the drag settles, and a stale value can no longer land after a newer one.
+        let _ = state.audio_player.set_volume(level);
+        let seq = self.shared.volume_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let this = self.clone();
+        self.rt.spawn(async move {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            if this.shared.volume_seq.load(Ordering::SeqCst) != seq {
+                return;
             }
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Err(e) = playback::set_volume(&state, level) {
+                    tracing::warn!("set_volume: {}", e.log_safe());
+                }
+            })
+            .await;
         });
     }
 
