@@ -95,6 +95,8 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_exclusive(s.exclusive);
     g.set_bit_perfect(s.bit_perfect);
     g.set_show_alsa_options(cfg!(any(target_os = "linux", windows)));
+    g.set_global_shortcuts(prefs.global_shortcuts);
+    g.set_global_shortcuts_hint(crate::platform::global_keys::describe().into());
     g.set_exclusive_hint(if cfg!(windows) {
         "Take over the audio device (WASAPI exclusive).".into()
     } else {
@@ -171,6 +173,13 @@ impl Backend {
                     utility::set_minimize_to_tray(&state, v).map_err(|e| e.log_safe())
                 }
                 "logging" => utility::set_enable_logging(v).map_err(|e| e.log_safe()),
+                "global-shortcuts" => {
+                    let mut prefs = crate::uiprefs::UiPrefs::load();
+                    prefs.global_shortcuts = v;
+                    let saved = prefs.save().map_err(|e| e.to_string());
+                    this.set_global_shortcuts(v);
+                    saved
+                }
                 "normalization" => {
                     utility::set_volume_normalization(&state, v).map_err(|e| e.log_safe())
                 }

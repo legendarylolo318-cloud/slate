@@ -52,7 +52,7 @@ jobs:
             --executable target/release/slate \
             --library /usr/lib/x86_64-linux-gnu/libsoup-3.0.so.0 \
             --deploy-deps-only AppDir/usr/lib/gio/modules \
-            --desktop-file data/slate.desktop \
+            --desktop-file data/io.github.legendarylolo318_cloud.slate.desktop \
             --icon-file assets/icons/128x128.png --icon-filename slate \
             --exclude-library 'libvulkan*' --exclude-library 'libGL.so*' --exclude-library 'libEGL*' \
             --exclude-library 'libGLX*' --exclude-library 'libGLdispatch*' --exclude-library 'libdrm*' --exclude-library 'libgbm*' \

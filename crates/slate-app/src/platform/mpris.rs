@@ -55,7 +55,7 @@ async fn serve(
     let (bus_name, desktop_entry) = if std::env::var("SNAP").is_ok() {
         ("slate", "slate_slate")
     } else {
-        ("slate", "slate")
+        ("slate", super::APP_ID)
     };
     let player = match Player::builder(bus_name)
         .can_play(true)

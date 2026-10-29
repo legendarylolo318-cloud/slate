@@ -35,6 +35,8 @@ export global SettingsState {
     in-out property <bool> bit-perfect;
     in-out property <bool> show-alsa-options: true;
     in-out property <string> exclusive-hint: "Take over the audio device (ALSA).";
+    in-out property <bool> global-shortcuts;
+    in-out property <string> global-shortcuts-hint;
     in-out property <[string]> devices;
     in-out property <int> device-index;
     // Scrobbling
@@ -154,6 +156,11 @@ export component SettingsPage inherits Rectangle {
                         label: "Close to tray";
                         hint: "Keep playing in the system tray when the window is closed.";
                         Toggle { checked: SettingsState.minimize-to-tray; toggled(v) => { SettingsState.minimize-to-tray = v; SettingsState.changed-bool("minimize-to-tray", v); } }
+                    }
+                    Row {
+                        label: "Global shortcuts";
+                        hint: "Work while another app has focus: " + SettingsState.global-shortcuts-hint + ". On Linux your desktop may ask you to confirm or change them (needs Slate installed with its desktop file).";
+                        Toggle { checked: SettingsState.global-shortcuts; toggled(v) => { SettingsState.global-shortcuts = v; SettingsState.changed-bool("global-shortcuts", v); } }
                     }
                     Row {
                         label: "Write log files";

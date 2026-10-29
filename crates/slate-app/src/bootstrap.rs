@@ -323,9 +323,9 @@ fn launch(
         .context("starting tokio runtime")?;
     let _guard = runtime.enter();
 
-    // Wayland app_id / X11 WM_CLASS: matches `slate.desktop` (StartupWMClass),
-    // so docks and taskbars show the right icon and group the window.
-    if let Err(e) = slint::set_xdg_app_id("slate") {
+    // Wayland app_id / X11 WM_CLASS: matches the desktop file (and its
+    // StartupWMClass), so docks and taskbars show the right icon and group it.
+    if let Err(e) = slint::set_xdg_app_id(crate::platform::APP_ID) {
         tracing::debug!("could not set the app id: {e}");
     }
     let window = AppWindow::new().context("creating main window")?;

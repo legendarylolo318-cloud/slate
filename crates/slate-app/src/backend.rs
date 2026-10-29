@@ -43,6 +43,9 @@ pub(crate) struct Shared {
     volume_seq: AtomicU64,
     /// The music video open in the player, 0 when none.
     pub(crate) video_id: AtomicU64,
+    /// Linux: the task holding the global-shortcuts portal session.
+    #[cfg(target_os = "linux")]
+    global_keys: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl Shared {
@@ -913,6 +916,9 @@ impl Backend {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             };
             let _ = &rt;
+            if crate::uiprefs::UiPrefs::load().global_shortcuts {
+                this.set_global_shortcuts(true);
+            }
             #[cfg(target_os = "linux")]
             {
                 let sink = crate::platform::mpris::start(this.control_fn(), this.position_fn());
@@ -931,6 +937,29 @@ impl Backend {
             #[cfg(not(any(target_os = "linux", windows)))]
             let _ = state;
         });
+    }
+
+    /// Turns the system-wide shortcuts on or off (Settings → General).
+    pub fn set_global_shortcuts(&self, enabled: bool) {
+        #[cfg(target_os = "linux")]
+        if let Ok(mut task) = self.shared.global_keys.lock() {
+            if let Some(t) = task.take() {
+                t.abort(); // drops the portal session, releasing the shortcuts
+            }
+            if enabled {
+                *task = Some(
+                    self.rt
+                        .spawn(crate::platform::global_keys::portal::run(self.control_fn())),
+                );
+            }
+        }
+        #[cfg(windows)]
+        {
+            let control = self.control_fn();
+            self.ui(move |_| crate::platform::global_keys::hotkeys::set(enabled, control));
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
+        let _ = enabled;
     }
 
     /// Close button: hide to the tray when enabled and present, else quit.

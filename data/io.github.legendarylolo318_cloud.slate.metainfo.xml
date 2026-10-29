@@ -8,7 +8,7 @@
   <description>
     <p>Slate is a native desktop client for TIDAL written in Rust with a Slint interface. It is a port of SONE by lullabyX and is not affiliated with TIDAL.</p>
   </description>
-  <launchable type="desktop-id">slate.desktop</launchable>
+  <launchable type="desktop-id">io.github.legendarylolo318_cloud.slate.desktop</launchable>
   <url type="homepage">https://github.com/legendarylolo318-cloud/slate</url>
   <url type="bugtracker">https://github.com/legendarylolo318-cloud/slate/issues</url>
   <provides><binary>slate</binary></provides>
