@@ -336,6 +336,9 @@ fn launch(
     crate::themes::apply(&window, &initial_theme);
     let backend = Backend::start(runtime.handle().clone(), &window, initial_theme);
     wire(&window, &backend);
+    // The tray icon belongs to the UI thread (it needs its message pump).
+    #[cfg(windows)]
+    crate::platform::win_tray::start(backend.control_fn());
     if let Some(l) = link {
         backend.queue_link(l);
     }

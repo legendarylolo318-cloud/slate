@@ -540,6 +540,15 @@ impl Backend {
                 }
             });
         }
+        #[cfg(windows)]
+        {
+            let tip = if artist.is_empty() {
+                title.clone()
+            } else {
+                format!("{title} — {artist}")
+            };
+            self.ui(move |_| crate::platform::win_tray::set_tooltip(&tip));
+        }
 
         let dur_text = images::format_time(duration);
         self.ui(move |w| {
@@ -937,7 +946,11 @@ impl Backend {
                 .map(|g| g.is_some())
                 .unwrap_or(false)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            crate::platform::win_tray::present()
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         {
             false
         }
