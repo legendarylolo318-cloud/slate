@@ -17,9 +17,14 @@ Copy-Item "$root\libexec\gstreamer-1.0\gst-plugin-scanner.exe" $Out
 # Loaded at runtime, so invisible to the dumpbin walk below:
 #  - gstsoup dlopens libsoup;
 #  - GIO loads its TLS backend (HTTPS) from GIO_MODULE_DIR, which main.rs sets.
-Copy-Item "$root\bin\libsoup-3.0-0.dll" $Out
+# (MSVC builds name it soup-3.0-0.dll; MinGW builds libsoup-3.0-0.dll.)
+$soup = Get-ChildItem "$root\bin" -Filter "*soup-3.0*.dll"
+if (-not $soup) { throw "libsoup 3 not found in $root\bin" }
+$soup | ForEach-Object { Copy-Item $_.FullName $Out }
 New-Item -ItemType Directory -Force "$Out\gio\modules" | Out-Null
-Copy-Item "$root\lib\gio\modules\gioopenssl.dll" "$Out\gio\modules"
+$tls = Get-ChildItem "$root\lib\gio\modules" -Filter "*gioopenssl*.dll"
+if (-not $tls) { throw "GIO OpenSSL module not found in $root\lib\gio\modules" }
+$tls | ForEach-Object { Copy-Item $_.FullName "$Out\gio\modules" }
 # VC++ runtime: GStreamer's DLLs link it dynamically and a clean machine may lack it.
 $crt = Get-ChildItem "$vs\VC\Redist\MSVC" -Recurse -Directory -Filter Microsoft.VC14*.CRT | Where-Object { $_.FullName -like "*\x64\*" -and $_.FullName -notlike "*onecore*" -and $_.FullName -notlike "*debug_nonredist*" } | Select-Object -First 1
 if ($crt) { Copy-Item "$($crt.FullName)\*.dll" $Out }
