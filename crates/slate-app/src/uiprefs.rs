@@ -16,6 +16,10 @@ pub struct UiPrefs {
     /// there instead of failing over again (see `bootstrap::run`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub renderer: Option<String>,
+    /// Renderer being started and not yet confirmed. Still set at the next
+    /// launch means that renderer crashed the process, so it is skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renderer_pending: Option<String>,
 }
 
 fn path() -> Option<PathBuf> {

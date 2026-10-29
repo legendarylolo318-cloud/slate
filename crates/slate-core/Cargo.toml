@@ -32,7 +32,7 @@ notify = "8.2"
 notify-debouncer-full = "0.7"
 thiserror = "2"
 aes-gcm = "0.10"
-keyring = { version = "3", features = ["sync-secret-service"] }
+keyring = { version = "3", features = ["sync-secret-service", "windows-native"] }
 zeroize = "1"
 discord-rich-presence = "1.1"
 zbus = "5"

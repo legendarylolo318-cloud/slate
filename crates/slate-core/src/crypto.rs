@@ -174,3 +174,24 @@ fn store_key_in_file(path: &Path, key: &[u8; 32]) -> Result<(), SlateError> {
 
 // Use rand's fill_bytes via the aead OsRng re-export
 use aes_gcm::aead::rand_core::RngCore;
+
+/// The master key must survive a restart, so the keyring backend must be the
+/// OS store, not keyring's in-memory mock (what a build without the platform
+/// feature silently gets). The mock keeps nothing between `Entry` values.
+#[cfg(all(test, windows))]
+mod keyring_backend_tests {
+    #[test]
+    fn keyring_is_the_persistent_os_store() {
+        let user = format!("selftest-{}", uuid::Uuid::new_v4().simple());
+        let write = keyring::Entry::new("slate-test", &user).unwrap();
+        write.set_password("persisted").unwrap();
+        let read = keyring::Entry::new("slate-test", &user).unwrap();
+        let got = read.get_password();
+        let _ = write.delete_credential();
+        assert_eq!(
+            got.unwrap(),
+            "persisted",
+            "keyring is not the Windows Credential Manager"
+        );
+    }
+}

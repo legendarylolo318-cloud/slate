@@ -116,8 +116,27 @@ pub fn run(
         index
     };
 
+    #[cfg(all(windows, feature = "renderer-software"))]
+    let index = match CHAIN.iter().position(|r| matches!(r, Renderer::Software)) {
+        Some(sw) if forced.is_none() && index < sw && !hardware_gpu_present() => {
+            tracing::warn!("no hardware GPU adapter; using the software renderer");
+            sw
+        }
+        _ => index,
+    };
+
+    // A fallback child gets later launches' messages from its parent, which
+    // keeps the single-instance socket, over stdin (see `respawn`).
+    let incoming = incoming.or_else(|| {
+        std::env::var_os(INDEX_ENV)
+            .is_some()
+            .then(stdin_messages)
+            .flatten()
+    });
+    let inbox = incoming.map(Inbox::start);
+
     let started = Instant::now();
-    let outcome = launch(forced.as_deref(), index, incoming, link);
+    let outcome = launch(forced.as_deref(), index, inbox.clone(), link);
 
     match outcome {
         Err(e)
@@ -125,6 +144,10 @@ pub fn run(
                 && (started.elapsed() < RENDERER_STARTUP_WINDOW
                     || e.downcast_ref::<NoFirstFrame>().is_some()) =>
         {
+            // The failed window is gone; hold messages until the child attaches.
+            if let Some(inbox) = &inbox {
+                inbox.detach();
+            }
             match CHAIN.get(index + 1) {
                 Some(next) => {
                     tracing::warn!(
@@ -133,7 +156,7 @@ pub fn run(
                         error = %format!("{e:#}"),
                         "renderer failed during startup; retrying with the next one"
                     );
-                    respawn(index + 1)
+                    respawn(index + 1, inbox.as_ref())
                 }
                 None => Err(e.context("every renderer failed to start")),
             }
@@ -149,27 +172,95 @@ fn remembered_index(forced: bool) -> usize {
     if forced {
         return 0;
     }
-    crate::uiprefs::UiPrefs::load()
-        .renderer
-        .and_then(|name| CHAIN.iter().position(|r| r.name() == name))
-        .unwrap_or(0)
+    let prefs = crate::uiprefs::UiPrefs::load();
+    let position = |name: &str| CHAIN.iter().position(|r| r.name() == name);
+    // A renderer that never got confirmed took the whole process down (an
+    // access violation in a GPU driver cannot be caught): start after it.
+    if let Some(crashed) = prefs.renderer_pending.as_deref().and_then(position) {
+        tracing::warn!(
+            renderer = CHAIN.get(crashed).map_or("?", |r| r.name()),
+            "this renderer crashed during the last startup; skipping it"
+        );
+        // Nothing after it: start over rather than run off the chain.
+        return if crashed + 1 < CHAIN.len() {
+            crashed + 1
+        } else {
+            0
+        };
+    }
+    prefs.renderer.as_deref().and_then(position).unwrap_or(0)
 }
 
-/// After a fallback relaunch, record the renderer once it has proved itself.
-fn remember_renderer(name: &'static str, no_frame: std::rc::Rc<std::cell::Cell<bool>>) {
+fn update_prefs(f: impl FnOnce(&mut crate::uiprefs::UiPrefs)) {
+    let mut prefs = crate::uiprefs::UiPrefs::load();
+    let before = prefs.clone();
+    f(&mut prefs);
+    if prefs != before {
+        if let Err(e) = prefs.save() {
+            tracing::warn!("could not save renderer state: {e}");
+        }
+    }
+}
+
+/// Marks `name` as being tried; cleared by [`confirm_renderer`] or a clean exit.
+fn mark_renderer_pending(name: &'static str) {
+    update_prefs(|p| p.renderer_pending = Some(name.to_string()));
+}
+
+fn clear_renderer_pending() {
+    update_prefs(|p| p.renderer_pending = None);
+}
+
+/// Once the renderer has drawn for a while it is confirmed. If it was reached
+/// by falling back (or by skipping a crashed one), remember it for next time.
+fn confirm_renderer(
+    name: &'static str,
+    index: usize,
+    no_frame: std::rc::Rc<std::cell::Cell<bool>>,
+) {
     slint::Timer::single_shot(FIRST_FRAME_TIMEOUT + Duration::from_secs(1), move || {
         if no_frame.get() {
             return;
         }
-        let mut prefs = crate::uiprefs::UiPrefs::load();
-        if prefs.renderer.as_deref() != Some(name) {
-            prefs.renderer = Some(name.to_string());
-            match prefs.save() {
-                Ok(()) => tracing::info!(renderer = name, "remembered the working renderer"),
-                Err(e) => tracing::warn!("could not remember the renderer: {e}"),
+        update_prefs(|p| {
+            p.renderer_pending = None;
+            if index > 0 && p.renderer.as_deref() != Some(name) {
+                tracing::info!(renderer = name, "remembered the working renderer");
+                p.renderer = Some(name.to_string());
+            }
+        });
+    });
+}
+
+/// True when DXGI reports a hardware adapter. Without one (VMs, remote
+/// sessions, CI runners on the Basic Render Driver) Skia/D3D and OpenGL crash
+/// the process with an access violation instead of failing, so the software
+/// renderer is the only safe choice.
+#[cfg(windows)]
+fn hardware_gpu_present() -> bool {
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
+    };
+    // SAFETY: DXGI COM calls on interfaces created here and released on drop.
+    unsafe {
+        let Ok(factory) = CreateDXGIFactory1::<IDXGIFactory1>() else {
+            return true; // cannot tell; do not block the GPU renderers
+        };
+        let mut i = 0;
+        while let Ok(adapter) = factory.EnumAdapters1(i) {
+            i += 1;
+            let Ok(desc) = adapter.GetDesc1() else {
+                continue;
+            };
+            let software = desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0;
+            // Microsoft Basic Render Driver (WARP).
+            let basic = desc.VendorId == 0x1414 && desc.DeviceId == 0x8c;
+            if !software && !basic {
+                return true;
             }
         }
-    });
+        false
+    }
 }
 
 /// True when the Vulkan loader is present, an instance can be created and it
@@ -200,7 +291,7 @@ fn vulkan_usable() -> bool {
 fn launch(
     forced: Option<&str>,
     index: usize,
-    incoming: Option<std::sync::mpsc::Receiver<String>>,
+    inbox: Option<Inbox>,
     link: Option<String>,
 ) -> anyhow::Result<()> {
     let mut chosen = None;
@@ -220,6 +311,7 @@ fn launch(
                 .select()
                 .map_err(|e| anyhow::anyhow!("selecting {}: {e}", renderer.name()))?;
             chosen = Some(renderer);
+            mark_renderer_pending(renderer.name());
             renderer.name().to_string()
         }
     };
@@ -247,19 +339,10 @@ fn launch(
     if let Some(l) = link {
         backend.queue_link(l);
     }
-    if let Some(rx) = incoming {
-        let b = backend.clone();
+    if let Some(inbox) = &inbox {
         // Messages from later launches: raise the window or open a link.
-        let spawned = std::thread::Builder::new()
-            .name("slate-links".into())
-            .spawn(move || {
-                for msg in rx {
-                    b.handle_message(&msg);
-                }
-            });
-        if let Err(e) = spawned {
-            tracing::warn!("link forwarding unavailable: {e}");
-        }
+        let b = backend.clone();
+        inbox.set_handler(Box::new(move |msg| b.handle_message(msg)));
     }
     let b = backend.clone();
     window
@@ -270,8 +353,8 @@ fn launch(
     // the rendering notifier; Vulkan is probed before selection instead).
     let watch = matches!(chosen, Some(Renderer::SkiaOpenGl | Renderer::FemtoVg));
     let no_frame = first_frame_watchdog(&window, watch);
-    if let Some(r) = chosen.filter(|_| std::env::var_os(INDEX_ENV).is_some()) {
-        remember_renderer(r.name(), std::rc::Rc::clone(&no_frame));
+    if let Some(r) = chosen {
+        confirm_renderer(r.name(), index, std::rc::Rc::clone(&no_frame));
     }
     let looped = slint::run_event_loop_until_quit();
     backend.shutdown();
@@ -281,6 +364,9 @@ fn launch(
         return Err(NoFirstFrame.into());
     }
     looped.context("running event loop")?;
+    if chosen.is_some() {
+        clear_renderer_pending();
+    }
     Ok(())
 }
 
@@ -406,15 +492,105 @@ fn wire(window: &AppWindow, backend: &Backend) {
 /// Slint fixes its platform once per process, so trying another renderer needs
 /// a fresh process. The launch-time scrub removed the user's proxy variables
 /// from this process; hand them back so the child scrubs from the same input.
-fn respawn(next_index: usize) -> anyhow::Result<()> {
+fn respawn(next_index: usize, inbox: Option<&Inbox>) -> anyhow::Result<()> {
     let exe = std::env::current_exe().context("locating own executable")?;
-    let status = std::process::Command::new(exe)
+    let mut child = std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
         .envs(slate_core::proxy::scrubbed_env().iter().cloned())
         .env(INDEX_ENV, next_index.to_string())
-        .status()
+        .stdin(std::process::Stdio::piped())
+        .spawn()
         .context("relaunching with a fallback renderer")?;
+    // This process still owns the single-instance socket: pass what arrives
+    // there on to the child, one message per line.
+    match (inbox, child.stdin.take()) {
+        (Some(inbox), Some(stdin)) => {
+            let stdin = std::sync::Mutex::new(stdin);
+            inbox.set_handler(Box::new(move |msg| {
+                if let Ok(mut s) = stdin.lock() {
+                    let _ = std::io::Write::write_all(&mut *s, format!("{msg}\n").as_bytes());
+                }
+            }));
+        }
+        (_, stdin) => drop(stdin),
+    }
+    let status = child.wait().context("waiting for the fallback renderer")?;
     std::process::exit(status.code().unwrap_or(1));
+}
+
+/// Messages from later launches, handed to whoever currently shows the UI:
+/// this process's window, or after a renderer fallback the relaunched child.
+/// Messages that arrive while nobody is attached wait (up to a few).
+#[derive(Clone, Default)]
+struct Inbox(std::sync::Arc<std::sync::Mutex<InboxState>>);
+
+type MessageHandler = Box<dyn Fn(&str) + Send>;
+
+#[derive(Default)]
+struct InboxState {
+    handler: Option<MessageHandler>,
+    pending: Vec<String>,
+}
+
+impl Inbox {
+    const MAX_PENDING: usize = 16;
+
+    fn start(rx: std::sync::mpsc::Receiver<String>) -> Self {
+        let inbox = Self::default();
+        let feed = inbox.clone();
+        let spawned = std::thread::Builder::new()
+            .name("slate-links".into())
+            .spawn(move || {
+                for msg in rx {
+                    feed.deliver(msg);
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::warn!("link forwarding unavailable: {e}");
+        }
+        inbox
+    }
+
+    fn deliver(&self, msg: String) {
+        let Ok(mut s) = self.0.lock() else { return };
+        match &s.handler {
+            Some(h) => h(&msg),
+            None if s.pending.len() < Self::MAX_PENDING => s.pending.push(msg),
+            None => {}
+        }
+    }
+
+    fn set_handler(&self, handler: MessageHandler) {
+        let Ok(mut s) = self.0.lock() else { return };
+        for msg in std::mem::take(&mut s.pending) {
+            handler(&msg);
+        }
+        s.handler = Some(handler);
+    }
+
+    fn detach(&self) {
+        if let Ok(mut s) = self.0.lock() {
+            s.handler = None;
+        }
+    }
+}
+
+/// A fallback child's incoming messages: lines its parent writes to stdin.
+fn stdin_messages() -> Option<std::sync::mpsc::Receiver<String>> {
+    use std::io::BufRead;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("slate-links-in".into())
+        .spawn(move || {
+            for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+                let msg = line.trim();
+                if !msg.is_empty() && tx.send(msg.to_string()).is_err() {
+                    break;
+                }
+            }
+        })
+        .ok()?;
+    Some(rx)
 }
 
 /// Stderr always; plus a rotating file under the config dir when the
