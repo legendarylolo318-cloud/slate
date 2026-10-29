@@ -7,9 +7,10 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 |---|---|---|
 | `cargo fmt --all --check` | pass | pass (CI) |
 | `cargo clippy --workspace --all-targets -- -D warnings` | pass | pass (CI) |
-| `cargo test --workspace` | 488 pass | pass (CI); 3 `curlhttpsrc` tests skipped, no curl plugin in GStreamer's Windows packages |
+| `cargo test --workspace` | 509 pass | pass (CI), plus Windows-only tests (keyring persistence, pipe ACL, `wasapi2sink`); 3 `curlhttpsrc` tests skipped, no curl plugin in GStreamer's Windows packages |
 | `cargo deny check` (advisories, bans, licenses, sources) | pass | n/a |
 | `cargo audit` | pass, with the exceptions below | n/a |
+| Release dry run (`workflow_dispatch`) | AppImage built and self-tested (host GStreamer/GIO/libsoup hidden; Fedora CA layout) | portable zip + installer built; self-test with a clean PATH; GUI launch; install/run/uninstall |
 
 ## Bugs found and fixed
 | # | Severity | Finding | Fix |
@@ -32,13 +33,21 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | 16 | High | AppImage: same runtime-loaded libsoup / GIO TLS gap (worked on the build machine only because the host had them) | Both bundled, `GIO_MODULE_DIR` set by the AppRun hook; CI self-test runs with the host's GStreamer plugins, GIO modules and libsoup hidden |
 | 17 | High | With no usable Vulkan driver the app reported `skia-vulkan` active and showed **no window** (Skia creates its surface lazily, after the fallback check) | Vulkan probed with `ash` (instance + physical device) before selection |
 | 18 | High | Same silent failure for GL renderers when EGL is unusable | First-frame watchdog on GL renderers: no frame in 6 s → window hidden, next renderer. Verified: no Vulkan + no EGL ends in the software renderer with one window and one MPRIS name |
-| 19 | Low | Wayland `app_id` was empty, so docks could not match `slate.desktop` (wrong icon, no grouping) | `slint::set_xdg_app_id("slate")`, also under `SLINT_BACKEND` |
+| 19 | Low | Wayland `app_id` was empty, so docks could not match the desktop file (wrong icon, no grouping) | `slint::set_xdg_app_id`, also under `SLINT_BACKEND`; since #32 the id is `io.github.legendarylolo318_cloud.slate` |
 | 20 | Medium | Long track lists kept a decoded thumbnail (~100 KB) per row ever shown, so scrolling a 9,000-track playlist could pin hundreds of MB beyond the image cache budget | Model keeps covers for the 6 pages nearest the viewport and refetches on return; image cache 96 → 64 MiB. Unit test |
 | 21 | Low | Closing the music video dropped the pipeline (`set_state(Null)`, joins streaming threads) on the UI thread while holding a mutex | Teardown moved to a blocking worker outside the lock |
 | 22 | Low | Workspace `repository` pointed at upstream SONE; crates publishable by accident | Points at Slate; `publish = false` |
 | 23 | Low | Settings and state files were created with the default umask (0644); contents encrypted, but the files disclosed account presence and usage times to other local users | `write_atomic` creates the temp file 0600 (Unix); test |
 | 24 | Low | A local client that connected to the single-instance socket and sent nothing blocked all later link forwarding | Each connection read on its own thread, at most 8 at once; verified live with a silent client held open |
 | 25 | Medium | After a renderer fallback, every launch failed over again (about 12 s on a machine without working GL) | The renderer that worked is stored in `ui.json` and used first next time; verified live (#9) |
+| 26 | Critical | **Windows logged the user out on every restart:** `keyring` was built without its Windows backend and silently used an in-memory mock, so the master key vanished at exit and the encrypted settings could not be read | `windows-native` feature; Windows test that a secret written through one `Entry` reads back through a fresh one (passes on CI) |
+| 27 | High | Windows without a hardware GPU (VMs, remote sessions, CI): Skia/D3D and femtovg crash with an access violation, which no fallback can catch | DXGI probe goes straight to the software renderer; a renderer still marked pending at the next start (it crashed) is skipped. Release smoke test now launches the GUI successfully |
+| 28 | Medium | Windows single-instance pipe had the default ACL and a predictable name another account could take first | DACL `D:P(A;;GA;;;OW)`; a second launch only forwards to a server running as the same user SID; Windows tests (#8) |
+| 29 | Medium | reqwest 0.12 (needed to drop h2 0.3) accepts any proxy URI and resolves nothing until a request is sent, which would have lost Slate's fail-closed "proxy unusable" errors; its environment rules also changed | `check_proxy_uri` restores the up-front check (known scheme, SOCKS host resolves); `system_proxy_from_env` now mirrors 0.12.28 (hyper-util) precedence; tests read the client through a Debug parser (#6) |
+| 30 | Medium | Audio errors reached the user as `Audio error: device_busy` | Every kind is a sentence saying what to do; WASAPI `AUDCLNT_E_DEVICE_IN_USE` and not-negotiated (bit-perfect on an unwilling device) classified; tests |
+| 31 | Medium | AppImage on Fedora/openSUSE: the bundled GnuTLS (Ubuntu) only knows `/etc/ssl/certs/ca-certificates.crt`, so HTTPS audio could fail certificate checks | souphttpsrc gets a `GTlsFileDatabase` built from the distro's bundle (`ssl-ca-file` is ignored with libsoup 3); CI repeats the self-test with only Fedora's bundle (#10) |
+| 32 | Low | The desktop file was `slate.desktop`, but XDG portals require an app id with a matching installed desktop file | Renamed to `io.github.legendarylolo318_cloud.slate.desktop` (the metainfo id), used as Wayland app_id and MPRIS desktop entry; a test keeps code, desktop file and metainfo in agreement |
+| 33 | Low | Links forwarded to a renderer-fallback session were dropped | The parent (which owns the socket) relays them to the child over stdin; verified across two fallbacks (#9) |
 
 ## Security verification
 - **Loopback only, off by default:** MCP binds `127.0.0.1` (hard-coded), overlay clamps to loopback; both default off (`defaults::mcp_enabled/overlay_enabled`).
@@ -52,12 +61,10 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 - **Panics:** clippy denies `unwrap`/`expect`/`panic!` in production code. Remaining slice-index risks are fixed (#13); other slices use `find()` results or lengths checked beforehand. Time math: timestamps are `i64`, float→int casts saturate.
 
 ### Dependency audit
-`deny.toml` allows only GPLv3-compatible licences (MIT, Apache-2.0, BSD, ISC, Zlib, MPL-2.0, LGPL-2.1+, …). Slint is triple-licensed; with the `LicenseRef-Slint-*` licences not allowed it resolves to **GPL-3.0-only**. Lockfile refresh fixed crossbeam-epoch, quick-xml, anyhow, tokio and event-listener advisories. Accepted exceptions (`deny.toml`, `.cargo/audit.toml`):
+`deny.toml` allows only GPLv3-compatible licences (MIT, Apache-2.0, BSD, ISC, Zlib, MPL-2.0, LGPL-2.1+, …). Slint is triple-licensed; with the `LicenseRef-Slint-*` licences not allowed it resolves to **GPL-3.0-only**. Lockfile refresh fixed crossbeam-epoch, quick-xml, anyhow, tokio and event-listener advisories; the reqwest 0.12 migration (#6) removed h2 0.3 (RUSTSEC-2026-0258) and rustls-pemfile 1. Accepted exceptions (`deny.toml`, `.cargo/audit.toml`):
 
 | Advisory | Crate | Why accepted |
 |---|---|---|
-| RUSTSEC-2026-0258 | h2 0.3 (via reqwest 0.11) | Client-side DoS from a malicious server; Slate talks to fixed HTTPS hosts. Migration: #6 |
-| RUSTSEC-2025-0134 | rustls-pemfile 1 | Unmaintained, via reqwest 0.11 (#6) |
 | RUSTSEC-2024-0436 | paste | Unmaintained proc-macro, via gstreamer-rs |
 | RUSTSEC-2026-0192 | ttf-parser | Unmaintained, via winit's Wayland decorations |
 | RUSTSEC-2026-0370/0371/0372 | zvariant, zbus_names, zvariant_derive | Unmaintained, via accesskit/zbus |
@@ -87,7 +94,7 @@ Idle RAM stays about 47 % below the original (hard requirement met).
 | Also `__EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent` | Skia/OpenGL draws nothing → femtovg draws nothing → software, about 12 s total |
 | `SLINT_BACKEND=winit-software` / `winit-femtovg` | Override honoured, no fallback attempted |
 
-The working renderer is remembered after a fallback (#25). Remaining: links forwarded during the fallback session itself are dropped (#9).
+The working renderer is remembered after a fallback (#25), links reach the fallback session (#33), and a renderer that crashed the process is skipped at the next start (#27).
 
 ## Feature parity (original README → Slate)
 "Code" = implemented and unit-tested, not exercised live in this review. Live tests were stopped after the TIDAL account was rate-limited.
@@ -96,34 +103,38 @@ The working renderer is remembered after a fallback (#25). Remaining: links forw
 |---|---|
 | Lossless/Hi-Res streaming, quality cap and fallback | Works (live playback earlier) |
 | Bit-perfect | Code: decoder → audioconvert (dither/noise-shaping off) → appsink → ALSA writer, no resampler or volume element; negotiated caps not inspected live |
-| Exclusive ALSA, DAC matching, "device busy" message | Code (Linux only); Windows: #3 |
+| Exclusive output, DAC matching, "device busy" message | Linux ALSA writer; Windows WASAPI exclusive (`wasapi2sink`, #3; not heard on Windows). Busy-device message now readable (#30) |
 | Signal Path panel | Code, unverified live |
 | ReplayGain album/track switching | Code (queue context decides), unverified live |
 | Autoplay | Works: skipping past the queue end continued with radio tracks |
 | Gapless (1.24+ with fallback) | Code, unit-tested; not heard |
-| GStreamer errors in UI | Code (`audio-error` event → toast) |
-| Music video | Code; HLS starts; minimise into bar missing (#15) |
-| Loved videos, Videos tabs | Missing (#12) |
+| GStreamer errors in UI | Code (`audio-error` event → readable message, #30) |
+| Music video | Code; minimise into the player bar (#15); not watched live in this review |
+| Loved videos, Videos tabs | Code (#12): Tracks/Videos tabs, video grid, heart in the player, "N videos · M tracks"; needs a live check |
 | Themes (15 presets, picker, light/dark) | Works |
 | Lyrics, full-screen player, miniplayer | Code; not exercised in this review |
 | Queue persistence | Works |
 | MPRIS | Works (play, pause, next, volume via `playerctl`) |
-| Tray | Linux code; Windows #2 |
-| Keyboard shortcuts | In-app work; `?` opens the shortcut sheet (a test checks it lists every bound key); global #5 |
-| Library + folders | Works; sorting missing (#14) |
+| Tray | Linux StatusNotifier; Windows notification-area icon (#2, built in CI, not clicked on Windows) |
+| Keyboard shortcuts | In-app work; `?` shortcut sheet (#13); global shortcuts off by default (#5): portal binding verified on Hyprland, key presses untested |
+| Library + folders | Works; sorting (#14): wiremock test that the order reaches TIDAL; needs a live check |
 | Share links | Code (copy link to clipboard) |
 | Deep links + single instance | Works (`tidal://album/…`, `tidal://playlist/…`) |
 | Profile editing | Code |
-| Explore | Missing (#11) |
+| Explore | Code (#11): Explore page, genre/mood sub-pages, See all, playable videos; needs a live check |
 | MCP server | Works (integration test) |
 | OBS overlay | Works (tests) |
 | Scrobbling, play reporting | Code; live submission unverified |
 | Discord presence | Works, but under SONE's app ID (#7) |
 | Proxy (HTTP/HTTPS/SOCKS5, auth, fail-closed) | Code, 135 tests; not tested against a live proxy |
 | Auth: device code, PKCE browser, expiry, logout | Device code works (existing session); wiremock tests cover refresh/expiry; logout wipe tested |
+| Windows media controls (SMTC) | Code (#1, souvlaki on the window HWND); built in CI, not used on Windows |
 
 ## Windows status
-CI builds, lints and tests pass. Packaging dry run: the AppImage job passes (including the bundled-plugins/HTTPS self-test with host libraries hidden); Windows packaging is being iterated. Sleep inhibit is implemented with `SetThreadExecutionState` on a dedicated thread (#4; compiled in CI, `powercfg /requests` not yet checked on a Windows machine). Known gaps, all filed: SMTC (#1), tray (#2), WASAPI exclusive (#3), global shortcuts (#5), pipe ACL (#8).
+CI builds, lints and tests pass, including Windows-only tests. The release dry run builds the portable zip and the Inno Setup installer, runs `slate --self-test --network` with PATH reduced to System32 and the GStreamer install hidden (no missing DLLs, bundled plugins load, HTTPS works), launches the GUI (software renderer on the runner's GPU-less VM), and installs, runs and uninstalls the installer with the `tidal://` handler registered. Implemented and built but not used on a real Windows desktop: SMTC (#1), tray (#2), WASAPI exclusive/bit-perfect (#3), sleep inhibit (#4), global hotkeys (#5).
+
+## Needs a live check
+Live TIDAL testing was paused after the account was rate-limited. With it available again: Explore (#11), Loved Videos (#12), sorting (#14), video in the player bar (#15), rapid skipping and a long playback session for leak checks.
 
 ## Open issues
-#1–#15 on GitHub; see the tables above for which finding each one tracks.
+#7 Discord Rich Presence still uses SONE's application ID: needs the maintainer to register a Slate application in the Discord developer portal; swapping the id is then one line in `discord.rs`.
