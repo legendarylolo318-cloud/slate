@@ -127,9 +127,23 @@ jobs:
             Get-Content selftest.txt, selftest-err.txt
             # 0xC0000135 = STATUS_DLL_NOT_FOUND
             if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
-            $p = Start-Process dist/slate-win/slate.exe -PassThru
-            Start-Sleep 8
-            if ($p.HasExited) { throw "slate.exe exited early with code $($p.ExitCode)" }
+            # Diagnostics: each renderer on its own, logs captured.
+            $env:SLATE_LOG = "debug,wgpu_hal=warn,naga=warn"
+            foreach ($b in "winit-skia", "winit-femtovg", "winit-software") {
+              $env:SLINT_BACKEND = $b
+              $q = Start-Process dist/slate-win/slate.exe -PassThru -NoNewWindow -RedirectStandardOutput "gui-$b.txt" -RedirectStandardError "gui-$b-err.txt"
+              Start-Sleep 8
+              if ($q.HasExited) { "${b}: exited with $('{0:X}' -f $q.ExitCode)" } else { "${b}: running"; Stop-Process $q; Start-Sleep 1 }
+              Get-Content "gui-$b.txt", "gui-$b-err.txt" -Tail 15
+            }
+            Remove-Item Env:SLINT_BACKEND
+            # The real check: default renderer chain.
+            $p = Start-Process dist/slate-win/slate.exe -PassThru -NoNewWindow -RedirectStandardOutput gui.txt -RedirectStandardError gui-err.txt
+            Start-Sleep 10
+            if ($p.HasExited) {
+              Get-Content gui.txt, gui-err.txt -Tail 40
+              throw "slate.exe exited early with code $('{0:X}' -f $p.ExitCode)"
+            }
             Stop-Process $p
           } finally {
             Rename-Item C:\gstreamer.hidden C:\gstreamer
