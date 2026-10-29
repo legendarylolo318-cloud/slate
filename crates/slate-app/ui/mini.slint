@@ -66,10 +66,10 @@ export component MiniPlayerWindow inherits Window {
         font-size: 12px;
         overflow: elide;
     }
-    IconButton { x: root.width - root.controls-w - root.pad; y: root.row-h / 2 - 15px; glyph: "⏮"; side: 30px; enabled: root.has-track; clicked => { root.previous(); } }
-    IconButton { x: root.width - root.controls-w - root.pad + 32px; y: root.row-h / 2 - 18px; glyph: root.playing ? "⏸" : "▶"; primary: true; side: 36px; enabled: root.has-track; clicked => { root.toggle-play(); } }
-    IconButton { x: root.width - root.controls-w - root.pad + 70px; y: root.row-h / 2 - 15px; glyph: "⏭"; side: 30px; enabled: root.has-track; clicked => { root.next(); } }
-    if root.wide: IconButton { x: root.width - 38px; y: root.row-h / 2 - 15px; glyph: "⤢"; side: 30px; clicked => { root.expand(); } }
+    IconButton { x: root.width - root.controls-w - root.pad; y: root.row-h / 2 - 15px; icon: @image-url("icons/previous.svg"); side: 30px; enabled: root.has-track; clicked => { root.previous(); } }
+    IconButton { x: root.width - root.controls-w - root.pad + 32px; y: root.row-h / 2 - 18px; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); primary: true; side: 36px; enabled: root.has-track; clicked => { root.toggle-play(); } }
+    IconButton { x: root.width - root.controls-w - root.pad + 70px; y: root.row-h / 2 - 15px; icon: @image-url("icons/next.svg"); side: 30px; enabled: root.has-track; clicked => { root.next(); } }
+    if root.wide: IconButton { x: root.width - 38px; y: root.row-h / 2 - 15px; icon: @image-url("icons/expand.svg"); side: 30px; clicked => { root.expand(); } }
     if root.tall: Text { x: root.pad; y: root.height - 24px; width: 40px; text: root.position-text; color: Theme.text-muted; font-size: 11px; }
     if root.tall: Bar { x: root.pad + 44px; y: root.height - 26px; width: max(0px, root.width - 2 * root.pad - 88px); fraction: root.progress; picked(f) => { root.seek(f); } }
     if root.tall: Text { x: root.width - root.pad - 40px; y: root.height - 24px; width: 40px; text: root.duration-text; color: Theme.text-muted; font-size: 11px; horizontal-alignment: right; }

@@ -171,7 +171,7 @@ export component QueuePanel inherits Rectangle {
         HorizontalLayout {
             Text { text: "Queue"; font-size: 20px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; }
             Button { label: "Clear"; min-width: 60px; height: 28px; clicked => { root.clear(); } }
-            IconButton { glyph: "✕"; side: 28px; clicked => { root.close(); } }
+            IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close(); } }
         }
         Text { text: "NOW PLAYING"; font-size: 11px; color: Theme.text-muted; }
         Text { text: root.now-title == "" ? "Nothing playing" : root.now-title + " — " + root.now-artist; color: Theme.accent; overflow: elide; }
@@ -191,7 +191,7 @@ export component QueuePanel inherits Rectangle {
                         Text { text: r.title; color: Theme.text; overflow: elide; }
                         Text { text: (r.manual ? "Added · " : "") + r.artist; color: Theme.text-muted; font-size: 11px; overflow: elide; }
                     }
-                    IconButton { glyph: "✕"; side: 28px; visible: qa.has-hover; clicked => { root.remove(i); } }
+                    IconButton { icon: @image-url("icons/close.svg"); side: 28px; visible: qa.has-hover; clicked => { root.remove(i); } }
                 }
                 qa := TouchArea { mouse-cursor: MouseCursor.pointer; z: -1; double-clicked => { root.play(i); } }
             }
@@ -200,6 +200,8 @@ export component QueuePanel inherits Rectangle {
 }
 
 export component LyricsPanel inherits Rectangle {
+    // Lyrics size (Settings → General).
+    in property <float> scale: 1.0;
     in property <[LyricLine]> lines;
     in property <string> status;
     in property <bool> synced;
@@ -211,21 +213,23 @@ export component LyricsPanel inherits Rectangle {
         padding: 12px;
         spacing: 8px;
         HorizontalLayout {
-            Text { text: "Lyrics"; font-size: 20px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; }
-            IconButton { glyph: "✕"; side: 28px; clicked => { root.close(); } }
+            Text { text: "Lyrics"; font-size: 20px * root.scale; font-weight: 700; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; }
+            IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close(); } }
         }
         if root.status != "": Text { text: root.status; color: Theme.text-muted; wrap: word-wrap; }
         lv := ListView {
             vertical-stretch: 1;
             for l[i] in root.lines: Rectangle {
-                height: 36px;
+                // Rows grow with the text, so large or wrapped lines are never clipped.
+                height: max(36px * root.scale, line.preferred-height + 12px * root.scale);
                 TouchArea { mouse-cursor: root.synced ? MouseCursor.pointer : MouseCursor.default; clicked => { if (root.synced) { root.seek(i); } } }
-                Text {
+                line := Text {
+                    width: parent.width;
                     text: l.text;
                     wrap: word-wrap;
                     vertical-alignment: center;
                     color: l.active ? Theme.accent : Theme.text-muted;
-                    font-size: l.active ? 18px : 15px;
+                    font-size: (l.active ? 18px : 15px) * root.scale;
                     font-weight: l.active ? 700 : 400;
                     animate color { duration: 150ms; }
                 }

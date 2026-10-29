@@ -63,6 +63,8 @@ export component Button inherits Rectangle {
 
 export component IconButton inherits Rectangle {
     in property <string> glyph;
+    // A vector icon (white SVG, tinted here); preferred over `glyph`.
+    in property <image> icon;
     in property <bool> primary: false;
     in property <bool> active: false;
     in property <bool> enabled: true;
@@ -74,10 +76,19 @@ export component IconButton inherits Rectangle {
     background: root.primary ? (ta.has-hover ? Theme.text.darker(0.1) : Theme.text)
         : (ta.has-hover ? Theme.surface-raised : transparent);
     opacity: root.enabled ? 1.0 : 0.4;
-    Text {
+    property <brush> tint: root.primary ? Theme.background : (root.active ? Theme.accent : Theme.text);
+    if root.icon.width > 0: Image {
+        source: root.icon;
+        colorize: root.tint;
+        width: root.side * (root.primary ? 0.44 : 0.56);
+        height: self.width;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+    if root.icon.width == 0: Text {
         text: root.glyph;
-        font-size: root.primary ? 18px : 15px;
-        color: root.primary ? Theme.background : (root.active ? Theme.accent : Theme.text);
+        font-size: root.side * (root.primary ? 0.41 : 0.44);
+        color: root.tint;
         horizontal-alignment: center;
         vertical-alignment: center;
     }

@@ -334,6 +334,11 @@ fn launch(
     crate::platform::win_smtc::remember_window(window.window());
     tracing::info!(renderer = %active, "UI renderer active");
 
+    {
+        let prefs = crate::uiprefs::UiPrefs::load();
+        window.set_bar_scale(prefs.bar_scale());
+        window.set_lyrics_scale(prefs.lyrics_scale());
+    }
     let initial_theme = crate::themes::load_saved();
     crate::themes::apply(&window, &initial_theme);
     let backend = Backend::start(runtime.handle().clone(), &window, initial_theme);

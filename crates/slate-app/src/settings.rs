@@ -88,6 +88,8 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_minimize_to_tray(s.minimize_to_tray);
     g.set_logging(s.logging);
     g.set_ui_scale_index(prefs.scale_index as i32);
+    g.set_bar_size_index(prefs.bar_size as i32);
+    g.set_lyrics_size_index(prefs.lyrics_size as i32);
     g.set_normalization(s.normalization);
     g.set_gapless(s.gapless);
     g.set_gapless_supported(s.gapless_supported);
@@ -222,6 +224,22 @@ impl Backend {
             let Some(state) = this.state() else { return };
             let usize_i = usize::try_from(i).unwrap_or(0);
             let result: Result<(), String> = match key.as_str() {
+                "bar-size" | "lyrics-size" => {
+                    let mut p = UiPrefs::load();
+                    if key == "bar-size" {
+                        p.bar_size = usize_i;
+                    } else {
+                        p.lyrics_size = usize_i;
+                    }
+                    let saved = p.save().map_err(|e| e.to_string());
+                    // Applies immediately; no restart.
+                    let (bar, lyrics) = (p.bar_scale(), p.lyrics_scale());
+                    this.ui(move |w| {
+                        w.set_bar_scale(bar);
+                        w.set_lyrics_scale(lyrics);
+                    });
+                    saved
+                }
                 "ui-scale" => {
                     let mut p = UiPrefs::load();
                     p.scale_index = usize_i;

@@ -41,7 +41,7 @@ export component ShortcutOverlay inherits Rectangle {
             HorizontalLayout {
                 padding-bottom: 8px;
                 Text { text: "Keyboard shortcuts"; font-size: 18px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; }
-                IconButton { glyph: "✕"; side: 28px; clicked => { root.close(); } }
+                IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close(); } }
             }
             Flickable {
                 vertical-stretch: 1;

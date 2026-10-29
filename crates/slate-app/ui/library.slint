@@ -36,7 +36,8 @@ component NavItem inherits Rectangle {
 component CoverTile inherits Rectangle {
     in property <image> source;
     in property <bool> loved;
-    in property <string> glyph;
+    // Shown instead of the cover (folders).
+    in property <image> icon;
     in property <length> side: 40px;
     in property <length> radius: 4px;
     width: root.side;
@@ -44,20 +45,23 @@ component CoverTile inherits Rectangle {
     border-radius: root.radius;
     clip: true;
     background: root.loved ? Theme.accent : Theme.surface-raised;
-    if root.loved: Text {
-        text: "♥";
-        color: Theme.on-accent;
-        font-size: root.side * 0.5;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    if root.loved: Image {
+        source: @image-url("icons/heart-filled.svg");
+        colorize: Theme.on-accent;
+        width: root.side * 0.5;
+        height: self.width;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
     }
-    if root.glyph != "": Text {
-        text: root.glyph;
-        font-size: root.side * 0.45;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    if !root.loved && root.icon.width > 0: Image {
+        source: root.icon;
+        colorize: Theme.text-muted;
+        width: root.side * 0.5;
+        height: self.width;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
     }
-    if !root.loved && root.glyph == "": Image {
+    if !root.loved && root.icon.width == 0: Image {
         source: root.source;
         width: parent.width;
         height: parent.height;
@@ -77,7 +81,7 @@ component PlaylistItem inherits Rectangle {
     HorizontalLayout {
         padding: 6px;
         spacing: 10px;
-        CoverTile { source: root.entry.cover; glyph: root.entry.folder ? "📁" : ""; }
+        CoverTile { source: root.entry.cover; icon: root.entry.folder ? @image-url("icons/folder.svg") : @image-url(""); }
         if !root.collapsed: VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;

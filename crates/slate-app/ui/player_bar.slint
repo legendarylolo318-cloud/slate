@@ -23,6 +23,10 @@ export component PlayerBar inherits Rectangle {
     in property <bool> favorite: false;
     in property <bool> queue-open: false;
     in property <bool> lyrics-open: false;
+    // Player bar size (Settings → General): scales everything below.
+    in property <float> scale: 1.0;
+    property <length> btn: 38px * root.scale;
+    property <length> btn-primary: 52px * root.scale;
     callback next();
     callback previous();
     callback toggle-shuffle();
@@ -42,28 +46,29 @@ export component PlayerBar inherits Rectangle {
     // Side columns are equal so the transport sits exactly in the middle; stretch
     // factors would add to each column's own content width and push it off-centre.
     // The right group (8 buttons + volume bar) needs ~420px.
-    property <length> side-w: max(430px, root.width * 0.28);
-    property <length> mid-w: max(0px, root.width - 2 * root.side-w - 52px);
-    height: root.compact ? 112px : 88px;
+    // Right cluster: 8 buttons + slim volume slider ≈ 410px at Normal.
+    property <length> side-w: max(420px * root.scale, root.width * 0.27);
+    property <length> mid-w: max(0px, root.width - 2 * root.side-w - 52px * root.scale);
+    height: (root.compact ? 124px : 96px) * root.scale;
     background: Theme.surface;
 
     // Wide: info | transport | volume. Compact: info on top, transport below.
     VerticalLayout {
-        padding: 10px;
-        spacing: 4px;
+        padding: 10px * root.scale;
+        spacing: 4px * root.scale;
         HorizontalLayout {
-            spacing: 16px;
+            spacing: 16px * root.scale;
             // track info
             HorizontalLayout {
                 horizontal-stretch: root.compact ? 1 : 0;
                 min-width: root.compact ? 0px : root.side-w;
                 max-width: root.compact ? 100000px : root.side-w;
-                spacing: 12px;
+                spacing: 12px * root.scale;
                 Rectangle {
-                    height: root.compact ? 40px : 56px;
+                    height: (root.compact ? 44px : 62px) * root.scale;
                     // 16:9 while a video plays here.
                     width: root.video-mini ? self.height * 16 / 9 : self.height;
-                    border-radius: 6px;
+                    border-radius: 6px * root.scale;
                     background: root.video-mini ? #000000 : Theme.surface-raised;
                     clip: true;
                     if !root.video-mini: Image { source: root.cover; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
@@ -72,9 +77,9 @@ export component PlayerBar inherits Rectangle {
                 }
                 VerticalLayout {
                     alignment: center;
-                    Text { text: root.video-mini ? root.video-title : root.title; color: Theme.text; font-weight: 600; overflow: elide; }
-                    Text { text: root.artist; color: Theme.text-muted; font-size: 12px; overflow: elide; }
-                    if root.quality != "": Text { text: root.quality; color: Theme.accent; font-size: 11px; font-weight: 600; overflow: elide; }
+                    Text { text: root.video-mini ? root.video-title : root.title; color: Theme.text; font-size: 14.5px * root.scale; font-weight: 600; overflow: elide; }
+                    Text { text: root.artist; color: Theme.text-muted; font-size: 12.5px * root.scale; overflow: elide; }
+                    if root.quality != "": Text { text: root.quality; color: Theme.accent; font-size: 11px * root.scale; font-weight: 600; overflow: elide; }
                 }
             }
             // transport (wide layout keeps it centred here)
@@ -82,21 +87,21 @@ export component PlayerBar inherits Rectangle {
                 min-width: root.mid-w;
                 max-width: root.mid-w;
                 alignment: center;
-                spacing: 2px;
+                spacing: 2px * root.scale;
                 HorizontalLayout {
                     alignment: center;
-                    spacing: 6px;
-                    IconButton { glyph: "🔀"; active: root.shuffle; opacity: root.shuffle ? 1.0 : 0.6; clicked => { root.toggle-shuffle(); } }
-                    IconButton { glyph: "⏮"; enabled: root.has-track; clicked => { root.previous(); } }
-                    IconButton { primary: true; enabled: root.has-track; glyph: root.playing ? "⏸" : "▶"; clicked => { root.toggle-play(); } }
-                    IconButton { glyph: "⏭"; enabled: root.has-track; clicked => { root.next(); } }
-                    IconButton { glyph: root.repeat == 2 ? "🔂" : "🔁"; active: root.repeat != 0; opacity: root.repeat == 0 ? 0.6 : 1.0; clicked => { root.cycle-repeat(); } }
+                    spacing: 10px * root.scale;
+                    IconButton { side: root.btn; icon: @image-url("icons/shuffle.svg"); active: root.shuffle; opacity: root.shuffle ? 1.0 : 0.6; clicked => { root.toggle-shuffle(); } }
+                    IconButton { side: root.btn; icon: @image-url("icons/previous.svg"); enabled: root.has-track; clicked => { root.previous(); } }
+                    IconButton { primary: true; side: root.btn-primary; enabled: root.has-track; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); clicked => { root.toggle-play(); } }
+                    IconButton { side: root.btn; icon: @image-url("icons/next.svg"); enabled: root.has-track; clicked => { root.next(); } }
+                    IconButton { side: root.btn; icon: root.repeat == 2 ? @image-url("icons/repeat-one.svg") : @image-url("icons/repeat.svg"); active: root.repeat != 0; opacity: root.repeat == 0 ? 0.6 : 1.0; clicked => { root.cycle-repeat(); } }
                 }
                 HorizontalLayout {
-                    spacing: 8px;
-                    Text { text: root.position-text; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; width: 40px; horizontal-alignment: right; }
-                    Bar { horizontal-stretch: 1; fraction: root.progress; picked(f) => { root.seek(f); } }
-                    Text { text: root.duration-text; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; width: 40px; }
+                    spacing: 8px * root.scale;
+                    Text { text: root.position-text; color: Theme.text-muted; font-size: 11.5px * root.scale; vertical-alignment: center; width: 44px * root.scale; horizontal-alignment: right; }
+                    Bar { horizontal-stretch: 1; height: 18px * root.scale; thickness: 4px * root.scale; fraction: root.progress; picked(f) => { root.seek(f); } }
+                    Text { text: root.duration-text; color: Theme.text-muted; font-size: 11.5px * root.scale; vertical-alignment: center; width: 44px * root.scale; }
                 }
             }
             // right cluster
@@ -105,23 +110,25 @@ export component PlayerBar inherits Rectangle {
                 min-width: root.compact ? 0px : root.side-w;
                 max-width: root.compact ? 100000px : root.side-w;
                 alignment: end;
-                spacing: 4px;
-                if root.compact: IconButton { primary: true; enabled: root.has-track; glyph: root.playing ? "⏸" : "▶"; clicked => { root.toggle-play(); } }
-                IconButton { glyph: root.favorite ? "♥" : "♡"; active: root.favorite; enabled: root.has-track; clicked => { root.toggle-favorite(); } }
-                IconButton { glyph: "＋"; enabled: root.has-track; clicked => { root.add-to-playlist(); } }
-                IconButton { glyph: "♪"; active: root.lyrics-open; enabled: root.has-track; clicked => { root.toggle-lyrics(); } }
-                IconButton { glyph: "▣"; clicked => { root.open-miniplayer(); } }
-                IconButton { glyph: "◎"; clicked => { root.open-signal-path(); } }
-                IconButton { glyph: "⛶"; enabled: root.has-track; clicked => { root.toggle-fullscreen(); } }
-                IconButton { glyph: "☰"; active: root.queue-open; clicked => { root.toggle-queue(); } }
-                if !root.compact: IconButton { glyph: root.volume == 0 ? "🔇" : "🔊"; clicked => { root.toggle-mute(); } }
+                spacing: 2px * root.scale;
+                if root.compact: IconButton { primary: true; side: root.btn-primary; enabled: root.has-track; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); clicked => { root.toggle-play(); } }
+                IconButton { side: root.btn; icon: root.favorite ? @image-url("icons/heart-filled.svg") : @image-url("icons/heart.svg"); active: root.favorite; enabled: root.has-track; clicked => { root.toggle-favorite(); } }
+                IconButton { side: root.btn; icon: @image-url("icons/plus.svg"); enabled: root.has-track; clicked => { root.add-to-playlist(); } }
+                IconButton { side: root.btn; icon: @image-url("icons/lyrics.svg"); active: root.lyrics-open; enabled: root.has-track; clicked => { root.toggle-lyrics(); } }
+                IconButton { side: root.btn; icon: @image-url("icons/miniplayer.svg"); clicked => { root.open-miniplayer(); } }
+                IconButton { side: root.btn; icon: @image-url("icons/signal.svg"); clicked => { root.open-signal-path(); } }
+                IconButton { side: root.btn; icon: @image-url("icons/fullscreen.svg"); enabled: root.has-track; clicked => { root.toggle-fullscreen(); } }
+                IconButton { side: root.btn; icon: @image-url("icons/queue.svg"); active: root.queue-open; clicked => { root.toggle-queue(); } }
+                if !root.compact: IconButton { side: root.btn; icon: root.volume == 0 ? @image-url("icons/volume-mute.svg") : @image-url("icons/volume.svg"); clicked => { root.toggle-mute(); } }
                 if !root.compact: Rectangle {
                     // Same height as the buttons so the bar lines up with the icons.
-                    width: 96px;
-                    height: 34px;
+                    width: 84px * root.scale;
+                    height: root.btn;
                     Bar {
                         y: (parent.height - self.height) / 2;
                         width: parent.width;
+                        height: 18px * root.scale;
+                        thickness: 4px * root.scale;
                         live: true;
                         fraction: root.volume;
                         changed(f) => { root.set-volume(f); }
@@ -131,14 +138,14 @@ export component PlayerBar inherits Rectangle {
             }
         }
         if root.compact: HorizontalLayout {
-            spacing: 4px;
-            IconButton { glyph: "🔀"; side: 30px; active: root.shuffle; clicked => { root.toggle-shuffle(); } }
-            IconButton { glyph: "⏮"; side: 30px; enabled: root.has-track; clicked => { root.previous(); } }
-            IconButton { glyph: "⏭"; side: 30px; enabled: root.has-track; clicked => { root.next(); } }
-            IconButton { glyph: root.repeat == 2 ? "🔂" : "🔁"; side: 30px; active: root.repeat != 0; clicked => { root.cycle-repeat(); } }
-            Text { text: root.position-text; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
-            Bar { horizontal-stretch: 1; fraction: root.progress; picked(f) => { root.seek(f); } }
-            Text { text: root.duration-text; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
+            spacing: 4px * root.scale;
+            IconButton { icon: @image-url("icons/shuffle.svg"); side: 34px * root.scale; active: root.shuffle; clicked => { root.toggle-shuffle(); } }
+            IconButton { icon: @image-url("icons/previous.svg"); side: 34px * root.scale; enabled: root.has-track; clicked => { root.previous(); } }
+            IconButton { icon: @image-url("icons/next.svg"); side: 34px * root.scale; enabled: root.has-track; clicked => { root.next(); } }
+            IconButton { icon: root.repeat == 2 ? @image-url("icons/repeat-one.svg") : @image-url("icons/repeat.svg"); side: 34px * root.scale; active: root.repeat != 0; clicked => { root.cycle-repeat(); } }
+            Text { text: root.position-text; color: Theme.text-muted; font-size: 11.5px * root.scale; vertical-alignment: center; }
+            Bar { horizontal-stretch: 1; height: 18px * root.scale; thickness: 4px * root.scale; fraction: root.progress; picked(f) => { root.seek(f); } }
+            Text { text: root.duration-text; color: Theme.text-muted; font-size: 11.5px * root.scale; vertical-alignment: center; }
         }
     }
 }

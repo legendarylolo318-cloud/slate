@@ -171,6 +171,9 @@ export component AppWindow inherits Window {
     callback set-volume(float);
     callback seek-relative(float);
     in-out property <bool> shortcuts-open;
+    // Settings → General: player bar and lyrics size.
+    in property <float> bar-scale: 1.0;
+    in property <float> lyrics-scale: 1.0;
     // Sort controls for the library list on screen (hidden elsewhere).
     in property <bool> sort-visible;
     in property <string> sort-label;
@@ -248,11 +251,11 @@ export component AppWindow inherits Window {
                             alignment: start;
                             VerticalLayout {
                                 alignment: center;
-                                IconButton { glyph: "‹"; enabled: root.can-back; clicked => { root.back(); } }
+                                IconButton { icon: @image-url("icons/chevron-left.svg"); enabled: root.can-back; clicked => { root.back(); } }
                             }
                             VerticalLayout {
                                 alignment: center;
-                                IconButton { glyph: "›"; enabled: root.can-forward; clicked => { root.forward(); } }
+                                IconButton { icon: @image-url("icons/chevron-right.svg"); enabled: root.can-forward; clicked => { root.forward(); } }
                             }
                             VerticalLayout {
                                 alignment: center;
@@ -352,7 +355,8 @@ export component AppWindow inherits Window {
                     close => { root.panel = ""; }
                 }
                 if root.panel == "lyrics" && !root.compact: LyricsPanel {
-                    width: 360px;
+                    width: 360px * max(1.0, root.lyrics-scale);
+                    scale: root.lyrics-scale;
                     lines: root.lyric-lines;
                     status: root.lyrics-status;
                     synced: root.lyrics-synced;
@@ -362,8 +366,10 @@ export component AppWindow inherits Window {
                 }
             }
             PlayerBar {
-                // The three-column bar needs ~1250px; below that the stacked layout is used.
-                compact: root.width < 1250px;
+                // The three-column bar needs ~1250px (more when enlarged); below that
+                // the stacked layout is used.
+                compact: root.width < 1250px * root.bar-scale;
+                scale: root.bar-scale;
                 title: root.track-title;
                 artist: root.track-artist;
                 quality: root.quality-text;
@@ -403,6 +409,7 @@ export component AppWindow inherits Window {
 
         if root.fullscreen && root.screen == Screen.main: FullscreenPlayer {
             compact: root.compact;
+            lyrics-scale: root.lyrics-scale;
             title: root.track-title;
             artist: root.track-artist;
             cover: root.track-cover;
@@ -443,7 +450,7 @@ export component AppWindow inherits Window {
                     spacing: 8px;
                     HorizontalLayout {
                         Text { text: root.picker-target == -1 ? "New playlist or folder" : "Add to playlist"; font-size: 18px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; }
-                        IconButton { glyph: "✕"; side: 28px; clicked => { root.picker-open = false; } }
+                        IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.picker-open = false; } }
                     }
                     HorizontalLayout {
                         spacing: 8px;
@@ -582,7 +589,7 @@ export component AppWindow inherits Window {
                     spacing: 10px;
                     HorizontalLayout {
                         Text { text: "Signal path"; font-size: 18px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; }
-                        IconButton { glyph: "✕"; side: 28px; clicked => { root.sp-open = false; } }
+                        IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.sp-open = false; } }
                     }
                     Text {
                         text: root.sp-pristine ? "PRISTINE" : "MODIFIED";

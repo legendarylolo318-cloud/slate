@@ -1,5 +1,9 @@
 fn main() {
-    if let Err(e) = slint_build::compile("ui/app.slint") {
+    // Icons and images referenced from .slint files go inside the binary, so
+    // packaged builds never look for them on the build machine's paths.
+    let config = slint_build::CompilerConfiguration::new()
+        .embed_resources(slint_build::EmbedResourcesKind::EmbedFiles);
+    if let Err(e) = slint_build::compile_with_config("ui/app.slint", config) {
         eprintln!("{e}");
         std::process::exit(1);
     }

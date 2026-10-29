@@ -23,6 +23,9 @@ export component FullscreenPlayer inherits Rectangle {
     in property <string> lyrics-status;
     in property <bool> compact: false;
     in-out property <bool> show-lyrics: false;
+    // Lyrics size (Settings → General); lines also follow the window height.
+    in property <float> lyrics-scale: 1.0;
+    property <length> lyric-size: clamp(root.height / 38, 18px, 34px) * root.lyrics-scale;
     callback close();
     callback toggle-play();
     callback next();
@@ -83,13 +86,13 @@ export component FullscreenPlayer inherits Rectangle {
                 HorizontalLayout {
                     alignment: center;
                     spacing: 10px;
-                    IconButton { glyph: "🔀"; active: root.shuffle; clicked => { root.toggle-shuffle(); } }
-                    IconButton { glyph: "⏮"; enabled: root.has-track; clicked => { root.previous(); } }
-                    IconButton { primary: true; glyph: root.playing ? "⏸" : "▶"; enabled: root.has-track; clicked => { root.toggle-play(); } }
-                    IconButton { glyph: "⏭"; enabled: root.has-track; clicked => { root.next(); } }
-                    IconButton { glyph: root.repeat == 2 ? "🔂" : "🔁"; active: root.repeat != 0; clicked => { root.cycle-repeat(); } }
-                    IconButton { glyph: root.favorite ? "♥" : "♡"; active: root.favorite; clicked => { root.toggle-favorite(); } }
-                    IconButton { glyph: "♪"; active: root.show-lyrics; clicked => { root.show-lyrics = !root.show-lyrics; } }
+                    IconButton { icon: @image-url("icons/shuffle.svg"); active: root.shuffle; clicked => { root.toggle-shuffle(); } }
+                    IconButton { icon: @image-url("icons/previous.svg"); enabled: root.has-track; clicked => { root.previous(); } }
+                    IconButton { primary: true; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); enabled: root.has-track; clicked => { root.toggle-play(); } }
+                    IconButton { icon: @image-url("icons/next.svg"); enabled: root.has-track; clicked => { root.next(); } }
+                    IconButton { icon: root.repeat == 2 ? @image-url("icons/repeat-one.svg") : @image-url("icons/repeat.svg"); active: root.repeat != 0; clicked => { root.cycle-repeat(); } }
+                    IconButton { icon: root.favorite ? @image-url("icons/heart-filled.svg") : @image-url("icons/heart.svg"); active: root.favorite; clicked => { root.toggle-favorite(); } }
+                    IconButton { icon: @image-url("icons/lyrics.svg"); active: root.show-lyrics; clicked => { root.show-lyrics = !root.show-lyrics; } }
                 }
             }
         }
@@ -99,14 +102,15 @@ export component FullscreenPlayer inherits Rectangle {
             ListView {
                 vertical-stretch: 1;
                 for l[i] in root.lyric-lines: Rectangle {
-                    height: 44px;
+                    height: max(root.lyric-size * 2.2, line.preferred-height + root.lyric-size * 0.6);
                     TouchArea { mouse-cursor: root.lyrics-synced ? MouseCursor.pointer : MouseCursor.default; clicked => { if (root.lyrics-synced) { root.lyric-seek(i); } } }
-                    Text {
+                    line := Text {
+                        width: parent.width;
                         text: l.text;
                         wrap: word-wrap;
                         vertical-alignment: center;
                         color: l.active ? Theme.accent : Theme.text-muted;
-                        font-size: l.active ? 26px : 20px;
+                        font-size: l.active ? root.lyric-size * 1.3 : root.lyric-size;
                         font-weight: l.active ? 800 : 500;
                         animate color { duration: 150ms; }
                     }
@@ -123,6 +127,6 @@ export component FullscreenPlayer inherits Rectangle {
         height: 40px;
         opacity: root.idle ? 0.0 : 1.0;
         animate opacity { duration: 250ms; }
-        IconButton { glyph: "✕"; clicked => { root.close(); } }
+        IconButton { icon: @image-url("icons/close.svg"); clicked => { root.close(); } }
     }
 }
