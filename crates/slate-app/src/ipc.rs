@@ -73,7 +73,16 @@ fn clear_stale() {
 /// Tries to hand `message` to a running instance.
 fn forward(name: &Name<'_>, message: &str) -> bool {
     match Stream::connect(name.borrow()) {
-        Ok(mut s) => s.write_all(format!("{message}\n").as_bytes()).is_ok(),
+        Ok(mut s) => {
+            // Windows pipe names are global: another account could have
+            // created ours first. Only hand links to a server we own.
+            #[cfg(windows)]
+            if !winsec::server_is_same_user(&s) {
+                tracing::warn!("single-instance pipe is held by another user; not forwarding");
+                return false;
+            }
+            s.write_all(format!("{message}\n").as_bytes()).is_ok()
+        }
         Err(_) => false,
     }
 }
@@ -86,7 +95,10 @@ pub fn claim(link_arg: Option<&str>) -> Claim {
         return Claim::Forwarded;
     }
     clear_stale();
-    let listener = match ListenerOptions::new().name(name).create_sync() {
+    let options = ListenerOptions::new().name(name);
+    #[cfg(windows)]
+    let options = winsec::owner_only(options);
+    let listener = match options.create_sync() {
         Ok(l) => l,
         Err(e) => {
             tracing::warn!("single-instance socket unavailable: {e}");
@@ -141,5 +153,118 @@ trait LimitedLine<R: std::io::Read> {
 impl<R: std::io::Read> LimitedLine<R> for BufReader<R> {
     fn take_line_limited(self) -> BufReader<std::io::Take<R>> {
         BufReader::new(self.into_inner().take(2048))
+    }
+}
+
+/// Windows: the pipe's access list, and checking who serves it.
+#[cfg(windows)]
+mod winsec {
+    use interprocess::local_socket::{traits::StreamCommon as _, ListenerOptions, Stream};
+    use interprocess::os::windows::{
+        local_socket::ListenerOptionsExt, security_descriptor::SecurityDescriptor,
+    };
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{
+        EqualSid, GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
+    };
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    /// Protected DACL with one entry: full access for the pipe's owner (the
+    /// user who started Slate). The default would let other accounts connect.
+    const OWNER_ONLY: &str = "D:P(A;;GA;;;OW)";
+
+    pub fn owner_only(options: ListenerOptions<'_>) -> ListenerOptions<'_> {
+        match widestring::U16CString::from_str(OWNER_ONLY)
+            .ok()
+            .and_then(|s| SecurityDescriptor::deserialize(&s).ok())
+        {
+            Some(sd) => options.security_descriptor(sd),
+            None => {
+                tracing::warn!("could not build the pipe's access list; using the default");
+                options
+            }
+        }
+    }
+
+    pub fn server_is_same_user(stream: &Stream) -> bool {
+        stream
+            .peer_creds()
+            .ok()
+            .and_then(|c| c.pid())
+            .is_some_and(is_same_user)
+    }
+
+    /// The process's user SID, in a buffer aligned for `TOKEN_USER`.
+    fn token_user(process: HANDLE) -> Option<Vec<u64>> {
+        // SAFETY: the token handle is opened and closed here; the buffer is
+        // sized from the first call and 8-byte aligned for TOKEN_USER.
+        unsafe {
+            let mut token = HANDLE::default();
+            OpenProcessToken(process, TOKEN_QUERY, &mut token).ok()?;
+            let mut len = 0u32;
+            let _ = GetTokenInformation(token, TokenUser, None, 0, &mut len);
+            let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+            let got = GetTokenInformation(
+                token,
+                TokenUser,
+                Some(buf.as_mut_ptr().cast()),
+                len,
+                &mut len,
+            );
+            let _ = CloseHandle(token);
+            got.ok()?;
+            Some(buf)
+        }
+    }
+
+    pub fn is_same_user(pid: u32) -> bool {
+        // SAFETY: handles are closed before return; both buffers hold a
+        // TOKEN_USER written by GetTokenInformation and outlive the SID reads.
+        unsafe {
+            let Some(mine) = token_user(GetCurrentProcess()) else {
+                return false;
+            };
+            let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+                return false;
+            };
+            let theirs = token_user(process);
+            let _ = CloseHandle(process);
+            let Some(theirs) = theirs else {
+                return false;
+            };
+            let a = &*mine.as_ptr().cast::<TOKEN_USER>();
+            let b = &*theirs.as_ptr().cast::<TOKEN_USER>();
+            EqualSid(a.User.Sid, b.User.Sid).is_ok()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use interprocess::local_socket::{
+            traits::{ListenerExt as _, Stream as _},
+            GenericNamespaced, ToNsName,
+        };
+
+        #[test]
+        fn this_process_is_its_own_user() {
+            assert!(is_same_user(std::process::id()));
+        }
+
+        #[test]
+        fn owner_only_pipe_accepts_its_owner_and_reports_the_server() {
+            let name = format!("slate-test-{}.sock", std::process::id())
+                .to_ns_name::<GenericNamespaced>()
+                .unwrap();
+            let listener = owner_only(ListenerOptions::new().name(name.borrow()))
+                .create_sync()
+                .unwrap();
+            let accept = std::thread::spawn(move || listener.incoming().next().map(|c| c.is_ok()));
+            let client = Stream::connect(name).unwrap();
+            assert!(server_is_same_user(&client));
+            assert_eq!(accept.join().unwrap(), Some(true));
+        }
     }
 }

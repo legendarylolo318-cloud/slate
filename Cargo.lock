@@ -6132,6 +6132,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "widestring",
  "windows",
  "winresource",
 ]
