@@ -23,7 +23,7 @@ const REQUIRED: &[&str] = &[
 ];
 
 #[cfg(windows)]
-const PLATFORM: &[&str] = &["wasapi2sink"];
+const PLATFORM: &[&str] = &["wasapi2sink", "wasapisink"];
 #[cfg(target_os = "linux")]
 const PLATFORM: &[&str] = &["alsasink"];
 #[cfg(not(any(windows, target_os = "linux")))]

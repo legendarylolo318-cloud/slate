@@ -179,6 +179,42 @@ fn ca_bundle_override(exists: impl Fn(&str) -> bool) -> Option<&'static str> {
     CA_BUNDLES.into_iter().find(|p| exists(p))
 }
 
+/// The WASAPI sink that can open a device exclusively, and how its device
+/// provider names devices for its `device` property.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExclusiveSink {
+    pub factory: &'static str,
+    device_api: &'static str,
+    device_id_key: &'static str,
+}
+
+/// `wasapi2sink` only gained an `exclusive` property in newer GStreamer
+/// (1.24 has none); the older `wasapisink` has had one throughout. Prefer the
+/// newer sink when it can do it. `None` when neither can (not Windows).
+pub fn exclusive_wasapi_sink() -> Option<ExclusiveSink> {
+    static CHOICE: std::sync::OnceLock<Option<ExclusiveSink>> = std::sync::OnceLock::new();
+    *CHOICE.get_or_init(|| {
+        gst::init().ok()?;
+        let candidates = [
+            ExclusiveSink {
+                factory: "wasapi2sink",
+                device_api: "wasapi2",
+                device_id_key: "device.id",
+            },
+            ExclusiveSink {
+                factory: "wasapisink",
+                device_api: "wasapi",
+                device_id_key: "device.strid",
+            },
+        ];
+        candidates.into_iter().find(|c| {
+            gst::ElementFactory::make(c.factory)
+                .build()
+                .is_ok_and(|e| e.find_property("exclusive").is_some())
+        })
+    })
+}
+
 /// The `audio-error` kind for a pipeline error. `device_busy`: another
 /// program holds the device (ALSA `EBUSY`, WASAPI `AUDCLNT_E_DEVICE_IN_USE`,
 /// 0x8889000A). `format_unsupported`: the sink refused every format on offer,
@@ -2430,13 +2466,24 @@ impl AudioPlayer {
                                 let wasapi_exclusive = cfg!(windows) && (exclusive || bit_perfect);
                                 let untouched = wasapi_exclusive && bit_perfect;
                                 let sink = if wasapi_exclusive {
-                                    let mut b = gst::ElementFactory::make("wasapi2sink")
-                                        .property("exclusive", true);
+                                    let sink_kind = exclusive_wasapi_sink().ok_or_else(|| {
+                                        "No WASAPI sink with exclusive mode in this GStreamer"
+                                            .to_string()
+                                    })?;
+                                    let sink = gst::ElementFactory::make(sink_kind.factory)
+                                        .build()
+                                        .map_err(|e| {
+                                            format!("Failed to create {}: {e}", sink_kind.factory)
+                                        })?;
+                                    // Checked by `exclusive_wasapi_sink`; set_property
+                                    // panics on a property an element lacks.
+                                    sink.set_property("exclusive", true);
                                     if let Some(id) = device.as_deref() {
-                                        b = b.property("device", id);
+                                        if sink.find_property("device").is_some() {
+                                            sink.set_property("device", id);
+                                        }
                                     }
-                                    b.build()
-                                        .map_err(|e| format!("Failed to create wasapi2sink: {e}"))?
+                                    sink
                                 } else {
                                     gst::ElementFactory::make("autoaudiosink").build().map_err(
                                         |e| format!("Failed to create autoaudiosink: {e}"),
@@ -4333,14 +4380,16 @@ fn list_alsa_devices_inner() -> Result<Vec<AudioDevice>, String> {
         };
 
         let api = props.get::<String>("device.api").unwrap_or_default();
-        // Windows: WASAPI endpoints. `device.id` is what wasapi2sink's
-        // `device` property takes.
-        if cfg!(windows) && api == "wasapi2" {
-            if let Ok(id) = props.get::<String>("device.id") {
-                result.push(AudioDevice {
-                    id,
-                    name: dev.display_name().to_string(),
-                });
+        // Windows: endpoints from the provider of the sink exclusive mode
+        // uses, keyed the way that sink's `device` property expects.
+        if cfg!(windows) {
+            if let Some(kind) = exclusive_wasapi_sink().filter(|k| k.device_api == api) {
+                if let Ok(id) = props.get::<String>(kind.device_id_key) {
+                    result.push(AudioDevice {
+                        id,
+                        name: dev.display_name().to_string(),
+                    });
+                }
             }
             continue;
         }
@@ -4376,17 +4425,27 @@ pub fn gapless_supported() -> bool {
 
 #[cfg(test)]
 mod proxy_source_tests {
-    /// The Windows exclusive path sets these two properties; a GStreamer
-    /// without them would fail every exclusive playback.
+    /// The Windows exclusive path needs a WASAPI sink with `exclusive` and
+    /// `device`; GStreamer 1.24's wasapi2sink has no `exclusive`, so this
+    /// pins that a usable sink is still found (wasapisink there).
     #[cfg(windows)]
     #[test]
-    fn wasapi2sink_has_the_exclusive_and_device_properties() {
-        let _ = gst::init();
-        let sink = gst::ElementFactory::make("wasapi2sink")
-            .build()
-            .expect("wasapi2sink ships with GStreamer for Windows");
-        assert!(sink.find_property("exclusive").is_some());
-        assert!(sink.find_property("device").is_some());
+    fn a_wasapi_sink_with_exclusive_mode_is_available() {
+        let kind = exclusive_wasapi_sink().expect("an exclusive-capable WASAPI sink");
+        let sink = gst::ElementFactory::make(kind.factory).build().unwrap();
+        assert!(
+            sink.find_property("exclusive").is_some(),
+            "{}",
+            kind.factory
+        );
+        assert!(sink.find_property("device").is_some(), "{}", kind.factory);
+    }
+
+    #[test]
+    fn no_exclusive_wasapi_sink_off_windows() {
+        if !cfg!(windows) {
+            assert_eq!(exclusive_wasapi_sink(), None);
+        }
     }
 
     #[test]
