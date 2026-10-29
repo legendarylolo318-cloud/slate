@@ -287,8 +287,12 @@ impl Backend {
         let this = self.clone();
         self.ui(move |w| {
             let for_fetch = this.clone();
+            let for_covers = this.clone();
             let model = LazyTracks::new(Box::new(move |page| {
                 for_fetch.request_page(generation, page)
+            }))
+            .with_cover_refetch(Box::new(move |page| {
+                for_covers.refetch_covers(generation, page)
             }));
             w.set_tracks(ModelRc::from(Rc::new(model)));
             w.set_view("tracks".into());
@@ -514,6 +518,24 @@ impl Backend {
             self.load_row_covers(covers);
         }
         rows
+    }
+
+    /// Thumbnails again for a page the model evicted (usually an image-cache hit).
+    fn refetch_covers(&self, generation: u64, page: usize) {
+        if self.lib.generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let mut covers: HashMap<String, Vec<usize>> = HashMap::new();
+        if let Ok(cache) = self.lib.tracks.lock() {
+            for index in page * PAGE_SIZE..(page + 1) * PAGE_SIZE {
+                if let Some(c) = cache.get(&index).and_then(|t| t.cover_id()) {
+                    covers.entry(c.to_string()).or_default().push(index);
+                }
+            }
+        }
+        if !covers.is_empty() {
+            self.load_row_covers(covers);
+        }
     }
 
     /// Thumbnails for rows: one fetch per distinct album cover, applied to every row using it.

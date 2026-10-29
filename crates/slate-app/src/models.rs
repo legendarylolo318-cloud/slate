@@ -14,6 +14,11 @@ use crate::bootstrap::{AppWindow, TrackRow};
 /// Rows per fetch. Matches what TIDAL accepts for playlist/favourite pages.
 pub const PAGE_SIZE: usize = 100;
 
+/// Pages whose thumbnails the model keeps. Each thumbnail is ~100 KB decoded,
+/// and the model's reference keeps it alive past the image cache's budget, so
+/// covers far from the viewport are dropped and fetched again on return.
+const MAX_COVER_PAGES: usize = 6;
+
 /// A row's text, `Send` so it can be built off the UI thread.
 #[derive(Clone, Debug, Default)]
 pub struct RowData {
@@ -32,6 +37,14 @@ pub struct LazyTracks {
     rows: RefCell<HashMap<usize, TrackRow>>,
     requested: RefCell<HashSet<usize>>,
     fetch: Box<dyn Fn(usize)>,
+    /// Re-requests a page's thumbnails after they were evicted.
+    refetch_covers: Box<dyn Fn(usize)>,
+    /// Pages holding at least one cover.
+    cover_pages: RefCell<HashSet<usize>>,
+    /// Loaded pages whose covers were dropped and not yet asked for again.
+    evicted: RefCell<HashSet<usize>>,
+    /// Page of the row the view asked for most recently: where the viewport is.
+    last_page: Cell<usize>,
     notify: ModelNotify,
 }
 
@@ -43,8 +56,18 @@ impl LazyTracks {
             rows: RefCell::new(HashMap::new()),
             requested: RefCell::new(HashSet::new()),
             fetch,
+            refetch_covers: Box::new(|_| {}),
+            cover_pages: RefCell::new(HashSet::new()),
+            evicted: RefCell::new(HashSet::new()),
+            last_page: Cell::new(0),
             notify: ModelNotify::default(),
         }
+    }
+
+    /// Sets how evicted thumbnails are fetched again (by page).
+    pub fn with_cover_refetch(mut self, f: Box<dyn Fn(usize)>) -> Self {
+        self.refetch_covers = f;
+        self
     }
 
     pub fn set_total(&self, total: usize) {
@@ -81,11 +104,30 @@ impl LazyTracks {
     /// Shows `cover` on every listed row.
     pub fn set_cover(&self, indices: &[usize], cover: &Image) {
         let mut covers = self.covers.borrow_mut();
+        let mut pages = self.cover_pages.borrow_mut();
         for &i in indices {
             covers.insert(i, cover.clone());
+            pages.insert(i / PAGE_SIZE);
+            self.evicted.borrow_mut().remove(&(i / PAGE_SIZE));
         }
-        drop(covers);
+        let mut dropped = Vec::new();
+        if pages.len() > MAX_COVER_PAGES {
+            let here = self.last_page.get();
+            let mut by_distance: Vec<usize> = pages.iter().copied().collect();
+            by_distance.sort_by_key(|p| std::cmp::Reverse(p.abs_diff(here)));
+            for page in by_distance.into_iter().take(pages.len() - MAX_COVER_PAGES) {
+                pages.remove(&page);
+                self.evicted.borrow_mut().insert(page);
+                let rows = page * PAGE_SIZE..(page + 1) * PAGE_SIZE;
+                covers.retain(|i, _| !rows.contains(i));
+                dropped.extend(rows);
+            }
+        }
+        drop((covers, pages));
         for &i in indices {
+            self.notify.row_changed(i);
+        }
+        for i in dropped.into_iter().filter(|&i| i < self.total.get()) {
             self.notify.row_changed(i);
         }
     }
@@ -135,14 +177,18 @@ impl Model for LazyTracks {
         if row >= self.total.get() {
             return None;
         }
+        let page = row / PAGE_SIZE;
+        self.last_page.set(page);
         if let Some(r) = self.rows.borrow().get(&row) {
+            if self.evicted.borrow_mut().remove(&page) {
+                (self.refetch_covers)(page);
+            }
             let mut r = r.clone();
             if let Some(c) = self.covers.borrow().get(&row) {
                 r.cover = c.clone();
             }
             return Some(r);
         }
-        let page = row / PAGE_SIZE;
         if self.requested.borrow_mut().insert(page) {
             (self.fetch)(page);
         }
@@ -203,6 +249,36 @@ mod tests {
         m.set_cover(&[1], &Image::default());
         assert!(m.row_data(1).is_some());
         assert_eq!(m.covers.borrow().len(), 1);
+    }
+
+    #[test]
+    fn covers_far_from_the_viewport_are_dropped_and_refetched_on_return() {
+        let refetched = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&refetched);
+        let m = LazyTracks::new(Box::new(|_| {}))
+            .with_cover_refetch(Box::new(move |p| log.borrow_mut().push(p)));
+        let pages = 20;
+        m.set_total(pages * PAGE_SIZE);
+        // Scroll from the top to the bottom, covers arriving for each page.
+        for page in 0..pages {
+            let first = page * PAGE_SIZE;
+            m.fill(first, (0..PAGE_SIZE).map(|_| row("t")).collect());
+            m.row_data(first);
+            let rows: Vec<usize> = (first..first + PAGE_SIZE).collect();
+            m.set_cover(&rows, &Image::default());
+            assert!(m.cover_pages.borrow().len() <= MAX_COVER_PAGES);
+            assert!(m.covers.borrow().len() <= MAX_COVER_PAGES * PAGE_SIZE);
+        }
+        // The pages kept are the ones nearest the viewport.
+        assert!(m.cover_pages.borrow().contains(&(pages - 1)));
+        assert!(!m.cover_pages.borrow().contains(&0));
+        assert!(refetched.borrow().is_empty());
+        // Back at the top: page 0's covers are asked for once.
+        m.row_data(3);
+        m.row_data(4);
+        assert_eq!(*refetched.borrow(), vec![0]);
+        // Rows themselves stay loaded.
+        assert!(m.row_data(3).is_some_and(|r| r.loaded));
     }
 
     #[test]

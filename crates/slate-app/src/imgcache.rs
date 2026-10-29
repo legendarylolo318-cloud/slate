@@ -17,7 +17,9 @@ use tokio::sync::Semaphore;
 use crate::images;
 
 /// In-memory budget for decoded pixels.
-const MEMORY_BUDGET: usize = 96 * 1024 * 1024;
+/// (~650 row thumbnails at 160 px; list models keep only the covers near the
+/// viewport, see `models::MAX_COVER_PAGES`.)
+const MEMORY_BUDGET: usize = 64 * 1024 * 1024;
 /// Concurrent network fetches.
 const MAX_FETCHES: usize = 8;
 
