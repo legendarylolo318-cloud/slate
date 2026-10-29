@@ -22,16 +22,18 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 
 - Sign in with a device code + QR code; session kept in an encrypted config (AES-256-GCM,
   key in the OS keyring).
-- Home, Search (tracks, artists, albums, playlists, videos), Library (Loved Tracks, albums,
-  artists, mixes, playlists and folders), Album / Artist / Mix / Playlist pages.
+- Home, Explore (genres, moods, new releases), Search (tracks, artists, albums, playlists,
+  videos), Library (Loved Tracks and Loved Videos, albums, artists, mixes, playlists and
+  folders, each sortable), Album / Artist / Mix / Playlist pages.
 - Lazy, virtualised track lists (thousands of tracks stay smooth) and a bounded
   thumbnail cache.
 - Queue panel, shuffle (order restored when turned off), repeat, history, autoplay radio,
   queue persisted across restarts.
 - Synced lyrics (click a line to seek), full-screen player, adaptive mini-player window,
-  music-video playback.
+  music-video playback (can shrink into the player bar).
 - Audio: GStreamer engine, ReplayGain normalisation, maximum-quality cap with automatic
-  fallback, exclusive and bit-perfect ALSA output with DAC detection (Linux), Signal Path
+  fallback, exclusive and bit-perfect output (ALSA with DAC detection on Linux, WASAPI exclusive
+  on Windows), Signal Path
   panel with a PRISTINE / MODIFIED verdict.
 - Scrobbling to Last.fm, Libre.fm and ListenBrainz; TIDAL play reporting (toggleable);
   Discord Rich Presence.
@@ -39,16 +41,16 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 - MCP server (`127.0.0.1:5577`) and OBS overlay (`127.0.0.1:5578`), both off by default.
 - 15 theme presets, custom colours with a built-in picker, `theme.json` with live reload,
   interface scale setting.
-- MPRIS and tray on Linux. Keyboard shortcuts: `Space` play/pause, `←/→` seek, `Ctrl+←/→`
+- MPRIS and tray on Linux; media controls (SMTC), tray and sleep prevention on Windows.
+  Optional global shortcuts (Ctrl+Alt+Space / → / ←). Keyboard shortcuts: `Space` play/pause, `←/→` seek, `Ctrl+←/→`
   previous/next, `M` mute, `S` shuffle, `R` repeat, `Q` queue, `L` lyrics, `F` full screen,
   `/` search, `?` shortcut sheet.
 
 - Gapless playback, single-instance with `tidal://` links, profile editing.
 
-Not yet done: Windows media controls, tray, exclusive output and sleep inhibit; Explore;
-loved videos; global shortcuts; library sorting. Each is a
-[GitHub issue](https://github.com/legendarylolo318-cloud/slate/issues). Security and
-performance review results are in [REVIEW.md](REVIEW.md).
+Known gap: Discord Rich Presence still shows "SONE" until a Slate Discord application is
+registered ([issue](https://github.com/legendarylolo318-cloud/slate/issues/7)). Security,
+performance and feature-parity review results are in [REVIEW.md](REVIEW.md).
 
 `slate --self-test --network` checks that GStreamer finds the plugins it needs and can
 stream over HTTPS, then exits (useful for packaged builds).
