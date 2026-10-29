@@ -45,6 +45,10 @@ pub struct Header {
 struct Active {
     kind: SourceKind,
     title: String,
+    /// Sidebar selection, so a re-sort can re-open the same list.
+    selected: String,
+    /// `order` / `orderDirection` for the paged fetches, fixed when opened.
+    order: Option<(String, String)>,
 }
 
 #[derive(Default)]
@@ -62,6 +66,8 @@ pub struct LibState {
     pub hero_tracks: Mutex<Vec<Track>>,
     cards_gen: AtomicU64,
     artist: Mutex<Option<u64>>,
+    /// The sortable list on screen, if any.
+    sort_list: Mutex<Option<crate::sort::List>>,
 }
 
 fn to_track(t: &TidalTrack) -> Option<Track> {
@@ -277,12 +283,21 @@ impl Backend {
             s.clear();
         }
         self.lib.total.store(0, Ordering::Relaxed);
+        let list = match kind {
+            SourceKind::Loved => Some(crate::sort::List::Loved),
+            SourceKind::Playlist(_) => Some(crate::sort::List::Playlist),
+            SourceKind::Album(_) | SourceKind::Mix(_) => None,
+        };
+        let prefs = crate::uiprefs::UiPrefs::load();
         if let Ok(mut a) = self.lib.active.lock() {
             *a = Some(Active {
                 kind: kind.clone(),
                 title: String::new(),
+                selected: selected.clone(),
+                order: list.and_then(|l| l.api_params(&prefs)),
             });
         }
+        self.show_sort(list, &prefs);
 
         let this = self.clone();
         self.ui(move |w| {
@@ -487,6 +502,65 @@ impl Backend {
         });
     }
 
+    fn active_order(&self) -> Option<(String, String)> {
+        self.lib.active.lock().ok()?.as_ref()?.order.clone()
+    }
+
+    /// Shows or hides the sort controls for `list`.
+    pub(crate) fn show_sort(
+        &self,
+        list: Option<crate::sort::List>,
+        prefs: &crate::uiprefs::UiPrefs,
+    ) {
+        if let Ok(mut l) = self.lib.sort_list.lock() {
+            *l = list;
+        }
+        let shown = list.map(|l| (l.label(prefs), l.current(prefs).1));
+        self.ui(move |w| match shown {
+            Some((label, desc)) => {
+                w.set_sort_label(label.into());
+                w.set_sort_desc(desc);
+                w.set_sort_visible(true);
+            }
+            None => w.set_sort_visible(false),
+        });
+    }
+
+    /// The sort button: `flip` reverses the direction, otherwise the next
+    /// order is chosen. Saved, then the list reloads in the new order.
+    pub fn change_sort(&self, flip: bool) {
+        let Some(list) = self.lib.sort_list.lock().ok().and_then(|l| *l) else {
+            return;
+        };
+        let reopen = self
+            .lib
+            .active
+            .lock()
+            .ok()
+            .and_then(|a| a.as_ref().map(|a| (a.kind.clone(), a.selected.clone())));
+        let this = self.clone();
+        self.rt.spawn_blocking(move || {
+            let mut prefs = crate::uiprefs::UiPrefs::load();
+            let pref = if flip {
+                list.flipped(&prefs)
+            } else {
+                list.cycled(&prefs)
+            };
+            prefs.sorts.insert(list.key().into(), pref);
+            if let Err(e) = prefs.save() {
+                tracing::warn!("could not save the sort order: {e}");
+            }
+            use crate::sort::List;
+            match (list, reopen) {
+                (List::Loved | List::Playlist, Some((kind, selected))) => this.open(kind, selected),
+                (List::Albums, _) => this.show_library_albums(),
+                (List::Artists, _) => this.show_library_artists(),
+                (List::Mixes, _) => this.show_library_mixes(),
+                _ => {}
+            }
+        });
+    }
+
     fn active_kind(&self) -> Option<SourceKind> {
         self.lib
             .active
@@ -579,26 +653,30 @@ impl Backend {
                     .user_id()
                     .await
                     .ok_or("Could not resolve your account.")?;
+                let (order, dir) = self
+                    .active_order()
+                    .unwrap_or_else(|| ("DATE".into(), "DESC".into()));
                 lib_cmds::get_favorite_tracks(
                     &state,
                     self.app.clone(),
                     uid,
                     offset,
                     limit,
-                    "DATE".into(),
-                    "DESC".into(),
+                    order,
+                    dir,
                 )
                 .await
             }
             SourceKind::Playlist(uuid) => {
+                let (order, dir) = self.active_order().unzip();
                 lib_cmds::get_playlist_tracks_page(
                     &state,
                     self.app.clone(),
                     uuid.clone(),
                     offset,
                     limit,
-                    None,
-                    None,
+                    order,
+                    dir,
                 )
                 .await
             }

@@ -278,3 +278,53 @@ async fn an_unreachable_server_is_a_network_error() {
     let err = c.get_track(1).await.expect_err("connection refused");
     assert!(err.is_network(), "{err:?}");
 }
+
+/// Library sorting: the chosen order reaches TIDAL as `order` /
+/// `orderDirection`, and a playlist in its own order sends neither.
+#[tokio::test]
+async fn sort_order_reaches_the_track_list_requests() {
+    use wiremock::matchers::query_param;
+    let server = MockServer::start().await;
+    let empty = json!({ "items": [], "totalNumberOfItems": 0, "limit": 100, "offset": 0 });
+    Mock::given(method("GET"))
+        .and(path("/v1/users/42/favorites/tracks"))
+        .and(query_param("order", "NAME"))
+        .and(query_param("orderDirection", "ASC"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(empty.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/playlists/p-1/items"))
+        .and(query_param("order", "LENGTH"))
+        .and(query_param("orderDirection", "DESC"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(empty.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/playlists/p-2/items"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(empty))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut c = client(&server);
+    c.tokens = Some(tokens("access-1"));
+    c.get_favorite_tracks(42, 0, 100, "NAME", "ASC")
+        .await
+        .expect("loved, by name");
+    c.get_playlist_tracks_page("p-1", 0, 100, Some("LENGTH"), Some("DESC"))
+        .await
+        .expect("playlist, longest first");
+    c.get_playlist_tracks_page("p-2", 0, 100, None, None)
+        .await
+        .expect("playlist order");
+
+    let sent = server.received_requests().await.unwrap_or_default();
+    let p2 = sent
+        .iter()
+        .find(|r| r.url.path() == "/v1/playlists/p-2/items")
+        .expect("p-2 requested");
+    assert!(!p2.url.query().unwrap_or("").contains("order"), "{:?}", p2.url);
+}

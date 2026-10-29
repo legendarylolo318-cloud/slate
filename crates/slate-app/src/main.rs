@@ -28,6 +28,7 @@ mod quality;
 mod selftest;
 mod settings;
 mod signal;
+mod sort;
 mod themes;
 mod uiprefs;
 mod video;

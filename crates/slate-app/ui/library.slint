@@ -337,6 +337,11 @@ export component TrackPage inherits Rectangle {
     in property <bool> can-favorite: false;
     in property <bool> page-favorite: false;
     callback toggle-page-favorite();
+    in property <bool> sort-visible;
+    in property <string> sort-label;
+    in property <bool> sort-desc;
+    callback cycle-sort();
+    callback flip-sort();
     property <bool> show-artist: root.width > 520px;
     property <bool> show-album: root.width > 760px;
     // Column layout shared by the header and every row (padding 12, spacing 12,
@@ -379,6 +384,8 @@ export component TrackPage inherits Rectangle {
             Button { label: "▶  Play"; primary: true; clicked => { root.play-all(); } }
             Button { label: "🔀  Shuffle"; clicked => { root.shuffle-all(); } }
             if root.can-favorite: Button { label: root.page-favorite ? "♥  Saved" : "♡  Save"; clicked => { root.toggle-page-favorite(); } }
+            if root.sort-visible: Button { label: "⇅  " + root.sort-label; clicked => { root.cycle-sort(); } }
+            if root.sort-visible: Button { label: root.sort-desc ? "↓" : "↑"; clicked => { root.flip-sort(); } }
         }
         HorizontalLayout {
             padding-left: 12px;

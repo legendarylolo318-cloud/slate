@@ -164,6 +164,12 @@ export component AppWindow inherits Window {
     callback set-volume(float);
     callback seek-relative(float);
     in-out property <bool> shortcuts-open;
+    // Sort controls for the library list on screen (hidden elsewhere).
+    in property <bool> sort-visible;
+    in property <string> sort-label;
+    in property <bool> sort-desc;
+    callback cycle-sort();
+    callback flip-sort();
 
     // Global shortcuts (ignored while a text field has focus, since fields consume keys).
     fs := FocusScope {
@@ -285,6 +291,11 @@ export component AppWindow inherits Window {
                         }
                         play-all => { root.play-all(); }
                         shuffle-all => { root.shuffle-all(); }
+                        sort-visible: root.sort-visible;
+                        sort-label: root.sort-label;
+                        sort-desc: root.sort-desc;
+                        cycle-sort => { root.cycle-sort(); }
+                        flip-sort => { root.flip-sort(); }
                     }
                     if root.view == "cards": CardsPage {
                         vertical-stretch: 1;
@@ -302,6 +313,11 @@ export component AppWindow inherits Window {
                         toggle-hero-favorite => { root.toggle-hero-favorite(); }
                         hero-play => { root.hero-play(); }
                         hero-shuffle => { root.hero-shuffle(); }
+                        sort-visible: root.sort-visible;
+                        sort-label: root.sort-label;
+                        sort-desc: root.sort-desc;
+                        cycle-sort => { root.cycle-sort(); }
+                        flip-sort => { root.flip-sort(); }
                     }
                     if root.view == "profile": ProfilePage {
                         vertical-stretch: 1;

@@ -559,6 +559,7 @@ impl Backend {
 
     fn begin_cards(&self, title: &str) -> u64 {
         let generation = self.lib.bump_cards();
+        self.show_sort(None, &crate::uiprefs::UiPrefs::default());
         let title = title.to_string();
         self.ui(move |w| {
             w.set_cards_title(title.into());
@@ -637,8 +638,11 @@ impl Backend {
         Ok(cards)
     }
 
-    fn show_library_albums(&self) {
+    pub(crate) fn show_library_albums(&self) {
         let generation = self.begin_cards("Albums");
+        let prefs = crate::uiprefs::UiPrefs::load();
+        self.show_sort(Some(crate::sort::List::Albums), &prefs);
+        let (sort_by, sort_desc) = crate::sort::List::Albums.current(&prefs);
         let this = self.clone();
         self.rt.spawn(async move {
             let (Some(state), Some(uid)) = (this.state(), this.user_id().await) else {
@@ -664,7 +668,8 @@ impl Backend {
                 return;
             }
             match res {
-                Ok(cards) => {
+                Ok(mut cards) => {
+                    crate::sort::sort_cards(&mut cards, sort_by, sort_desc);
                     let n = cards.len();
                     this.show_cards(
                         "Albums".into(),
@@ -682,8 +687,11 @@ impl Backend {
         });
     }
 
-    fn show_library_artists(&self) {
+    pub(crate) fn show_library_artists(&self) {
         let generation = self.begin_cards("Artists");
+        let prefs = crate::uiprefs::UiPrefs::load();
+        self.show_sort(Some(crate::sort::List::Artists), &prefs);
+        let (sort_by, sort_desc) = crate::sort::List::Artists.current(&prefs);
         let this = self.clone();
         self.rt.spawn(async move {
             let (Some(state), Some(uid)) = (this.state(), this.user_id().await) else {
@@ -711,7 +719,8 @@ impl Backend {
                 return;
             }
             match res {
-                Ok(cards) => {
+                Ok(mut cards) => {
+                    crate::sort::sort_cards(&mut cards, sort_by, sort_desc);
                     let n = cards.len();
                     this.show_cards(
                         "Artists".into(),
@@ -729,8 +738,11 @@ impl Backend {
         });
     }
 
-    fn show_library_mixes(&self) {
+    pub(crate) fn show_library_mixes(&self) {
         let generation = self.begin_cards("Mixes");
+        let prefs = crate::uiprefs::UiPrefs::load();
+        self.show_sort(Some(crate::sort::List::Mixes), &prefs);
+        let (sort_by, sort_desc) = crate::sort::List::Mixes.current(&prefs);
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
@@ -763,7 +775,8 @@ impl Backend {
                 return;
             }
             match res {
-                Ok(cards) => {
+                Ok(mut cards) => {
+                    crate::sort::sort_cards(&mut cards, sort_by, sort_desc);
                     let n = cards.len();
                     this.show_cards(
                         "Mixes".into(),

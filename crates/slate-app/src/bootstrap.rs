@@ -451,6 +451,8 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_open_miniplayer, |b| b.open_miniplayer());
     bind!(on_video_toggle, |b| b.video_toggle());
     bind!(on_video_seek, |b, f| b.video_seek(f));
+    bind!(on_cycle_sort, |b| b.change_sort(false));
+    bind!(on_flip_sort, |b| b.change_sort(true));
     bind!(on_video_close, |b| b.close_video());
     bind!(on_toggle_play, |b| b.toggle_play());
     bind!(on_next, |b| b.next());

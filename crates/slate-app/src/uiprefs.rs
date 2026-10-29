@@ -20,6 +20,15 @@ pub struct UiPrefs {
     /// launch means that renderer crashed the process, so it is skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub renderer_pending: Option<String>,
+    /// Sort order per library list (`sort::List::key`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sorts: std::collections::BTreeMap<String, SortPref>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SortPref {
+    pub order: String,
+    pub desc: bool,
 }
 
 fn path() -> Option<PathBuf> {
