@@ -155,6 +155,48 @@ fn audio_route_differs(before: &AudioProxy, after: &AudioProxy) -> bool {
 /// left alone, because `set_property` panics on a property an element lacks.
 const HTTP_SOURCE_FACTORIES: [&str; 2] = ["curlhttpsrc", "souphttpsrc"];
 
+/// Where GnuTLS (behind souphttpsrc) looks for CA certificates when built on
+/// Debian/Ubuntu — the AppImage's build host.
+const GNUTLS_DEFAULT_CA: &str = "/etc/ssl/certs/ca-certificates.crt";
+
+/// CA bundle locations on other distributions, most common first.
+const CA_BUNDLES: [&str; 5] = [
+    "/etc/pki/tls/certs/ca-bundle.crt", // Fedora, RHEL
+    "/etc/ssl/ca-bundle.pem",           // openSUSE
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // Fedora, RHEL
+    "/etc/ssl/cert.pem",                // Alpine, Arch
+    "/etc/ssl/certs/ca-bundle.crt",     // Void, others
+];
+
+/// The CA bundle to hand souphttpsrc, or `None` to leave its default alone.
+/// The AppImage ships a GnuTLS built for Ubuntu's path; on a distribution
+/// without that file, HTTPS streams would fail certificate verification.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn ca_bundle_override(exists: impl Fn(&str) -> bool) -> Option<&'static str> {
+    if exists(GNUTLS_DEFAULT_CA) {
+        return None;
+    }
+    CA_BUNDLES.into_iter().find(|p| exists(p))
+}
+
+/// Point a souphttpsrc at the distribution's CA bundle when GnuTLS's built-in
+/// path is missing (see [`ca_bundle_override`]). Public for `slate --self-test`.
+pub fn apply_ca_bundle(source: &gst::Element) {
+    #[cfg(target_os = "linux")]
+    {
+        let is_soup = source.factory().is_some_and(|f| f.name() == "souphttpsrc");
+        if is_soup && source.find_property("ssl-ca-file").is_some() {
+            static CA: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
+            let ca = CA.get_or_init(|| ca_bundle_override(|p| std::path::Path::new(p).is_file()));
+            if let Some(path) = ca {
+                source.set_property("ssl-ca-file", *path);
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = source;
+}
+
 /// Apply one `Route` to one HTTP source element.
 fn apply_route_to_source(source: &gst::Element, route: &crate::proxy::Route) {
     let Some(factory) = source.factory().map(|f| f.name().to_string()) else {
@@ -163,6 +205,8 @@ fn apply_route_to_source(source: &gst::Element, route: &crate::proxy::Route) {
     if !HTTP_SOURCE_FACTORIES.contains(&factory.as_str()) {
         return;
     }
+
+    apply_ca_bundle(source);
 
     // `NoProxy` means the system's own configuration applies; these elements
     // read the environment themselves, so setting nothing is correct here.
@@ -4267,6 +4311,37 @@ fn list_alsa_devices_inner() -> Result<Vec<AudioDevice>, String> {
 /// coreelements, so this is effectively always true.
 pub fn gapless_supported() -> bool {
     gst::ElementFactory::find("concat").is_some()
+}
+
+#[cfg(test)]
+mod ca_bundle_tests {
+    use super::*;
+
+    #[test]
+    fn ubuntu_path_present_means_no_override() {
+        assert_eq!(ca_bundle_override(|_| true), None);
+    }
+
+    #[test]
+    fn fedora_and_opensuse_bundles_are_found() {
+        assert_eq!(
+            ca_bundle_override(|p| p == "/etc/pki/tls/certs/ca-bundle.crt"),
+            Some("/etc/pki/tls/certs/ca-bundle.crt")
+        );
+        assert_eq!(
+            ca_bundle_override(|p| p == "/etc/ssl/ca-bundle.pem"),
+            Some("/etc/ssl/ca-bundle.pem")
+        );
+        assert_eq!(ca_bundle_override(|_| false), None);
+    }
+
+    #[test]
+    fn soup_source_accepts_the_ca_file_property() {
+        let _ = gst::init();
+        let src = gst::ElementFactory::make("souphttpsrc").build().unwrap();
+        assert!(src.find_property("ssl-ca-file").is_some());
+        src.set_property("ssl-ca-file", "/etc/pki/tls/certs/ca-bundle.crt");
+    }
 }
 
 #[cfg(test)]

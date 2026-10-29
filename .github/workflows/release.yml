@@ -76,6 +76,11 @@ jobs:
           sudo mv $L/gio/modules $L/gio/modules.hidden
           for f in $L/libsoup-3.0.so* $L/libsoup-2.4.so*; do [ -e "$f" ] && sudo mv "$f" "$f.hidden"; done
           dist/slate-$VERSION-x86_64.AppImage --self-test --network
+          # Fedora layout: CA bundle only at /etc/pki/tls/certs/ca-bundle.crt.
+          sudo mkdir -p /etc/pki/tls/certs
+          sudo cp -L /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt
+          sudo mv /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt.hidden
+          dist/slate-$VERSION-x86_64.AppImage --self-test --network
       - uses: actions/upload-artifact@v4
         with: { name: appimage, path: dist/*.AppImage }
 
@@ -207,5 +212,7 @@ jobs:
       - name: Create release
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
-          gh release create "$GITHUB_REF_NAME" release/artifacts/* --repo "$GITHUB_REPOSITORY" \
+          # Published assets: the AppImage and the Windows installer only.
+          gh release create "$GITHUB_REF_NAME" release/artifacts/*.AppImage release/artifacts/*-setup.exe \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Slate $GITHUB_REF_NAME" --notes-file release/notes.md

@@ -72,8 +72,17 @@ pub fn run() -> i32 {
 }
 
 fn https_fetch() -> Result<(), String> {
-    let pipeline = gst::parse::launch("souphttpsrc location=https://www.example.com/ ! fakesink")
-        .map_err(|e| e.to_string())?;
+    let pipeline =
+        gst::parse::launch("souphttpsrc name=src location=https://www.example.com/ ! fakesink")
+            .map_err(|e| e.to_string())?;
+    // Same CA handling as playback, so this also checks distributions whose
+    // CA bundle is not where the bundled GnuTLS expects it.
+    if let Some(src) = pipeline
+        .downcast_ref::<gst::Bin>()
+        .and_then(|b| b.by_name("src"))
+    {
+        slate_core::audio::apply_ca_bundle(&src);
+    }
     pipeline
         .set_state(gst::State::Playing)
         .map_err(|e| e.to_string())?;
