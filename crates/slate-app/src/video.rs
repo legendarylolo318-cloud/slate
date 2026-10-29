@@ -220,9 +220,13 @@ impl Backend {
         }
     }
 
+    /// Called from the UI. Dropping the session sets the pipeline to `Null`,
+    /// which joins its streaming threads and can wait on the network, so the
+    /// drop happens on a blocking worker, outside the lock.
     pub fn close_video(&self) {
-        if let Ok(mut s) = self.video.lock() {
-            s.take();
+        let session = self.video.lock().ok().and_then(|mut s| s.take());
+        if let Some(session) = session {
+            self.rt.spawn_blocking(move || drop(session));
         }
     }
 }

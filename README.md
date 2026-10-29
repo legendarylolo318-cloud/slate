@@ -45,8 +45,13 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 
 - Gapless playback, single-instance with `tidal://` links, profile editing.
 
-Not yet done (see the plan): Windows media controls and tray, Explore sub-pages,
-shortcut overlay, global shortcuts.
+Not yet done: Windows media controls, tray, exclusive output and sleep inhibit; Explore;
+loved videos; shortcut overlay; global shortcuts; library sorting. Each is a
+[GitHub issue](https://github.com/legendarylolo318-cloud/slate/issues). Security and
+performance review results are in [REVIEW.md](REVIEW.md).
+
+`slate --self-test --network` checks that GStreamer finds the plugins it needs and can
+stream over HTTPS, then exits (useful for packaged builds).
 
 ## Build
 
