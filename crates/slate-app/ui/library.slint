@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
 import { TrackRow, PlaylistEntry } from "types.slint";
 import { ListView } from "std-widgets.slint";
-import { Button } from "widgets.slint";
+import { Button, Segmented } from "widgets.slint";
 
 component NavItem inherits Rectangle {
     in property <string> label;
@@ -342,6 +342,9 @@ export component TrackPage inherits Rectangle {
     in property <bool> sort-desc;
     callback cycle-sort();
     callback flip-sort();
+    in property <bool> loved-tabs;
+    in property <int> loved-tab;
+    callback loved-tab-picked(int);
     property <bool> show-artist: root.width > 520px;
     property <bool> show-album: root.width > 760px;
     // Column layout shared by the header and every row (padding 12, spacing 12,
@@ -386,6 +389,7 @@ export component TrackPage inherits Rectangle {
             if root.can-favorite: Button { label: root.page-favorite ? "♥  Saved" : "♡  Save"; clicked => { root.toggle-page-favorite(); } }
             if root.sort-visible: Button { label: "⇅  " + root.sort-label; clicked => { root.cycle-sort(); } }
             if root.sort-visible: Button { label: root.sort-desc ? "↓" : "↑"; clicked => { root.flip-sort(); } }
+            if root.loved-tabs: Segmented { options: ["Tracks", "Videos"]; index: root.loved-tab; picked(i) => { root.loved-tab-picked(i); } }
         }
         HorizontalLayout {
             padding-left: 12px;

@@ -198,7 +198,9 @@ impl Backend {
                         data.extend(p.items.into_iter().map(|pl| {
                             let count = pl
                                 .number_of_tracks
-                                .map(|n| format!("{n} tracks"))
+                                .map(|n| {
+                                    item_count(n.into(), pl.number_of_videos.unwrap_or(0).into())
+                                })
                                 .unwrap_or_default();
                             (pl.uuid, pl.title, count, pl.image)
                         }));
@@ -298,6 +300,7 @@ impl Backend {
             });
         }
         self.show_sort(list, &prefs);
+        self.show_loved_tabs(matches!(kind, SourceKind::Loved).then_some(0));
 
         let this = self.clone();
         self.ui(move |w| {
@@ -401,15 +404,18 @@ impl Backend {
                     .await
                 {
                     Ok(v) => {
-                        let count = v["numberOfTracks"].as_u64().unwrap_or(0);
+                        let count = item_count(
+                            v["numberOfTracks"].as_u64().unwrap_or(0),
+                            v["numberOfVideos"].as_u64().unwrap_or(0),
+                        );
                         let by = v["creator"]["name"].as_str().unwrap_or("");
                         Header {
                             label: "PLAYLIST",
                             title: v["title"].as_str().unwrap_or("Playlist").to_string(),
                             subtitle: if by.is_empty() {
-                                format!("{count} tracks")
+                                count
                             } else {
-                                format!("{by} · {count} tracks")
+                                format!("{by} · {count}")
                             },
                             cover: v["squareImage"]
                                 .as_str()
@@ -499,6 +505,14 @@ impl Backend {
                     });
                 }
             }
+        });
+    }
+
+    /// The Tracks / Videos tabs on the Loved pages: `Some(tab)` shows them.
+    pub(crate) fn show_loved_tabs(&self, tab: Option<i32>) {
+        self.ui(move |w| {
+            w.set_loved_tabs(tab.is_some());
+            w.set_loved_tab(tab.unwrap_or(0));
         });
     }
 
@@ -818,5 +832,32 @@ impl Backend {
             let outcome = ctl.play_all(all, Some(source), album, shuffle).await;
             this.apply(outcome).await;
         });
+    }
+}
+
+/// "12 tracks", or "3 videos · 12 tracks" for a mixed playlist.
+fn item_count(tracks: u64, videos: u64) -> String {
+    let n = |count: u64, one: &str, many: &str| {
+        format!("{count} {}", if count == 1 { one } else { many })
+    };
+    if videos == 0 {
+        n(tracks, "track", "tracks")
+    } else {
+        format!(
+            "{} · {}",
+            n(videos, "video", "videos"),
+            n(tracks, "track", "tracks")
+        )
+    }
+}
+
+#[cfg(test)]
+mod item_count_tests {
+    #[test]
+    fn counts_read_like_the_original() {
+        assert_eq!(super::item_count(12, 0), "12 tracks");
+        assert_eq!(super::item_count(1, 0), "1 track");
+        assert_eq!(super::item_count(12, 3), "3 videos · 12 tracks");
+        assert_eq!(super::item_count(0, 1), "1 video · 0 tracks");
     }
 }

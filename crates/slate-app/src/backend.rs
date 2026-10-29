@@ -41,6 +41,8 @@ pub(crate) struct Shared {
     login_url: Mutex<String>,
     /// Bumped on every volume change so only the last of a drag is persisted.
     volume_seq: AtomicU64,
+    /// The music video open in the player, 0 when none.
+    pub(crate) video_id: AtomicU64,
 }
 
 impl Shared {

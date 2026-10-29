@@ -451,6 +451,13 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_open_miniplayer, |b| b.open_miniplayer());
     bind!(on_video_toggle, |b| b.video_toggle());
     bind!(on_video_seek, |b, f| b.video_seek(f));
+    bind!(on_video_toggle_favorite, |b, loved| b
+        .toggle_video_favorite(loved));
+    bind!(on_loved_tab_picked, |b, i| b.navigate(if i == 1 {
+        crate::pages::Route::LovedVideos
+    } else {
+        crate::pages::Route::Loved
+    }));
     bind!(on_cycle_sort, |b| b.change_sort(false));
     bind!(on_flip_sort, |b| b.change_sort(true));
     bind!(on_video_close, |b| b.close_video());

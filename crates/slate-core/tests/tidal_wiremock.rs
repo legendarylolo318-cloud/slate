@@ -326,5 +326,9 @@ async fn sort_order_reaches_the_track_list_requests() {
         .iter()
         .find(|r| r.url.path() == "/v1/playlists/p-2/items")
         .expect("p-2 requested");
-    assert!(!p2.url.query().unwrap_or("").contains("order"), "{:?}", p2.url);
+    assert!(
+        !p2.url.query().unwrap_or("").contains("order"),
+        "{:?}",
+        p2.url
+    );
 }

@@ -27,6 +27,7 @@ pub enum Route {
     Artists,
     Mixes,
     Loved,
+    LovedVideos,
     Playlist(String),
     Album(u64),
     Artist(u64),
@@ -46,6 +47,7 @@ impl Route {
             "artists" => Self::Artists,
             "mixes" => Self::Mixes,
             "loved" => Self::Loved,
+            "loved-videos" => Self::LovedVideos,
             "settings" => Self::Settings,
             "profile" => Self::Profile,
             _ => return None,
@@ -144,6 +146,20 @@ fn names(artist: &Option<TidalArtist>, artists: &Option<Vec<TidalArtist>>) -> St
             })
         })
         .unwrap_or_default()
+}
+
+fn video_card(v: &slate_core::tidal_api::TidalVideo) -> CardData {
+    CardData {
+        kind: "video",
+        id: v.id.to_string(),
+        title: v.title.clone(),
+        subtitle: v
+            .artist
+            .as_ref()
+            .map(|a| a.name.clone())
+            .unwrap_or_default(),
+        image: v.image_id.clone(),
+    }
 }
 
 pub fn album_card(a: &TidalAlbumDetail) -> CardData {
@@ -332,6 +348,7 @@ impl Backend {
             Route::Folder(id) => self.show_folder(id),
             Route::Artist(id) => self.show_artist(id),
             Route::Loved => self.open(SourceKind::Loved, "loved".into()),
+            Route::LovedVideos => self.show_loved_videos(),
             Route::Playlist(u) => self.open(SourceKind::Playlist(u.clone()), u),
             Route::Album(id) => self.open(SourceKind::Album(id), String::new()),
             Route::Mix(id) => self.open(SourceKind::Mix(id), String::new()),
@@ -560,6 +577,7 @@ impl Backend {
     fn begin_cards(&self, title: &str) -> u64 {
         let generation = self.lib.bump_cards();
         self.show_sort(None, &crate::uiprefs::UiPrefs::default());
+        self.show_loved_tabs(None);
         let title = title.to_string();
         self.ui(move |w| {
             w.set_cards_title(title.into());
@@ -636,6 +654,61 @@ impl Backend {
             }
         }
         Ok(cards)
+    }
+
+    /// Loved → Videos: favourite music videos as a grid; a card plays it.
+    pub(crate) fn show_loved_videos(&self) {
+        let generation = self.begin_cards("Loved Videos");
+        self.show_loved_tabs(Some(1));
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let (Some(state), Some(uid)) = (this.state(), this.user_id().await) else {
+                return;
+            };
+            let mut cards = Vec::new();
+            let mut failed = None;
+            for page in 0.. {
+                if this.lib.cards_generation() != generation {
+                    return;
+                }
+                match lib_cmds::get_favorite_videos(&state, uid, page * GRID_PAGE, GRID_PAGE).await
+                {
+                    Ok(videos) => {
+                        let got = videos.len();
+                        cards.extend(videos.iter().map(video_card));
+                        if got < GRID_PAGE as usize || page >= 50 {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        failed = Some(e.log_safe());
+                        break;
+                    }
+                }
+            }
+            if this.lib.cards_generation() != generation {
+                return;
+            }
+            match failed {
+                Some(e) if cards.is_empty() => {
+                    this.fail_cards(format!("Could not load loved videos: {e}"))
+                }
+                _ => {
+                    let n = cards.len();
+                    this.show_cards(
+                        "Loved Videos".into(),
+                        format!("{n} videos"),
+                        vec![SectionData {
+                            title: String::new(),
+                            wrap: true,
+                            cards,
+                        }],
+                        None,
+                    );
+                    this.show_loved_tabs(Some(1));
+                }
+            }
+        });
     }
 
     pub(crate) fn show_library_albums(&self) {
@@ -833,23 +906,7 @@ impl Backend {
                             })
                             .collect(),
                     );
-                    push(
-                        "Videos",
-                        r.videos
-                            .iter()
-                            .map(|v| CardData {
-                                kind: "video",
-                                id: v.id.to_string(),
-                                title: v.title.clone(),
-                                subtitle: v
-                                    .artist
-                                    .as_ref()
-                                    .map(|a| a.name.clone())
-                                    .unwrap_or_default(),
-                                image: v.image_id.clone(),
-                            })
-                            .collect(),
-                    );
+                    push("Videos", r.videos.iter().map(video_card).collect());
                     push("Albums", r.albums.iter().map(album_card).collect());
                     push("Playlists", r.playlists.iter().map(playlist_card).collect());
                     if this.lib.cards_generation() == generation {

@@ -121,7 +121,12 @@ impl Backend {
             // One thing at a time: pause the audio engine.
             let _ = playback::pause_track(&state).await;
             this.shared_set_playing(false);
+            this.shared
+                .video_id
+                .store(id, std::sync::atomic::Ordering::SeqCst);
+            this.refresh_video_favorite(id);
             this.ui(move |w| {
+                w.set_video_favorite(false);
                 w.set_video_title(title.into());
                 w.set_video_frame(Image::default());
                 w.set_video_status("Loading video…".into());
@@ -149,6 +154,69 @@ impl Backend {
                     this.ui(move |w| w.set_video_status(format!("Video failed: {e}").into()))
                 }
                 Err(e) => this.ui(move |w| w.set_video_status(format!("Video failed: {e}").into())),
+            }
+        });
+    }
+
+    /// Sets the player's heart from the account's favourite videos.
+    fn refresh_video_favorite(&self, id: u64) {
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let (Some(state), Some(uid)) = (this.state(), this.user_id().await) else {
+                return;
+            };
+            if let Ok(ids) =
+                slate_core::commands::library::get_favorite_video_ids(&state, uid).await
+            {
+                let loved = ids.contains(&id);
+                if this
+                    .shared
+                    .video_id
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                    == id
+                {
+                    this.ui(move |w| w.set_video_favorite(loved));
+                }
+            }
+        });
+    }
+
+    /// The player's heart: add or remove the open video from Loved Videos.
+    pub fn toggle_video_favorite(&self, now_loved: bool) {
+        let id = self
+            .shared
+            .video_id
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if id == 0 {
+            return;
+        }
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let (Some(state), Some(uid)) = (this.state(), this.user_id().await) else {
+                return;
+            };
+            use slate_core::commands::library as lib;
+            let result = if now_loved {
+                lib::remove_favorite_video(&state, uid, id).await
+            } else {
+                lib::add_favorite_video(&state, uid, id).await
+            };
+            match result {
+                Ok(()) => this.ui(move |w| {
+                    w.set_video_favorite(!now_loved);
+                    w.set_notice(
+                        if now_loved {
+                            "Removed from Loved Videos"
+                        } else {
+                            "Added to Loved Videos"
+                        }
+                        .into(),
+                    );
+                }),
+                Err(e) => {
+                    let msg = format!("Could not update Loved Videos: {}", e.log_safe());
+                    this.ui(move |w| w.set_error(msg.into()));
+                }
             }
         });
     }
@@ -224,6 +292,9 @@ impl Backend {
     /// which joins its streaming threads and can wait on the network, so the
     /// drop happens on a blocking worker, outside the lock.
     pub fn close_video(&self) {
+        self.shared
+            .video_id
+            .store(0, std::sync::atomic::Ordering::SeqCst);
         let session = self.video.lock().ok().and_then(|mut s| s.take());
         if let Some(session) = session {
             self.rt.spawn_blocking(move || drop(session));

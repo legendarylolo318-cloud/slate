@@ -37,6 +37,12 @@ export component AppWindow inherits Window {
     in-out property <bool> video-open: false;
     in property <image> video-frame;
     in property <string> video-title;
+    in property <bool> video-favorite;
+    callback video-toggle-favorite(bool);
+    // Tracks / Videos tabs on the Loved pages.
+    in property <bool> loved-tabs;
+    in property <int> loved-tab;
+    callback loved-tab-picked(int);
     in property <bool> video-playing;
     in property <float> video-progress;
     in property <string> video-position-text: "0:00";
@@ -291,6 +297,9 @@ export component AppWindow inherits Window {
                         }
                         play-all => { root.play-all(); }
                         shuffle-all => { root.shuffle-all(); }
+                        loved-tabs: root.loved-tabs;
+                        loved-tab: root.loved-tab;
+                        loved-tab-picked(i) => { root.loved-tab-picked(i); }
                         sort-visible: root.sort-visible;
                         sort-label: root.sort-label;
                         sort-desc: root.sort-desc;
@@ -313,6 +322,9 @@ export component AppWindow inherits Window {
                         toggle-hero-favorite => { root.toggle-hero-favorite(); }
                         hero-play => { root.hero-play(); }
                         hero-shuffle => { root.hero-shuffle(); }
+                        loved-tabs: root.loved-tabs;
+                        loved-tab: root.loved-tab;
+                        loved-tab-picked(i) => { root.loved-tab-picked(i); }
                         sort-visible: root.sort-visible;
                         sort-label: root.sort-label;
                         sort-desc: root.sort-desc;
@@ -536,6 +548,8 @@ export component AppWindow inherits Window {
         if root.video-open: VideoView {
             frame: root.video-frame;
             title: root.video-title;
+            favorite: root.video-favorite;
+            toggle-favorite => { root.video-toggle-favorite(root.video-favorite); }
             playing: root.video-playing;
             progress: root.video-progress;
             position-text: root.video-position-text;
