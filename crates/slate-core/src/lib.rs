@@ -102,7 +102,15 @@ fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = std::path::PathBuf::from(tmp);
-    fs::write(&tmp, data)?;
+    // Owner-only, like the key file: the contents are encrypted, but who has
+    // an account here and when it was used is nobody else's business. A
+    // leftover temp file is removed so the mode applies to a fresh file.
+    let _ = fs::remove_file(&tmp);
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    std::io::Write::write_all(&mut opts.open(&tmp)?, data)?;
     fs::rename(&tmp, path).inspect_err(|_| {
         let _ = fs::remove_file(&tmp);
     })
@@ -657,5 +665,22 @@ impl AppState {
         let encrypted = self.crypto.encrypt(content.as_bytes())?;
         write_atomic(&path, &encrypted)?;
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod write_atomic_tests {
+    #[test]
+    fn written_files_are_owner_only_and_replace_the_old_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("settings.json");
+        std::fs::write(&p, b"old").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        super::write_atomic(&p, b"new").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"new");
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{mode:o}");
+        assert!(!dir.path().join("settings.json.tmp").exists());
     }
 }
