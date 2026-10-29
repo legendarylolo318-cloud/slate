@@ -15,6 +15,24 @@ use crate::backend::Backend;
 
 /// A failure this early means the renderer could not drive the window at all.
 const RENDERER_STARTUP_WINDOW: Duration = Duration::from_secs(5);
+/// A renderer that has not drawn its first frame by then counts as failed.
+const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(6);
+
+/// The renderer was selected and the window shown, but nothing was ever drawn
+/// (Skia creates its GPU surface lazily, so a missing driver surfaces here).
+#[derive(Debug)]
+struct NoFirstFrame;
+
+impl std::fmt::Display for NoFirstFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the renderer drew no frame within {FIRST_FRAME_TIMEOUT:?}"
+        )
+    }
+}
+
+impl std::error::Error for NoFirstFrame {}
 const INDEX_ENV: &str = "SLATE_RENDERER_INDEX";
 
 #[derive(Clone, Copy, Debug)]
@@ -84,11 +102,29 @@ pub fn run(
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
 
+    // Skia creates its Vulkan surface lazily, after `launch` has already
+    // reported success, so a missing driver would leave an invisible window
+    // instead of failing over. Skip Vulkan up front when it cannot work.
+    #[cfg(all(feature = "renderer-skia-vulkan", target_os = "linux"))]
+    let index = if forced.is_none()
+        && matches!(CHAIN.get(index), Some(Renderer::SkiaVulkan))
+        && !vulkan_usable()
+    {
+        tracing::warn!("no usable Vulkan device; skipping the Skia/Vulkan renderer");
+        index + 1
+    } else {
+        index
+    };
+
     let started = Instant::now();
     let outcome = launch(forced.as_deref(), index, incoming, link);
 
     match outcome {
-        Err(e) if forced.is_none() && started.elapsed() < RENDERER_STARTUP_WINDOW => {
+        Err(e)
+            if forced.is_none()
+                && (started.elapsed() < RENDERER_STARTUP_WINDOW
+                    || e.downcast_ref::<NoFirstFrame>().is_some()) =>
+        {
             match CHAIN.get(index + 1) {
                 Some(next) => {
                     tracing::warn!(
@@ -106,15 +142,46 @@ pub fn run(
     }
 }
 
+/// True when the Vulkan loader is present, an instance can be created and it
+/// reports at least one physical device.
+#[cfg(all(feature = "renderer-skia-vulkan", target_os = "linux"))]
+fn vulkan_usable() -> bool {
+    use ash::vk;
+    // SAFETY: `Entry::load` dlopens the system Vulkan loader; the instance is
+    // created from valid, fully initialised structs and destroyed before
+    // return, and nothing derived from it outlives this function.
+    unsafe {
+        let Ok(entry) = ash::Entry::load() else {
+            return false;
+        };
+        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
+        let info = vk::InstanceCreateInfo::default().application_info(&app);
+        let Ok(instance) = entry.create_instance(&info, None) else {
+            return false;
+        };
+        let usable = instance
+            .enumerate_physical_devices()
+            .is_ok_and(|d| !d.is_empty());
+        instance.destroy_instance(None);
+        usable
+    }
+}
+
 fn launch(
     forced: Option<&str>,
     index: usize,
     incoming: Option<std::sync::mpsc::Receiver<String>>,
     link: Option<String>,
 ) -> anyhow::Result<()> {
+    let mut chosen = None;
     let active = match forced {
         Some(name) => {
             tracing::info!(backend = name, "SLINT_BACKEND override in effect");
+            // Initialise the platform now (it honours SLINT_BACKEND) so the
+            // app id below applies, as it does on the chosen-renderer path.
+            slint::BackendSelector::new()
+                .select()
+                .map_err(|e| anyhow::anyhow!("SLINT_BACKEND={name}: {e}"))?;
             name.to_string()
         }
         None => {
@@ -122,6 +189,7 @@ fn launch(
             renderer
                 .select()
                 .map_err(|e| anyhow::anyhow!("selecting {}: {e}", renderer.name()))?;
+            chosen = Some(renderer);
             renderer.name().to_string()
         }
     };
@@ -133,6 +201,11 @@ fn launch(
         .context("starting tokio runtime")?;
     let _guard = runtime.enter();
 
+    // Wayland app_id / X11 WM_CLASS: matches `slate.desktop` (StartupWMClass),
+    // so docks and taskbars show the right icon and group the window.
+    if let Err(e) = slint::set_xdg_app_id("slate") {
+        tracing::debug!("could not set the app id: {e}");
+    }
     let window = AppWindow::new().context("creating main window")?;
     window.show().context("showing main window")?;
     tracing::info!(renderer = %active, "UI renderer active");
@@ -163,9 +236,56 @@ fn launch(
         .window()
         .on_close_requested(move || b.close_requested());
     // Not `window.run()`: hiding the window to the tray must not end the loop.
-    slint::run_event_loop_until_quit().context("running event loop")?;
+    // Only the GL renderers report frames reliably (Skia/Vulkan does not call
+    // the rendering notifier; Vulkan is probed before selection instead).
+    let watch = matches!(chosen, Some(Renderer::SkiaOpenGl | Renderer::FemtoVg));
+    let no_frame = first_frame_watchdog(&window, watch);
+    let looped = slint::run_event_loop_until_quit();
     backend.shutdown();
+    // A renderer that never drew may also make the loop itself fail on the
+    // way out; the missing frame is the error that triggers the fallback.
+    if no_frame.get() {
+        return Err(NoFirstFrame.into());
+    }
+    looped.context("running event loop")?;
     Ok(())
+}
+
+/// Quits the event loop and sets the returned flag if the window has drawn
+/// nothing after [`FIRST_FRAME_TIMEOUT`]. Inactive under `SLINT_BACKEND` and
+/// for renderers that do not report frames (nothing to fall back to then).
+fn first_frame_watchdog(window: &AppWindow, enabled: bool) -> std::rc::Rc<std::cell::Cell<bool>> {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let no_frame = Rc::new(Cell::new(false));
+    if !enabled {
+        return no_frame;
+    }
+    let drew = Rc::new(Cell::new(false));
+    let flag = Rc::clone(&drew);
+    let watching = window
+        .window()
+        .set_rendering_notifier(move |state, _| {
+            if matches!(state, slint::RenderingState::AfterRendering) {
+                flag.set(true);
+            }
+        })
+        .is_ok();
+    if watching {
+        let failed = Rc::clone(&no_frame);
+        let weak = window.as_weak();
+        slint::Timer::single_shot(FIRST_FRAME_TIMEOUT, move || {
+            if !drew.get() {
+                tracing::error!("no frame drawn since startup; trying the next renderer");
+                failed.set(true);
+                if let Some(w) = weak.upgrade() {
+                    let _ = w.hide();
+                }
+                let _ = slint::quit_event_loop();
+            }
+        });
+    }
+    no_frame
 }
 
 fn wire(window: &AppWindow, backend: &Backend) {

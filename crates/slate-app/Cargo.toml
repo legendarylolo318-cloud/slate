@@ -42,6 +42,8 @@ arboard = { version = "3", default-features = false, features = ["wayland-data-c
 
 [target.'cfg(target_os = "linux")'.dependencies]
 slint = { version = "1.18", default-features = false, features = ["renderer-skia-vulkan"] }
+# Probe for a usable Vulkan driver before choosing Skia/Vulkan (same version Skia uses).
+ash = "0.38"
 mpris-server = "0.9"
 ksni = "0.3"
 
