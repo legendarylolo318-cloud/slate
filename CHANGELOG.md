@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0] - 2026-10-29
+
+### Changed
+- New icon set: clean vector icons replace the emoji and text symbols across the player bar,
+  full-screen player, mini player, video player and dialogs. Larger buttons by default.
+- The player bar can be resized: Settings → General → Player bar size (Small, Normal, Large,
+  Extra large). Buttons, icons, cover art, text and sliders all scale, instantly.
+- Lyrics can be resized: Settings → General → Lyrics size. Full-screen lyrics also grow with
+  the window, and long lines wrap instead of being cut off.
+- The seek bar keeps a usable length in narrower windows.
+
 ## [0.1.0] - 2026-10-28
 
 First release of Slate: a native TIDAL client written in Rust with a Slint UI, ported
