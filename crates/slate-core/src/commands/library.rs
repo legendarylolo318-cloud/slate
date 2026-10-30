@@ -42,10 +42,11 @@ pub async fn get_user_playlists(
                         let key = cache_key.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client.get_user_playlists(user_id, offset, limit).await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -133,12 +134,13 @@ pub async fn get_all_playlists(
                         let od = order_direction.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client
                                     .get_all_playlists(user_id, offset, limit, &o, &od)
                                     .await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -215,10 +217,11 @@ pub async fn get_playlist_tracks(
                         let pid = playlist_id.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client.get_playlist_tracks(&pid).await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -314,7 +317,7 @@ pub async fn get_playlist_tracks_page(
                         let ord_dir = order_direction.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client
                                     .get_playlist_tracks_page(
@@ -325,7 +328,8 @@ pub async fn get_playlist_tracks_page(
                                         ord_dir.as_deref(),
                                     )
                                     .await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -414,10 +418,11 @@ pub async fn get_favorite_playlists(
                         let key = cache_key.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client.get_favorite_playlists(user_id, offset, limit).await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -510,12 +515,13 @@ pub async fn get_favorite_albums(
                         let dir_bg = order_direction.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client
                                     .get_favorite_albums(user_id, offset, limit, &order_bg, &dir_bg)
                                     .await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -728,12 +734,13 @@ pub async fn get_favorite_tracks(
                         let ord_dir = order_direction.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client
                                     .get_favorite_tracks(user_id, offset, limit, &ord, &ord_dir)
                                     .await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -1114,12 +1121,13 @@ pub async fn get_favorite_mixes(
                         let dir_bg = order_direction.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client
                                     .get_favorite_mixes(offset, limit, &order_bg, &dir_bg)
                                     .await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -1225,14 +1233,15 @@ pub async fn get_favorite_artists(
                         let dir_bg = order_direction.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client
                                     .get_favorite_artists(
                                         user_id, offset, limit, &order_bg, &dir_bg,
                                     )
                                     .await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -1327,7 +1336,7 @@ pub async fn get_playlist_folders(
                         let c = cursor.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client
                                     .get_playlist_folders(
@@ -1340,7 +1349,8 @@ pub async fn get_playlist_folders(
                                         c.as_deref().unwrap_or(""),
                                     )
                                     .await
-                            };
+                            })
+                            .await;
                             match result {
                                 Ok(fresh) => {
                                     if let Ok(bytes) = serde_json::to_vec(&fresh) {

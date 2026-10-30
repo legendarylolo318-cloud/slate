@@ -1,10 +1,14 @@
 import { Theme } from "theme.slint";
-import { IconButton, Bar } from "widgets.slint";
+import { IconButton, Bar, QualityBadges } from "widgets.slint";
 
 export component PlayerBar inherits Rectangle {
     in property <string> title;
     in property <string> artist;
+    in property <bool> tint-on;
+    in property <color> tint;
     in property <string> quality;
+    in property <int> badge;
+    in property <bool> atmos;
     in property <image> cover;
     // A minimised music video plays in the artwork slot; click restores it.
     in property <bool> video-mini;
@@ -50,7 +54,8 @@ export component PlayerBar inherits Rectangle {
     property <length> side-w: max(420px * root.scale, root.width * 0.27);
     property <length> mid-w: max(0px, root.width - 2 * root.side-w - 52px * root.scale);
     height: (root.compact ? 124px : 96px) * root.scale;
-    background: Theme.surface;
+    background: root.tint-on ? root.tint : Theme.surface;
+    animate background { duration: 300ms; }
 
     // Wide: info | transport | volume. Compact: info on top, transport below.
     VerticalLayout {
@@ -79,7 +84,11 @@ export component PlayerBar inherits Rectangle {
                     alignment: center;
                     Text { text: root.video-mini ? root.video-title : root.title; color: Theme.text; font-size: 14.5px * root.scale; font-weight: 600; overflow: elide; }
                     Text { text: root.artist; color: Theme.text-muted; font-size: 12.5px * root.scale; overflow: elide; }
-                    if root.quality != "": Text { text: root.quality; color: Theme.accent; font-size: 11px * root.scale; font-weight: 600; overflow: elide; }
+                    if root.quality != "" || root.badge > 0 || root.atmos: HorizontalLayout {
+                        spacing: 6px * root.scale;
+                        QualityBadges { tier: root.badge; atmos: root.atmos; long-atmos: false; scale: root.scale; }
+                        if root.quality != "": Text { text: root.quality; color: root.tint-on ? Theme.text-muted : Theme.accent; font-size: 11px * root.scale; font-weight: 600; overflow: elide; vertical-alignment: center; }
+                    }
                 }
             }
             // transport (wide layout keeps it centred here)

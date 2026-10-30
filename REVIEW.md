@@ -7,7 +7,7 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 |---|---|---|
 | `cargo fmt --all --check` | pass | pass (CI) |
 | `cargo clippy --workspace --all-targets -- -D warnings` | pass | pass (CI) |
-| `cargo test --workspace` | 510 pass | pass (CI), plus Windows-only tests (keyring persistence, pipe ACL, `wasapi2sink`); 3 `curlhttpsrc` tests skipped, no curl plugin in GStreamer's Windows packages |
+| `cargo test --workspace` | 575 pass | pass (CI), plus Windows-only tests (keyring persistence, pipe ACL, `wasapi2sink`); 3 `curlhttpsrc` tests skipped, no curl plugin in GStreamer's Windows packages |
 | `cargo deny check` (advisories, bans, licenses, sources) | pass | n/a |
 | `cargo audit` | pass, with the exceptions below | n/a |
 | Release dry run (`workflow_dispatch`) | AppImage built and self-tested (host GStreamer/GIO/libsoup hidden; Fedora CA layout) | portable zip + installer built; self-test with a clean PATH; GUI launch; install/run/uninstall |
@@ -55,6 +55,20 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | 38 | Low | Image cache removed its in-flight entry before caching the pixels, and could remove a newer fetch's entry, causing duplicate downloads | Insert first; remove only our own entry (`Shared::ptr_eq`) |
 | 39 | Medium | Library → Mixes asked v2 for 100 items (HTTP 400); one unparsable mix also ended paging early | Pages of 50 (`MAX_V2_FAVORITES_LIMIT`), page fullness counted before filtering |
 | 40 | Low | Explore tiles requested slug "image ids" (`hiphop`, `k-pop`) that the CDN refuses | Only UUID-shaped ids or URLs are requested; others get a name tile |
+| 41 | Medium | Every TIDAL request held the shared client mutex until the server answered, so the whole app made one API request at a time | The client is a cheap handle over shared credentials; requests run at once, capped at 4 in flight; background refreshes go one at a time and only while nothing on screen is waiting (`tidal_api.rs`) |
+| 42 | Low | The user id was fetched from `/sessions` every time a page needed it and the cache was empty, although sign-in already knew it | The id is kept with the tokens (`TidalClient::user_id`) |
+| 43 | Low | Cached track credits could never be read back (written as `creditType`, read as `type`), so every open was a request | `alias = "creditType"` on `TidalCredit` |
+| 44 | Low | Idle wakeups: the theme-file watcher woke 16 times a second, the MPRIS position task once a second while paused, the playback ticker twice a second while idle | Watcher tick 250 ms; MPRIS and playback tickers sleep until playback starts (25 → 6 wakeups/s idle) |
+| 45 | High | Signing out while a token refresh was on the wire let the refresh store (and persist) the old session's tokens again | Refresh only stores its tokens if the session it refreshed is still the current one; `sign_out` clears first, then waits for any refresh so nothing persists after it. Test: `signing_out_during_a_refresh_does_not_bring_the_tokens_back` |
+| 46 | Medium | A client copy taken before another request's refresh still sent the old access token (a wasted 401 and retry per request; playlist edits, which do not retry, failed once) | `send` re-stamps the bearer with the current token after taking its permit, and refuses to send at all after a sign-out. Test: `a_client_copy_made_before_a_refresh_sends_the_new_token` |
+| 47 | Medium | Playlist create/rename and the profile edits (name, bio, links, picture upload/poll/delete) bypassed `send`: no rate-gate check, no 429 trip, not counted against the in-flight cap | Routed through `send` (the S3 picture upload, not a TIDAL API host, still goes direct) |
+| 48 | Medium | A stale-while-revalidate refresh that fetched before a favourite was added (or before logout's `clear`) wrote the old data back afterwards | Disk cache keeps an invalidation epoch; a refresh's write is dropped if any invalidation happened since it started, checked before and after the file write. Test: `a_refresh_that_started_before_an_invalidation_is_not_written_back` |
+| 49 | Medium | Export read the page generation and track total after the save dialog closed, so navigating while it was open exported the new page's rows under the old title | Both captured before the dialog; the first loop pass rechecks the generation |
+| 50 | Low | Export file names could end in a space (Windows strips it) and a name typed without an extension was saved without one | Trailing dots/spaces trimmed after truncation; the format's extension is added when missing. Tests |
+| 51 | Low | Credits panel reopened itself when the answer arrived after the user closed it | The answer only fills a panel that is still open |
+| 52 | Low | Cover tint: the track check and the colour write were not atomic with `clear_tint`, so a skip in between could leave the previous cover's colour | Check and write under the colour slot's lock |
+| 53 | Low | `HI_RES` (TIDAL's old MQA tier, now streamed as 16-bit FLAC) was badged Hi-Res | Badged Lossless; only `HI_RES_LOSSLESS` / the `HIRES_LOSSLESS` tag is Hi-Res. Test |
+| 54 | Medium | The new `[tidal-req]` debug line (and two existing 401 logs) printed `/users/<account id>/…` paths | `loggable_path` replaces the id and drops the query. Test |
 
 ## Security verification
 - **Loopback only, off by default:** MCP binds `127.0.0.1` (hard-coded), overlay clamps to loopback; both default off (`defaults::mcp_enabled/overlay_enabled`).

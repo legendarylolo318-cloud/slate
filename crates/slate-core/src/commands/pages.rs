@@ -94,10 +94,11 @@ pub async fn get_album_page(
                         let key = cache_key.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client.get_album_page(album_id).await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -246,10 +247,11 @@ pub async fn get_home_page(
                         let cache_key = cache_key.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client.get_home_page(&slug).await
-                            };
+                            })
+                            .await;
                             match result {
                                 Ok(fresh) => {
                                     if let Some(json) = encode_home_for_cache(&fresh) {
@@ -386,10 +388,11 @@ pub async fn get_page_section(
                         let key = cache_key.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client.get_page(&path).await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -519,10 +522,11 @@ pub async fn get_artist_top_tracks(
                         let key = cache_key.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client.get_artist_top_tracks(artist_id, limit).await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -635,10 +639,11 @@ pub async fn get_artist_bio(
                         let key = cache_key.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client.get_artist_bio(artist_id).await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -706,10 +711,11 @@ pub async fn get_artist_page(
                         let key = cache_key.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client.get_artist_page(artist_id).await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -784,12 +790,13 @@ pub async fn get_artist_top_tracks_all(
                         let key = cache_key.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client
                                     .get_artist_top_tracks_all(artist_id, offset, limit)
                                     .await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache
@@ -872,12 +879,13 @@ pub async fn get_artist_view_all(
                         let path = view_all_path.clone();
                         tokio::spawn(async move {
                             let st = handle.state::<AppState>();
-                            let result = {
+                            let result = crate::tidal_api::as_background(async {
                                 let mut client = st.tidal_client.lock().await;
                                 client
                                     .get_artist_view_all(artist_id, &path, offset, limit)
                                     .await
-                            };
+                            })
+                            .await;
                             if let Ok(fresh) = result {
                                 if let Ok(json) = serde_json::to_vec(&fresh) {
                                     st.disk_cache

@@ -39,6 +39,8 @@ pub struct Header {
     pub subtitle: String,
     pub cover: Option<String>,
     pub loved: bool,
+    /// Quality badges (albums only).
+    pub badges: crate::quality::Badges,
 }
 
 #[derive(Clone)]
@@ -49,6 +51,23 @@ struct Active {
     selected: String,
     /// `order` / `orderDirection` for the paged fetches, fixed when opened.
     order: Option<(String, String)>,
+}
+
+impl LibState {
+    /// What the track page shows: its source and title.
+    pub(crate) fn active_for_export(&self) -> Option<(SourceKind, String)> {
+        let active = self.active.lock().ok()?;
+        let a = active.as_ref()?;
+        Some((a.kind.clone(), a.title.clone()))
+    }
+
+    pub(crate) fn generation_now(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn total_now(&self) -> usize {
+        self.total.load(Ordering::Relaxed)
+    }
 }
 
 #[derive(Default)]
@@ -70,7 +89,7 @@ pub struct LibState {
     sort_list: Mutex<Option<crate::sort::List>>,
 }
 
-fn to_track(t: &TidalTrack) -> Option<Track> {
+pub(crate) fn to_track(t: &TidalTrack) -> Option<Track> {
     serde_json::to_value(t)
         .ok()
         .and_then(|v| serde_json::from_value(v).ok())
@@ -101,6 +120,8 @@ fn row_of(t: &Track) -> RowData {
         duration: format_time(t.duration_secs()),
         explicit: t.extra.get("explicit").and_then(|v| v.as_bool()) == Some(true),
         favorite: false,
+        quality: crate::quality::track_badges(t).tier,
+        atmos: crate::quality::track_badges(t).atmos,
     }
 }
 
@@ -317,6 +338,8 @@ impl Backend {
             w.set_has_page(true);
             w.set_page_title("".into());
             w.set_page_subtitle("".into());
+            w.set_page_quality(0);
+            w.set_page_atmos(false);
             w.set_page_loading(true);
             w.set_page_cover(Image::default());
             w.set_page_loved(false);
@@ -336,7 +359,10 @@ impl Backend {
             }
             let (label, title, loved) = (header.label, header.title.clone(), header.loved);
             let subtitle = header.subtitle.clone();
+            let badges = header.badges;
             this.ui(move |w| {
+                w.set_page_quality(badges.tier);
+                w.set_page_atmos(badges.atmos);
                 w.set_page_kind(label.into());
                 w.set_page_title(title.into());
                 w.set_page_subtitle(subtitle.into());
@@ -393,6 +419,7 @@ impl Backend {
             subtitle: String::new(),
             cover: None,
             loved: false,
+            badges: Default::default(),
         };
         let Some(state) = self.state() else {
             return none("", "");
@@ -425,6 +452,7 @@ impl Backend {
                                 .or_else(|| v["image"].as_str())
                                 .map(str::to_string),
                             loved: false,
+                            badges: Default::default(),
                         }
                     }
                     Err(_) => none("PLAYLIST", "Playlist"),
@@ -461,6 +489,11 @@ impl Backend {
                         subtitle: parts.join(" · "),
                         cover: a.cover,
                         loved: false,
+                        badges: crate::quality::album_badges(
+                            a.audio_quality.as_deref(),
+                            a.media_metadata.as_ref(),
+                            a.audio_modes.as_deref(),
+                        ),
                     }
                 }
                 Err(_) => none("ALBUM", "Album"),
@@ -477,6 +510,7 @@ impl Backend {
                         subtitle: format!("{} · {count} tracks", m.subtitle.unwrap_or_default()),
                         cover: m.image,
                         loved: false,
+                        badges: Default::default(),
                     }
                 }
                 Err(_) => none("MIX", "Mix"),
@@ -517,6 +551,24 @@ impl Backend {
             w.set_loved_tabs(tab.is_some());
             w.set_loved_tab(tab.unwrap_or(0));
         });
+    }
+
+    /// The tracks of `page` if every row of it is already loaded.
+    pub(crate) fn loaded_page(&self, page: usize, wanted: usize) -> Option<Vec<Track>> {
+        let cache = self.lib.tracks.lock().ok()?;
+        (0..wanted)
+            .map(|i| cache.get(&(page * PAGE_SIZE + i)).cloned())
+            .collect()
+    }
+
+    /// One page of the open list, for exporting: nothing is added to the
+    /// on-screen cache.
+    pub(crate) async fn fetch_page_for_export(
+        &self,
+        kind: &SourceKind,
+        page: usize,
+    ) -> Result<(Vec<TidalTrack>, usize), String> {
+        self.fetch_page(kind, page).await
     }
 
     fn active_order(&self) -> Option<(String, String)> {
@@ -660,7 +712,7 @@ impl Backend {
         });
     }
 
-    async fn fetch_page(
+    pub(crate) async fn fetch_page(
         &self,
         kind: &SourceKind,
         page: usize,

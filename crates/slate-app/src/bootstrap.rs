@@ -426,6 +426,8 @@ fn wire(window: &AppWindow, backend: &Backend) {
     }
     bind!(on_start_login, |b| b.start_login());
     bind!(on_open_login_url, |b| b.open_login_url());
+    bind!(on_open_update, |b| b.open_update());
+    bind!(on_dismiss_update, |b| b.dismiss_update());
     bind!(on_logout, |b| b.logout());
     bind!(on_back, |b| b.back());
     bind!(on_forward, |b| b.forward());
@@ -451,6 +453,7 @@ fn wire(window: &AppWindow, backend: &Backend) {
         .lyric_seek(usize::try_from(i).unwrap_or(0)));
     bind!(on_toggle_favorite, |b| b.toggle_current_favorite());
     bind!(on_toggle_page_favorite, |b| b.toggle_page_favorite());
+    bind!(on_export_list, |b, f| b.export_list(&f));
     bind!(on_toggle_hero_favorite, |b| b.toggle_hero_favorite());
     bind!(on_add_to_playlist, |b, t, u| b.add_to_playlist(t, &u));
     bind!(on_create_playlist, |b, t, n| b.create_playlist(t, &n));

@@ -571,11 +571,28 @@ fn alsa_format_to_gst(alsa_fmt: alsa::pcm::Format) -> (&'static str, u32) {
     }
 }
 
-/// Converts perceptual linear volume (0.0 to 1.0 from the UI)
-/// into an audio amplitude curve (cubic taper, ~50 dB range).
+/// Settings → Playback → Cubic volume curve. Off (the default), the slider
+/// position is the amplitude; on, it is cubed (~50 dB range), which spreads
+/// perceived loudness more evenly across the slider.
+static CUBIC_VOLUME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_cubic_volume(enabled: bool) {
+    CUBIC_VOLUME.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn cubic_volume() -> bool {
+    CUBIC_VOLUME.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Converts the UI's slider position (0.0 to 1.0) into an amplitude.
 #[inline]
 fn slider_to_amplitude(slider_val: f64) -> f64 {
-    slider_val.clamp(0.0, 1.0).powi(3)
+    let v = slider_val.clamp(0.0, 1.0);
+    if cubic_volume() {
+        v.powi(3)
+    } else {
+        v
+    }
 }
 
 /// Applies a normalization gain across all volume sinks: the GStreamer
@@ -4425,6 +4442,18 @@ pub fn gapless_supported() -> bool {
 
 #[cfg(test)]
 mod proxy_source_tests {
+    #[test]
+    fn the_slider_is_linear_unless_the_cubic_curve_is_chosen() {
+        use super::{set_cubic_volume, slider_to_amplitude};
+        set_cubic_volume(false);
+        assert_eq!(slider_to_amplitude(0.5), 0.5);
+        assert_eq!(slider_to_amplitude(1.5), 1.0);
+        set_cubic_volume(true);
+        assert_eq!(slider_to_amplitude(0.5), 0.125);
+        assert_eq!(slider_to_amplitude(-1.0), 0.0);
+        set_cubic_volume(false);
+    }
+
     /// The Windows exclusive path needs a WASAPI sink with `exclusive` and
     /// `device`; GStreamer 1.24's wasapi2sink has no `exclusive`, so this
     /// pins that a usable sink is still found (wasapisink there).

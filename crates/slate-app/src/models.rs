@@ -29,6 +29,9 @@ pub struct RowData {
     pub duration: String,
     pub explicit: bool,
     pub favorite: bool,
+    /// 0 none, 1 Lossless, 2 Hi-Res.
+    pub quality: i32,
+    pub atmos: bool,
 }
 
 pub struct LazyTracks {
@@ -91,6 +94,8 @@ impl LazyTracks {
                     explicit: r.explicit,
                     loaded: true,
                     favorite: r.favorite,
+                    quality: r.quality,
+                    atmos: r.atmos,
                     cover: Image::default(),
                 },
             );
@@ -161,6 +166,8 @@ impl LazyTracks {
             explicit: false,
             loaded: false,
             favorite: false,
+            quality: 0,
+            atmos: false,
             cover: Image::default(),
         }
     }

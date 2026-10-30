@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
 import { TrackRow, PlaylistEntry } from "types.slint";
 import { ListView } from "std-widgets.slint";
-import { Button, Segmented } from "widgets.slint";
+import { Button, Segmented, QualityBadges } from "widgets.slint";
 
 component NavItem inherits Rectangle {
     in property <string> label;
@@ -233,6 +233,7 @@ component Row inherits Rectangle {
             MenuItem { title: "Add to queue"; activated => { root.action("queue"); } }
             MenuItem { title: "Go to album"; activated => { root.action("album"); } }
             MenuItem { title: "Go to artist"; activated => { root.action("artist"); } }
+            MenuItem { title: "Credits"; activated => { root.action("credits"); } }
             MenuItem { title: "Copy TIDAL link"; activated => { root.action("copy-link"); } }
         }
     }
@@ -276,6 +277,10 @@ component Row inherits Rectangle {
                 font-size: 10px;
                 color: Theme.text-muted;
                 vertical-alignment: center;
+            }
+            if root.item.quality > 0 || root.item.atmos: VerticalLayout {
+                alignment: center;
+                QualityBadges { tier: root.item.quality; atmos: root.item.atmos; long-atmos: false; }
             }
         }
         if root.show-artist: Rectangle {
@@ -340,6 +345,11 @@ export component TrackPage inherits Rectangle {
     in property <bool> loved;
     in property <string> kind-label: "PLAYLIST";
     in property <bool> can-favorite: false;
+    in property <bool> can-export: false;
+    /// Album quality badges: 0 none, 1 Lossless, 2 Hi-Res.
+    in property <int> quality;
+    in property <bool> atmos;
+    callback export-list(string);
     in property <bool> page-favorite: false;
     callback toggle-page-favorite();
     in property <bool> sort-visible;
@@ -384,6 +394,7 @@ export component TrackPage inherits Rectangle {
                 Text { text: root.kind-label; font-size: 11px; color: Theme.text-muted; }
                 Text { text: root.title; font-size: 36px; font-weight: 800; color: Theme.text; overflow: elide; }
                 Text { text: root.loading ? "Loading…" : root.subtitle; color: Theme.text-muted; }
+                if root.quality > 0 || root.atmos: QualityBadges { tier: root.quality; atmos: root.atmos; }
             }
         }
         HorizontalLayout {
@@ -392,6 +403,16 @@ export component TrackPage inherits Rectangle {
             Button { label: "▶  Play"; primary: true; clicked => { root.play-all(); } }
             Button { label: "🔀  Shuffle"; clicked => { root.shuffle-all(); } }
             if root.can-favorite: Button { label: root.page-favorite ? "♥  Saved" : "♡  Save"; clicked => { root.toggle-page-favorite(); } }
+            if root.can-export: export-button := Button {
+                label: "Export…";
+                clicked => { export-menu.show({ x: export-button.absolute-position.x, y: export-button.absolute-position.y + export-button.height }); }
+                export-menu := ContextMenuArea {
+                    Menu {
+                        MenuItem { title: "Export as CSV…"; activated => { root.export-list("csv"); } }
+                        MenuItem { title: "Export as M3U playlist…"; activated => { root.export-list("m3u"); } }
+                    }
+                }
+            }
             if root.sort-visible: Button { label: "⇅  " + root.sort-label; clicked => { root.cycle-sort(); } }
             if root.sort-visible: Button { label: root.sort-desc ? "↓" : "↑"; clicked => { root.flip-sort(); } }
             if root.loved-tabs: Segmented { options: ["Tracks", "Videos"]; index: root.loved-tab; picked(i) => { root.loved-tab-picked(i); } }

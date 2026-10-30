@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -138,8 +138,13 @@ struct DiskCacheInner {
     access_counter: u64,
     /// Total bytes of all `.dat` files on disk.
     total_disk_usage: u64,
-    /// Keys currently being refreshed (prevents duplicate SWR spawns).
-    in_flight: HashSet<String>,
+    /// Keys currently being refreshed (prevents duplicate SWR spawns), with
+    /// the invalidation epoch the refresh started in.
+    in_flight: HashMap<String, u64>,
+    /// Bumped by every invalidation and `clear`. A refresh that started in an
+    /// older epoch may have fetched what was just invalidated, so its write is
+    /// dropped (see `put`).
+    epoch: u64,
 }
 
 impl DiskCacheInner {
@@ -149,7 +154,8 @@ impl DiskCacheInner {
             tag_index: HashMap::new(),
             access_counter: 0,
             total_disk_usage: 0,
-            in_flight: HashSet::new(),
+            in_flight: HashMap::new(),
+            epoch: 0,
         }
     }
 
@@ -168,6 +174,14 @@ impl DiskCacheInner {
             hashes.retain(|h| h != hash);
             !hashes.is_empty()
         });
+    }
+
+    /// True when `hash` is being refreshed by a task that started before the
+    /// latest invalidation.
+    fn refresh_outdated(&self, hash: &str) -> bool {
+        self.in_flight
+            .get(hash)
+            .is_some_and(|started| *started != self.epoch)
     }
 
     fn remove_entry(&mut self, hash: &str) -> Option<IndexEntry> {
@@ -339,24 +353,27 @@ impl DiskCache {
             return CacheResult::Miss;
         }
 
-        // Read data from disk (outside lock) and decrypt.
+        // Read data from disk (outside lock) and decrypt, off the async workers.
         let dat_path = self
             .base_dir
             .join(tier.subdir())
             .join(format!("{}.dat", hash));
-        let data = match fs::read(&dat_path) {
-            Ok(raw) => match self.crypto.decrypt(&raw) {
-                Ok(plain) => plain,
-                Err(e) => {
-                    // Decryption failed (key changed?) — treat as miss, remove corrupt entry.
-                    log::warn!("[DiskCache] decrypt failed for {}: {e}", &hash[..12]);
-                    self.remove_files(&hash, tier);
-                    let mut inner = self.inner.write().await;
-                    inner.remove_entry(&hash);
-                    return CacheResult::Miss;
-                }
-            },
-            Err(_) => {
+        let crypto = Arc::clone(&self.crypto);
+        let read = tokio::task::spawn_blocking(move || {
+            fs::read(&dat_path).map(|raw| crypto.decrypt(&raw))
+        })
+        .await;
+        let data = match read {
+            Ok(Ok(Ok(plain))) => plain,
+            Ok(Ok(Err(e))) => {
+                // Decryption failed (key changed?) — treat as miss, remove corrupt entry.
+                log::warn!("[DiskCache] decrypt failed for {}: {e}", &hash[..12]);
+                self.remove_files_blocking(vec![(hash.clone(), tier)]).await;
+                let mut inner = self.inner.write().await;
+                inner.remove_entry(&hash);
+                return CacheResult::Miss;
+            }
+            Ok(Err(_)) | Err(_) => {
                 // File gone but index has it — clean up.
                 let mut inner = self.inner.write().await;
                 inner.remove_entry(&hash);
@@ -402,7 +419,7 @@ impl DiskCache {
                 age
             );
             // Beyond grace — treat as miss and clean up.
-            self.remove_files(&hash, tier);
+            self.remove_files_blocking(vec![(hash.clone(), tier)]).await;
             let mut inner = self.inner.write().await;
             inner.remove_entry(&hash);
             CacheResult::Miss
@@ -425,12 +442,12 @@ impl DiskCache {
         let dat_path = dir.join(format!("{}.dat", hash));
         let meta_path = dir.join(format!("{}.meta", hash));
 
-        // Encrypt and write data file.
-        let encrypted = self
-            .crypto
-            .encrypt(data)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        fs::write(&dat_path, &encrypted)?;
+        if self.inner.read().await.refresh_outdated(&hash) {
+            log::debug!("[DiskCache] dropped outdated refresh for {}", &hash[..12]);
+            return Ok(());
+        }
+
+        // Encrypt and write both files off the async workers.
         let meta = EntryMeta {
             schema_version: CURRENT_SCHEMA_VERSION,
             tags: tag_strings.clone(),
@@ -438,11 +455,30 @@ impl DiskCache {
             created_at: now_secs(),
             size,
         };
-        fs::write(&meta_path, serde_json::to_string(&meta).unwrap_or_default())?;
+        let crypto = Arc::clone(&self.crypto);
+        let plain = data.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<(), std::io::Error> {
+            let encrypted = crypto
+                .encrypt(&plain)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            fs::write(&dat_path, &encrypted)?;
+            fs::write(&meta_path, serde_json::to_string(&meta).unwrap_or_default())
+        })
+        .await
+        .map_err(|e| std::io::Error::other(e.to_string()))??;
 
         // Update index.
         {
             let mut inner = self.inner.write().await;
+
+            // Invalidated while the files were being written: what was
+            // written is outdated, so forget the key rather than index it.
+            if inner.refresh_outdated(&hash) {
+                inner.remove_entry(&hash);
+                drop(inner);
+                self.remove_files_blocking(vec![(hash, tier)]).await;
+                return Ok(());
+            }
 
             // Remove old entry if overwriting.
             if let Some(old) = inner.index.remove(&hash) {
@@ -476,7 +512,8 @@ impl DiskCache {
     /// Invalidate all entries matching a given tag.
     pub async fn invalidate_tag(&self, tag: &str) {
         let hashes: Vec<String> = {
-            let inner = self.inner.read().await;
+            let mut inner = self.inner.write().await;
+            inner.epoch += 1;
             inner.tag_index.get(tag).cloned().unwrap_or_default()
         };
 
@@ -484,25 +521,32 @@ impl DiskCache {
             return;
         }
 
-        let mut inner = self.inner.write().await;
-        for hash in &hashes {
-            if let Some(entry) = inner.index.get(hash) {
-                let tier = entry.tier;
-                self.remove_files(hash, tier);
+        let doomed = {
+            let mut inner = self.inner.write().await;
+            let mut doomed = Vec::new();
+            for hash in &hashes {
+                if let Some(entry) = inner.index.get(hash) {
+                    doomed.push((hash.clone(), entry.tier));
+                }
+                inner.remove_entry(hash);
             }
-            inner.remove_entry(hash);
-        }
+            doomed
+        };
+        self.remove_files_blocking(doomed).await;
     }
 
     /// Invalidate a single entry by its plaintext key.
     pub async fn invalidate_key(&self, key: &str) {
         let hash = hash_key(key);
-        let mut inner = self.inner.write().await;
-        if let Some(entry) = inner.index.get(&hash) {
-            let tier = entry.tier;
-            self.remove_files(&hash, tier);
-        }
-        inner.remove_entry(&hash);
+        let doomed = {
+            let mut inner = self.inner.write().await;
+            inner.epoch += 1;
+            let tier = inner.index.get(&hash).map(|e| e.tier);
+            inner.remove_entry(&hash);
+            tier.map(|t| (hash, t))
+        };
+        self.remove_files_blocking(doomed.into_iter().collect())
+            .await;
     }
 
     /// Clear the entire cache (e.g. on logout).
@@ -512,18 +556,27 @@ impl DiskCache {
         inner.tag_index.clear();
         inner.total_disk_usage = 0;
         inner.access_counter = 0;
-        inner.in_flight.clear();
+        // Refreshes still running keep their markers (they clear them when
+        // done); the new epoch makes their writes drop.
+        inner.epoch += 1;
         drop(inner);
 
         // Delete all files in tier subdirs.
-        for tier in &ALL_TIERS {
-            let dir = self.base_dir.join(tier.subdir());
-            if let Ok(entries) = fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    fs::remove_file(entry.path()).ok();
+        let dirs: Vec<PathBuf> = ALL_TIERS
+            .iter()
+            .map(|tier| self.base_dir.join(tier.subdir()))
+            .collect();
+        tokio::task::spawn_blocking(move || {
+            for dir in dirs {
+                if let Ok(entries) = fs::read_dir(&dir) {
+                    for entry in entries.flatten() {
+                        fs::remove_file(entry.path()).ok();
+                    }
                 }
             }
-        }
+        })
+        .await
+        .ok();
     }
 
     /// Mark a key as in-flight (being refreshed). Returns `true` if it was
@@ -531,7 +584,14 @@ impl DiskCache {
     pub async fn mark_in_flight(&self, key: &str) -> bool {
         let hash = hash_key(key);
         let mut inner = self.inner.write().await;
-        inner.in_flight.insert(hash)
+        let epoch = inner.epoch;
+        match inner.in_flight.entry(hash) {
+            std::collections::hash_map::Entry::Occupied(_) => false,
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(epoch);
+                true
+            }
+        }
     }
 
     /// Remove in-flight marker after refresh completes.
@@ -599,10 +659,23 @@ impl DiskCache {
     // Private helpers
     // -----------------------------------------------------------------------
 
-    fn remove_files(&self, hash: &str, tier: CacheTier) {
-        let dir = self.base_dir.join(tier.subdir());
-        fs::remove_file(dir.join(format!("{}.dat", hash))).ok();
-        fs::remove_file(dir.join(format!("{}.meta", hash))).ok();
+    /// Delete the files of these entries on a blocking thread. The index has
+    /// already forgotten them, so a failure only leaves an orphan file that
+    /// the next start's scan cleans up.
+    async fn remove_files_blocking(&self, entries: Vec<(String, CacheTier)>) {
+        if entries.is_empty() {
+            return;
+        }
+        let base = self.base_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            for (hash, tier) in entries {
+                let dir = base.join(tier.subdir());
+                fs::remove_file(dir.join(format!("{}.dat", hash))).ok();
+                fs::remove_file(dir.join(format!("{}.meta", hash))).ok();
+            }
+        })
+        .await
+        .ok();
     }
 
     async fn maybe_evict(&self) {
@@ -621,29 +694,34 @@ impl DiskCache {
             MAX_DISK_BYTES as f64 / (1024.0 * 1024.0)
         );
 
-        let mut inner = self.inner.write().await;
+        let doomed = {
+            let mut inner = self.inner.write().await;
 
-        // Collect entries sorted by last_access ascending (oldest first).
-        let mut entries: Vec<(String, u64, u64, CacheTier)> = inner
-            .index
-            .iter()
-            .map(|(hash, e)| (hash.clone(), e.last_access, e.size, e.tier))
-            .collect();
-        entries.sort_by_key(|(_, access, _, _)| *access);
+            // Collect entries sorted by last_access ascending (oldest first).
+            let mut entries: Vec<(String, u64, u64, CacheTier)> = inner
+                .index
+                .iter()
+                .map(|(hash, e)| (hash.clone(), e.last_access, e.size, e.tier))
+                .collect();
+            entries.sort_by_key(|(_, access, _, _)| *access);
 
-        for (hash, _, size, tier) in entries {
-            if inner.total_disk_usage <= EVICT_TARGET {
-                break;
+            let mut doomed = Vec::new();
+            for (hash, _, size, tier) in entries {
+                if inner.total_disk_usage <= EVICT_TARGET {
+                    break;
+                }
+                inner.remove_entry(&hash);
+                log::debug!(
+                    "[DiskCache] evicted {} ({} bytes, {:?})",
+                    &hash[..12],
+                    size,
+                    tier
+                );
+                doomed.push((hash, tier));
             }
-            self.remove_files(&hash, tier);
-            inner.remove_entry(&hash);
-            log::debug!(
-                "[DiskCache] evicted {} ({} bytes, {:?})",
-                &hash[..12],
-                size,
-                tier
-            );
-        }
+            doomed
+        };
+        self.remove_files_blocking(doomed).await;
     }
 }
 
@@ -662,5 +740,139 @@ mod schema_tests {
     #[test]
     fn schema_bumped_for_ai_field() {
         const { assert!(super::CURRENT_SCHEMA_VERSION >= 6) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cache(dir: &Path) -> DiskCache {
+        DiskCache::new(dir, Arc::new(Crypto::with_test_key()))
+    }
+
+    #[tokio::test]
+    async fn put_then_get_round_trips_through_encryption() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let c = cache(dir.path());
+        c.put("k", b"hello", CacheTier::Dynamic, &["t"])
+            .await
+            .expect("put");
+        match c.get("k", CacheTier::Dynamic).await {
+            CacheResult::Fresh(b) => assert_eq!(b, b"hello"),
+            _ => panic!("expected a fresh hit"),
+        }
+        // Nothing readable on disk.
+        let raw = fs::read(dir.path().join(format!(
+            "v{CURRENT_SCHEMA_VERSION}/dynamic/{}.dat",
+            hash_key("k")
+        )))
+        .expect("dat file");
+        assert!(!raw.windows(5).any(|w| w == b"hello"));
+        assert!(matches!(
+            c.get("other", CacheTier::Dynamic).await,
+            CacheResult::Miss
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalidate_by_tag_and_key_removes_entries_and_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let c = cache(dir.path());
+        c.put("a", b"1", CacheTier::UserContent, &["album"])
+            .await
+            .expect("put");
+        c.put("b", b"2", CacheTier::UserContent, &["album"])
+            .await
+            .expect("put");
+        c.put("c", b"3", CacheTier::UserContent, &["other"])
+            .await
+            .expect("put");
+        c.invalidate_tag("album").await;
+        c.invalidate_key("c").await;
+        for k in ["a", "b", "c"] {
+            assert!(matches!(
+                c.get(k, CacheTier::UserContent).await,
+                CacheResult::Miss
+            ));
+        }
+        let left = fs::read_dir(dir.path().join(format!("v{CURRENT_SCHEMA_VERSION}/user")))
+            .expect("dir")
+            .count();
+        assert_eq!(left, 0);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_that_started_before_an_invalidation_is_not_written_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let c = cache(dir.path());
+        c.put("favs", b"old", CacheTier::UserContent, &["favorites"])
+            .await
+            .expect("put");
+
+        // Refresh starts, then a favourite is added (invalidating), then the
+        // refresh lands with the list it fetched before the add.
+        assert!(c.mark_in_flight("favs").await);
+        c.invalidate_tag("favorites").await;
+        c.put("favs", b"old", CacheTier::UserContent, &["favorites"])
+            .await
+            .expect("put");
+        c.clear_in_flight("favs").await;
+        assert!(matches!(
+            c.get("favs", CacheTier::UserContent).await,
+            CacheResult::Miss
+        ));
+
+        // Same for a logout's clear.
+        assert!(c.mark_in_flight("favs").await);
+        c.clear().await;
+        c.put("favs", b"other account", CacheTier::UserContent, &[])
+            .await
+            .expect("put");
+        c.clear_in_flight("favs").await;
+        assert!(matches!(
+            c.get("favs", CacheTier::UserContent).await,
+            CacheResult::Miss
+        ));
+
+        // A refresh with no invalidation in between still lands.
+        assert!(c.mark_in_flight("favs").await);
+        c.put("favs", b"new", CacheTier::UserContent, &["favorites"])
+            .await
+            .expect("put");
+        c.clear_in_flight("favs").await;
+        assert!(matches!(
+            c.get("favs", CacheTier::UserContent).await,
+            CacheResult::Fresh(b) if b == b"new"
+        ));
+    }
+
+    #[tokio::test]
+    async fn clear_empties_every_tier() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let c = cache(dir.path());
+        c.put("a", b"1", CacheTier::Image, &[]).await.expect("put");
+        c.put("b", b"2", CacheTier::StaticMeta, &[])
+            .await
+            .expect("put");
+        c.clear().await;
+        assert_eq!(c.stats().await.total_entries, 0);
+        assert!(matches!(
+            c.get("a", CacheTier::Image).await,
+            CacheResult::Miss
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_reopened_cache_still_serves_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        cache(dir.path())
+            .put("k", b"kept", CacheTier::StaticMeta, &[])
+            .await
+            .expect("put");
+        match cache(dir.path()).get("k", CacheTier::StaticMeta).await {
+            CacheResult::Fresh(b) => assert_eq!(b, b"kept"),
+            _ => panic!("expected a hit after reopening"),
+        }
     }
 }

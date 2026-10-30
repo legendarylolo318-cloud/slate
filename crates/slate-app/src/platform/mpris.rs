@@ -125,13 +125,21 @@ async fn serve(
     tokio::task::spawn_local(player.run());
 
     // The spec's `Position` is not signalled; clients extrapolate from the last
-    // anchor, so refresh it once a second while playing.
+    // anchor, so refresh it once a second while playing. While not playing the
+    // task sleeps until the status changes, instead of waking every second.
     let ticking = Rc::clone(&player);
+    let playing_started = Rc::new(tokio::sync::Notify::new());
+    let wake = Rc::clone(&playing_started);
     tokio::task::spawn_local(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         tick.tick().await;
         loop {
+            if ticking.playback_status() != PlaybackStatus::Playing {
+                wake.notified().await;
+                tick.reset();
+                continue;
+            }
             tick.tick().await;
             if ticking.playback_status() != PlaybackStatus::Playing {
                 continue;
@@ -202,6 +210,9 @@ async fn serve(
                     PlaybackStatus::Paused
                 };
                 let _ = player.set_playback_status(st).await;
+                if is_playing {
+                    playing_started.notify_one();
+                }
             }
             MediaCommand::SetVolume { volume } => {
                 let _ = player.set_volume(volume).await;

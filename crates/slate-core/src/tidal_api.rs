@@ -536,7 +536,11 @@ pub struct TidalContributor {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TidalCredit {
-    #[serde(rename(deserialize = "type", serialize = "creditType"))]
+    // Written to the disk cache as `creditType`; the alias lets it read back.
+    #[serde(
+        rename(deserialize = "type", serialize = "creditType"),
+        alias = "creditType"
+    )]
     pub credit_type: String,
     #[serde(default)]
     pub contributors: Vec<TidalContributor>,
@@ -1297,6 +1301,7 @@ impl Default for ApiUrls {
     }
 }
 
+#[derive(Clone)]
 pub struct TidalClient {
     urls: ApiUrls,
     /// The shared cell, not a client: when the proxy plan is blocked there is
@@ -1310,6 +1315,120 @@ pub struct TidalClient {
     pub country_code: String,
     token_persist: Option<TokenPersist>,
     gate: Arc<crate::rate_gate::RateGate>,
+    shared: Arc<ClientShared>,
+}
+
+/// Most TIDAL requests in flight at once. The old client mutex was an
+/// accidental rate limiter (one request at a time); this cap replaces it.
+pub const MAX_IN_FLIGHT: usize = 4;
+
+/// How long a background request waits for the screen's own requests to
+/// finish before it goes anyway.
+const BACKGROUND_YIELD_MAX: std::time::Duration = std::time::Duration::from_secs(30);
+const BACKGROUND_YIELD_STEP: std::time::Duration = std::time::Duration::from_millis(100);
+
+tokio::task_local! {
+    static BACKGROUND: ();
+}
+
+/// Marks everything `fut` requests as background work (stale-cache refreshes,
+/// prefetch): one request at a time, and only while nothing on screen is
+/// waiting for the network.
+pub async fn as_background<F: std::future::Future>(fut: F) -> F::Output {
+    BACKGROUND.scope((), fut).await
+}
+
+fn in_background() -> bool {
+    BACKGROUND.try_with(|_| ()).is_ok()
+}
+
+static REQUEST_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// TIDAL API requests sent so far; the debug log numbers each one so a page's
+/// request count is the difference between two page markers.
+pub fn request_count() -> u64 {
+    REQUEST_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn log_request(method: Option<&str>, resp: &reqwest::Response) {
+    let n = REQUEST_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    log::debug!(
+        "[tidal-req] #{} {} {} -> {}",
+        n,
+        method.unwrap_or("?"),
+        loggable_path(resp.url().path()),
+        resp.status().as_u16()
+    );
+}
+
+/// A request path (or URL) for the log: the segment after `users/` is the
+/// account id, so it is replaced. The query string is dropped as well.
+fn loggable_path(path: &str) -> String {
+    let path = path.split('?').next().unwrap_or("");
+    let mut out = Vec::new();
+    let mut after_users = false;
+    for seg in path.split('/') {
+        out.push(if after_users && !seg.is_empty() {
+            "<user>"
+        } else {
+            seg
+        });
+        after_users = seg == "users";
+    }
+    out.join("/")
+}
+
+fn lock_std<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// What every handle onto the client shares: the credentials, so a refresh
+/// made by one request is seen by the rest, and the locks that order work.
+struct ClientShared {
+    tokens: std::sync::Mutex<Option<AuthTokens>>,
+    country_code: std::sync::Mutex<String>,
+    credentials: std::sync::Mutex<(String, String)>,
+    /// Serialises token refreshes, so several requests that all see a 401
+    /// refresh once.
+    refresh: tokio::sync::Mutex<()>,
+    /// Orders the read-etag-then-write playlist edits against each other.
+    write: tokio::sync::Mutex<()>,
+    permits: tokio::sync::Semaphore,
+    /// Foreground requests waiting for or holding a permit.
+    foreground: std::sync::atomic::AtomicUsize,
+    /// Background requests go one at a time.
+    background: tokio::sync::Mutex<()>,
+}
+
+struct ForegroundGuard<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl<'a> ForegroundGuard<'a> {
+    fn new(count: &'a std::sync::atomic::AtomicUsize) -> Self {
+        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self(count)
+    }
+}
+
+impl Drop for ForegroundGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// `AppState`'s client. `lock` hands out a private copy of the client rather
+/// than a guard, so nothing is held while a request is on the wire. Copies
+/// share the token store, the rate gate and the in-flight cap.
+pub struct ClientCell(TidalClient);
+
+impl ClientCell {
+    pub fn new(client: TidalClient) -> Self {
+        Self(client)
+    }
+
+    /// Async only so call sites read as they did when this was a mutex.
+    pub async fn lock(&self) -> TidalClient {
+        self.0.snapshot()
+    }
 }
 
 impl TidalClient {
@@ -1323,7 +1442,69 @@ impl TidalClient {
             country_code: "US".to_string(),
             token_persist: None,
             gate: Arc::new(crate::rate_gate::RateGate::new()),
+            shared: Arc::new(ClientShared {
+                tokens: std::sync::Mutex::new(None),
+                country_code: std::sync::Mutex::new("US".to_string()),
+                credentials: std::sync::Mutex::new((String::new(), String::new())),
+                refresh: tokio::sync::Mutex::new(()),
+                write: tokio::sync::Mutex::new(()),
+                permits: tokio::sync::Semaphore::new(MAX_IN_FLIGHT),
+                foreground: std::sync::atomic::AtomicUsize::new(0),
+                background: tokio::sync::Mutex::new(()),
+            }),
         }
+    }
+
+    /// A copy carrying the current shared credentials.
+    fn snapshot(&self) -> Self {
+        let mut copy = self.clone();
+        copy.tokens = lock_std(&self.shared.tokens).clone();
+        copy.country_code = lock_std(&self.shared.country_code).clone();
+        let (id, secret) = lock_std(&self.shared.credentials).clone();
+        copy.client_id = id;
+        copy.client_secret = secret;
+        copy
+    }
+
+    /// Replace the tokens for this copy and every other one.
+    pub fn set_tokens(&mut self, tokens: Option<AuthTokens>) {
+        *lock_std(&self.shared.tokens) = tokens.clone();
+        self.tokens = tokens;
+    }
+
+    /// Forget the session for every copy. Cleared first, so a refresh on the
+    /// wire finds no session to store into and a retry finds no token to
+    /// send; then waits for that refresh, so it cannot persist its tokens
+    /// after this returns (the caller wipes the saved session next).
+    pub async fn sign_out(&mut self) {
+        self.set_tokens(None);
+        self.set_country_code("US".to_string());
+        let shared = Arc::clone(&self.shared);
+        let _refreshing = shared.refresh.lock().await;
+        self.set_tokens(None);
+    }
+
+    /// Record the user id on the stored tokens (in place, so a refresh that
+    /// finished meanwhile is not overwritten). `user_id()` then needs no
+    /// request.
+    fn remember_user_id(&mut self, user_id: u64) {
+        if let Some(t) = lock_std(&self.shared.tokens).as_mut() {
+            t.user_id = Some(user_id);
+        }
+        if let Some(t) = self.tokens.as_mut() {
+            t.user_id = Some(user_id);
+        }
+    }
+
+    /// The signed-in user's id, if the tokens carry it.
+    pub fn user_id(&self) -> Option<u64> {
+        self.tokens.as_ref().and_then(|t| t.user_id)
+    }
+
+    /// Replace the country code for this copy and every other one.
+    pub fn set_country_code(&mut self, country_code: String) {
+        *lock_std(&self.shared.country_code) = country_code.clone();
+        self.country_code = country_code;
     }
 
     /// Points the client at other service URLs (used by tests).
@@ -1340,6 +1521,7 @@ impl TidalClient {
     pub fn set_credentials(&mut self, client_id: &str, client_secret: &str) {
         self.client_id = client_id.to_string();
         self.client_secret = client_secret.to_string();
+        *lock_std(&self.shared.credentials) = (self.client_id.clone(), self.client_secret.clone());
     }
 
     /// The one place a request this client makes is actually sent.
@@ -1372,7 +1554,42 @@ impl TidalClient {
         if let Some(secs) = self.gate.cooling_down() {
             return Err(rate_limited_error(secs));
         }
+        let background = in_background();
+        let _one_at_a_time = if background {
+            Some(self.shared.background.lock().await)
+        } else {
+            None
+        };
+        let _foreground = (!background).then(|| ForegroundGuard::new(&self.shared.foreground));
+        if background {
+            let started = std::time::Instant::now();
+            while self
+                .shared
+                .foreground
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > 0
+                && started.elapsed() < BACKGROUND_YIELD_MAX
+            {
+                tokio::time::sleep(BACKGROUND_YIELD_STEP).await;
+            }
+        }
+        let _permit = self
+            .shared
+            .permits
+            .acquire()
+            .await
+            .map_err(|_| SlateError::Network("request limiter closed".into()))?;
+        // A 429 may have landed while this request waited its turn.
+        if let Some(secs) = self.gate.cooling_down() {
+            return Err(rate_limited_error(secs));
+        }
+        let (http, built) = req.build_split();
+        let mut built = built.map_err(|e| SlateError::Network(e.to_string()))?;
+        self.restamp_bearer(&mut built)?;
+        let method = built.method().to_string();
+        let req = reqwest::RequestBuilder::from_parts(http, built);
         let resp = self.dispatch(generation, req).await?;
+        log_request(Some(&method), &resp);
         if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let secs = crate::rate_gate::retry_after_or_default(resp.headers());
             self.gate.trip(secs);
@@ -1384,6 +1601,31 @@ impl TidalClient {
             return Err(rate_limited_error(secs));
         }
         Ok(resp)
+    }
+
+    /// A copy of the client keeps the access token it was made with, and a
+    /// refresh by another request may have replaced it while this one waited
+    /// for a permit. Sending the old one would only earn a 401 and a retry, so
+    /// the bearer is swapped for the current token here; after a logout there
+    /// is none and the request does not go out at all.
+    fn restamp_bearer(&self, req: &mut reqwest::Request) -> Result<(), SlateError> {
+        let header = reqwest::header::AUTHORIZATION;
+        let Some(sent) = req.headers().get(&header).and_then(|v| v.to_str().ok()) else {
+            return Ok(());
+        };
+        let Some(sent) = sent.strip_prefix("Bearer ") else {
+            return Ok(());
+        };
+        let current = lock_std(&self.shared.tokens)
+            .as_ref()
+            .map(|t| t.access_token.clone())
+            .ok_or(SlateError::NotAuthenticated)?;
+        if sent != current {
+            let value = reqwest::header::HeaderValue::from_str(&format!("Bearer {current}"))
+                .map_err(|e| SlateError::Network(e.to_string()))?;
+            req.headers_mut().insert(header, value);
+        }
+        Ok(())
     }
 
     /// Clone the gate out so callers can consult it WITHOUT holding the client
@@ -1422,6 +1664,25 @@ impl TidalClient {
         let current_tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
         let refresh_tok = current_tokens.refresh_token.clone();
         let old_user_id = current_tokens.user_id;
+        let stale_access = current_tokens.access_token.clone();
+
+        // One refresh at a time. Whoever comes second finds the tokens already
+        // replaced and uses those instead of spending the refresh token again.
+        let shared = Arc::clone(&self.shared);
+        let _refreshing = shared.refresh.lock().await;
+        let shared_now = lock_std(&shared.tokens).clone();
+        match shared_now {
+            // Signed out while this request waited: nothing to refresh.
+            None => {
+                self.tokens = None;
+                return Err(SlateError::NotAuthenticated);
+            }
+            Some(fresh) if fresh.access_token != stale_access => {
+                self.tokens = Some(fresh.clone());
+                return Ok(fresh);
+            }
+            Some(_) => {}
+        }
 
         // Build params — include client_secret only if available
         let mut form_params = vec![
@@ -1474,6 +1735,27 @@ impl TidalClient {
             user_id: parsed.user_id.or(old_user_id),
         };
 
+        // Store only if nobody signed out or in while the refresh was on the
+        // wire; otherwise these tokens belong to a session that has ended.
+        {
+            let mut stored = lock_std(&shared.tokens);
+            match stored.as_ref() {
+                Some(t) if t.access_token == stale_access => {
+                    *stored = Some(new_tokens.clone());
+                }
+                Some(other) => {
+                    let other = other.clone();
+                    drop(stored);
+                    self.tokens = Some(other.clone());
+                    return Ok(other);
+                }
+                None => {
+                    drop(stored);
+                    self.tokens = None;
+                    return Err(SlateError::NotAuthenticated);
+                }
+            }
+        }
         self.tokens = Some(new_tokens.clone());
         // Persist immediately: the auto-refresh on 401 is the common path, and
         // without this the stored token stays stale forever.
@@ -1580,12 +1862,12 @@ impl TidalClient {
             if is_playbackinfo_sub_status(&body) {
                 log::warn!(
                     "[authenticated_get] {} -> 401 playbackinfo sub-status, not retrying: {}",
-                    url,
+                    loggable_path(url),
                     body.chars().take(200).collect::<String>()
                 );
                 return Err(SlateError::Api { status: 401, body });
             }
-            log::debug!("Got 401 from {}, attempting refresh...", url);
+            log::debug!("Got 401 from {}, attempting refresh...", loggable_path(url));
             // 4. Refresh token (requires &mut self)
             let new_tokens = self.refresh_token().await?;
             log::debug!("Refresh successful, retrying request...");
@@ -1694,7 +1976,7 @@ impl TidalClient {
         let tokens = serde_json::from_str::<AuthTokens>(&body)
             .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
 
-        self.tokens = Some(tokens.clone());
+        self.set_tokens(Some(tokens.clone()));
         Ok(Some(tokens))
     }
 
@@ -1734,7 +2016,7 @@ impl TidalClient {
         let tokens = serde_json::from_str::<AuthTokens>(&body)
             .map_err(|e| SlateError::Parse(format!("{} - Body: {}", e, body)))?;
 
-        self.tokens = Some(tokens.clone());
+        self.set_tokens(Some(tokens.clone()));
         Ok(tokens)
     }
 
@@ -1790,10 +2072,11 @@ impl TidalClient {
         let data: SessionResponse =
             serde_json::from_str(&body).map_err(|e| SlateError::Parse(e.to_string()))?;
 
+        self.remember_user_id(data.user_id);
         // Store the user's country code for all subsequent API calls
         if let Some(cc) = data.country_code {
             if !cc.is_empty() {
-                self.country_code = cc;
+                self.set_country_code(cc);
             }
         }
         Ok(data.user_id)
@@ -1918,7 +2201,7 @@ impl TidalClient {
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())])
             .json(&body);
-        let response = self.dispatch(generation, request).await?;
+        let response = self.send(generation, request).await?;
 
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
@@ -1949,6 +2232,7 @@ impl TidalClient {
         description: &str,
         access_type: &str,
     ) -> Result<TidalPlaylist, SlateError> {
+        let _ordered = self.shared.write.lock().await;
         let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
 
         let body = serde_json::json!({
@@ -1977,7 +2261,7 @@ impl TidalClient {
             .header("Content-Type", "application/vnd.api+json")
             .query(&[("countryCode", self.country_code.as_str())])
             .json(&body);
-        let response = self.dispatch(generation, request).await?;
+        let response = self.send(generation, request).await?;
 
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
@@ -2023,6 +2307,7 @@ impl TidalClient {
         playlist_id: &str,
         track_id: u64,
     ) -> Result<(), SlateError> {
+        let _ordered = self.shared.write.lock().await;
         let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
 
         // First, get the playlist ETag which is required for modifications
@@ -2072,6 +2357,7 @@ impl TidalClient {
         playlist_id: &str,
         index: u32,
     ) -> Result<(), SlateError> {
+        let _ordered = self.shared.write.lock().await;
         let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
 
         // First, get the playlist ETag which is required for modifications
@@ -2115,6 +2401,7 @@ impl TidalClient {
     }
 
     pub async fn delete_playlist(&self, playlist_id: &str) -> Result<(), SlateError> {
+        let _ordered = self.shared.write.lock().await;
         let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
 
         // First, get the playlist ETag which is required for modifications
@@ -3680,6 +3967,7 @@ impl TidalClient {
         playlist_id: &str,
         track_ids: &[u64],
     ) -> Result<(), SlateError> {
+        let _ordered = self.shared.write.lock().await;
         let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
 
         // Get the playlist ETag which is required for modifications
@@ -5720,7 +6008,7 @@ impl TidalClient {
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[("countryCode", self.country_code.as_str())])
             .json(&body);
-        let response = self.dispatch(generation, request).await?;
+        let response = self.send(generation, request).await?;
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -5748,7 +6036,7 @@ impl TidalClient {
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[("countryCode", self.country_code.as_str())])
             .json(&body);
-        let response = self.dispatch(generation, request).await?;
+        let response = self.send(generation, request).await?;
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -5775,7 +6063,7 @@ impl TidalClient {
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[("countryCode", self.country_code.as_str())])
             .json(&body);
-        let response = self.dispatch(generation, request).await?;
+        let response = self.send(generation, request).await?;
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -5821,7 +6109,7 @@ impl TidalClient {
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[("countryCode", self.country_code.as_str())])
             .json(&create_body);
-        let resp = self.dispatch(generation, request).await?;
+        let resp = self.send(generation, request).await?;
         let status = resp.status();
         let create_text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -5879,7 +6167,7 @@ impl TidalClient {
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[("countryCode", self.country_code.as_str())])
             .json(&link_body);
-        let patch = self.dispatch(generation, request).await?;
+        let patch = self.send(generation, request).await?;
         let patch_status = patch.status();
         let patch_text = patch.text().await.unwrap_or_default();
         if !patch_status.is_success() {
@@ -5901,7 +6189,7 @@ impl TidalClient {
                 .header("Authorization", &bearer)
                 .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
                 .query(&[("countryCode", self.country_code.as_str())]);
-            let resp = self.dispatch(generation, request).await?;
+            let resp = self.send(generation, request).await?;
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             if !status.is_success() {
@@ -5940,7 +6228,7 @@ impl TidalClient {
             .header("x-tidal-client-version", TIDAL_CLIENT_VERSION)
             .query(&[("countryCode", self.country_code.as_str())])
             .json(&body);
-        let response = self.dispatch(generation, request).await?;
+        let response = self.send(generation, request).await?;
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -7469,5 +7757,41 @@ mod v2_paging_tests {
     fn a_short_page_is_the_last() {
         assert_eq!(estimated_total(50, 7, 50), 57);
         assert_eq!(estimated_total(0, 0, 50), 0);
+    }
+}
+
+#[cfg(test)]
+mod log_tests {
+    use super::loggable_path;
+
+    #[test]
+    fn account_ids_and_queries_stay_out_of_the_log() {
+        assert_eq!(
+            loggable_path("/v1/users/123456789/favorites/ids"),
+            "/v1/users/<user>/favorites/ids"
+        );
+        assert_eq!(
+            loggable_path("https://api.tidal.com/v2/users/42?countryCode=US"),
+            "https://api.tidal.com/v2/users/<user>"
+        );
+        assert_eq!(loggable_path("/v1/tracks/7"), "/v1/tracks/7");
+    }
+}
+
+#[cfg(test)]
+mod credit_tests {
+    use super::TidalCredit;
+
+    #[test]
+    fn credits_survive_the_disk_cache_round_trip() {
+        let from_tidal: Vec<TidalCredit> = serde_json::from_str(
+            r#"[{"type":"Producer","contributors":[{"name":"A","id":1}]},{"type":"Vocals","contributors":[]}]"#,
+        )
+        .expect("tidal shape");
+        let cached = serde_json::to_vec(&from_tidal).expect("serialise");
+        let back: Vec<TidalCredit> = serde_json::from_slice(&cached).expect("cache shape");
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].credit_type, "Producer");
+        assert_eq!(back[0].contributors[0].name, "A");
     }
 }

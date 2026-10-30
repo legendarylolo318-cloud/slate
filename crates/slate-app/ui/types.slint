@@ -7,6 +7,9 @@ export struct TrackRow {
     explicit: bool,
     loaded: bool,
     favorite: bool,
+    /// 0 none, 1 Lossless, 2 Hi-Res.
+    quality: int,
+    atmos: bool,
     cover: image,
 }
 

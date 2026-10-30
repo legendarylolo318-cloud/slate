@@ -20,6 +20,8 @@ use crate::images;
 #[derive(Default)]
 pub(crate) struct Shared {
     playing: AtomicBool,
+    /// Wakes the ticker, which sleeps while nothing plays.
+    playing_changed: tokio::sync::Notify,
     has_track: AtomicBool,
     /// Audio pipeline holds the current track (false for a restored, not yet started one).
     loaded: AtomicBool,
@@ -39,6 +41,14 @@ pub(crate) struct Shared {
     /// Track length in seconds, stored as `f32` bits.
     duration: AtomicU32,
     login_url: Mutex<String>,
+    /// Settings → "Colours from album art".
+    pub(crate) tint_enabled: AtomicBool,
+    /// The cover of the playing track, as decoded for the player bar.
+    pub(crate) cover_px: Mutex<Option<crate::imgcache::Pixels>>,
+    /// Its main colour, before it is made readable on the current theme.
+    pub(crate) cover_color: Mutex<Option<crate::cover_tint::Rgb>>,
+    /// The update notice on screen: version, release page.
+    pub(crate) update: Mutex<Option<(String, String)>>,
     /// Bumped on every volume change so only the last of a drag is persisted.
     volume_seq: AtomicU64,
     /// The music video open in the player, 0 when none.
@@ -49,6 +59,13 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
+    fn set_playing(&self, playing: bool) {
+        self.playing.store(playing, Ordering::Relaxed);
+        if playing {
+            self.playing_changed.notify_one();
+        }
+    }
+
     fn duration(&self) -> f32 {
         f32::from_bits(self.duration.load(Ordering::Relaxed))
     }
@@ -70,7 +87,7 @@ impl EventSink for UiSink {
                     .unwrap_or("unknown");
                 let detail = payload.get("message").and_then(|m| m.as_str());
                 let msg = audio_error_text(kind, detail);
-                self.shared.playing.store(false, Ordering::Relaxed);
+                self.shared.set_playing(false);
                 let _ = self.ui.upgrade_in_event_loop(move |w| {
                     w.set_error(msg.into());
                     w.set_playing(false);
@@ -127,6 +144,10 @@ impl Backend {
         initial_theme: slate_core::theme::Theme,
     ) -> Self {
         let shared = Arc::new(Shared::default());
+        shared.tint_enabled.store(
+            crate::uiprefs::UiPrefs::load().cover_colors,
+            Ordering::Relaxed,
+        );
         let sink = UiSink {
             ui: window.as_weak(),
             shared: Arc::clone(&shared),
@@ -191,6 +212,7 @@ impl Backend {
     fn init(&self) {
         let this = self.clone();
         self.rt.spawn(async move {
+            let t0 = std::time::Instant::now();
             let app = this.app.clone();
             // AppState::new does blocking disk and keyring work.
             let built = tokio::task::spawn_blocking(move || AppState::try_new(app)).await;
@@ -221,6 +243,23 @@ impl Backend {
             let volume = state.load_settings().map(|s| s.volume).unwrap_or(1.0);
             this.ui(move |w| w.set_volume(volume));
 
+            // Decide the screen first, from the saved settings alone: no
+            // network, and nothing below has to finish before it shows.
+            let saved = auth::restore_saved_tokens(&state).await;
+            match &saved {
+                Ok(Some(_)) => this.ui(|w| w.set_screen(Screen::Main)),
+                Ok(None) => this.ui(|w| w.set_screen(Screen::Login)),
+                Err(e) => {
+                    tracing::warn!("saved session unusable: {}", e.log_safe());
+                    let msg = format!("Session expired: {}", e.log_safe());
+                    this.ui(move |w| {
+                        w.set_login_status(msg.into());
+                        w.set_screen(Screen::Login);
+                    });
+                }
+            }
+            tracing::debug!("[startup] screen chosen at {:?}", t0.elapsed());
+
             slate_core::startup::run_startup(&this.app).await;
             this.start_theme_watcher();
 
@@ -239,31 +278,31 @@ impl Backend {
                 w.set_repeat(i32::from(repeat.as_u8()));
             });
             this.refresh_queue_info().await;
+            tracing::debug!("[startup] queue restored at {:?}", t0.elapsed());
 
-            match auth::load_saved_auth(&state).await {
-                Ok(Some(_)) => {
-                    this.ui(|w| w.set_screen(Screen::Main));
-                    this.enter_main();
-                }
-                Ok(None) => this.ui(|w| w.set_screen(Screen::Login)),
-                Err(e) => {
-                    tracing::warn!("saved session unusable: {}", e.log_safe());
-                    let msg = format!("Session expired: {}", e.log_safe());
-                    this.ui(move |w| {
-                        w.set_login_status(msg.into());
-                        w.set_screen(Screen::Login);
-                    });
-                }
+            if matches!(saved, Ok(Some(_))) {
+                // The country and user id the first pages need.
+                auth::refresh_saved_session(&state).await;
+                tracing::debug!("[startup] session refreshed at {:?}", t0.elapsed());
+                this.enter_main();
             }
         });
     }
 
-    /// Polls the audio position twice a second while something is playing.
+    /// Polls the audio position twice a second while something is playing, and
+    /// sleeps (no timer, no wakeups) while nothing is.
     fn spawn_ticker(&self) {
         let this = self.clone();
         self.rt.spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_millis(500));
             loop {
+                if !this.shared.playing.load(Ordering::Relaxed) {
+                    // A stored permit from an earlier start only costs one
+                    // extra pass through this check.
+                    this.shared.playing_changed.notified().await;
+                    tick.reset();
+                    continue;
+                }
                 tick.tick().await;
                 if !this.shared.playing.load(Ordering::Relaxed) {
                     continue;
@@ -402,7 +441,7 @@ impl Backend {
             if let Err(e) = auth::logout(&state).await {
                 tracing::warn!("logout: {}", e.log_safe());
             }
-            this.shared.playing.store(false, Ordering::Relaxed);
+            this.shared.set_playing(false);
             this.shared.has_track.store(false, Ordering::Relaxed);
             this.shared.loaded.store(false, Ordering::Relaxed);
             if let Some(ctl) = this.controller() {
@@ -414,6 +453,8 @@ impl Backend {
                 w.set_track_title("".into());
                 w.set_track_artist("".into());
                 w.set_track_cover(Image::default());
+                w.set_track_badge(0);
+                w.set_track_atmos(false);
                 w.set_progress(0.0);
                 w.set_screen(Screen::Login);
             });
@@ -476,7 +517,7 @@ impl Backend {
     }
 
     fn set_playing(&self, playing: bool) {
-        self.shared.playing.store(playing, Ordering::Relaxed);
+        self.shared.set_playing(playing);
         self.ui(move |w| w.set_playing(playing));
         if let Some(state) = self.state() {
             let pos = f32::from_bits(self.shared.position.load(Ordering::Relaxed));
@@ -499,7 +540,7 @@ impl Backend {
             .store(duration.to_bits(), Ordering::Relaxed);
         self.shared.position.store(0, Ordering::Relaxed);
         self.shared.has_track.store(true, Ordering::Relaxed);
-        self.shared.playing.store(playing, Ordering::Relaxed);
+        self.shared.set_playing(playing);
 
         if let Some(state) = self.state() {
             let album = track
@@ -555,9 +596,12 @@ impl Backend {
         }
 
         let dur_text = images::format_time(duration);
+        let badges = crate::quality::track_badges(track);
         self.ui(move |w| {
             w.set_playing_id(id.into());
             w.set_quality_text("".into());
+            w.set_track_badge(badges.tier);
+            w.set_track_atmos(badges.atmos);
             w.set_track_title(title.into());
             w.set_track_artist(artist.into());
             w.set_duration_text(dur_text.into());
@@ -567,18 +611,26 @@ impl Backend {
             w.set_playing(playing);
             w.set_track_cover(Image::default());
         });
+        if cover.is_none() {
+            self.clear_tint(track.id);
+        }
+        let track_id = track.id;
         if let (Some(uuid), Some(state)) = (cover, self.state()) {
             let this = self.clone();
             self.rt.spawn(async move {
-                this.load_cover(state, images::tidal_image_url(&uuid, 320))
+                this.load_cover(state, track_id, images::tidal_image_url(&uuid, 320))
                     .await;
             });
         }
     }
 
-    async fn load_cover(&self, state: Arc<AppState>, url: String) {
-        if let Some(px) = self.images.get(&state, &url).await {
-            self.ui(move |w| w.set_track_cover(Image::from_rgba8(px)));
+    async fn load_cover(&self, state: Arc<AppState>, track_id: u64, url: String) {
+        match self.images.get(&state, &url).await {
+            Some(px) => {
+                self.cover_arrived(track_id, px.clone());
+                self.ui(move |w| w.set_track_cover(Image::from_rgba8(px)));
+            }
+            None => self.clear_tint(track_id),
         }
     }
 
@@ -776,6 +828,7 @@ impl Backend {
     pub fn enter_main(&self) {
         self.load_favorites();
         self.load_library();
+        self.check_for_update();
         self.in_main.store(true, Ordering::Relaxed);
         let pending = self.pending_link.lock().ok().and_then(|mut p| p.take());
         match pending {
@@ -1062,5 +1115,42 @@ mod audio_error_tests {
                 "{k} leaks its identifier"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn starting_playback_wakes_a_parked_ticker_and_stopping_does_not() {
+        let shared = Arc::new(Shared::default());
+        let woke = Arc::new(AtomicBool::new(false));
+        let waiter = {
+            let (shared, woke) = (Arc::clone(&shared), Arc::clone(&woke));
+            tokio::spawn(async move {
+                shared.playing_changed.notified().await;
+                woke.store(true, Ordering::SeqCst);
+            })
+        };
+        shared.set_playing(false);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!woke.load(Ordering::SeqCst));
+        shared.set_playing(true);
+        tokio::time::timeout(Duration::from_secs(2), waiter)
+            .await
+            .expect("woken")
+            .expect("join");
+        assert!(woke.load(Ordering::SeqCst));
+        assert!(shared.playing.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn a_start_before_the_ticker_parks_is_not_lost() {
+        let shared = Shared::default();
+        shared.set_playing(true);
+        tokio::time::timeout(Duration::from_secs(2), shared.playing_changed.notified())
+            .await
+            .expect("stored permit");
     }
 }

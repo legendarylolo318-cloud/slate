@@ -362,3 +362,37 @@ export component TextArea inherits Rectangle {
         visible: ti.text == "";
     }
 }
+
+component Badge inherits Rectangle {
+    in property <string> text;
+    // Solid accent for Hi-Res; an outline in the muted text colour otherwise.
+    in property <bool> filled: false;
+    in property <float> scale: 1.0;
+    height: 16px * root.scale;
+    width: label.preferred-width + 10px * root.scale;
+    border-radius: 3px * root.scale;
+    border-width: root.filled ? 0px : 1px;
+    border-color: Theme.text-muted;
+    background: root.filled ? Theme.accent : transparent;
+    label := Text {
+        text: root.text;
+        font-size: 10px * root.scale;
+        font-weight: 700;
+        color: root.filled ? Theme.on-accent : Theme.text-muted;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+/// Hi-Res / Lossless / Dolby Atmos badges. `tier`: 0 none, 1 Lossless, 2 Hi-Res.
+export component QualityBadges inherits HorizontalLayout {
+    in property <int> tier;
+    in property <bool> atmos;
+    in property <bool> long-atmos: true;
+    in property <float> scale: 1.0;
+    spacing: 4px * root.scale;
+    alignment: start;
+    if root.tier == 2: Badge { text: "Hi-Res"; filled: true; scale: root.scale; }
+    if root.tier == 1: Badge { text: "Lossless"; scale: root.scale; }
+    if root.atmos: Badge { text: root.long-atmos ? "Dolby Atmos" : "Atmos"; scale: root.scale; }
+}

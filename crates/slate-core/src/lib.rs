@@ -198,6 +198,9 @@ pub struct Settings {
     pub titlebar_migration_v1: bool,
     #[serde(default)]
     pub volume_normalization: bool,
+    /// Cubic volume slider instead of linear (the default).
+    #[serde(default)]
+    pub cubic_volume: bool,
     #[serde(default)]
     pub exclusive_mode: bool,
     #[serde(default)]
@@ -253,6 +256,7 @@ impl Default for Settings {
             decorations: false,
             titlebar_migration_v1: true,
             volume_normalization: false,
+            cubic_volume: false,
             exclusive_mode: false,
             exclusive_device: None,
             bit_perfect: false,
@@ -277,7 +281,7 @@ impl Default for Settings {
 pub struct AppState {
     pub audio_player: Arc<AudioPlayer>,
     pub pipeline_probe: Arc<crate::pipeline_probe::PipelineProbe>,
-    pub tidal_client: Mutex<TidalClient>,
+    pub tidal_client: crate::tidal_api::ClientCell,
     /// The one reqwest client every consumer shares. Blocked plans hold an
     /// `Err`, so no caller can fall back to an unproxied client.
     pub proxied_http: crate::proxy_http::ProxiedHttp,
@@ -458,6 +462,7 @@ impl AppState {
             .as_ref()
             .map(|s| s.volume_normalization)
             .unwrap_or(false);
+        crate::audio::set_cubic_volume(saved.as_ref().is_some_and(|s| s.cubic_volume));
         let exclusive_mode = saved.as_ref().map(|s| s.exclusive_mode).unwrap_or(false);
         let bit_perfect = saved.as_ref().map(|s| s.bit_perfect).unwrap_or(false);
         let gapless = saved.as_ref().map(|s| s.gapless).unwrap_or(true);
@@ -552,7 +557,7 @@ impl AppState {
         Ok(Self {
             audio_player,
             pipeline_probe,
-            tidal_client: Mutex::new(tidal_client),
+            tidal_client: crate::tidal_api::ClientCell::new(tidal_client),
             proxied_http,
             host_caps: std::sync::Mutex::new(host_caps),
             settings_path,

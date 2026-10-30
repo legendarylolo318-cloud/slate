@@ -11,7 +11,10 @@ mod bootstrap;
 // Only Linux has OS media controls and a tray so far (SMTC/tray on Windows are tracked issues).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod control;
+mod cover_tint;
+mod credits;
 mod deeplink;
+mod export;
 mod favorites;
 mod images;
 mod imgcache;
@@ -31,6 +34,7 @@ mod signal;
 mod sort;
 mod themes;
 mod uiprefs;
+mod updates;
 mod video;
 
 fn main() -> anyhow::Result<()> {

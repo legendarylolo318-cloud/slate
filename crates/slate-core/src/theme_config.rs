@@ -326,7 +326,13 @@ pub fn spawn_theme_watcher(app: crate::AppHandle) -> Option<ThemeWatcher> {
 
     // Debounce coalesces the tmp-file churn of a single atomic write, and any
     // editor that saves more than once in quick succession.
-    let mut debouncer = match new_debouncer(Duration::from_millis(250), None, handler) {
+    let mut debouncer = match new_debouncer(
+        Duration::from_millis(250),
+        // The debouncer thread wakes once per tick, forever; its default of a
+        // quarter of the timeout is 16 idle wakeups a second.
+        Some(Duration::from_millis(250)),
+        handler,
+    ) {
         Ok(d) => d,
         Err(e) => {
             log::warn!("theme: could not start watcher: {e}");

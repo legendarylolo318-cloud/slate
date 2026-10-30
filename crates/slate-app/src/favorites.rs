@@ -108,6 +108,7 @@ impl Backend {
             self.lib.active_kind_pub(),
             self.lib.artist_id(),
         );
+        let can_export = matches!(kind, Some(SourceKind::Loved | SourceKind::Playlist(_)));
         let (track_fav, page_fav, can, hero_fav) = {
             let Ok(f) = self.favs.lock() else { return };
             let track_fav = cur.is_some_and(|c| f.tracks.contains(&c));
@@ -127,6 +128,7 @@ impl Backend {
             w.set_track_favorite(track_fav);
             w.set_page_favorite(page_fav);
             w.set_can_favorite(can);
+            w.set_can_export(can_export);
             w.set_hero_favorite(hero_fav);
         });
     }

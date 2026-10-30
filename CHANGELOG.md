@@ -1,5 +1,64 @@
 # Changelog
 
+## [1.0.0] - 2026-10-29
+
+### Added
+- Update notice: once a day Slate looks at its latest GitHub release and, if a newer final
+  version exists, shows "Slate X.Y.Z is available" with a button that opens the release page.
+  It never downloads or installs anything. Settings → General → Check for updates (on by
+  default); closing the notice remembers that version.
+- Export: playlists and Loved Tracks have an Export… button (CSV or M3U), with a save dialog,
+  progress, and pages not yet loaded fetched one at a time.
+- Track credits: right-click a track → Credits lists producers, writers, engineers and
+  musicians (one request, cached).
+- Hi-Res, Lossless and Dolby Atmos badges on track rows, album pages and the player bar,
+  from the quality data TIDAL already sends.
+- Settings → General → Colours from album art (off by default): tints the player bar and
+  full-screen player with the cover's main colour, adjusted so text stays readable.
+- Settings → Playback → Cubic volume curve. The volume slider is now linear by default (the
+  slider position is the level); turn this on for the previous cubic curve.
+
+### Changed
+- TIDAL requests now run up to four at a time instead of one after another; pages load
+  faster, rate-limit handling is unchanged, and background refreshes wait for the page on
+  screen. Library lists (albums, artists, mixes) and the artist page fetch their parts at once.
+- Images decode with one copy of the pixels; the disk cache does its file and encryption
+  work off the async workers.
+- Fewer idle wakeups (about 25 → 6 a second): the playback and MPRIS tickers sleep while
+  nothing plays, and the theme-file watcher ticks four times a second instead of sixteen.
+- The main screen no longer waits for the session lookup, queue restore and startup tasks.
+
+### Fixed
+- Cached track credits were never read back, so each open asked TIDAL again.
+- The signed-in user id was requested again whenever it was needed.
+- Signing out while a token refresh was on the wire could bring the old session back.
+- A request prepared just before a token refresh was sent with the old token, earning a
+  401 and a second request.
+- Creating or renaming a playlist and the profile edits (name, bio, links, picture) skipped
+  the rate-limit cooldown and the in-flight cap.
+- A background refresh that started before a favourite was added (or before signing out)
+  could write the old list back into the disk cache.
+- Export: navigating while the save dialog was open could put the new page's tracks in the
+  file; names typed without an extension now get one; names no longer end in a dot or
+  space (invalid on Windows).
+- The credits panel reopened itself if closed before the credits arrived.
+- A quick skip could leave the previous track's cover colour on the player bar.
+- Tracks in TIDAL's old MQA tier were badged Hi-Res; they stream as 16-bit FLAC and are
+  now badged Lossless.
+- The request log included the account id from `/users/<id>/…` paths.
+
+### Performance (measured)
+Release builds, empty profile, login screen, 60 s after a 12 s warm-up, two runs each:
+idle wakeups 20–25 → 6–8 a second, CPU 5 → 1–2 ticks a minute, memory (PSS) unchanged at
+about 158 MB, `--self-test` startup unchanged (10.8 vs 11.1 ms, within noise). Playing and
+signed-in numbers were not measured.
+
+### Later
+- The remaining idle wakeups are the theme-file watcher (4 a second, the debouncer
+  library's floor) and one unattributed blocking thread (2 a second).
+- About 120 MB of the 158 MB is file-backed (GPU driver, the binary, font caches); there is
+  no easy cut in the 43 MB that is the app's own.
+
 ## [0.3.0] - 2026-10-29
 
 ### Added

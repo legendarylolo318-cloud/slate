@@ -97,6 +97,24 @@ pub fn set_minimize_to_tray(state: &AppState, enabled: bool) -> Result<(), Slate
     Ok(())
 }
 
+pub fn get_cubic_volume() -> bool {
+    crate::audio::cubic_volume()
+}
+
+/// Switches the slider curve and re-applies the saved slider position, so the
+/// change is heard at once.
+pub fn set_cubic_volume(state: &AppState, enabled: bool) -> Result<(), SlateError> {
+    crate::audio::set_cubic_volume(enabled);
+    let mut settings = state.load_settings().unwrap_or_default();
+    settings.cubic_volume = enabled;
+    state.save_settings(&settings)?;
+    state
+        .audio_player
+        .set_volume(settings.volume)
+        .map_err(SlateError::Audio)?;
+    Ok(())
+}
+
 pub fn get_volume_normalization(state: &AppState) -> bool {
     state.volume_normalization.load(Ordering::Relaxed)
 }

@@ -19,6 +19,7 @@ struct Snapshot {
     minimize_to_tray: bool,
     logging: bool,
     normalization: bool,
+    cubic_volume: bool,
     gapless: bool,
     gapless_supported: bool,
     quality_index: i32,
@@ -41,6 +42,7 @@ async fn snapshot(state: &Arc<AppState>) -> Snapshot {
         minimize_to_tray: utility::get_minimize_to_tray(state),
         logging: utility::get_enable_logging(),
         normalization: utility::get_volume_normalization(state),
+        cubic_volume: utility::get_cubic_volume(),
         gapless: utility::get_gapless(state),
         gapless_supported: utility::get_gapless_supported(),
         exclusive: utility::get_exclusive_mode(state),
@@ -91,6 +93,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_bar_size_index(prefs.bar_size as i32);
     g.set_lyrics_size_index(prefs.lyrics_size as i32);
     g.set_normalization(s.normalization);
+    g.set_cubic_volume(s.cubic_volume);
     g.set_gapless(s.gapless);
     g.set_gapless_supported(s.gapless_supported);
     g.set_quality_index(s.quality_index);
@@ -98,6 +101,8 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_bit_perfect(s.bit_perfect);
     g.set_show_alsa_options(cfg!(any(target_os = "linux", windows)));
     g.set_global_shortcuts(prefs.global_shortcuts);
+    g.set_check_updates(prefs.check_updates);
+    g.set_cover_colors(prefs.cover_colors);
     #[cfg(target_os = "linux")]
     {
         g.set_show_app_menu(true);
@@ -187,9 +192,12 @@ impl Backend {
                     this.set_global_shortcuts(v);
                     saved
                 }
+                "check-updates" => this.set_check_updates(v),
+                "cover-colors" => this.set_cover_colors(v),
                 "normalization" => {
                     utility::set_volume_normalization(&state, v).map_err(|e| e.log_safe())
                 }
+                "cubic-volume" => utility::set_cubic_volume(&state, v).map_err(|e| e.log_safe()),
                 "gapless" => utility::set_gapless(&state, v).map_err(|e| e.log_safe()),
                 "exclusive" => utility::set_exclusive_mode(&state, v).map_err(|e| e.log_safe()),
                 "bit-perfect" => utility::set_bit_perfect(&state, v).map_err(|e| e.log_safe()),

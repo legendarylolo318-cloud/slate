@@ -111,30 +111,51 @@ pub fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
-pub async fn load_saved_auth(state: &AppState) -> Result<Option<AuthTokens>, SlateError> {
-    log::debug!("[load_saved_auth]: path={:?}", state.settings_path);
+/// Puts the saved session into the client without touching the network.
+/// `None` means nobody is signed in.
+pub async fn restore_saved_tokens(state: &AppState) -> Result<Option<AuthTokens>, SlateError> {
+    log::debug!("[restore_saved_tokens]: path={:?}", state.settings_path);
     if let Some(settings) = state.load_settings() {
         log::debug!(
-            "[load_saved_auth]: auth_tokens present: {}, has_credentials: {}",
+            "[restore_saved_tokens]: auth_tokens present: {}, has_credentials: {}",
             settings.auth_tokens.is_some(),
             !settings.client_id.is_empty()
         );
         if let Some(ref tokens) = settings.auth_tokens {
             let (id, secret) = resolve_credentials(&settings);
             let mut client = state.tidal_client.lock().await;
-            client.tokens = Some(tokens.clone());
+            client.set_tokens(Some(tokens.clone()));
             client.set_credentials(&id, &secret);
-            // Fetch session info to populate country_code for search
-            match client.get_session_info().await {
-                Ok(_) => log::debug!("[load_saved_auth]: tokens restored, country_code: {}", client.country_code),
-                Err(e) => log::debug!("[load_saved_auth]: tokens restored but session info failed (will use default country_code): {}", e),
-            }
             return Ok(Some(tokens.clone()));
         }
     } else {
-        log::debug!("[load_saved_auth]: no settings file found");
+        log::debug!("[restore_saved_tokens]: no settings file found");
     }
     Ok(None)
+}
+
+/// Fetches the session's country and user id after `restore_saved_tokens`.
+/// A failure is only logged: the default country still works.
+pub async fn refresh_saved_session(state: &AppState) {
+    let mut client = state.tidal_client.lock().await;
+    match client.get_session_info().await {
+        Ok(_) => log::debug!(
+            "[refresh_saved_session]: country_code: {}",
+            client.country_code
+        ),
+        Err(e) => log::debug!(
+            "[refresh_saved_session]: session info failed (will use default country_code): {}",
+            e
+        ),
+    }
+}
+
+pub async fn load_saved_auth(state: &AppState) -> Result<Option<AuthTokens>, SlateError> {
+    let tokens = restore_saved_tokens(state).await?;
+    if tokens.is_some() {
+        refresh_saved_session(state).await;
+    }
+    Ok(tokens)
 }
 
 /// Returns saved client credentials so the Login page can pre-fill the advanced view.
@@ -223,19 +244,19 @@ pub async fn import_session(
             token_type: "Bearer".to_string(),
             user_id: None,
         };
-        client.tokens = Some(tokens.clone());
+        client.set_tokens(Some(tokens.clone()));
         let user_id = client.get_session_info().await.ok();
         let tokens = AuthTokens { user_id, ..tokens };
-        client.tokens = Some(tokens.clone());
+        client.set_tokens(Some(tokens.clone()));
         tokens
     } else {
-        client.tokens = Some(AuthTokens {
+        client.set_tokens(Some(AuthTokens {
             access_token: String::new(),
             refresh_token: refresh_token.clone(),
             expires_in: 0,
             token_type: "Bearer".to_string(),
             user_id: None,
-        });
+        }));
         let tokens = client.refresh_token().await?;
         // Refresh the session country for the refresh-only path too.
         if let Err(e) = client.get_session_info().await {
@@ -423,8 +444,7 @@ pub async fn logout(state: &AppState) -> Result<(), SlateError> {
     // credentials (client_id/secret) for the next login.
     {
         let mut client = state.tidal_client.lock().await;
-        client.tokens = None;
-        client.country_code = "US".to_string();
+        client.sign_out().await;
     }
 
     // Clear auth tokens + purge scrobble creds from settings; keep the rest
@@ -487,6 +507,10 @@ pub fn consume_legacy_auth_notice(state: &AppState) -> Result<bool, SlateError> 
 pub async fn get_session_user_id(state: &AppState) -> Result<u64, SlateError> {
     log::debug!("[get_session_user_id]");
     let mut client = state.tidal_client.lock().await;
+    // Sign-in already asked /sessions and kept the id with the tokens.
+    if let Some(id) = client.user_id() {
+        return Ok(id);
+    }
     client.get_session_info().await
 }
 

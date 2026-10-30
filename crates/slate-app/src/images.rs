@@ -3,11 +3,27 @@
 
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 
-/// Decodes encoded image bytes (JPEG/PNG) into an RGBA buffer.
+/// Decodes encoded image bytes (JPEG/PNG) into an RGBA buffer. The pixels are
+/// written straight into the final buffer, so a JPEG (RGB) is converted and
+/// copied once instead of converted into a temporary and then copied again.
 pub fn decode(bytes: &[u8]) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
-    let rgba = image::load_from_memory(bytes).ok()?.to_rgba8();
-    let (w, h) = rgba.dimensions();
-    Some(SharedPixelBuffer::clone_from_slice(rgba.as_raw(), w, h))
+    use image::DynamicImage;
+
+    let img = image::load_from_memory(bytes).ok()?;
+    let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(img.width(), img.height());
+    let out = buf.make_mut_bytes();
+    match img {
+        DynamicImage::ImageRgb8(rgb) => {
+            let (dst, _) = out.as_chunks_mut::<4>();
+            let (src, _) = rgb.as_raw().as_chunks::<3>();
+            for (dst, src) in dst.iter_mut().zip(src) {
+                *dst = [src[0], src[1], src[2], 255];
+            }
+        }
+        DynamicImage::ImageRgba8(rgba) => out.copy_from_slice(rgba.as_raw()),
+        other => out.copy_from_slice(other.into_rgba8().as_raw()),
+    }
+    Some(buf)
 }
 
 /// Renders `data` as a QR code with a 4-module quiet zone.
@@ -112,5 +128,83 @@ mod tests {
         assert_eq!(b.width(), b.height());
         // top-left corner lies in the quiet zone: white
         assert_eq!(b.as_slice()[0].r, 255);
+    }
+
+    fn encoded(img: image::DynamicImage, format: image::ImageFormat) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, format).expect("encode");
+        out.into_inner()
+    }
+
+    /// The two-copy path `decode` replaced; the reference for the tests.
+    fn decode_two_copies(bytes: &[u8]) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+        let rgba = image::load_from_memory(bytes).ok()?.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        Some(SharedPixelBuffer::clone_from_slice(rgba.as_raw(), w, h))
+    }
+
+    fn gradient(w: u32, h: u32) -> image::RgbaImage {
+        image::RgbaImage::from_fn(w, h, |x, y| {
+            image::Rgba([
+                (x * 7) as u8,
+                (y * 5) as u8,
+                (x + y) as u8,
+                255 - (x % 50) as u8,
+            ])
+        })
+    }
+
+    #[test]
+    fn decode_matches_the_two_copy_path_for_every_pixel_layout() {
+        let rgba = gradient(37, 23);
+        let cases = [
+            encoded(
+                image::DynamicImage::ImageRgba8(rgba.clone()),
+                image::ImageFormat::Png,
+            ),
+            encoded(
+                image::DynamicImage::ImageRgb8(
+                    image::DynamicImage::ImageRgba8(rgba.clone()).to_rgb8(),
+                ),
+                image::ImageFormat::Png,
+            ),
+            encoded(
+                image::DynamicImage::ImageRgb8(
+                    image::DynamicImage::ImageRgba8(rgba.clone()).to_rgb8(),
+                ),
+                image::ImageFormat::Jpeg,
+            ),
+            encoded(
+                image::DynamicImage::ImageLuma8(image::DynamicImage::ImageRgba8(rgba).to_luma8()),
+                image::ImageFormat::Png,
+            ),
+        ];
+        for bytes in &cases {
+            let a = decode(bytes).expect("decode");
+            let b = decode_two_copies(bytes).expect("reference");
+            assert_eq!((a.width(), a.height()), (b.width(), b.height()));
+            assert_eq!(a.as_bytes(), b.as_bytes());
+        }
+        assert!(decode(b"not an image").is_none());
+    }
+
+    #[test]
+    #[ignore = "timing; run with --release -- --ignored --nocapture"]
+    fn decode_timing() {
+        let rgb = image::DynamicImage::ImageRgba8(gradient(640, 640)).to_rgb8();
+        let jpeg = encoded(
+            image::DynamicImage::ImageRgb8(rgb),
+            image::ImageFormat::Jpeg,
+        );
+        for (name, f) in [
+            ("two copies", decode_two_copies as fn(&[u8]) -> _),
+            ("one copy", decode as fn(&[u8]) -> _),
+        ] {
+            let t = std::time::Instant::now();
+            for _ in 0..300 {
+                std::hint::black_box(f(&jpeg));
+            }
+            println!("{name}: {:?} per 640x640 jpeg", t.elapsed() / 300);
+        }
     }
 }

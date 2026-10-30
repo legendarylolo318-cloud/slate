@@ -15,6 +15,10 @@ pub const LYRICS_SCALES: [f32; 4] = [0.85, 1.0, 1.25, 1.5];
 /// "Normal" in both lists.
 const DEFAULT_SIZE: usize = 1;
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_size() -> usize {
     DEFAULT_SIZE
 }
@@ -40,6 +44,21 @@ pub struct UiPrefs {
     /// System-wide media shortcuts (off by default).
     #[serde(default)]
     pub global_shortcuts: bool,
+    /// Tint the player bar and full-screen player with the cover's colour.
+    #[serde(default)]
+    pub cover_colors: bool,
+    /// Look for a newer Slate release once a day (on by default).
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
+    /// Unix time of the last check, successful or not.
+    #[serde(default)]
+    pub last_update_check: u64,
+    /// The newest release found and not yet installed: version, then link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_update: Option<(String, String)>,
+    /// The version whose notice the user closed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dismissed_update: String,
     /// Sort order per library list (`sort::List::key`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub sorts: std::collections::BTreeMap<String, SortPref>,
@@ -60,6 +79,11 @@ impl Default for UiPrefs {
             bar_size: DEFAULT_SIZE,
             lyrics_size: DEFAULT_SIZE,
             global_shortcuts: false,
+            cover_colors: false,
+            check_updates: true,
+            last_update_check: 0,
+            known_update: None,
+            dismissed_update: String::new(),
             sorts: Default::default(),
         }
     }

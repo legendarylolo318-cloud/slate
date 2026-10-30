@@ -2,13 +2,16 @@
 //! error classification and the rate-limit gate. No real network is touched.
 
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use slate_core::proxy::HostCaps;
 use slate_core::proxy_http::ProxiedHttp;
-use slate_core::tidal_api::{ApiUrls, AuthTokens, TidalClient};
+use slate_core::tidal_api::{
+    as_background, ApiUrls, AuthTokens, ClientCell, TidalClient, MAX_IN_FLIGHT,
+};
 use slate_core::{ProxySettings, SlateError};
-use wiremock::matchers::{body_string_contains, header, method, path};
+use wiremock::matchers::{body_string_contains, header, method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn client(server: &MockServer) -> TidalClient {
@@ -164,7 +167,7 @@ async fn an_expired_token_is_refreshed_persisted_and_the_request_retried() {
     let persisted: Arc<Mutex<Vec<String>>> = Arc::default();
     let sink = Arc::clone(&persisted);
     let mut c = client(&server);
-    c.tokens = Some(tokens("old"));
+    c.set_tokens(Some(tokens("old")));
     c.set_token_persist(Arc::new(move |t: &AuthTokens| {
         if let Ok(mut g) = sink.lock() {
             g.push(t.access_token.clone());
@@ -200,7 +203,7 @@ async fn a_playbackinfo_401_is_not_treated_as_token_expiry() {
         .await;
 
     let mut c = client(&server);
-    c.tokens = Some(tokens("tok"));
+    c.set_tokens(Some(tokens("tok")));
     let err = c.get_track(2).await.expect_err("401");
     assert!(err.is_terminal_unplayable());
 }
@@ -216,7 +219,7 @@ async fn http_errors_are_classified() {
         .mount(&server)
         .await;
     let mut c = client(&server);
-    c.tokens = Some(tokens("tok"));
+    c.set_tokens(Some(tokens("tok")));
     let err = c.get_track(404).await.expect_err("404");
     assert!(matches!(err, SlateError::Api { status: 404, .. }));
     assert!(err.is_terminal_unplayable());
@@ -233,7 +236,7 @@ async fn a_429_opens_the_gate_so_the_next_call_sends_nothing() {
         .mount(&server)
         .await;
     let mut c = client(&server);
-    c.tokens = Some(tokens("tok"));
+    c.set_tokens(Some(tokens("tok")));
 
     let first = c.get_track(3).await.expect_err("429");
     assert!(first.is_rate_limited());
@@ -274,7 +277,7 @@ async fn an_unreachable_server_is_a_network_error() {
         api_v2: format!("{base}/v2"),
         openapi: format!("{base}/openapi"),
     });
-    c.tokens = Some(tokens("tok"));
+    c.set_tokens(Some(tokens("tok")));
     let err = c.get_track(1).await.expect_err("connection refused");
     assert!(err.is_network(), "{err:?}");
 }
@@ -310,7 +313,7 @@ async fn sort_order_reaches_the_track_list_requests() {
         .await;
 
     let mut c = client(&server);
-    c.tokens = Some(tokens("access-1"));
+    c.set_tokens(Some(tokens("access-1")));
     c.get_favorite_tracks(42, 0, 100, "NAME", "ASC")
         .await
         .expect("loved, by name");
@@ -331,4 +334,217 @@ async fn sort_order_reaches_the_track_list_requests() {
         "{:?}",
         p2.url
     );
+}
+
+#[tokio::test]
+async fn requests_run_at_once_up_to_the_cap() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/v1/tracks/\d+$"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id": 1}))
+                .set_delay(Duration::from_millis(200)),
+        )
+        .expect(8)
+        .mount(&server)
+        .await;
+    let mut c = client(&server);
+    c.set_tokens(Some(tokens("tok")));
+    let cell = Arc::new(ClientCell::new(c));
+
+    let started = Instant::now();
+    let mut tasks = Vec::new();
+    for id in 0..8u64 {
+        let cell = Arc::clone(&cell);
+        tasks.push(tokio::spawn(async move {
+            cell.lock().await.get_track(id).await
+        }));
+    }
+    for t in tasks {
+        t.await.expect("join").expect("request");
+    }
+    let took = started.elapsed();
+    let rounds = 8usize.div_ceil(MAX_IN_FLIGHT) as u32;
+    // Fewer rounds than one-at-a-time (8 x 200 ms), but no more than the cap allows.
+    assert!(took >= Duration::from_millis(200) * rounds, "{took:?}");
+    assert!(took < Duration::from_millis(1400), "{took:?}");
+}
+
+#[tokio::test]
+async fn several_requests_seeing_a_401_refresh_the_token_once() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/v1/tracks/\d+$"))
+        .and(header("authorization", "Bearer old"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({"status": 401})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/auth/token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({
+                    "access_token": "new", "expires_in": 3600, "token_type": "Bearer"
+                }))
+                .set_delay(Duration::from_millis(100)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/v1/tracks/\d+$"))
+        .and(header("authorization", "Bearer new"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 1})))
+        .mount(&server)
+        .await;
+    let mut c = client(&server);
+    c.set_tokens(Some(tokens("old")));
+    let cell = Arc::new(ClientCell::new(c));
+
+    let mut tasks = Vec::new();
+    for id in 0..4u64 {
+        let cell = Arc::clone(&cell);
+        tasks.push(tokio::spawn(async move {
+            cell.lock().await.get_track(id).await
+        }));
+    }
+    for t in tasks {
+        t.await.expect("join").expect("request");
+    }
+    // A client handed out afterwards already has the new token.
+    let next = cell.lock().await;
+    assert_eq!(
+        next.tokens.as_ref().map(|t| t.access_token.as_str()),
+        Some("new")
+    );
+}
+
+#[tokio::test]
+async fn background_requests_wait_for_the_screen_and_go_one_at_a_time() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/tracks/1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id": 1}))
+                .set_delay(Duration::from_millis(300)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/v1/tracks/[23]$"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id": 2}))
+                .set_delay(Duration::from_millis(100)),
+        )
+        .mount(&server)
+        .await;
+    let mut c = client(&server);
+    c.set_tokens(Some(tokens("tok")));
+    let cell = Arc::new(ClientCell::new(c));
+
+    let started = Instant::now();
+    let fg = {
+        let cell = Arc::clone(&cell);
+        tokio::spawn(async move { cell.lock().await.get_track(1).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let mut bg = Vec::new();
+    for id in [2u64, 3] {
+        let cell = Arc::clone(&cell);
+        bg.push(tokio::spawn(async move {
+            as_background(async { cell.lock().await.get_track(id).await }).await?;
+            Ok::<_, SlateError>(started.elapsed())
+        }));
+    }
+    fg.await.expect("join").expect("foreground");
+    let mut done = Vec::new();
+    for b in bg {
+        done.push(b.await.expect("join").expect("background"));
+    }
+    done.sort();
+    // Neither started before the foreground request finished (300 ms), and the
+    // second waited for the first (100 ms each).
+    assert!(done[0] >= Duration::from_millis(400), "{done:?}");
+    assert!(done[1] >= done[0] + Duration::from_millis(90), "{done:?}");
+}
+
+#[tokio::test]
+async fn a_client_copy_made_before_a_refresh_sends_the_new_token() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/v1/tracks/\d+$"))
+        .and(header("authorization", "Bearer old"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({"status": 401})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/auth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new", "expires_in": 3600, "token_type": "Bearer"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/v1/tracks/\d+$"))
+        .and(header("authorization", "Bearer new"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 1})))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let mut c = client(&server);
+    c.set_tokens(Some(tokens("old")));
+    let cell = ClientCell::new(c);
+
+    // Taken before the refresh, used after it.
+    let mut early = cell.lock().await;
+    cell.lock().await.get_track(1).await.expect("refreshed");
+    early.get_track(2).await.expect("sent with the new token");
+}
+
+#[tokio::test]
+async fn signing_out_during_a_refresh_does_not_bring_the_tokens_back() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/tracks/1"))
+        .and(header("authorization", "Bearer old"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({"status": 401})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/auth/token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({
+                    "access_token": "new", "expires_in": 3600, "token_type": "Bearer"
+                }))
+                .set_delay(Duration::from_millis(300)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/tracks/1"))
+        .and(header("authorization", "Bearer new"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 1})))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let mut c = client(&server);
+    c.set_tokens(Some(tokens("old")));
+    let cell = Arc::new(ClientCell::new(c));
+
+    let request = {
+        let cell = Arc::clone(&cell);
+        tokio::spawn(async move { cell.lock().await.get_track(1).await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    cell.lock().await.sign_out().await;
+
+    let err = request.await.expect("join").expect_err("signed out");
+    assert!(matches!(err, SlateError::NotAuthenticated), "{err:?}");
+    assert!(cell.lock().await.tokens.is_none());
 }

@@ -65,6 +65,11 @@ export component AppWindow inherits Window {
     in-out property <string> dialog-target;
     in-out property <string> dialog-text;
     in-out property <bool> picker-open: false;
+    // Track credits panel.
+    in-out property <bool> credits-open: false;
+    in property <string> credits-title;
+    in property <string> credits-status;
+    in property <[KeyValue]> credits-rows;
     in-out property <int> picker-target: -1;
     in-out property <string> picker-name;
     in-out property <string> folder-name;
@@ -77,6 +82,8 @@ export component AppWindow inherits Window {
     in property <bool> login-busy;
     in property <bool> login-has-code;
     callback start-login();
+    callback open-update();
+    callback dismiss-update();
     callback open-login-url();
 
     // ---- navigation ----
@@ -103,12 +110,16 @@ export component AppWindow inherits Window {
     in property <string> page-kind: "PLAYLIST";
     in property <string> page-title;
     in property <string> page-subtitle;
+    in property <int> page-quality;
+    in property <bool> page-atmos;
     in property <image> page-cover;
     in property <bool> page-loved;
     in property <bool> page-loading;
     in property <[TrackRow]> tracks;
     in property <string> playing-id;
     in property <bool> can-favorite;
+    in property <bool> can-export;
+    callback export-list(string);
     in property <bool> page-favorite;
     in property <bool> hero-favorite;
     in property <bool> track-favorite;
@@ -150,7 +161,12 @@ export component AppWindow inherits Window {
     // ---- playback ----
     in property <string> track-title;
     in property <string> track-artist;
+    // Colours from album art: a background both theme text colours read on.
+    in property <bool> tint-on;
+    in property <color> tint;
     in property <string> quality-text;
+    in property <int> track-badge;
+    in property <bool> track-atmos;
     in property <image> track-cover;
     in property <bool> playing;
     in property <bool> has-track;
@@ -162,6 +178,7 @@ export component AppWindow inherits Window {
     in property <int> repeat;
     in property <string> error;
     in property <string> notice;
+    in property <string> update-notice;
     callback next();
     callback previous();
     callback toggle-shuffle();
@@ -270,6 +287,19 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                    if root.update-notice != "": Rectangle {
+                        height: 40px;
+                        background: Theme.accent;
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 8px;
+                            spacing: 12px;
+                            alignment: center;
+                            Text { text: root.update-notice; color: Theme.on-accent; font-weight: 600; vertical-alignment: center; overflow: elide; }
+                            Button { label: "View release"; height: 28px; y: (parent.height - self.height) / 2; clicked => { root.open-update(); } }
+                            Button { label: "Dismiss"; height: 28px; y: (parent.height - self.height) / 2; clicked => { root.dismiss-update(); } }
+                        }
+                    }
                     if root.notice != "": Rectangle {
                         height: 28px;
                         background: Theme.accent;
@@ -287,6 +317,8 @@ export component AppWindow inherits Window {
                         kind-label: root.page-kind;
                         title: root.page-title;
                         subtitle: root.page-subtitle;
+                        quality: root.page-quality;
+                        atmos: root.page-atmos;
                         cover: root.page-cover;
                         loved: root.page-loved;
                         loading: root.page-loading;
@@ -294,6 +326,8 @@ export component AppWindow inherits Window {
                         playing-id: root.playing-id;
                         play-row(i) => { root.play-row(i); }
                         can-favorite: root.can-favorite;
+                        can-export: root.can-export;
+                        export-list(f) => { root.export-list(f); }
                         page-favorite: root.page-favorite;
                         toggle-page-favorite => { root.toggle-page-favorite(); }
                         row-action(i, a) => {
@@ -373,7 +407,11 @@ export component AppWindow inherits Window {
                 scale: root.bar-scale;
                 title: root.track-title;
                 artist: root.track-artist;
+                tint-on: root.tint-on;
+                tint: root.tint;
                 quality: root.quality-text;
+                badge: root.track-badge;
+                atmos: root.track-atmos;
                 cover: root.track-cover;
                 video-mini: root.video-open && root.video-minimized;
                 video-frame: root.video-frame;
@@ -414,6 +452,8 @@ export component AppWindow inherits Window {
             title: root.track-title;
             artist: root.track-artist;
             cover: root.track-cover;
+            tint-on: root.tint-on;
+            tint: root.tint;
             playing: root.playing;
             has-track: root.has-track;
             position-text: root.position-text;
@@ -493,6 +533,49 @@ export component AppWindow inherits Window {
                             pk := TouchArea {
                                 mouse-cursor: MouseCursor.pointer;
                                 clicked => { root.add-to-playlist(root.picker-target, p.uuid); root.picker-open = false; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.credits-open: Rectangle {
+            background: #000000a0;
+            TouchArea { clicked => { root.credits-open = false; } }
+            Rectangle {
+                width: min(440px, parent.width - 32px);
+                height: min(520px, parent.height - 48px);
+                border-radius: 12px;
+                background: Theme.surface;
+                TouchArea { }
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 8px;
+                    HorizontalLayout {
+                        Text { text: root.credits-title; font-size: 18px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; overflow: elide; }
+                        IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.credits-open = false; } }
+                    }
+                    if root.credits-status != "": Text {
+                        text: root.credits-status;
+                        color: Theme.text-muted;
+                        wrap: word-wrap;
+                    }
+                    ListView {
+                        vertical-stretch: 1;
+                        for c in root.credits-rows: Rectangle {
+                            height: c.value == "" ? 32px : 28px;
+                            if c.value == "": Text {
+                                text: c.key;
+                                font-size: 11px;
+                                font-weight: 700;
+                                color: Theme.text-muted;
+                                vertical-alignment: bottom;
+                            }
+                            if c.value != "": HorizontalLayout {
+                                spacing: 12px;
+                                Text { width: 150px; text: c.key; color: Theme.text-muted; vertical-alignment: center; overflow: elide; }
+                                Text { text: c.value; color: Theme.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                             }
                         }
                     }

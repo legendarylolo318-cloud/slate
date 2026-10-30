@@ -222,6 +222,7 @@ impl Backend {
                     }
                 }
                 "copy-link" => this.copy_link(&track).await,
+                "credits" => this.show_credits(&track),
                 _ => {}
             }
         });

@@ -32,6 +32,7 @@ export global SettingsState {
     in-out property <bool> logging;
     // Playback
     in-out property <bool> normalization;
+    in-out property <bool> cubic-volume;
     in-out property <bool> gapless;
     in-out property <bool> gapless-supported: true;
     in-out property <int> quality-index;
@@ -40,6 +41,8 @@ export global SettingsState {
     in-out property <bool> show-alsa-options: true;
     in-out property <string> exclusive-hint: "Take over the audio device (ALSA).";
     in-out property <bool> global-shortcuts;
+    in-out property <bool> check-updates;
+    in-out property <bool> cover-colors;
     in-out property <bool> show-app-menu: false;
     in-out property <bool> in-app-menu: false;
     in-out property <string> global-shortcuts-hint;
@@ -188,6 +191,16 @@ export component SettingsPage inherits Rectangle {
                         Toggle { checked: SettingsState.global-shortcuts; toggled(v) => { SettingsState.global-shortcuts = v; SettingsState.changed-bool("global-shortcuts", v); } }
                     }
                     Row {
+                        label: "Colours from album art";
+                        hint: "Tint the player bar and full-screen player with the cover's main colour.";
+                        Toggle { checked: SettingsState.cover-colors; toggled(v) => { SettingsState.cover-colors = v; SettingsState.changed-bool("cover-colors", v); } }
+                    }
+                    Row {
+                        label: "Check for updates";
+                        hint: "Once a day, look for a newer Slate on GitHub and show a notice. Nothing is downloaded or installed.";
+                        Toggle { checked: SettingsState.check-updates; toggled(v) => { SettingsState.check-updates = v; SettingsState.changed-bool("check-updates", v); } }
+                    }
+                    Row {
                         label: "Write log files";
                         hint: "Rotating logs in the Slate config folder.";
                         Toggle { checked: SettingsState.logging; toggled(v) => { SettingsState.logging = v; SettingsState.changed-bool("logging", v); } }
@@ -281,6 +294,11 @@ export component SettingsPage inherits Rectangle {
                         label: "Volume normalization";
                         hint: "Level tracks using ReplayGain.";
                         Toggle { checked: SettingsState.normalization; toggled(v) => { SettingsState.normalization = v; SettingsState.changed-bool("normalization", v); } }
+                    }
+                    Row {
+                        label: "Cubic volume curve";
+                        hint: "Off: the slider sets the level directly. On: the slider is cubed, so loudness changes more evenly along it.";
+                        Toggle { checked: SettingsState.cubic-volume; toggled(v) => { SettingsState.cubic-volume = v; SettingsState.changed-bool("cubic-volume", v); } }
                     }
                     Row {
                         label: "Gapless playback";

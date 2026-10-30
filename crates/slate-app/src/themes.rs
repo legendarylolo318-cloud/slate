@@ -68,6 +68,10 @@ fn hex_of(c: Color) -> String {
 }
 
 impl Backend {
+    pub(crate) fn current_theme_pub(&self) -> CoreTheme {
+        self.current_theme()
+    }
+
     fn current_theme(&self) -> CoreTheme {
         self.theme
             .lock()
@@ -81,6 +85,8 @@ impl Backend {
         }
         let shown = t.clone();
         self.ui(move |w| apply(&w, &shown));
+        // Text colours changed, so the tint may need another lightness.
+        self.reapply_tint();
         if save {
             self.save_theme(&t);
         }

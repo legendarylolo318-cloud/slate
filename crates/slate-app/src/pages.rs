@@ -21,6 +21,9 @@ const GRID_PAGE: u32 = 100;
 /// v2 endpoints reject `limit` above 50 (HTTP 400), so mixes page in 50s.
 const MIXES_PAGE: u32 = slate_core::tidal_api::MAX_V2_FAVORITES_LIMIT;
 const MAX_GRID_PAGES: u32 = 30;
+/// Pages of one library list fetched at once; the core's request cap bounds it
+/// further.
+const GRID_CONCURRENCY: usize = 3;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Route {
@@ -755,8 +758,9 @@ impl Backend {
     /// Pages through a paginated favourites endpoint, mapping items to cards.
     async fn collect_grid<T, F, Fut>(
         &self,
+        generation: u64,
         page_size: u32,
-        mut fetch: F,
+        fetch: F,
         map: impl Fn(&T) -> CardData,
     ) -> Result<Vec<CardData>, String>
     where
@@ -765,16 +769,14 @@ impl Backend {
             Output = Result<slate_core::tidal_api::PaginatedResponse<T>, slate_core::SlateError>,
         >,
     {
-        let mut cards = Vec::new();
-        for page in 0..MAX_GRID_PAGES {
-            let p = fetch(page * page_size).await.map_err(|e| e.log_safe())?;
-            let got = p.items.len();
-            cards.extend(p.items.iter().map(&map));
-            if got == 0 || cards.len() >= p.total_number_of_items as usize {
-                break;
-            }
-        }
-        Ok(cards)
+        collect_pages(
+            page_size,
+            GRID_CONCURRENCY,
+            || self.lib.cards_generation() == generation,
+            fetch,
+            map,
+        )
+        .await
     }
 
     /// Loved → Videos: favourite music videos as a grid; a card plays it.
@@ -863,6 +865,7 @@ impl Backend {
             };
             let res = this
                 .collect_grid(
+                    generation,
                     GRID_PAGE,
                     |off| {
                         lib_cmds::get_favorite_albums(
@@ -913,6 +916,7 @@ impl Backend {
             };
             let res = this
                 .collect_grid(
+                    generation,
                     GRID_PAGE,
                     |off| {
                         lib_cmds::get_favorite_artists(
@@ -963,6 +967,7 @@ impl Backend {
             let Some(state) = this.state() else { return };
             let res = this
                 .collect_grid(
+                    generation,
                     MIXES_PAGE,
                     |off| {
                         lib_cmds::get_favorite_mixes(
@@ -1067,9 +1072,11 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
-            let detail = pages::get_artist_detail(&state, id).await;
-            let top = pages::get_artist_top_tracks(&state, this.app.clone(), id, 10).await;
-            let albums = pages::get_artist_albums(&state, id, 50).await;
+            let (detail, top, albums) = tokio::join!(
+                pages::get_artist_detail(&state, id),
+                pages::get_artist_top_tracks(&state, this.app.clone(), id, 10),
+                pages::get_artist_albums(&state, id, 50),
+            );
             if this.lib.cards_generation() != generation {
                 return;
             }
@@ -1217,8 +1224,170 @@ fn set_card_cover(w: &AppWindow, s: usize, c: usize, cover: Image) {
     }
 }
 
+/// Fetches a paginated list: the first page for the total, then the remaining
+/// pages a few at a time (in order). Stops early, without fetching, once
+/// `alive` says the page being built is no longer the one on screen. Never
+/// asks for more pages than the total needs.
+async fn collect_pages<T, F, Fut>(
+    page_size: u32,
+    concurrency: usize,
+    alive: impl Fn() -> bool,
+    mut fetch: F,
+    map: impl Fn(&T) -> CardData,
+) -> Result<Vec<CardData>, String>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<
+        Output = Result<slate_core::tidal_api::PaginatedResponse<T>, slate_core::SlateError>,
+    >,
+{
+    use futures_util::StreamExt;
+
+    if !alive() {
+        return Ok(Vec::new());
+    }
+    let first = fetch(0).await.map_err(|e| e.log_safe())?;
+    let mut cards: Vec<CardData> = first.items.iter().map(&map).collect();
+    let total = first.total_number_of_items as usize;
+    if first.items.is_empty() || cards.len() >= total {
+        return Ok(cards);
+    }
+    let pages = total
+        .div_ceil(page_size.max(1) as usize)
+        .min(MAX_GRID_PAGES as usize) as u32;
+    let alive = &alive;
+    let mut rest = futures_util::stream::iter(1..pages)
+        .map(|page| {
+            let request = alive().then(|| fetch(page * page_size));
+            async move {
+                match request {
+                    Some(request) => Some(request.await),
+                    None => None,
+                }
+            }
+        })
+        .buffered(concurrency.max(1));
+    while let Some(result) = rest.next().await {
+        let Some(result) = result else { break };
+        let page = result.map_err(|e| e.log_safe())?;
+        if page.items.is_empty() {
+            break;
+        }
+        cards.extend(page.items.iter().map(&map));
+    }
+    Ok(cards)
+}
+
 #[cfg(test)]
 mod tests {
+    fn fake_page(
+        offset: u32,
+        size: u32,
+        total: u32,
+    ) -> slate_core::tidal_api::PaginatedResponse<u32> {
+        let items = (offset..total.min(offset + size)).collect();
+        slate_core::tidal_api::PaginatedResponse {
+            items,
+            total_number_of_items: total,
+            offset,
+            limit: size,
+        }
+    }
+
+    fn id_card(n: &u32) -> CardData {
+        CardData {
+            kind: "album",
+            id: n.to_string(),
+            title: String::new(),
+            subtitle: String::new(),
+            image: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_pages_keeps_order_and_asks_for_each_page_once() {
+        let asked = std::sync::Mutex::new(Vec::new());
+        let cards = collect_pages(
+            10,
+            3,
+            || true,
+            |off| {
+                asked.lock().unwrap().push(off);
+                // Later pages answer first.
+                let delay = 50u64.saturating_sub(u64::from(off));
+                async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    Ok(fake_page(off, 10, 35))
+                }
+            },
+            id_card,
+        )
+        .await
+        .unwrap();
+        let ids: Vec<String> = cards.into_iter().map(|c| c.id).collect();
+        assert_eq!(ids, (0..35).map(|n| n.to_string()).collect::<Vec<_>>());
+        let mut asked = asked.into_inner().unwrap();
+        asked.sort();
+        assert_eq!(asked, vec![0, 10, 20, 30]);
+    }
+
+    #[tokio::test]
+    async fn collect_pages_with_one_page_asks_once_and_a_dead_page_asks_never() {
+        let asked = std::sync::atomic::AtomicU32::new(0);
+        let fetch = |off| {
+            asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async move { Ok(fake_page(off, 10, 7)) }
+        };
+        let cards = collect_pages(10, 3, || true, fetch, id_card).await.unwrap();
+        assert_eq!(cards.len(), 7);
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let cards = collect_pages(10, 3, || false, fetch, id_card)
+            .await
+            .unwrap();
+        assert!(cards.is_empty());
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn collect_pages_stops_fetching_when_the_page_goes_away() {
+        let asked = std::sync::atomic::AtomicU32::new(0);
+        let gone = std::sync::atomic::AtomicBool::new(false);
+        let _ = collect_pages(
+            10,
+            1,
+            || !gone.load(std::sync::atomic::Ordering::SeqCst),
+            |off| {
+                asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                gone.store(true, std::sync::atomic::Ordering::SeqCst);
+                async move { Ok(fake_page(off, 10, 100)) }
+            },
+            id_card,
+        )
+        .await;
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn collect_pages_reports_a_failed_page() {
+        let err = collect_pages(
+            10,
+            3,
+            || true,
+            |off| async move {
+                if off == 10 {
+                    Err(slate_core::SlateError::Network("down".into()))
+                } else {
+                    Ok(fake_page(off, 10, 30))
+                }
+            },
+            id_card,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("down") || !err.is_empty());
+    }
+
     #[test]
     fn slug_image_ids_are_not_requested() {
         for slug in ["pop", "k-pop", "r-b-soul"] {

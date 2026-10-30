@@ -29,6 +29,15 @@ impl Crypto {
         Ok(Self { cipher })
     }
 
+    /// A cipher with a fixed key, so tests never touch the keyring.
+    #[cfg(test)]
+    pub fn with_test_key() -> Self {
+        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&[7u8; 32]);
+        Self {
+            cipher: Aes256Gcm::new(key),
+        }
+    }
+
     /// Encrypt plaintext. Returns `[magic][version][nonce][ciphertext+tag]`.
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, SlateError> {
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);

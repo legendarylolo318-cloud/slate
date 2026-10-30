@@ -36,8 +36,11 @@ export component FullscreenPlayer inherits Rectangle {
     callback seek(float);
     callback lyric-seek(int);
 
+    in property <bool> tint-on;
+    in property <color> tint;
     property <bool> idle: false;
-    background: Theme.background;
+    background: root.tint-on ? root.tint : Theme.background;
+    animate background { duration: 300ms; }
 
     // Auto-hide: any movement shows the controls and restarts the countdown.
     idle-timer := Timer {
