@@ -32,6 +32,8 @@ export component Toggle inherits Rectangle {
 
 export component Button inherits Rectangle {
     in property <string> label;
+    /// Keyboard focus ring: reached with Tab, activated with Space or Enter.
+    property <bool> focused: kf.has-focus;
     in property <bool> primary: false;
     in property <bool> enabled: true;
     in property <bool> danger: false;
@@ -43,6 +45,14 @@ export component Button inherits Rectangle {
         : root.primary ? (ta.has-hover ? Theme.accent-hover : Theme.accent)
         : (ta.pressed ? Theme.surface : ta.has-hover ? Theme.surface-raised.brighter(0.15) : Theme.surface-raised);
     opacity: root.enabled ? 1.0 : 0.5;
+    border-width: root.focused ? 2px : 0px;
+    border-color: Theme.accent;
+    kf := FocusScope {
+        key-pressed(e) => {
+            if (root.enabled && (e.text == " " || e.text == "\n")) { root.clicked(); return accept; }
+            reject
+        }
+    }
     HorizontalLayout {
         padding-left: 16px;
         padding-right: 16px;
@@ -63,6 +73,8 @@ export component Button inherits Rectangle {
 
 export component IconButton inherits Rectangle {
     in property <string> glyph;
+    /// Tooltip shown while hovering (every icon-only button sets one).
+    in property <string> tip;
     // A vector icon (white SVG, tinted here); preferred over `glyph`.
     in property <image> icon;
     in property <bool> primary: false;
@@ -77,6 +89,25 @@ export component IconButton inherits Rectangle {
         : (ta.has-hover ? Theme.surface-raised : transparent);
     opacity: root.enabled ? 1.0 : 0.4;
     property <brush> tint: root.primary ? Theme.background : (root.active ? Theme.accent : Theme.text);
+    border-width: kf.has-focus ? 2px : 0px;
+    border-color: Theme.accent;
+    kf := FocusScope {
+        key-pressed(e) => {
+            if (root.enabled && (e.text == " " || e.text == "\n")) { root.clicked(); return accept; }
+            reject
+        }
+    }
+    if root.tip != "" && ta.has-hover: Rectangle {
+        y: -self.height - 6px;
+        x: (parent.width - self.width) / 2;
+        width: tipt.preferred-width + 16px;
+        height: 24px;
+        border-radius: 4px;
+        background: Theme.surface-raised;
+        border-width: 1px;
+        border-color: Theme.text-muted.with-alpha(0.3);
+        tipt := Text { text: root.tip; color: Theme.text; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    }
     if root.icon.width > 0: Image {
         source: root.icon;
         colorize: root.tint;

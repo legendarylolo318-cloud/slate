@@ -41,6 +41,7 @@ mod quality;
 mod remote;
 mod selftest;
 mod settings;
+mod settings_search;
 mod signal;
 mod smart;
 mod sort;

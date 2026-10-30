@@ -112,11 +112,11 @@ export component PlayerBar inherits Rectangle {
                 HorizontalLayout {
                     alignment: center;
                     spacing: 10px * root.scale;
-                    IconButton { side: root.btn; icon: @image-url("icons/shuffle.svg"); active: root.shuffle; opacity: root.shuffle ? 1.0 : 0.6; clicked => { root.toggle-shuffle(); } }
-                    IconButton { side: root.btn; icon: @image-url("icons/previous.svg"); enabled: root.has-track; clicked => { root.previous(); } }
+                    IconButton { tip: "Shuffle"; side: root.btn; icon: @image-url("icons/shuffle.svg"); active: root.shuffle; opacity: root.shuffle ? 1.0 : 0.6; clicked => { root.toggle-shuffle(); } }
+                    IconButton { tip: "Previous"; side: root.btn; icon: @image-url("icons/previous.svg"); enabled: root.has-track; clicked => { root.previous(); } }
                     IconButton { primary: true; side: root.btn-primary; enabled: root.has-track; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); clicked => { root.toggle-play(); } }
-                    IconButton { side: root.btn; icon: @image-url("icons/next.svg"); enabled: root.has-track; clicked => { root.next(); } }
-                    IconButton { side: root.btn; icon: root.repeat == 2 ? @image-url("icons/repeat-one.svg") : @image-url("icons/repeat.svg"); active: root.repeat != 0; opacity: root.repeat == 0 ? 0.6 : 1.0; clicked => { root.cycle-repeat(); } }
+                    IconButton { tip: "Next"; side: root.btn; icon: @image-url("icons/next.svg"); enabled: root.has-track; clicked => { root.next(); } }
+                    IconButton { tip: "Repeat"; side: root.btn; icon: root.repeat == 2 ? @image-url("icons/repeat-one.svg") : @image-url("icons/repeat.svg"); active: root.repeat != 0; opacity: root.repeat == 0 ? 0.6 : 1.0; clicked => { root.cycle-repeat(); } }
                 }
                 HorizontalLayout {
                     spacing: 8px * root.scale;
@@ -132,14 +132,14 @@ export component PlayerBar inherits Rectangle {
                 max-width: root.compact ? 100000px : root.side-w;
                 alignment: end;
                 spacing: 2px * root.scale;
-                IconButton { side: root.btn; icon: root.favorite ? @image-url("icons/heart-filled.svg") : @image-url("icons/heart.svg"); active: root.favorite; enabled: root.has-track; clicked => { root.toggle-favorite(); } }
-                if !root.compact || !root.narrow: IconButton { side: root.btn; icon: @image-url("icons/plus.svg"); enabled: root.has-track; clicked => { root.add-to-playlist(); } }
-                IconButton { side: root.btn; icon: @image-url("icons/lyrics.svg"); active: root.lyrics-open; enabled: root.has-track; clicked => { root.toggle-lyrics(); } }
-                if !root.compact || !root.narrow: IconButton { side: root.btn; icon: @image-url("icons/miniplayer.svg"); clicked => { root.open-miniplayer(); } }
-                if !root.compact || !root.narrow: IconButton { side: root.btn; icon: @image-url("icons/signal.svg"); clicked => { root.open-signal-path(); } }
-                if !root.compact || !root.narrow: IconButton { side: root.btn; icon: @image-url("icons/fullscreen.svg"); enabled: root.has-track; clicked => { root.toggle-fullscreen(); } }
-                IconButton { side: root.btn; icon: @image-url("icons/queue.svg"); active: root.queue-open; clicked => { root.toggle-queue(); } }
-                if !root.compact: IconButton { side: root.btn; icon: root.volume == 0 ? @image-url("icons/volume-mute.svg") : @image-url("icons/volume.svg"); clicked => { root.toggle-mute(); } }
+                IconButton { tip: "Favourite"; side: root.btn; icon: root.favorite ? @image-url("icons/heart-filled.svg") : @image-url("icons/heart.svg"); active: root.favorite; enabled: root.has-track; clicked => { root.toggle-favorite(); } }
+                if !root.compact || !root.narrow: IconButton { tip: "Add to playlist"; side: root.btn; icon: @image-url("icons/plus.svg"); enabled: root.has-track; clicked => { root.add-to-playlist(); } }
+                IconButton { tip: "Lyrics"; side: root.btn; icon: @image-url("icons/lyrics.svg"); active: root.lyrics-open; enabled: root.has-track; clicked => { root.toggle-lyrics(); } }
+                if !root.compact || !root.narrow: IconButton { tip: "Mini player"; side: root.btn; icon: @image-url("icons/miniplayer.svg"); clicked => { root.open-miniplayer(); } }
+                if !root.compact || !root.narrow: IconButton { tip: "Signal path"; side: root.btn; icon: @image-url("icons/signal.svg"); clicked => { root.open-signal-path(); } }
+                if !root.compact || !root.narrow: IconButton { tip: "Full screen"; side: root.btn; icon: @image-url("icons/fullscreen.svg"); enabled: root.has-track; clicked => { root.toggle-fullscreen(); } }
+                IconButton { tip: "Queue"; side: root.btn; icon: @image-url("icons/queue.svg"); active: root.queue-open; clicked => { root.toggle-queue(); } }
+                if !root.compact: IconButton { tip: "Mute"; side: root.btn; icon: root.volume == 0 ? @image-url("icons/volume-mute.svg") : @image-url("icons/volume.svg"); clicked => { root.toggle-mute(); } }
                 if !root.compact: Rectangle {
                     // Same height as the buttons so the bar lines up with the icons.
                     width: 84px * root.scale;
@@ -160,11 +160,11 @@ export component PlayerBar inherits Rectangle {
         if root.compact: HorizontalLayout {
             alignment: center;
             spacing: 6px * root.scale;
-            IconButton { icon: @image-url("icons/shuffle.svg"); side: 36px * root.scale; active: root.shuffle; clicked => { root.toggle-shuffle(); } }
-            IconButton { icon: @image-url("icons/previous.svg"); side: 40px * root.scale; enabled: root.has-track; clicked => { root.previous(); } }
+            IconButton { tip: "Shuffle"; icon: @image-url("icons/shuffle.svg"); side: 36px * root.scale; active: root.shuffle; clicked => { root.toggle-shuffle(); } }
+            IconButton { tip: "Previous"; icon: @image-url("icons/previous.svg"); side: 40px * root.scale; enabled: root.has-track; clicked => { root.previous(); } }
             IconButton { primary: true; side: root.btn-primary; enabled: root.has-track; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); clicked => { root.toggle-play(); } }
-            IconButton { icon: @image-url("icons/next.svg"); side: 40px * root.scale; enabled: root.has-track; clicked => { root.next(); } }
-            IconButton { icon: root.repeat == 2 ? @image-url("icons/repeat-one.svg") : @image-url("icons/repeat.svg"); side: 36px * root.scale; active: root.repeat != 0; clicked => { root.cycle-repeat(); } }
+            IconButton { tip: "Next"; icon: @image-url("icons/next.svg"); side: 40px * root.scale; enabled: root.has-track; clicked => { root.next(); } }
+            IconButton { tip: "Repeat"; icon: root.repeat == 2 ? @image-url("icons/repeat-one.svg") : @image-url("icons/repeat.svg"); side: 36px * root.scale; active: root.repeat != 0; clicked => { root.cycle-repeat(); } }
         }
         if root.compact: HorizontalLayout {
             spacing: 6px * root.scale;

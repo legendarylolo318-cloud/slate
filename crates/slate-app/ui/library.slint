@@ -5,6 +5,8 @@ import { Button, Segmented, QualityBadges, TextField, IconButton } from "widgets
 import { Dnd } from "dnd.slint";
 
 component NavItem inherits Rectangle {
+    in property <image> icon;
+    in property <bool> collapsed: false;
     in property <string> label;
     in property <string> hint;
     in property <bool> active;
@@ -15,8 +17,15 @@ component NavItem inherits Rectangle {
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 8px;
-        spacing: 6px;
-        Text {
+        spacing: 10px;
+        if root.icon.width > 0: Image {
+            source: root.icon;
+            colorize: root.active ? Theme.accent : Theme.text-muted;
+            width: 18px;
+            height: 18px;
+            y: (parent.height - self.height) / 2;
+        }
+        if !root.collapsed: Text {
             text: root.label;
             color: root.active ? Theme.text : Theme.text-muted;
             font-weight: root.active ? 600 : 400;
@@ -83,7 +92,7 @@ component SmartItem inherits Rectangle {
         padding-left: 10px;
         padding-right: 6px;
         spacing: 8px;
-        Text { text: "✦"; color: Theme.accent; vertical-alignment: center; }
+        Image { source: @image-url("icons/smart.svg"); colorize: Theme.accent; width: 16px; height: 16px; y: (parent.height - self.height) / 2; }
         if !root.collapsed: Text {
             text: root.entry.title;
             color: Theme.text;
@@ -190,14 +199,16 @@ export component Sidebar inherits Rectangle {
             horizontal-alignment: root.collapsed ? TextHorizontalAlignment.center : TextHorizontalAlignment.left;
         }
         for item in [
-            { id: "home", glyph: "⌂", label: "Home" },
-            { id: "albums", glyph: "◉", label: "Albums" },
-            { id: "artists", glyph: "♫", label: "Artists" },
-            { id: "mixes", glyph: "✦", label: "Mixes" },
-            { id: "explore", glyph: "◈", label: "Explore" },
-            { id: "profile", glyph: "☺", label: "Profile" },
+            { id: "home", icon: @image-url("icons/home.svg"), label: "Home" },
+            { id: "albums", icon: @image-url("icons/albums.svg"), label: "Albums" },
+            { id: "artists", icon: @image-url("icons/artists.svg"), label: "Artists" },
+            { id: "mixes", icon: @image-url("icons/mixes.svg"), label: "Mixes" },
+            { id: "explore", icon: @image-url("icons/explore.svg"), label: "Explore" },
+            { id: "profile", icon: @image-url("icons/profile.svg"), label: "Profile" },
         ]: NavItem {
-            label: root.collapsed ? item.glyph : item.glyph + "   " + item.label;
+            icon: item.icon;
+            collapsed: root.collapsed;
+            label: item.label;
             active: root.selected == item.id;
             clicked => { root.go(item.id); }
         }
@@ -265,12 +276,16 @@ export component Sidebar inherits Rectangle {
             }
         }
         NavItem {
-            label: root.collapsed ? "⚙" : "⚙   Settings";
+            icon: @image-url("icons/settings.svg");
+            collapsed: root.collapsed;
+            label: "Settings";
             active: root.selected == "settings";
             clicked => { root.go("settings"); }
         }
         NavItem {
-            label: root.collapsed ? "⏻" : "⏻   Sign out";
+            icon: @image-url("icons/logout.svg");
+            collapsed: root.collapsed;
+            label: "Sign out";
             clicked => { root.logout(); }
         }
     }

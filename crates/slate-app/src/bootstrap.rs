@@ -554,6 +554,8 @@ fn wire(window: &AppWindow, backend: &Backend) {
     g.on_theme_color_final(move |t, c| b.theme_color(t, c, true));
     let b = backend.clone();
     g.on_theme_hex(move |t, s| b.theme_hex(t, &s));
+    let w = window.as_weak();
+    g.on_search_changed(move |q| crate::settings_search::apply(&w, &q));
     let b = backend.clone();
     g.on_agent_undo(move |id| b.agent_undo(id));
     let b = backend.clone();

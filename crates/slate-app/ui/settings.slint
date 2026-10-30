@@ -79,6 +79,11 @@ export global SettingsState {
     in-out property <string> mcp-url;
     in-out property <bool> overlay-enabled;
     in-out property <string> overlay-url;
+    // Settings search
+    in-out property <string> query;
+    in-out property <[string]> search-results;
+    in-out property <[int]> search-tabs;
+    callback search-changed(string);
     // Agents (MCP)
     in-out property <bool> agent-read-only;
     in-out property <bool> agent-ask: true;
@@ -165,6 +170,23 @@ export component SettingsPage inherits Rectangle {
                 index <=> SettingsState.tab;
             }
         }
+        TextField {
+            text <=> SettingsState.query;
+            placeholder: "Search settings";
+            field-width: 320px;
+            edited(t) => { SettingsState.search-changed(t); }
+        }
+        if SettingsState.query != "": VerticalLayout {
+            spacing: 4px;
+            if SettingsState.search-results.length == 0: Text { text: "No setting matches that."; color: Theme.text-muted; }
+            for r[i] in SettingsState.search-results: Rectangle {
+                height: 36px;
+                border-radius: 6px;
+                background: sr.has-hover ? Theme.surface-raised : Theme.surface;
+                Text { x: 12px; text: r; color: Theme.text; vertical-alignment: center; }
+                sr := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { SettingsState.tab = SettingsState.search-tabs[i]; SettingsState.query = ""; SettingsState.search-changed(""); } }
+            }
+        }
         if SettingsState.status != "": Rectangle {
             height: 30px;
             border-radius: 6px;
@@ -177,7 +199,7 @@ export component SettingsPage inherits Rectangle {
                 max-width: 760px;
                 alignment: start;
 
-                if SettingsState.tab == 0: VerticalLayout {
+                if SettingsState.tab == 0 && SettingsState.query == "": VerticalLayout {
                     Row {
                         label: "Streaming quality access";
                         hint: SettingsState.auth-max ? "Signed in with the browser login: Lossless and Max are available." : "This sign-in is limited to 320 kbps AAC. Sign in with your browser to unlock Lossless and Max.";
@@ -273,7 +295,7 @@ export component SettingsPage inherits Rectangle {
                 }
 
 
-                if SettingsState.tab == 1: VerticalLayout {
+                if SettingsState.tab == 1 && SettingsState.query == "": VerticalLayout {
                     spacing: 12px;
                     padding-top: 8px;
                     Text { text: "Theme: " + SettingsState.theme-name; color: Theme.text; font-weight: 700; }
@@ -412,7 +434,7 @@ export component SettingsPage inherits Rectangle {
                         wrap: word-wrap;
                     }
                 }
-                if SettingsState.tab == 2: VerticalLayout {
+                if SettingsState.tab == 2 && SettingsState.query == "": VerticalLayout {
                     Row {
                         label: "Maximum quality";
                         hint: "Slate falls back automatically when a track is not available at this level.";
@@ -466,7 +488,7 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                if SettingsState.tab == 3: VerticalLayout {
+                if SettingsState.tab == 3 && SettingsState.query == "": VerticalLayout {
                     Row {
                         label: "Report plays to TIDAL";
                         hint: "Feeds Recently Played and recommendations.";
@@ -565,7 +587,7 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                if SettingsState.tab == 4: VerticalLayout {
+                if SettingsState.tab == 4 && SettingsState.query == "": VerticalLayout {
                     Row {
                         label: "Use a proxy";
                         hint: "All Slate traffic goes through it, or nothing is sent.";
@@ -584,7 +606,7 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                if SettingsState.tab == 5: VerticalLayout {
+                if SettingsState.tab == 5 && SettingsState.query == "": VerticalLayout {
                     Row {
                         label: "MCP server";
                         hint: SettingsState.mcp-enabled ? SettingsState.mcp-url : "Lets AI assistants control playback. Local only (127.0.0.1:5577).";
@@ -651,7 +673,7 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                if SettingsState.tab == 6: VerticalLayout {
+                if SettingsState.tab == 6 && SettingsState.query == "": VerticalLayout {
                     Row {
                         label: "Reset all shortcuts";
                         hint: "Click a shortcut to change it. Esc cancels while recording. Global shortcuts work system-wide when turned on in General.";
@@ -667,7 +689,7 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                if SettingsState.tab == 7: VerticalLayout {
+                if SettingsState.tab == 7 && SettingsState.query == "": VerticalLayout {
                     Row {
                         label: "Listening party";
                         hint: SettingsState.party-role == "" ? "Listen together while each person plays from their own TIDAL account. Slate only syncs what is playing; no audio is sent. Needs no port forwarding." : (SettingsState.party-role == "host" ? "You are hosting. Guests: " + SettingsState.party-guests.length : "You are in a party.");
@@ -726,7 +748,7 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                if SettingsState.tab == 8: VerticalLayout {
+                if SettingsState.tab == 8 && SettingsState.query == "": VerticalLayout {
                     spacing: 8px;
                     padding-top: 12px;
                     Text { text: "Slate " + SettingsState.version; font-size: 22px; font-weight: 700; color: Theme.text; }
