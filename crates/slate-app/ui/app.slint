@@ -8,7 +8,7 @@ import { MiniPlayerWindow } from "mini.slint";
 import { VideoView } from "video.slint";
 import { SettingsPage, SettingsState } from "settings.slint";
 import { ProfilePage, ProfileState } from "profile.slint";
-import { IconButton, TextField, Button } from "widgets.slint";
+import { IconButton, TextField, Button, Segmented } from "widgets.slint";
 import { ShortcutOverlay, Shortcut, Shortcuts } from "shortcuts.slint";
 import { ListView } from "std-widgets.slint";
 import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow } from "types.slint";
@@ -34,6 +34,16 @@ export component AppWindow inherits Window {
     property <bool> compact: self.width < 600px;
     property <int> focus-tick: 0;
     in-out property <int> filter-tick: 0;
+    in-out property <bool> cmp-open: false;
+    in-out property <string> cmp-title;
+    in-out property <int> cmp-tab: 0;
+    in-out property <[string]> cmp-labels;
+    in-out property <[string]> cmp-lines;
+    in-out property <bool> cmp-can-add-a: false;
+    in-out property <bool> cmp-can-add-b: false;
+    callback compare-tab(int);
+    callback compare-action(string);
+    callback compare-close();
     in-out property <bool> filter-open: false;
     in-out property <string> filter-text;
     in-out property <int> filter-quality: 0;
@@ -276,6 +286,7 @@ export component AppWindow inherits Window {
                     entry-action(id, a) => {
                         if (a == "delete") { root.dialog-kind = "delete"; root.dialog-target = id; root.dialog-open = true; }
                         else if (a == "rename") { root.dialog-kind = "rename"; root.dialog-target = id; root.dialog-text = ""; root.dialog-open = true; }
+                        else if (a == "compare") { root.dialog-kind = "compare"; root.dialog-target = id; root.dialog-open = true; }
                         else if (a == "move") { root.dialog-kind = "move"; root.dialog-target = id; root.dialog-open = true; }
                     }
                     new-playlist => { root.picker-target = -1; root.picker-open = true; }
@@ -631,6 +642,38 @@ export component AppWindow inherits Window {
             }
         }
 
+        if root.cmp-open: Rectangle {
+            background: #000000a0;
+            TouchArea { clicked => { root.cmp-open = false; root.compare-close(); } }
+            Rectangle {
+                width: min(640px, parent.width - 32px);
+                height: min(560px, parent.height - 48px);
+                border-radius: 12px;
+                background: Theme.surface;
+                TouchArea { }
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+                    Text { text: "Compare playlists"; font-size: 18px; font-weight: 700; color: Theme.text; }
+                    Text { text: root.cmp-title; color: Theme.text-muted; overflow: elide; }
+                    Segmented { options: root.cmp-labels; index: root.cmp-tab; picked(i) => { root.cmp-tab = i; root.compare-tab(i); } }
+                    ListView {
+                        vertical-stretch: 1;
+                        for l in root.cmp-lines: Text { text: l; color: Theme.text; height: 24px; overflow: elide; vertical-alignment: center; }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        if root.cmp-tab == 1: Button { label: "Add missing to A"; enabled: root.cmp-can-add-a; clicked => { root.compare-action("add-to-a"); } }
+                        if root.cmp-tab == 0: Button { label: "Add missing to B"; enabled: root.cmp-can-add-b; clicked => { root.compare-action("add-to-b"); } }
+                        Button { label: "New playlist from this tab"; clicked => { root.compare-action("tab-new"); } }
+                        Button { label: "Merge A + B…"; clicked => { root.compare-action("merge-new"); } }
+                        Button { label: "Close"; clicked => { root.cmp-open = false; root.compare-close(); } }
+                    }
+                }
+            }
+        }
+
         if SettingsState.capturing != "": Rectangle {
             background: #000000c0;
             capture-scope := FocusScope {
@@ -662,7 +705,7 @@ export component AppWindow inherits Window {
             TouchArea { clicked => { root.dialog-open = false; } }
             Rectangle {
                 width: min(400px, parent.width - 32px);
-                height: root.dialog-kind == "move" ? min(420px, parent.height - 48px) : root.dialog-kind == "dedupe" || root.dialog-kind == "artists" ? min(420px, parent.height - 48px) : 190px;
+                height: root.dialog-kind == "move" ? min(420px, parent.height - 48px) : root.dialog-kind == "dedupe" || root.dialog-kind == "artists" || root.dialog-kind == "compare" ? min(420px, parent.height - 48px) : 190px;
                 border-radius: 12px;
                 background: Theme.surface;
                 TouchArea { }
@@ -670,12 +713,25 @@ export component AppWindow inherits Window {
                     padding: 16px;
                     spacing: 10px;
                     Text {
-                        text: root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : "Move to folder";
+                        text: root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : root.dialog-kind == "compare" ? "Compare with…" : "Move to folder";
                         font-size: 18px; font-weight: 700; color: Theme.text;
                     }
                     if root.dialog-kind == "delete": Text {
                         text: "This cannot be undone.";
                         color: Theme.text-muted;
+                    }
+                    if root.dialog-kind == "compare": Flickable {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            for p in root.playlists: Rectangle {
+                                height: (p.folder || p.uuid == root.dialog-target) ? 0px : 40px;
+                                visible: !p.folder && p.uuid != root.dialog-target;
+                                border-radius: 6px;
+                                background: cp.has-hover ? Theme.surface-raised : transparent;
+                                Text { x: 10px; text: p.title; color: Theme.text; vertical-alignment: center; overflow: elide; width: parent.width - 20px; }
+                                cp := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.dialog-accepted("compare", root.dialog-target, p.uuid); root.dialog-open = false; } }
+                            }
+                        }
                     }
                     if root.dialog-kind == "artists": Flickable {
                         vertical-stretch: 1;

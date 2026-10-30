@@ -26,6 +26,10 @@
   Themes can be used, edited, duplicated, renamed and deleted, exported to a `.slatetheme`
   file and imported again (invalid or oversized files give a clear message). Dropping a
   `.slatetheme` on the window imports it.
+- Right-click a playlist → "Compare with…" and pick another: tabs for tracks only in A,
+  only in B and in both (matched by ISRC, else track), with counts. Make a new playlist from
+  any tab, merge both into a new de-duplicated playlist, or add the missing tracks to
+  whichever of the two you own.
 
 ## [1.1.0] - 2026-10-30
 

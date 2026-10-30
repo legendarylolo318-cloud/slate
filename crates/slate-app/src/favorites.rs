@@ -368,6 +368,7 @@ impl Backend {
                     }
                     return;
                 }
+                ("compare", None) => return this.run_compare(&target, &text).await,
                 ("dedupe", None) => return this.run_dedupe(&target).await,
                 ("delete", None) => lib_cmds::delete_playlist(&state, uid, target.clone())
                     .await

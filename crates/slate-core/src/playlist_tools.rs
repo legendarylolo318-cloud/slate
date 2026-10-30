@@ -56,6 +56,69 @@ pub fn removal_order(dups: &[Duplicate]) -> Vec<u32> {
     v
 }
 
+/// Result of comparing two playlists; indices point into the lists that were compared.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Comparison {
+    /// Tracks of A that B lacks (first occurrence each, A's order).
+    pub only_a: Vec<usize>,
+    /// Tracks of B that A lacks.
+    pub only_b: Vec<usize>,
+    /// Tracks of A that B also has (indices into A).
+    pub both: Vec<usize>,
+}
+
+fn first_occurrences(t: &[TidalTrack]) -> Vec<(usize, TrackKey)> {
+    let mut seen = std::collections::HashSet::new();
+    t.iter()
+        .enumerate()
+        .map(|(i, x)| (i, track_key(x)))
+        .filter(|(_, k)| seen.insert(k.clone()))
+        .collect()
+}
+
+pub fn compare(a: &[TidalTrack], b: &[TidalTrack]) -> Comparison {
+    let in_b: std::collections::HashSet<TrackKey> = b.iter().map(track_key).collect();
+    let in_a: std::collections::HashSet<TrackKey> = a.iter().map(track_key).collect();
+    let mut c = Comparison::default();
+    for (i, k) in first_occurrences(a) {
+        if in_b.contains(&k) {
+            c.both.push(i);
+        } else {
+            c.only_a.push(i);
+        }
+    }
+    for (i, k) in first_occurrences(b) {
+        if !in_a.contains(&k) {
+            c.only_b.push(i);
+        }
+    }
+    c
+}
+
+/// Track ids at `indices`, in that order.
+pub fn ids_at(tracks: &[TidalTrack], indices: &[usize]) -> Vec<u64> {
+    indices
+        .iter()
+        .filter_map(|i| tracks.get(*i).map(|t| t.id))
+        .collect()
+}
+
+/// A's tracks followed by B's that A lacks, without repeats.
+pub fn merged_ids(a: &[TidalTrack], b: &[TidalTrack]) -> Vec<u64> {
+    let mut seen = std::collections::HashSet::new();
+    a.iter()
+        .chain(b.iter())
+        .filter(|t| seen.insert(track_key(t)))
+        .map(|t| t.id)
+        .collect()
+}
+
+/// `ids` without repeats, order kept.
+pub fn unique_ids(ids: &[u64]) -> Vec<u64> {
+    let mut seen = std::collections::HashSet::new();
+    ids.iter().copied().filter(|i| seen.insert(*i)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,5 +171,47 @@ mod tests {
     fn no_duplicates_is_empty() {
         assert!(find_duplicates(&[track(1, None), track(2, None)]).is_empty());
         assert!(find_duplicates(&[]).is_empty());
+    }
+
+    #[test]
+    fn compare_splits_into_a_only_b_only_and_both() {
+        let a = [
+            track(1, Some("X")),
+            track(2, Some("Y")),
+            track(3, None),
+            track(4, Some("X")),
+        ];
+        let b = [
+            track(10, Some("Y")),
+            track(3, None),
+            track(11, Some("Z")),
+            track(12, Some("Z")),
+        ];
+        let c = compare(&a, &b);
+        assert_eq!(c.only_a, vec![0]); // X, once (the repeat at 3 collapses)
+        assert_eq!(c.both, vec![1, 2]);
+        assert_eq!(c.only_b, vec![2]); // Z, once
+        assert_eq!(ids_at(&b, &c.only_b), vec![11]);
+    }
+
+    #[test]
+    fn merge_is_a_then_new_from_b_without_repeats() {
+        let a = [track(1, Some("X")), track(2, Some("Y"))];
+        let b = [
+            track(9, Some("Y")),
+            track(3, Some("Z")),
+            track(3, Some("Z")),
+        ];
+        assert_eq!(merged_ids(&a, &b), vec![1, 2, 3]);
+        assert!(merged_ids(&[], &[]).is_empty());
+        assert_eq!(unique_ids(&[3, 1, 3, 2, 1]), vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn comparing_with_an_empty_list() {
+        let a = [track(1, None)];
+        assert_eq!(compare(&a, &[]).only_a, vec![0]);
+        assert_eq!(compare(&[], &a).only_b, vec![0]);
+        assert_eq!(compare(&a, &a).both, vec![0]);
     }
 }

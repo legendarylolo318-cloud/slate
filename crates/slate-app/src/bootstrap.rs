@@ -446,6 +446,9 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_capture_key, |b, t, c, a, s, m| b
         .capture_key(&t, c, a, s, m));
     bind!(on_filter_changed, |b, t, q| b.page_filter_changed(&t, q));
+    bind!(on_compare_tab, |b, i| b.compare_tab(i));
+    bind!(on_compare_action, |b, a| b.compare_action(&a));
+    bind!(on_compare_close, |b| b.compare_close());
     bind!(on_start_login, |b| b.start_login());
     bind!(on_open_login_url, |b| b.open_login_url());
     bind!(on_open_update, |b| b.open_update());

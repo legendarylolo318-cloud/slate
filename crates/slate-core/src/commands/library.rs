@@ -1503,3 +1503,51 @@ pub async fn get_playlist_recommendations(
         .get_playlist_recommendations(&playlist_id, offset, limit)
         .await
 }
+
+/// Tracks added per request when filling a playlist.
+pub const ADD_BATCH: usize = 50;
+const ADD_PAUSE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Adds `ids` to a playlist in batches with a pause between them (all requests go through the
+/// paced client). A batch TIDAL rejects is retried one track at a time so the rest still land.
+/// Returns how many were added; rate limiting stops with the error.
+pub async fn add_tracks_paced(
+    state: &AppState,
+    playlist_id: &str,
+    ids: &[u64],
+) -> Result<usize, SlateError> {
+    let mut added = 0usize;
+    for (n, batch) in ids.chunks(ADD_BATCH).enumerate() {
+        if n > 0 {
+            tokio::time::sleep(ADD_PAUSE).await;
+        }
+        match add_tracks_to_playlist(state, playlist_id.to_string(), batch.to_vec()).await {
+            Ok(()) => added += batch.len(),
+            Err(e) if e.is_rate_limited() => return Err(e),
+            Err(_) => {
+                for id in batch {
+                    tokio::time::sleep(ADD_PAUSE).await;
+                    match add_tracks_to_playlist(state, playlist_id.to_string(), vec![*id]).await {
+                        Ok(()) => added += 1,
+                        Err(e) if e.is_rate_limited() => return Err(e),
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
+    }
+    Ok(added)
+}
+
+/// A new playlist (`access_type` "UNLISTED" or "PUBLIC") holding `ids`, repeats removed.
+pub async fn create_playlist_with_tracks(
+    state: &AppState,
+    title: String,
+    access_type: &str,
+    ids: &[u64],
+) -> Result<(TidalPlaylist, usize), SlateError> {
+    let ids = crate::playlist_tools::unique_ids(ids);
+    let playlist = create_playlist(state, title, String::new(), access_type.into()).await?;
+    let added = add_tracks_paced(state, &playlist.uuid, &ids).await?;
+    Ok((playlist, added))
+}
