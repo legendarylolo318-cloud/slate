@@ -26,6 +26,7 @@ pub use events::{AppHandle, EventSink, Events};
 pub mod cache;
 pub mod commands;
 pub mod controller;
+pub mod crossfade;
 pub mod crypto;
 pub mod custom_theme;
 pub mod discord;
