@@ -198,9 +198,6 @@ pub struct Settings {
     pub titlebar_migration_v1: bool,
     #[serde(default)]
     pub volume_normalization: bool,
-    /// Cubic volume slider instead of linear (the default).
-    #[serde(default)]
-    pub cubic_volume: bool,
     #[serde(default)]
     pub exclusive_mode: bool,
     #[serde(default)]
@@ -256,7 +253,6 @@ impl Default for Settings {
             decorations: false,
             titlebar_migration_v1: true,
             volume_normalization: false,
-            cubic_volume: false,
             exclusive_mode: false,
             exclusive_device: None,
             bit_perfect: false,
@@ -462,7 +458,6 @@ impl AppState {
             .as_ref()
             .map(|s| s.volume_normalization)
             .unwrap_or(false);
-        crate::audio::set_cubic_volume(saved.as_ref().is_some_and(|s| s.cubic_volume));
         let exclusive_mode = saved.as_ref().map(|s| s.exclusive_mode).unwrap_or(false);
         let bit_perfect = saved.as_ref().map(|s| s.bit_perfect).unwrap_or(false);
         let gapless = saved.as_ref().map(|s| s.gapless).unwrap_or(true);

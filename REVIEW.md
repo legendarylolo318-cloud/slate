@@ -68,6 +68,8 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | 51 | Low | Credits panel reopened itself when the answer arrived after the user closed it | The answer only fills a panel that is still open |
 | 52 | Low | Cover tint: the track check and the colour write were not atomic with `clear_tint`, so a skip in between could leave the previous cover's colour | Check and write under the colour slot's lock |
 | 53 | Low | `HI_RES` (TIDAL's old MQA tier, now streamed as 16-bit FLAC) was badged Hi-Res | Badged Lossless; only `HI_RES_LOSSLESS` / the `HIRES_LOSSLESS` tag is Hi-Res. Test |
+| 55 | Low | Volume slider used a cubic taper: uneven loudness steps (18 dB between 10 % and 20 %, under 3 dB between 90 % and 100 %) | Decibel-linear taper: 5 dB per tenth over 50 dB, linear fade to silence below 5 %. Test `equal_slider_steps_are_equal_loudness_steps` |
+| 56 | Low | Quality badges and the "E" marker were laid out with the stretching title text, so they floated mid-column at a different spot in every row | Badges have their own fixed-width Quality column (hidden below 640 px wide); the title hugs its text so "E" follows it. Checked by rendering `TrackPage` offscreen at 700 and 1400 px |
 | 54 | Medium | The new `[tidal-req]` debug line (and two existing 401 logs) printed `/users/<account id>/…` paths | `loggable_path` replaces the id and drops the query. Test |
 
 ## Security verification

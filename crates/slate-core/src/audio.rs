@@ -571,27 +571,25 @@ fn alsa_format_to_gst(alsa_fmt: alsa::pcm::Format) -> (&'static str, u32) {
     }
 }
 
-/// Settings → Playback → Cubic volume curve. Off (the default), the slider
-/// position is the amplitude; on, it is cubed (~50 dB range), which spreads
-/// perceived loudness more evenly across the slider.
-static CUBIC_VOLUME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Loudness range of the volume slider, from just above the bottom to the top.
+const VOLUME_RANGE_DB: f64 = 50.0;
+/// Below this slider position the level fades linearly to silence, so the
+/// bottom of the slider is a true mute rather than -50 dB.
+const VOLUME_FADE_BELOW: f64 = 0.05;
 
-pub fn set_cubic_volume(enabled: bool) {
-    CUBIC_VOLUME.store(enabled, std::sync::atomic::Ordering::Relaxed);
-}
-
-pub fn cubic_volume() -> bool {
-    CUBIC_VOLUME.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Converts the UI's slider position (0.0 to 1.0) into an amplitude.
+/// Converts the UI's slider position (0.0 to 1.0) into an amplitude. Loudness
+/// is heard in decibels, so equal slider steps are equal dB steps (5 dB per
+/// tenth): the level changes evenly along the whole slider instead of jumping
+/// near the bottom (a linear amplitude) or bunching up there (a cubic one).
 #[inline]
 fn slider_to_amplitude(slider_val: f64) -> f64 {
     let v = slider_val.clamp(0.0, 1.0);
-    if cubic_volume() {
-        v.powi(3)
+    let db = (v - 1.0) * VOLUME_RANGE_DB;
+    let amp = 10f64.powf(db / 20.0);
+    if v < VOLUME_FADE_BELOW {
+        amp * v / VOLUME_FADE_BELOW
     } else {
-        v
+        amp
     }
 }
 
@@ -4443,15 +4441,26 @@ pub fn gapless_supported() -> bool {
 #[cfg(test)]
 mod proxy_source_tests {
     #[test]
-    fn the_slider_is_linear_unless_the_cubic_curve_is_chosen() {
-        use super::{set_cubic_volume, slider_to_amplitude};
-        set_cubic_volume(false);
-        assert_eq!(slider_to_amplitude(0.5), 0.5);
+    fn equal_slider_steps_are_equal_loudness_steps() {
+        use super::slider_to_amplitude;
+        let db = |v: f64| 20.0 * slider_to_amplitude(v).log10();
+        assert_eq!(slider_to_amplitude(1.0), 1.0);
         assert_eq!(slider_to_amplitude(1.5), 1.0);
-        set_cubic_volume(true);
-        assert_eq!(slider_to_amplitude(0.5), 0.125);
+        assert_eq!(slider_to_amplitude(0.0), 0.0);
         assert_eq!(slider_to_amplitude(-1.0), 0.0);
-        set_cubic_volume(false);
+        // Every tenth of the slider is the same 5 dB.
+        for i in 1..10 {
+            let (lo, hi) = (f64::from(i) / 10.0, f64::from(i + 1) / 10.0);
+            assert!((db(hi) - db(lo) - 5.0).abs() < 1e-9, "{lo}..{hi}");
+        }
+        assert!((db(0.5) + 25.0).abs() < 1e-9);
+        // The fade to silence at the bottom only ever gets quieter.
+        let mut last = 0.0;
+        for i in 0..=100 {
+            let a = slider_to_amplitude(f64::from(i) / 100.0);
+            assert!(a >= last);
+            last = a;
+        }
     }
 
     /// The Windows exclusive path needs a WASAPI sink with `exclusive` and

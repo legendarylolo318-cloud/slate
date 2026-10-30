@@ -19,7 +19,6 @@ struct Snapshot {
     minimize_to_tray: bool,
     logging: bool,
     normalization: bool,
-    cubic_volume: bool,
     gapless: bool,
     gapless_supported: bool,
     quality_index: i32,
@@ -42,7 +41,6 @@ async fn snapshot(state: &Arc<AppState>) -> Snapshot {
         minimize_to_tray: utility::get_minimize_to_tray(state),
         logging: utility::get_enable_logging(),
         normalization: utility::get_volume_normalization(state),
-        cubic_volume: utility::get_cubic_volume(),
         gapless: utility::get_gapless(state),
         gapless_supported: utility::get_gapless_supported(),
         exclusive: utility::get_exclusive_mode(state),
@@ -93,7 +91,6 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_bar_size_index(prefs.bar_size as i32);
     g.set_lyrics_size_index(prefs.lyrics_size as i32);
     g.set_normalization(s.normalization);
-    g.set_cubic_volume(s.cubic_volume);
     g.set_gapless(s.gapless);
     g.set_gapless_supported(s.gapless_supported);
     g.set_quality_index(s.quality_index);
@@ -197,7 +194,6 @@ impl Backend {
                 "normalization" => {
                     utility::set_volume_normalization(&state, v).map_err(|e| e.log_safe())
                 }
-                "cubic-volume" => utility::set_cubic_volume(&state, v).map_err(|e| e.log_safe()),
                 "gapless" => utility::set_gapless(&state, v).map_err(|e| e.log_safe()),
                 "exclusive" => utility::set_exclusive_mode(&state, v).map_err(|e| e.log_safe()),
                 "bit-perfect" => utility::set_bit_perfect(&state, v).map_err(|e| e.log_safe()),
@@ -307,6 +303,20 @@ impl Backend {
                 "pkce-finish" => this.finish_pkce().await,
                 "pkce-open" => this.open_pkce_url().await,
                 "pkce-copy" => this.copy_pkce_url().await,
+                "mcp-copy" => {
+                    let url = mcp::mcp_get_connection_info(&state)
+                        .await
+                        .ok()
+                        .and_then(|i| i.url);
+                    this.copy_setting_url(url, "MCP URL").await;
+                }
+                "overlay-copy" => {
+                    let url = overlay::overlay_get_connection_info(&state)
+                        .await
+                        .ok()
+                        .and_then(|i| i.url);
+                    this.copy_setting_url(url, "Overlay URL").await;
+                }
                 #[cfg(target_os = "linux")]
                 "app-menu-add" | "app-menu-remove" => {
                     let adding = name == "app-menu-add";
@@ -444,6 +454,22 @@ impl Backend {
     }
 
     /// Runs `f` on the UI thread and waits for its result.
+    /// Puts a connection URL on the clipboard and says so on the settings page.
+    /// The MCP URL carries its token, so it is never logged.
+    async fn copy_setting_url(&self, url: Option<String>, what: &str) {
+        let Some(url) = url.filter(|u| !u.is_empty()) else {
+            return self.settings_status(format!("{what} is not available; is the server on?"));
+        };
+        let copied = tokio::task::spawn_blocking(move || {
+            arboard::Clipboard::new().and_then(|mut c| c.set_text(url))
+        })
+        .await;
+        match copied {
+            Ok(Ok(())) => self.settings_status(format!("{what} copied.")),
+            _ => self.settings_status("Could not access the clipboard."),
+        }
+    }
+
     pub(crate) async fn read_ui<R: Send + Default + 'static>(
         &self,
         f: impl FnOnce(AppWindow) -> R + Send + 'static,

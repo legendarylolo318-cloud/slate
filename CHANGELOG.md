@@ -11,12 +11,12 @@
   progress, and pages not yet loaded fetched one at a time.
 - Track credits: right-click a track → Credits lists producers, writers, engineers and
   musicians (one request, cached).
-- Hi-Res, Lossless and Dolby Atmos badges on track rows, album pages and the player bar,
-  from the quality data TIDAL already sends.
+- Hi-Res, Lossless and Dolby Atmos badges in their own Quality column on track lists, on
+  album pages and in the player bar, from the quality data TIDAL already sends.
+- Settings → Integrations: Copy URL buttons for the MCP server and the OBS overlay, so the
+  connection URL can be pasted into an AI client or OBS.
 - Settings → General → Colours from album art (off by default): tints the player bar and
   full-screen player with the cover's main colour, adjusted so text stays readable.
-- Settings → Playback → Cubic volume curve. The volume slider is now linear by default (the
-  slider position is the level); turn this on for the previous cubic curve.
 
 ### Changed
 - TIDAL requests now run up to four at a time instead of one after another; pages load
@@ -27,6 +27,11 @@
 - Fewer idle wakeups (about 25 → 6 a second): the playback and MPRIS tickers sleep while
   nothing plays, and the theme-file watcher ticks four times a second instead of sixteen.
 - The main screen no longer waits for the session lookup, queue restore and startup tasks.
+- The volume slider changes loudness evenly along its whole length: every tenth of the slider
+  is the same 5 dB step (50 dB range, fading to silence at the bottom), instead of the cubic
+  curve that did most of its change near the bottom.
+- The explicit "E" marker sits right after the track title instead of floating in the
+  title column.
 
 ### Fixed
 - Cached track credits were never read back, so each open asked TIDAL again.

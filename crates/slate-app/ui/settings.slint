@@ -32,7 +32,6 @@ export global SettingsState {
     in-out property <bool> logging;
     // Playback
     in-out property <bool> normalization;
-    in-out property <bool> cubic-volume;
     in-out property <bool> gapless;
     in-out property <bool> gapless-supported: true;
     in-out property <int> quality-index;
@@ -296,11 +295,6 @@ export component SettingsPage inherits Rectangle {
                         Toggle { checked: SettingsState.normalization; toggled(v) => { SettingsState.normalization = v; SettingsState.changed-bool("normalization", v); } }
                     }
                     Row {
-                        label: "Cubic volume curve";
-                        hint: "Off: the slider sets the level directly. On: the slider is cubed, so loudness changes more evenly along it.";
-                        Toggle { checked: SettingsState.cubic-volume; toggled(v) => { SettingsState.cubic-volume = v; SettingsState.changed-bool("cubic-volume", v); } }
-                    }
-                    Row {
                         label: "Gapless playback";
                         hint: SettingsState.gapless-supported ? "Seamless transitions between tracks." : "Needs GStreamer 1.24 or newer.";
                         Toggle { enabled: SettingsState.gapless-supported; checked: SettingsState.gapless; toggled(v) => { SettingsState.gapless = v; SettingsState.changed-bool("gapless", v); } }
@@ -416,14 +410,23 @@ export component SettingsPage inherits Rectangle {
                         Toggle { checked: SettingsState.mcp-enabled; toggled(v) => { SettingsState.mcp-enabled = v; SettingsState.changed-bool("mcp", v); } }
                     }
                     if SettingsState.mcp-enabled: Row {
-                        label: "MCP token";
-                        hint: "Generates a new URL; old clients stop working.";
-                        Button { label: "Regenerate"; clicked => { SettingsState.action("mcp-regenerate"); } }
+                        label: "MCP URL";
+                        hint: "Copy it into your AI client. Regenerate makes a new one; old clients stop working.";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { label: "Copy URL"; primary: true; clicked => { SettingsState.action("mcp-copy"); } }
+                            Button { label: "Regenerate"; clicked => { SettingsState.action("mcp-regenerate"); } }
+                        }
                     }
                     Row {
                         label: "OBS overlay";
                         hint: SettingsState.overlay-enabled ? SettingsState.overlay-url : "Now-playing browser source for streaming. Local only (127.0.0.1:5578).";
                         Toggle { checked: SettingsState.overlay-enabled; toggled(v) => { SettingsState.overlay-enabled = v; SettingsState.changed-bool("overlay", v); } }
+                    }
+                    if SettingsState.overlay-enabled: Row {
+                        label: "Overlay URL";
+                        hint: "Paste it into an OBS browser source.";
+                        Button { label: "Copy URL"; clicked => { SettingsState.action("overlay-copy"); } }
                     }
                 }
 

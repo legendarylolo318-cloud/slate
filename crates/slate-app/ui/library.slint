@@ -209,6 +209,8 @@ component Row inherits Rectangle {
     in property <bool> playing;
     in property <bool> show-album: true;
     in property <bool> show-artist: true;
+    in property <bool> show-quality: true;
+    in property <length> quality-w;
     in property <length> title-w;
     in property <length> artist-w;
     in property <length> album-w;
@@ -271,16 +273,31 @@ component Row inherits Rectangle {
                 color: root.playing ? Theme.accent : Theme.text;
                 vertical-alignment: center;
                 overflow: elide;
+                // Only as wide as the title (the spacer takes the rest), so
+                // the "E" sits right after it; still elides when too narrow.
+                max-width: self.preferred-width;
+                min-width: 0px;
             }
             if root.item.explicit: Text {
                 text: "E";
                 font-size: 10px;
                 color: Theme.text-muted;
                 vertical-alignment: center;
+                horizontal-stretch: 0;
             }
-            if root.item.quality > 0 || root.item.atmos: VerticalLayout {
-                alignment: center;
-                QualityBadges { tier: root.item.quality; atmos: root.item.atmos; long-atmos: false; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if root.show-quality: Rectangle {
+            // Its own fixed-width column, so the badges line up from row to
+            // row and never overlap the title or the artist.
+            width: root.quality-w;
+            if root.item.quality > 0 || root.item.atmos: QualityBadges {
+                x: 0;
+                y: (parent.height - 16px) / 2;
+                height: 16px;
+                tier: root.item.quality;
+                atmos: root.item.atmos;
+                long-atmos: false;
             }
         }
         if root.show-artist: Rectangle {
@@ -362,10 +379,13 @@ export component TrackPage inherits Rectangle {
     callback loved-tab-picked(int);
     property <bool> show-artist: root.width > 520px;
     property <bool> show-album: root.width > 760px;
+    property <bool> show-quality: root.width > 640px;
+    // Hi-Res/Lossless plus Atmos side by side.
+    property <length> quality-w: 110px;
     // Column layout shared by the header and every row (padding 12, spacing 12,
-    // index 28 + heart 24 + time 52 fixed; title:artist:album = 3:2:2).
-    property <int> cols: 4 + (root.show-artist ? 1 : 0) + (root.show-album ? 1 : 0);
-    property <length> flex: max(0px, root.width - (root.compact ? 24px : 48px) - 24px - 104px - 12px * (root.cols - 1) - 14px);
+    // index 28 + heart 24 + time 52 + quality fixed; title:artist:album = 3:2:2).
+    property <int> cols: 4 + (root.show-artist ? 1 : 0) + (root.show-album ? 1 : 0) + (root.show-quality ? 1 : 0);
+    property <length> flex: max(0px, root.width - (root.compact ? 24px : 48px) - 24px - 104px - (root.show-quality ? root.quality-w : 0px) - 12px * (root.cols - 1) - 14px);
     property <length> share: root.flex / (3 + (root.show-artist ? 2 : 0) + (root.show-album ? 2 : 0));
     in property <bool> compact: false;
     callback row-action(int, string);
@@ -430,6 +450,10 @@ export component TrackPage inherits Rectangle {
                 Rectangle { width: 34px; }
                 Text { text: "TITLE"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: left; vertical-alignment: center; }
             }
+            if root.show-quality: Rectangle {
+                width: root.quality-w;
+                Text { x: 0; width: parent.width; height: parent.height; text: "QUALITY"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: left; vertical-alignment: center; }
+            }
             if root.show-artist: Rectangle {
                 width: 2 * root.share;
                 Text { x: 0; width: parent.width; height: parent.height; text: "ARTIST"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: left; vertical-alignment: center; }
@@ -449,6 +473,8 @@ export component TrackPage inherits Rectangle {
                 playing: r.id != "" && r.id == root.playing-id;
                 show-artist: root.show-artist;
                 show-album: root.show-album;
+                show-quality: root.show-quality;
+                quality-w: root.quality-w;
                 title-w: 3 * root.share;
                 artist-w: 2 * root.share;
                 album-w: 2 * root.share;
