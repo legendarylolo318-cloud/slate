@@ -58,6 +58,9 @@
 - MCP playback tools (play, pause, resume, skip, seek, volume, queue, repeat, shuffle, play a
   playlist/album/artist/mix) reported success but did nothing: the app never handled them.
   `get_now_playing` and `get_queue` always came back empty. Both now work.
+- Creating a playlist (New playlist, Import) and renaming a private one failed with HTTP 400:
+  Slate sent the access type `PRIVATE`, which TIDAL's playlist API does not accept; it is now
+  `UNLISTED`.
 - The OBS overlay never showed the playing track. It now updates on every track change,
   pause and seek, with cover and stream quality.
 

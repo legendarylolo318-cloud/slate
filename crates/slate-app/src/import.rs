@@ -314,7 +314,7 @@ impl Backend {
         }
 
         let playlist =
-            lib_cmds::create_playlist(&state, name.clone(), String::new(), "PRIVATE".into())
+            lib_cmds::create_playlist(&state, name.clone(), String::new(), "UNLISTED".into())
                 .await
                 .map_err(|e| format!("Could not create the playlist: {}", e.log_safe()))?;
 

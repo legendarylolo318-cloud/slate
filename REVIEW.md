@@ -7,7 +7,7 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 |---|---|---|
 | `cargo fmt --all --check` | pass | pass (CI) |
 | `cargo clippy --workspace --all-targets -- -D warnings` | pass | pass (CI) |
-| `cargo test --workspace` | 587 pass | pass (CI), plus Windows-only tests (keyring persistence, pipe ACL, `wasapi2sink`); 3 `curlhttpsrc` tests skipped, no curl plugin in GStreamer's Windows packages |
+| `cargo test --workspace` | 588 pass | pass (CI), plus Windows-only tests (keyring persistence, pipe ACL, `wasapi2sink`); 3 `curlhttpsrc` tests skipped, no curl plugin in GStreamer's Windows packages |
 | `cargo deny check` (advisories, bans, licenses, sources) | pass | n/a |
 | `cargo audit` | pass, with the exceptions below | n/a |
 | Release dry run (`workflow_dispatch`) | AppImage built and self-tested (host GStreamer/GIO/libsoup hidden; Fedora CA layout) | portable zip + installer built; self-test with a clean PATH; GUI launch; install/run/uninstall |
@@ -72,6 +72,7 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | 56 | Low | Quality badges and the "E" marker were laid out with the stretching title text, so they floated mid-column at a different spot in every row | Badges have their own fixed-width Quality column (hidden below 640 px wide); the title hugs its text so "E" follows it. Checked by rendering `TrackPage` offscreen at 700 and 1400 px |
 | 57 | High | MCP playback tools only emitted `mcp:*` events, which the Slint app dropped: play/pause/skip/seek/volume/queue/repeat/shuffle/play-source all answered "ok" and did nothing; `get_now_playing`/`get_queue` were never fed | `remote.rs`: events routed to the player-bar actions; now playing and queue published to the MCP state (position on each playback tick). Live-tested with Hermes and direct MCP calls against a signed-in Slate, cross-checked with MPRIS |
 | 58 | High | The OBS overlay was never sent the playing track (`overlay_publish_state` had no caller), so it stayed empty | Published on track change, play/pause, seek and quality; live-tested in a Chromium page (track, cover, quality, pause state) |
+| 60 | High | New playlist, Import and renaming a private playlist failed with HTTP 400 (`INVALID_REQUEST_BODY` at `/data/attributes/accessType`): the app sent `PRIVATE`; the API takes `PUBLIC` or `UNLISTED` | Callers send `UNLISTED`; `playlist_access_type` in the core maps anything but `PUBLIC` to `UNLISTED`. Test; live create/add/delete check and your import succeeded |
 | 59 | — | New: Import from file (CSV/M3U → new playlist) | `import.rs`; 10 parser tests incl. round trips of Slate's own exports |
 | 54 | Medium | The new `[tidal-req]` debug line (and two existing 401 logs) printed `/users/<account id>/…` paths | `loggable_path` replaces the id and drops the query. Test |
 

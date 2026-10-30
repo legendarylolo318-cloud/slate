@@ -1301,6 +1301,16 @@ impl Default for ApiUrls {
     }
 }
 
+/// The playlist API knows only `PUBLIC` and `UNLISTED` (HTTP 400 for anything
+/// else). "Private" is what the app calls an unlisted playlist.
+fn playlist_access_type(access_type: &str) -> &'static str {
+    if access_type.eq_ignore_ascii_case("PUBLIC") {
+        "PUBLIC"
+    } else {
+        "UNLISTED"
+    }
+}
+
 #[derive(Clone)]
 pub struct TidalClient {
     urls: ApiUrls,
@@ -2184,7 +2194,7 @@ impl TidalClient {
                 "attributes": {
                     "name": title,
                     "description": description,
-                    "accessType": access_type
+                    "accessType": playlist_access_type(access_type)
                 }
             }
         });
@@ -2242,7 +2252,7 @@ impl TidalClient {
                 "attributes": {
                     "name": title,
                     "description": description,
-                    "accessType": access_type
+                    "accessType": playlist_access_type(access_type)
                 }
             }
         });
@@ -7757,6 +7767,20 @@ mod v2_paging_tests {
     fn a_short_page_is_the_last() {
         assert_eq!(estimated_total(50, 7, 50), 57);
         assert_eq!(estimated_total(0, 0, 50), 0);
+    }
+}
+
+#[cfg(test)]
+mod access_type_tests {
+    use super::playlist_access_type;
+
+    #[test]
+    fn only_public_and_unlisted_reach_the_api() {
+        assert_eq!(playlist_access_type("PUBLIC"), "PUBLIC");
+        assert_eq!(playlist_access_type("public"), "PUBLIC");
+        assert_eq!(playlist_access_type("PRIVATE"), "UNLISTED");
+        assert_eq!(playlist_access_type("UNLISTED"), "UNLISTED");
+        assert_eq!(playlist_access_type(""), "UNLISTED");
     }
 }
 

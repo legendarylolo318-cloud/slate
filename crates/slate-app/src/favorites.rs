@@ -309,7 +309,7 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
-            match lib_cmds::create_playlist(&state, name, String::new(), "PRIVATE".into()).await {
+            match lib_cmds::create_playlist(&state, name, String::new(), "UNLISTED".into()).await {
                 Ok(p) => {
                     if let Some(t) = track {
                         if let Err(e) = lib_cmds::add_track_to_playlist(&state, p.uuid, t.id).await
@@ -515,10 +515,13 @@ async fn rename_playlist(
         .await
         .map_err(|e| e.log_safe())?;
     let description = details["description"].as_str().unwrap_or("").to_string();
-    let access =
-        details["publicPlaylist"]
-            .as_bool()
-            .map_or("PRIVATE", |p| if p { "PUBLIC" } else { "PRIVATE" });
+    let access = details["publicPlaylist"].as_bool().map_or("UNLISTED", |p| {
+        if p {
+            "PUBLIC"
+        } else {
+            "UNLISTED"
+        }
+    });
     lib_cmds::update_playlist(
         state,
         uuid.to_string(),
