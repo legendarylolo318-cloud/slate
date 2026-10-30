@@ -72,6 +72,11 @@
   agent changed with Undo, and "Let an agent DJ", which gives an agent 10 s to refill an empty
   queue before the autoplay radio.
 
+### Fixed
+- Player bar in narrow windows: previous / play / next / shuffle / repeat get their own
+  centred row and the seek bar its own line, so they never disappear; the less-used buttons
+  (add to playlist, mini-player, signal path, full screen) drop out first.
+
 ## [1.1.0] - 2026-10-30
 
 ### Added
