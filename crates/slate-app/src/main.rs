@@ -13,6 +13,7 @@ mod bootstrap;
 mod control;
 mod cover_tint;
 mod credits;
+mod dedupe;
 mod deeplink;
 mod export;
 mod favorites;

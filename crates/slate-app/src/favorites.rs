@@ -109,6 +109,7 @@ impl Backend {
             self.lib.artist_id(),
         );
         let can_export = matches!(kind, Some(SourceKind::Loved | SourceKind::Playlist(_)));
+        let can_dedupe = matches!(kind, Some(SourceKind::Playlist(_)));
         let (track_fav, page_fav, can, hero_fav) = {
             let Ok(f) = self.favs.lock() else { return };
             let track_fav = cur.is_some_and(|c| f.tracks.contains(&c));
@@ -129,6 +130,7 @@ impl Backend {
             w.set_page_favorite(page_fav);
             w.set_can_favorite(can);
             w.set_can_export(can_export);
+            w.set_can_dedupe(can_dedupe);
             w.set_hero_favorite(hero_fav);
         });
     }
@@ -360,6 +362,7 @@ impl Backend {
                         .map(|()| "Folder deleted")
                         .map_err(|e| e.log_safe())
                 }
+                ("dedupe", None) => return this.run_dedupe(&target).await,
                 ("delete", None) => lib_cmds::delete_playlist(&state, uid, target.clone())
                     .await
                     .map(|()| "Playlist deleted")

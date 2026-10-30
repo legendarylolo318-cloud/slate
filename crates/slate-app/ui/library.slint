@@ -367,6 +367,8 @@ export component TrackPage inherits Rectangle {
     in property <int> quality;
     in property <bool> atmos;
     callback export-list(string);
+    in property <bool> can-dedupe: false;
+    callback remove-duplicates();
     in property <bool> page-favorite: false;
     callback toggle-page-favorite();
     in property <bool> sort-visible;
@@ -433,6 +435,7 @@ export component TrackPage inherits Rectangle {
                     }
                 }
             }
+            if root.can-dedupe: Button { label: "Remove duplicates…"; clicked => { root.remove-duplicates(); } }
             if root.sort-visible: Button { label: "⇅  " + root.sort-label; clicked => { root.cycle-sort(); } }
             if root.sort-visible: Button { label: root.sort-desc ? "↓" : "↑"; clicked => { root.flip-sort(); } }
             if root.loved-tabs: Segmented { options: ["Tracks", "Videos"]; index: root.loved-tab; picked(i) => { root.loved-tab-picked(i); } }

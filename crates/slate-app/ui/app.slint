@@ -119,6 +119,8 @@ export component AppWindow inherits Window {
     in property <string> playing-id;
     in property <bool> can-favorite;
     in property <bool> can-export;
+    in property <bool> can-dedupe;
+    callback remove-duplicates();
     callback export-list(string);
     in property <bool> page-favorite;
     in property <bool> hero-favorite;
@@ -337,6 +339,8 @@ export component AppWindow inherits Window {
                         can-favorite: root.can-favorite;
                         can-export: root.can-export;
                         export-list(f) => { root.export-list(f); }
+                        can-dedupe: root.can-dedupe;
+                        remove-duplicates => { root.remove-duplicates(); }
                         page-favorite: root.page-favorite;
                         toggle-page-favorite => { root.toggle-page-favorite(); }
                         row-action(i, a) => {
@@ -607,7 +611,7 @@ export component AppWindow inherits Window {
             TouchArea { clicked => { root.dialog-open = false; } }
             Rectangle {
                 width: min(400px, parent.width - 32px);
-                height: root.dialog-kind == "move" ? min(420px, parent.height - 48px) : 190px;
+                height: root.dialog-kind == "move" ? min(420px, parent.height - 48px) : root.dialog-kind == "dedupe" ? min(420px, parent.height - 48px) : 190px;
                 border-radius: 12px;
                 background: Theme.surface;
                 TouchArea { }
@@ -615,12 +619,17 @@ export component AppWindow inherits Window {
                     padding: 16px;
                     spacing: 10px;
                     Text {
-                        text: root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : "Move to folder";
+                        text: root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : "Move to folder";
                         font-size: 18px; font-weight: 700; color: Theme.text;
                     }
                     if root.dialog-kind == "delete": Text {
                         text: "This cannot be undone.";
                         color: Theme.text-muted;
+                    }
+                    if root.dialog-kind == "dedupe": Flickable {
+                        vertical-stretch: 1;
+                        content-height: dedupe-text.preferred-height;
+                        dedupe-text := Text { width: parent.width; text: root.dialog-text; color: Theme.text-muted; wrap: word-wrap; }
                     }
                     if root.dialog-kind == "rename": TextField {
                         text <=> root.dialog-text;
@@ -653,6 +662,7 @@ export component AppWindow inherits Window {
                         spacing: 8px;
                         Button { label: "Cancel"; clicked => { root.dialog-open = false; } }
                         if root.dialog-kind == "rename": Button { label: "Rename"; primary: true; enabled: root.dialog-text != ""; clicked => { root.dialog-accepted("rename", root.dialog-target, root.dialog-text); root.dialog-open = false; } }
+                        if root.dialog-kind == "dedupe": Button { label: "Remove"; danger: true; clicked => { root.dialog-accepted("dedupe", root.dialog-target, ""); root.dialog-open = false; } }
                         if root.dialog-kind == "delete": Button { label: "Delete"; danger: true; clicked => { root.dialog-accepted("delete", root.dialog-target, ""); root.dialog-open = false; } }
                     }
                 }

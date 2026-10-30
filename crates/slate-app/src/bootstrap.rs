@@ -456,6 +456,7 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_toggle_favorite, |b| b.toggle_current_favorite());
     bind!(on_toggle_page_favorite, |b| b.toggle_page_favorite());
     bind!(on_export_list, |b, f| b.export_list(&f));
+    bind!(on_remove_duplicates, |b| b.scan_duplicates());
     bind!(on_toggle_hero_favorite, |b| b.toggle_hero_favorite());
     bind!(on_add_to_playlist, |b, t, u| b.add_to_playlist(t, &u));
     bind!(on_create_playlist, |b, t, n| b.create_playlist(t, &n));

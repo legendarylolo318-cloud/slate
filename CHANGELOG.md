@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Playlists you own have a "Remove duplicates…" button. It reads the whole playlist (with
+  progress), lists the repeated tracks (same ISRC, or the same TIDAL track when there is no
+  ISRC), and after you confirm removes every copy except the first.
+
 ## [1.1.0] - 2026-10-30
 
 ### Added
