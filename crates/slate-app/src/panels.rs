@@ -235,6 +235,7 @@ impl Backend {
                 "artist" => this.go_artist(&track),
                 "copy-link" => this.copy_link(&track).await,
                 "credits" => this.show_credits(&track),
+                "versions" => this.show_track_versions(track, index, None),
                 _ => {}
             }
         });
@@ -293,7 +294,11 @@ impl Backend {
         self.rt.spawn(async move {
             let Some(ctl) = this.controller() else { return };
             if let Some(t) = ctl.with_queue(|q| q.upcoming().nth(index).cloned()).await {
-                this.go_to(&t, &kind);
+                if kind == "versions" {
+                    this.show_track_versions(t, None, Some(index));
+                } else {
+                    this.go_to(&t, &kind);
+                }
             }
         });
     }

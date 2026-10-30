@@ -47,6 +47,10 @@
   (the next suggestion takes its place), the right-click menu and play work as usual,
   "Refresh" gets a new batch and "Show more" the next. Settings → General → Suggested
   tracks under playlists: Off / 5 / 10 / 20 (default 10); Off never asks TIDAL.
+- Other versions: right-click a track (in a list or the queue) → "Other versions…" lists the
+  explicit / clean, remastered, live and Dolby Atmos versions of the song with year, quality
+  and length. Play or queue one, or "Replace" the track in the playlist (same position) or in
+  the queue. Album pages have "Other versions" for deluxe / remaster / clean editions.
 - MCP for AI agents (full list in docs-assets/MCP.md): new tools for the queue (`add_to_queue`,
   `play_next`, `move_queue_item`, `get_history`), search and browsing (`search_albums`,
   `search_artists`, `search_playlists`, `get_mixes`, `get_explore`, `get_similar_artists`,

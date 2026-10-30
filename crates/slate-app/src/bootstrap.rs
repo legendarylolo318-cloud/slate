@@ -465,6 +465,10 @@ fn wire(window: &AppWindow, backend: &Backend) {
         .suggest_action(usize::try_from(i).unwrap_or(usize::MAX), &a));
     bind!(on_approval_answer, |b, id, allow| b
         .approval_answer(id, allow));
+    bind!(on_version_action, |b, i, a| b
+        .version_action(usize::try_from(i).unwrap_or(usize::MAX), &a));
+    bind!(on_versions_close, |b| b.versions_close());
+    bind!(on_show_album_versions, |b| b.show_album_versions());
     bind!(on_start_login, |b| b.start_login());
     bind!(on_open_login_url, |b| b.open_login_url());
     bind!(on_open_update, |b| b.open_update());

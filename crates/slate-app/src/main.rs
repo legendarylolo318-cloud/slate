@@ -46,6 +46,7 @@ mod suggest;
 mod themes;
 mod uiprefs;
 mod updates;
+mod versions_ui;
 mod video;
 
 fn main() -> anyhow::Result<()> {

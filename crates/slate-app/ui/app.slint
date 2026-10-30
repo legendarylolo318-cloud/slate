@@ -11,8 +11,8 @@ import { ProfilePage, ProfileState } from "profile.slint";
 import { IconButton, TextField, Button, Segmented } from "widgets.slint";
 import { ShortcutOverlay, Shortcut, Shortcuts } from "shortcuts.slint";
 import { ListView } from "std-widgets.slint";
-import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow } from "types.slint";
-export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, Shortcut, Shortcuts, SettingsState, ProfileState, Theme }
+import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow } from "types.slint";
+export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, Shortcut, Shortcuts, SettingsState, ProfileState, Theme }
 
 export enum Screen { loading, login, main }
 
@@ -56,6 +56,15 @@ export component AppWindow inherits Window {
     in-out property <string> smart-limit;
     in-out property <string> smart-error;
     callback smart-edit(string, int, string);
+    in-out property <bool> versions-open: false;
+    in-out property <string> versions-title;
+    in-out property <[VersionRow]> versions-rows;
+    in-out property <bool> versions-album: false;
+    in-out property <bool> versions-replace-playlist: false;
+    in-out property <bool> versions-replace-queue: false;
+    callback version-action(int, string);
+    callback versions-close();
+    callback show-album-versions();
     in-out property <bool> approval-open: false;
     in-out property <int> approval-id: 0;
     in-out property <string> approval-text;
@@ -395,6 +404,7 @@ export component AppWindow inherits Window {
                         can-export: root.can-export;
                         export-list(f) => { root.export-list(f); }
                         can-dedupe: root.can-dedupe;
+                        show-album-versions => { root.show-album-versions(); }
                         can-save-smart: root.can-save-smart;
                         suggestions: root.suggestions;
                         suggest-visible: root.suggest-visible;
@@ -676,6 +686,47 @@ export component AppWindow inherits Window {
                                 Text { text: c.value; color: Theme.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        if root.versions-open: Rectangle {
+            background: #000000a0;
+            TouchArea { clicked => { root.versions-open = false; root.versions-close(); } }
+            Rectangle {
+                width: min(680px, parent.width - 32px);
+                height: min(520px, parent.height - 48px);
+                border-radius: 12px;
+                background: Theme.surface;
+                TouchArea { }
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+                    Text { text: root.versions-title; font-size: 18px; font-weight: 700; color: Theme.text; overflow: elide; }
+                    ListView {
+                        vertical-stretch: 1;
+                        for v[i] in root.versions-rows: Rectangle {
+                            height: 52px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    Text { text: v.title; color: Theme.text; overflow: elide; }
+                                    Text { text: v.label + (v.detail != "" ? "  ·  " + v.detail : ""); color: Theme.text-muted; font-size: 11px; overflow: elide; }
+                                }
+                                if root.versions-album: Button { label: "Open"; clicked => { root.version-action(i, "open"); } }
+                                if !root.versions-album: Button { label: "Play"; clicked => { root.version-action(i, "play"); } }
+                                if !root.versions-album: Button { label: "Queue"; clicked => { root.version-action(i, "queue"); } }
+                                if !root.versions-album && root.versions-replace-playlist: Button { label: "Replace"; clicked => { root.version-action(i, "replace-playlist"); } }
+                                if !root.versions-album && root.versions-replace-queue: Button { label: "Replace"; clicked => { root.version-action(i, "replace-queue"); } }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: end;
+                        Button { label: "Close"; clicked => { root.versions-open = false; root.versions-close(); } }
                     }
                 }
             }

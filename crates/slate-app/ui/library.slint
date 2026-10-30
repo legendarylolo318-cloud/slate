@@ -291,6 +291,7 @@ component Row inherits Rectangle {
             MenuItem { title: "Add to queue"; activated => { root.action("queue"); } }
             MenuItem { title: "Go to album"; activated => { root.action("album"); } }
             MenuItem { title: "Go to artist"; activated => { root.action("artist"); } }
+            MenuItem { title: "Other versions…"; activated => { root.action("versions"); } }
             MenuItem { title: "Credits"; activated => { root.action("credits"); } }
             MenuItem { title: "Copy TIDAL link"; activated => { root.action("copy-link"); } }
         }
@@ -445,6 +446,7 @@ export component TrackPage inherits Rectangle {
     }
     in property <bool> can-dedupe: false;
     callback remove-duplicates();
+    callback show-album-versions();
     in property <[TrackRow]> suggestions;
     in property <bool> suggest-visible: false;
     in property <string> suggest-status;
@@ -520,6 +522,7 @@ export component TrackPage inherits Rectangle {
                     }
                 }
             }
+            if root.kind-label == "ALBUM": Button { label: "Other versions"; clicked => { root.show-album-versions(); } }
             if root.can-save-smart: Button { label: "Save as TIDAL playlist"; clicked => { root.save-smart-snapshot(); } }
             if root.can-dedupe: Button { label: "Remove duplicates…"; clicked => { root.remove-duplicates(); } }
             if root.sort-visible: Button { label: "⇅  " + root.sort-label; clicked => { root.cycle-sort(); } }
