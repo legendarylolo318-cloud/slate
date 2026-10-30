@@ -48,6 +48,8 @@ pub struct LazyTracks {
     evicted: RefCell<HashSet<usize>>,
     /// Page of the row the view asked for most recently: where the viewport is.
     last_page: Cell<usize>,
+    /// While a filter is active: source index of each shown row.
+    view: RefCell<Option<Vec<usize>>>,
     notify: ModelNotify,
 }
 
@@ -63,6 +65,7 @@ impl LazyTracks {
             cover_pages: RefCell::new(HashSet::new()),
             evicted: RefCell::new(HashSet::new()),
             last_page: Cell::new(0),
+            view: RefCell::new(None),
             notify: ModelNotify::default(),
         }
     }
@@ -71,6 +74,22 @@ impl LazyTracks {
     pub fn with_cover_refetch(mut self, f: Box<dyn Fn(usize)>) -> Self {
         self.refetch_covers = f;
         self
+    }
+
+    /// Shows only `rows` (source indices), or everything again with `None`.
+    pub fn set_view(&self, rows: Option<Vec<usize>>) {
+        *self.view.borrow_mut() = rows;
+        self.notify.reset();
+    }
+
+    fn changed_many(&self, rows: impl IntoIterator<Item = usize>) {
+        if self.view.borrow().is_some() {
+            self.notify.reset();
+        } else {
+            for i in rows {
+                self.notify.row_changed(i);
+            }
+        }
     }
 
     pub fn set_total(&self, total: usize) {
@@ -101,8 +120,12 @@ impl LazyTracks {
             );
         }
         drop(map);
-        for i in 0..count {
-            self.notify.row_changed(offset + i);
+        if self.view.borrow().is_some() {
+            self.notify.reset();
+        } else {
+            for i in 0..count {
+                self.notify.row_changed(offset + i);
+            }
         }
     }
 
@@ -129,12 +152,12 @@ impl LazyTracks {
             }
         }
         drop((covers, pages));
-        for &i in indices {
-            self.notify.row_changed(i);
-        }
-        for i in dropped.into_iter().filter(|&i| i < self.total.get()) {
-            self.notify.row_changed(i);
-        }
+        self.changed_many(
+            indices
+                .iter()
+                .copied()
+                .chain(dropped.into_iter().filter(|&i| i < self.total.get())),
+        );
     }
 
     /// Updates the heart on every loaded row of `track_id`.
@@ -146,9 +169,7 @@ impl LazyTracks {
                 changed.push(*i);
             }
         }
-        for i in changed {
-            self.notify.row_changed(i);
-        }
+        self.changed_many(changed);
     }
 
     /// Drops every cover so rows fetch theirs again as they come into view
@@ -186,10 +207,17 @@ impl Model for LazyTracks {
     type Data = TrackRow;
 
     fn row_count(&self) -> usize {
-        self.total.get()
+        match &*self.view.borrow() {
+            Some(v) => v.len(),
+            None => self.total.get(),
+        }
     }
 
     fn row_data(&self, row: usize) -> Option<TrackRow> {
+        let row = match &*self.view.borrow() {
+            Some(v) => *v.get(row)?,
+            None => row,
+        };
         if row >= self.total.get() {
             return None;
         }

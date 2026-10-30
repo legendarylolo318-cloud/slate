@@ -17,6 +17,7 @@ mod dedupe;
 mod deeplink;
 mod export;
 mod favorites;
+mod filter;
 mod images;
 mod imgcache;
 mod import;

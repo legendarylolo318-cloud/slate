@@ -62,6 +62,9 @@ pub struct UiPrefs {
     /// Rebound shortcuts: action id → combo (`slate_core::keymap`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub keymap: std::collections::BTreeMap<String, String>,
+    /// Quality chip per page type (loved / playlist / album / mix): 1 Lossless, 2 Hi-Res, 3 Atmos.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub quality_filters: std::collections::BTreeMap<String, i32>,
     /// Sort order per library list (`sort::List::key`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub sorts: std::collections::BTreeMap<String, SortPref>,
@@ -88,6 +91,7 @@ impl Default for UiPrefs {
             known_update: None,
             dismissed_update: String::new(),
             keymap: Default::default(),
+            quality_filters: Default::default(),
             sorts: Default::default(),
         }
     }

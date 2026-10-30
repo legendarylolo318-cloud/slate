@@ -42,6 +42,7 @@ pub mod error;
 pub mod http_util;
 pub mod idle_inhibit;
 pub mod keymap;
+pub mod list_filter;
 pub mod logging;
 pub mod mcp;
 pub mod overlay;

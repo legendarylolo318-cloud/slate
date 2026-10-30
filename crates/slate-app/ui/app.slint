@@ -34,6 +34,11 @@ export component AppWindow inherits Window {
     property <bool> compact: self.width < 600px;
     property <int> focus-tick: 0;
     in-out property <int> filter-tick: 0;
+    in-out property <bool> filter-open: false;
+    in-out property <string> filter-text;
+    in-out property <int> filter-quality: 0;
+    in-out property <string> filter-status;
+    callback filter-changed(string, int);
     pure callback resolve-key(string, bool, bool, bool, bool) -> string;
     callback capture-key(string, bool, bool, bool, bool);
     // Playlist picker: -1 = just create, -2 = current track, >=0 = list row.
@@ -349,6 +354,12 @@ export component AppWindow inherits Window {
                         can-export: root.can-export;
                         export-list(f) => { root.export-list(f); }
                         can-dedupe: root.can-dedupe;
+                        filter-request: root.filter-tick;
+                        filter-open <=> root.filter-open;
+                        filter-text <=> root.filter-text;
+                        filter-quality <=> root.filter-quality;
+                        filter-status: root.filter-status;
+                        filter-changed(t, q) => { root.filter-changed(t, q); }
                         remove-duplicates => { root.remove-duplicates(); }
                         page-favorite: root.page-favorite;
                         toggle-page-favorite => { root.toggle-page-favorite(); }

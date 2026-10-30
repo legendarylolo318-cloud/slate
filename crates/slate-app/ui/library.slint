@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
 import { TrackRow, PlaylistEntry } from "types.slint";
 import { ListView } from "std-widgets.slint";
-import { Button, Segmented, QualityBadges } from "widgets.slint";
+import { Button, Segmented, QualityBadges, TextField, IconButton } from "widgets.slint";
 
 component NavItem inherits Rectangle {
     in property <string> label;
@@ -367,6 +367,21 @@ export component TrackPage inherits Rectangle {
     in property <int> quality;
     in property <bool> atmos;
     callback export-list(string);
+    in property <int> filter-request: 0;
+    in-out property <bool> filter-open: false;
+    in-out property <string> filter-text;
+    in-out property <int> filter-quality: 0;
+    in property <string> filter-status;
+    callback filter-changed(string, int);
+    property <int> filter-focus: 0;
+    changed filter-request => {
+        if (root.has-page) { root.filter-open = true; root.filter-focus += 1; }
+    }
+    function close-filter() {
+        root.filter-open = false;
+        root.filter-text = "";
+        root.filter-changed("", root.filter-quality);
+    }
     in property <bool> can-dedupe: false;
     callback remove-duplicates();
     in property <bool> page-favorite: false;
@@ -439,6 +454,31 @@ export component TrackPage inherits Rectangle {
             if root.sort-visible: Button { label: "⇅  " + root.sort-label; clicked => { root.cycle-sort(); } }
             if root.sort-visible: Button { label: root.sort-desc ? "↓" : "↑"; clicked => { root.flip-sort(); } }
             if root.loved-tabs: Segmented { options: ["Tracks", "Videos"]; index: root.loved-tab; picked(i) => { root.loved-tab-picked(i); } }
+        }
+        FocusScope {
+            height: 34px;
+            key-pressed(e) => {
+                if (e.text == Key.Escape && root.filter-open) { root.close-filter(); return accept; }
+                reject
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                if root.filter-open: TextField {
+                    text <=> root.filter-text;
+                    placeholder: "Filter this list…";
+                    field-width: 240px;
+                    focus-request: root.filter-focus;
+                    edited(t) => { root.filter-changed(t, root.filter-quality); }
+                }
+                Segmented {
+                    options: ["All", "Lossless", "Hi-Res", "Atmos"];
+                    index: root.filter-quality;
+                    picked(i) => { root.filter-quality = i; root.filter-changed(root.filter-text, i); }
+                }
+                if root.filter-status != "": Text { text: root.filter-status; color: Theme.text-muted; vertical-alignment: center; }
+                if root.filter-open: IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close-filter(); } }
+            }
         }
         HorizontalLayout {
             padding-left: 12px;

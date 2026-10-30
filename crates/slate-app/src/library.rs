@@ -74,7 +74,7 @@ impl LibState {
 pub struct LibState {
     generation: AtomicU64,
     active: Mutex<Option<Active>>,
-    tracks: Mutex<BTreeMap<usize, Track>>,
+    pub(crate) tracks: Mutex<BTreeMap<usize, Track>>,
     total: AtomicUsize,
     user_id: Mutex<Option<u64>>,
     /// Playlist uuid → TIDAL image id, for the page header.
@@ -83,6 +83,8 @@ pub struct LibState {
     static_tracks: Mutex<Vec<TidalTrack>>,
     /// Artist page "Play top tracks" list.
     pub hero_tracks: Mutex<Vec<Track>>,
+    /// While a filter is active: source index of each row shown (see `filter.rs`).
+    pub(crate) view: Mutex<Option<Vec<usize>>>,
     cards_gen: AtomicU64,
     artist: Mutex<Option<u64>>,
     /// The sortable list on screen, if any.
@@ -93,7 +95,7 @@ pub(crate) fn to_track(t: &TidalTrack) -> Option<Track> {
     Track::from_serialized(t)
 }
 
-fn row_of(t: &Track) -> RowData {
+pub(crate) fn row_of(t: &Track) -> RowData {
     let version = t
         .extra
         .get("version")
@@ -163,8 +165,28 @@ impl LibState {
 }
 
 impl Backend {
+    /// Row `index` as the window shows it (after any filter) → its place in the list.
+    pub(crate) fn real_index(&self, index: usize) -> usize {
+        match self.lib.view.lock() {
+            Ok(v) => v
+                .as_ref()
+                .and_then(|v| v.get(index).copied())
+                .unwrap_or(index),
+            Err(_) => index,
+        }
+    }
+
     pub(crate) fn cached_track(&self, index: usize) -> Option<Track> {
+        let index = self.real_index(index);
         self.lib.tracks.lock().ok()?.get(&index).cloned()
+    }
+
+    /// The tracks a filtered view shows, in order. `None` when no filter is active.
+    pub(crate) fn filtered_tracks(&self) -> Option<Vec<Track>> {
+        let view = self.lib.view.lock().ok()?;
+        let view = view.as_ref()?;
+        let cache = self.lib.tracks.lock().ok()?;
+        Some(view.iter().filter_map(|i| cache.get(i).cloned()).collect())
     }
 
     // ---------- sidebar ----------
@@ -329,6 +351,9 @@ impl Backend {
             s.clear();
         }
         self.lib.total.store(0, Ordering::Relaxed);
+        if let Ok(mut v) = self.lib.view.lock() {
+            *v = None;
+        }
         let list = match kind {
             SourceKind::Loved => Some(crate::sort::List::Loved),
             SourceKind::Playlist(_) => Some(crate::sort::List::Playlist),
@@ -346,6 +371,7 @@ impl Backend {
         self.show_sort(list, &prefs);
         self.show_loved_tabs(matches!(kind, SourceKind::Loved).then_some(0));
 
+        let saved_quality = self.saved_quality_filter(&kind);
         let this = self.clone();
         self.ui(move |w| {
             let for_fetch = this.clone();
@@ -367,6 +393,10 @@ impl Backend {
             w.set_page_cover(Image::default());
             w.set_page_loved(false);
             w.set_selected_source(selected.into());
+            w.set_filter_open(false);
+            w.set_filter_text("".into());
+            w.set_filter_status("".into());
+            w.set_filter_quality(saved_quality);
         });
 
         let this = self.clone();
@@ -426,6 +456,9 @@ impl Backend {
                         });
                         w.set_page_loading(false);
                     });
+                    if saved_quality != 0 {
+                        this.page_filter_changed("", saved_quality);
+                    }
                 }
                 Err(msg) => this.ui(move |w| {
                     w.set_page_loading(false);
@@ -663,7 +696,7 @@ impl Backend {
     }
 
     /// Stores fetched tracks for playback and returns their display rows.
-    fn remember(&self, page: usize, tracks: &[TidalTrack]) -> Vec<RowData> {
+    pub(crate) fn remember(&self, page: usize, tracks: &[TidalTrack]) -> Vec<RowData> {
         let mut rows = Vec::with_capacity(tracks.len());
         let mut covers: HashMap<String, Vec<usize>> = HashMap::new();
         if let Ok(mut cache) = self.lib.tracks.lock() {
@@ -805,7 +838,7 @@ impl Backend {
     // ---------- playback from a list ----------
 
     /// Loads every page not yet cached and returns the list in order.
-    async fn ensure_all(&self) -> Option<(Vec<Track>, Source)> {
+    pub(crate) async fn ensure_all(&self) -> Option<(Vec<Track>, Source)> {
         let active = self.lib.active.lock().ok()?.clone()?;
         let generation = self.lib.generation.load(Ordering::SeqCst);
         let total = self.lib.total.load(Ordering::Relaxed);
@@ -850,6 +883,16 @@ impl Backend {
             let Some(track) = this.cached_track(index) else {
                 return;
             };
+            if let (Some(list), Some(active)) = (
+                this.filtered_tracks(),
+                this.lib.active.lock().ok().and_then(|a| a.clone()),
+            ) {
+                // Playing from a filtered view plays what the view shows.
+                let source = Self::source_for(&active, list.clone());
+                let outcome = ctl.play_from_source(track, list, Some(source), false).await;
+                this.apply(outcome).await;
+                return;
+            }
             let total = this.lib.total.load(Ordering::Relaxed);
             let complete = this.lib.tracks.lock().is_ok_and(|c| c.len() >= total);
             if complete {
@@ -910,10 +953,14 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(ctl) = this.controller() else { return };
-            let Some((all, source)) = this.ensure_all().await else {
+            let Some((mut all, mut source)) = this.ensure_all().await else {
                 return;
             };
-            let album = source.kind == "album" && !shuffle;
+            if let Some(list) = this.filtered_tracks() {
+                source.tracks = list.clone();
+                all = list;
+            }
+            let album = source.kind == "album" && !shuffle && this.filtered_tracks().is_none();
             let outcome = ctl.play_all(all, Some(source), album, shuffle).await;
             this.apply(outcome).await;
         });

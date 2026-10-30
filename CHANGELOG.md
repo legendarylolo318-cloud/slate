@@ -13,6 +13,12 @@
   rebound. Click one and press the new combination; a clash names the action already using
   it, each item has Reset, and "Reset all" restores the defaults. The `?` sheet shows your
   current bindings, and global shortcuts are re-registered without a restart.
+- Ctrl+F on a playlist, album, Loved Tracks or mix opens a filter box (Esc clears and closes
+  it). It matches title, artists and album ignoring case and accents. If the list is not
+  fully loaded Slate says "Loading N more tracks to search…" and fetches the rest. Playing a
+  track from a filtered list plays the filtered tracks.
+- A chip row (All / Lossless / Hi-Res / Atmos) on the same pages narrows the list by quality,
+  combines with the filter, and is remembered per kind of page.
 
 ## [1.1.0] - 2026-10-30
 
