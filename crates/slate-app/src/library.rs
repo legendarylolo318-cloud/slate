@@ -515,6 +515,10 @@ impl Backend {
                             v["numberOfTracks"].as_u64().unwrap_or(0),
                             v["numberOfVideos"].as_u64().unwrap_or(0),
                         );
+                        let count = match v["duration"].as_u64().filter(|d| *d > 0) {
+                            Some(d) => format!("{count} · {}", human_duration(d)),
+                            None => count,
+                        };
                         let by = v["creator"]["name"].as_str().unwrap_or("");
                         let owned = match self.user_id().await {
                             Some(me) => v["creator"]["id"].as_u64() == Some(me),
@@ -563,8 +567,13 @@ impl Backend {
                         .and_then(|d| d.get(..4))
                         .unwrap_or("");
                     let count = a.number_of_tracks.unwrap_or(0);
+                    let total = a
+                        .duration
+                        .filter(|d| *d > 0)
+                        .map(|d| human_duration(u64::from(d)));
                     let parts: Vec<String> = [artist, year.to_string(), format!("{count} tracks")]
                         .into_iter()
+                        .chain(total)
                         .filter(|s| !s.is_empty())
                         .collect();
                     Header {
@@ -1016,6 +1025,16 @@ impl Backend {
     }
 }
 
+/// "2 h 15 min", "45 min", "3 min".
+pub(crate) fn human_duration(secs: u64) -> String {
+    let mins = (secs + 30) / 60;
+    match (mins / 60, mins % 60) {
+        (0, m) => format!("{} min", m.max(1)),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m} min"),
+    }
+}
+
 /// "12 tracks", or "3 videos · 12 tracks" for a mixed playlist.
 fn item_count(tracks: u64, videos: u64) -> String {
     let n = |count: u64, one: &str, many: &str| {
@@ -1034,6 +1053,14 @@ fn item_count(tracks: u64, videos: u64) -> String {
 
 #[cfg(test)]
 mod item_count_tests {
+    #[test]
+    fn durations_read_naturally() {
+        assert_eq!(super::human_duration(20), "1 min");
+        assert_eq!(super::human_duration(45 * 60), "45 min");
+        assert_eq!(super::human_duration(3600), "1 h");
+        assert_eq!(super::human_duration(2 * 3600 + 15 * 60 + 20), "2 h 15 min");
+    }
+
     #[test]
     fn counts_read_like_the_original() {
         assert_eq!(super::item_count(12, 0), "12 tracks");

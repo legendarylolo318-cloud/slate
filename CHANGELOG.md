@@ -84,6 +84,7 @@
   path reads MODIFIED. Each track keeps its own ReplayGain level; skipping or seeking during a fade
   ends it at once, and pausing pauses both. The second player exists only for the length of a
   fade; with crossfade off nothing changes in playback.
+- Album and playlist headers show the total length (for example "13 tracks · 1 h 1 min").
 - Settings has a search box: type a word and pick the setting from the list to jump to its page.
 - The sidebar uses one set of line icons instead of mixed symbols; icon-only buttons in the player
   bar show a tooltip on hover, and buttons show a focus ring and can be used with Tab, Space and
