@@ -1157,7 +1157,7 @@ impl Backend {
 }
 
 /// Every track of a source (used by hover-play on cards).
-async fn fetch_all(
+pub(crate) async fn fetch_all(
     state: &Arc<slate_core::AppState>,
     this: &Backend,
     kind: &SourceKind,

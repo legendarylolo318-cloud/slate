@@ -17,25 +17,32 @@ use crate::control::{Control, ControlFn, PositionFn};
 use crate::images;
 
 /// Playback facts the ticker needs without touching the UI thread.
+/// Carries out an `mcp:*` event: its name and payload.
+type McpHandler = Box<dyn Fn(&str, serde_json::Value) + Send + Sync>;
+
 #[derive(Default)]
 pub(crate) struct Shared {
-    playing: AtomicBool,
+    pub(crate) playing: AtomicBool,
     /// Wakes the ticker, which sleeps while nothing plays.
     playing_changed: tokio::sync::Notify,
     has_track: AtomicBool,
     /// Audio pipeline holds the current track (false for a restored, not yet started one).
     loaded: AtomicBool,
-    shuffle: AtomicBool,
+    pub(crate) shuffle: AtomicBool,
     current_id: AtomicU64,
     /// Volume before muting, as `f32` bits; 0 when not muted.
     pre_mute: AtomicU32,
     /// Latest position in seconds, as `f32` bits.
-    position: AtomicU32,
+    pub(crate) position: AtomicU32,
     controller: OnceLock<Arc<Controller>>,
     /// Set once the backend exists; invoked when a track ends by itself.
     on_finished: OnceLock<Box<dyn Fn() + Send + Sync>>,
     on_theme_file: OnceLock<Box<dyn Fn(serde_json::Value) + Send + Sync>>,
     on_advanced: OnceLock<Box<dyn Fn(serde_json::Value) + Send + Sync>>,
+    /// MCP playback tools (`mcp:*` events).
+    on_mcp: OnceLock<McpHandler>,
+    /// The playing track, for the MCP server and the OBS overlay.
+    pub(crate) now: Mutex<Option<crate::remote::NowInfo>>,
     #[cfg(target_os = "linux")]
     tray: tokio::sync::Mutex<Option<crate::platform::tray::TrayHandle>>,
     /// Track length in seconds, stored as `f32` bits.
@@ -66,7 +73,7 @@ impl Shared {
         }
     }
 
-    fn duration(&self) -> f32 {
+    pub(crate) fn duration(&self) -> f32 {
         f32::from_bits(self.duration.load(Ordering::Relaxed))
     }
 }
@@ -107,6 +114,11 @@ impl EventSink for UiSink {
                 // Queue advance decides whether playback continues.
                 if let Some(cb) = self.shared.on_finished.get() {
                     cb();
+                }
+            }
+            e if e.starts_with("mcp:") => {
+                if let Some(cb) = self.shared.on_mcp.get() {
+                    cb(e, payload);
                 }
             }
             _ => {}
@@ -183,6 +195,11 @@ impl Backend {
             .shared
             .on_advanced
             .set(Box::new(move |v| advanced.track_advanced(v)));
+        let remote = backend.clone();
+        let _ = backend
+            .shared
+            .on_mcp
+            .set(Box::new(move |e, v| remote.mcp_event(e, v)));
         let themed = backend.clone();
         let _ = backend
             .shared
@@ -312,6 +329,7 @@ impl Backend {
                     continue;
                 };
                 this.shared.position.store(pos.to_bits(), Ordering::Relaxed);
+                this.publish_now(false);
                 this.update_lyric_position(pos);
                 let dur = this.shared.duration();
                 let progress = if dur > 0.0 {
@@ -444,6 +462,7 @@ impl Backend {
             this.shared.set_playing(false);
             this.shared.has_track.store(false, Ordering::Relaxed);
             this.shared.loaded.store(false, Ordering::Relaxed);
+            this.set_now(None);
             if let Some(ctl) = this.controller() {
                 ctl.clear_queue().await;
             }
@@ -478,6 +497,7 @@ impl Backend {
                     .and_then(|c| c.stream_info())
                     .map(|i| crate::quality::describe(&i))
                     .unwrap_or_default();
+                self.set_now_quality(quality.clone());
                 self.ui(move |w| w.set_quality_text(quality.into()));
             }
             Outcome::Restarted => {
@@ -518,6 +538,7 @@ impl Backend {
 
     fn set_playing(&self, playing: bool) {
         self.shared.set_playing(playing);
+        self.publish_now(true);
         self.ui(move |w| w.set_playing(playing));
         if let Some(state) = self.state() {
             let pos = f32::from_bits(self.shared.position.load(Ordering::Relaxed));
@@ -541,6 +562,7 @@ impl Backend {
         self.shared.position.store(0, Ordering::Relaxed);
         self.shared.has_track.store(true, Ordering::Relaxed);
         self.shared.set_playing(playing);
+        self.set_now(Some(crate::remote::NowInfo::of(track)));
 
         if let Some(state) = self.state() {
             let album = track
@@ -760,6 +782,7 @@ impl Backend {
             this.shared
                 .position
                 .store(secs.to_bits(), Ordering::Relaxed);
+            this.publish_now(true);
             let dur = this.shared.duration();
             let text = images::format_time(secs);
             this.ui(move |w| {
@@ -905,7 +928,7 @@ impl Backend {
         })
     }
 
-    fn handle_control(&self, c: Control) {
+    pub(crate) fn handle_control(&self, c: Control) {
         let playing = self.shared.playing.load(Ordering::Relaxed);
         let pos = f32::from_bits(self.shared.position.load(Ordering::Relaxed));
         match c {

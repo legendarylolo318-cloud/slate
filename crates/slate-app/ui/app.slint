@@ -129,6 +129,7 @@ export component AppWindow inherits Window {
     callback dialog-accepted(string, string, string);
     callback add-to-playlist(int, string);
     callback create-playlist(int, string);
+    callback import-playlist();
     callback create-folder(string);
     callback play-row(int);
     callback row-action(int, string);
@@ -520,6 +521,15 @@ export component AppWindow inherits Window {
                             enabled: root.folder-name != "";
                             clicked => { root.create-folder(root.folder-name); root.folder-name = ""; root.picker-open = false; }
                         }
+                    }
+                    if root.picker-target == -1: HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Button {
+                            label: "Import from file…";
+                            clicked => { root.picker-open = false; root.import-playlist(); }
+                        }
+                        Text { text: "CSV or M3U, e.g. a Slate or Spotify export"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
                     }
                     if root.picker-target != -1: Text { text: "OR PICK ONE"; font-size: 11px; color: Theme.text-muted; }
                     if root.picker-target != -1: ListView {

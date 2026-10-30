@@ -9,6 +9,10 @@
   default); closing the notice remembers that version.
 - Export: playlists and Loved Tracks have an Export… button (CSV or M3U), with a save dialog,
   progress, and pages not yet loaded fetched one at a time.
+- Import: New playlist → Import from file… turns a CSV or M3U into a new playlist. Slate's
+  own exports and any file with TIDAL track links need no lookups; other files (Spotify
+  exports via Exportify, M3U with `#EXTINF` lines) are matched by artist and title, one
+  search at a time with a pause between them, stopping if TIDAL starts rate-limiting.
 - Track credits: right-click a track → Credits lists producers, writers, engineers and
   musicians (one request, cached).
 - Hi-Res, Lossless and Dolby Atmos badges in their own Quality column on track lists, on
@@ -51,6 +55,11 @@
 - Tracks in TIDAL's old MQA tier were badged Hi-Res; they stream as 16-bit FLAC and are
   now badged Lossless.
 - The request log included the account id from `/users/<id>/…` paths.
+- MCP playback tools (play, pause, resume, skip, seek, volume, queue, repeat, shuffle, play a
+  playlist/album/artist/mix) reported success but did nothing: the app never handled them.
+  `get_now_playing` and `get_queue` always came back empty. Both now work.
+- The OBS overlay never showed the playing track. It now updates on every track change,
+  pause and seek, with cover and stream quality.
 
 ### Performance (measured)
 Release builds, empty profile, login screen, 60 s after a 12 s warm-up, two runs each:

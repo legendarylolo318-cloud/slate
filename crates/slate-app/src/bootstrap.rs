@@ -457,6 +457,7 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_toggle_hero_favorite, |b| b.toggle_hero_favorite());
     bind!(on_add_to_playlist, |b, t, u| b.add_to_playlist(t, &u));
     bind!(on_create_playlist, |b, t, n| b.create_playlist(t, &n));
+    bind!(on_import_playlist, |b| b.import_playlist());
     bind!(on_create_folder, |b, n| b.create_folder(&n));
     bind!(on_dialog_accepted, |b, k, t, x| b
         .dialog_accepted(&k, &t, &x));

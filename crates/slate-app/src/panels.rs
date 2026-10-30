@@ -17,6 +17,7 @@ impl Backend {
     // ---------- queue panel ----------
 
     pub async fn publish_queue(&self) {
+        self.publish_queue_to_mcp().await;
         let Some(ctl) = self.controller() else { return };
         let rows: Vec<(String, String, bool)> = ctl
             .with_queue(|q| {
