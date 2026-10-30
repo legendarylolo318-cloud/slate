@@ -66,6 +66,12 @@ impl SlateMcpServer {
         match policy::decide(&self.rt.policy(), &name, confirm) {
             Decision::Allow => {}
             Decision::Reject(why) => return Ok(CallToolResult::error(text(why))),
+            Decision::Describe | Decision::AskUser
+                if self.playlist_problem(&request).await.is_some() =>
+            {
+                let why = self.playlist_problem(&request).await.unwrap_or_default();
+                return Ok(CallToolResult::error(text(why)));
+            }
             Decision::Describe => {
                 let what = self.describe(&request).await;
                 return Ok(CallToolResult::success(text(

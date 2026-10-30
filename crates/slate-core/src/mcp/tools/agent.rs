@@ -192,6 +192,30 @@ impl SlateMcpServer {
         Some((uuid, title, tracks))
     }
 
+    /// For playlist tools: the helpful error ("did you mean …?") when the playlist cannot be found.
+    pub(crate) async fn playlist_problem(&self, req: &CallToolRequestParams) -> Option<String> {
+        let takes_playlist = matches!(
+            req.name.as_ref(),
+            "delete_playlist"
+                | "remove_track_from_playlist"
+                | "dedupe_playlist"
+                | "reorder_playlist"
+        );
+        if !takes_playlist {
+            return None;
+        }
+        let state = self.app_handle.try_state()?;
+        let mut client = state.tidal_client.lock().await;
+        resolve_playlist(
+            &mut client,
+            Self::arg_str(req, "playlist_uuid").as_deref(),
+            Self::arg_str(req, "playlist_name").as_deref(),
+        )
+        .await
+        .err()
+        .map(|e| e.message.to_string())
+    }
+
     /// A sentence for the user (and the agent) saying what a destructive call would do.
     pub(crate) async fn describe(&self, req: &CallToolRequestParams) -> String {
         let name = req.name.as_ref();
