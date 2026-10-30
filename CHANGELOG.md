@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.0] - 2026-10-29
+
+### Added
+- Browser sign-in has Open browser and Copy link buttons, for when the browser does not open
+  by itself.
+- Explore genre and mood tiles without artwork show their name on a coloured tile.
+
+### Fixed
+- Library → Mixes failed to load: TIDAL rejects pages larger than 50 for mixes, which now
+  page in 50s. A mix that cannot be read no longer cuts the list short.
+- Folders with more than 50 playlists (and more than 50 folders in the sidebar) showed only
+  the first 50.
+- A cover that failed to download (server error, rate limit) was cached as broken for up to
+  90 days; failed downloads are no longer cached.
+- Leaving a large library page stopped downloading its remaining covers, and a late cover can
+  no longer appear on the next page.
+- Two requests for the same image at once no longer download it twice.
+- Short pages stay at the top of the window; "1 album", "1 mix" and so on are singular.
+
+### Changed
+- Release builds use thin LTO, one codegen unit and stripped symbols (smaller download).
+
 ## [0.2.0] - 2026-10-29
 
 ### Changed

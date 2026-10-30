@@ -49,6 +49,12 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | 32 | Low | The desktop file was `slate.desktop`, but XDG portals require an app id with a matching installed desktop file | Renamed to `io.github.legendarylolo318_cloud.slate.desktop` (the metainfo id), used as Wayland app_id and MPRIS desktop entry; a test keeps code, desktop file and metainfo in agreement |
 | 33 | Low | Links forwarded to a renderer-fallback session were dropped | The parent (which owns the socket) relays them to the child over stdin; verified across two fallbacks (#9) |
 | 34 | High | Windows exclusive mode set `wasapi2sink`'s `exclusive` property, which GStreamer 1.24 does not have; setting a missing property panics, so the first exclusive playback would have crashed the audio thread (caught by the Windows CI test) | The sink is chosen at runtime: `wasapi2sink` when it supports exclusive mode, else `wasapisink`; devices come from the matching provider; properties are only set after checking they exist; the packaged self-test requires `wasapisink` |
+| 35 | Medium | Image downloads were cached without checking the HTTP status, so an error page (404, 429, 5xx) stayed cached as a broken cover for 30–90 days | `error_for_status()` before caching (`commands/utility.rs`) |
+| 36 | Medium | Folder listings (sidebar folders, folder contents) read only the first 50 items | Follow the response `cursor` (`favorites.rs` `folder_listing`); folder cache key now includes `includeOnly` |
+| 37 | Medium | Card pages kept downloading every remaining cover after navigating away (thousands on big library grids); the stale check ran off the UI thread, so a late cover could land on the next page | Generation checked before each fetch and again inside the UI closure (cards, hero, row covers, page cover) |
+| 38 | Low | Image cache removed its in-flight entry before caching the pixels, and could remove a newer fetch's entry, causing duplicate downloads | Insert first; remove only our own entry (`Shared::ptr_eq`) |
+| 39 | Medium | Library → Mixes asked v2 for 100 items (HTTP 400); one unparsable mix also ended paging early | Pages of 50 (`MAX_V2_FAVORITES_LIMIT`), page fullness counted before filtering |
+| 40 | Low | Explore tiles requested slug "image ids" (`hiphop`, `k-pop`) that the CDN refuses | Only UUID-shaped ids or URLs are requested; others get a name tile |
 
 ## Security verification
 - **Loopback only, off by default:** MCP binds `127.0.0.1` (hard-coded), overlay clamps to loopback; both default off (`defaults::mcp_enabled/overlay_enabled`).
@@ -70,6 +76,11 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | RUSTSEC-2026-0192 | ttf-parser | Unmaintained, via winit's Wayland decorations |
 | RUSTSEC-2026-0370/0371/0372 | zvariant, zbus_names, zvariant_derive | Unmaintained, via accesskit/zbus |
 | RUSTSEC-2025-0141 | bincode | Unmaintained; in the lockfile, not in the built graph |
+
+## Release profile (0.3.0)
+`lto = "thin"`, `codegen-units = 1`, `strip = true`: binary 88.0 MB → 52.6 MB (−40 %). `--self-test` start-up unchanged (median ~11 ms over 10 runs), login-screen PSS/CPU within run-to-run noise. Cost: slower release builds (a full rebuild took 5 min 50 s on 16 threads).
+
+Known, not changed: every core command holds the `tidal_client` mutex across its HTTP request, so API calls are serialised app-wide; the disk cache does synchronous file I/O and AES inside async functions.
 
 ## Memory and CPU
 Linux/Wayland, logged in, Skia/Vulkan, measured from `/proc/<pid>/smaps_rollup`, CPU over the stated window.

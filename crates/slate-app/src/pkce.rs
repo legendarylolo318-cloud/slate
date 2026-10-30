@@ -49,21 +49,58 @@ impl Backend {
                 *p = Some((params.code_verifier, params.client_unique_key));
             }
             let url = params.authorize_url;
-            this.rt.spawn_blocking(move || {
-                if let Err(e) = open::that(&url) {
-                    tracing::warn!("could not open browser: {e}");
-                }
-            });
-            this.ui(|w| {
+            let shown = url.clone();
+            this.ui(move |w| {
                 let g = w.global::<SettingsState>();
                 g.set_pkce_pending(true);
                 g.set_pkce_input("".into());
+                g.set_pkce_url(shown.into());
             });
             this.pkce_status(
-                "Sign in in your browser. When it finishes the page may look blank or show an error: \\
-                 copy its address from the address bar and paste it here.",
+                "Sign in in your browser (use Open browser or Copy link if it did not open). When it \\
+                 finishes the page may look blank or show an error: copy its address from the \\
+                 address bar and paste it here.",
             );
+            this.open_in_browser(url);
         });
+    }
+
+    fn open_in_browser(&self, url: String) {
+        let this = self.clone();
+        self.rt.spawn_blocking(move || {
+            if let Err(e) = open::that(&url) {
+                tracing::warn!("could not open browser: {e}");
+                this.pkce_status("Could not open a browser. Press Copy link and open it yourself.");
+            }
+        });
+    }
+
+    async fn pkce_url(&self) -> Option<String> {
+        let url = self
+            .read_ui(|w| w.global::<SettingsState>().get_pkce_url().to_string())
+            .await;
+        (!url.is_empty()).then_some(url)
+    }
+
+    pub async fn open_pkce_url(&self) {
+        match self.pkce_url().await {
+            Some(url) => self.open_in_browser(url),
+            None => self.pkce_status("Start the browser sign-in first."),
+        }
+    }
+
+    pub async fn copy_pkce_url(&self) {
+        let Some(url) = self.pkce_url().await else {
+            return self.pkce_status("Start the browser sign-in first.");
+        };
+        let result = tokio::task::spawn_blocking(move || {
+            arboard::Clipboard::new().and_then(|mut c| c.set_text(url))
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => self.pkce_status("Link copied. Paste it into your browser and sign in."),
+            _ => self.pkce_status("Could not access the clipboard."),
+        }
     }
 
     pub async fn finish_pkce(&self) {

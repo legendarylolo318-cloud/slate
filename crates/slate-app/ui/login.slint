@@ -96,6 +96,12 @@ export component LoginScreen inherits Rectangle {
             if SettingsState.pkce-pending: HorizontalLayout {
                 alignment: center;
                 spacing: 8px;
+                Button { label: "Open browser"; clicked => { SettingsState.action("pkce-open"); } }
+                Button { label: "Copy link"; clicked => { SettingsState.action("pkce-copy"); } }
+            }
+            if SettingsState.pkce-pending: HorizontalLayout {
+                alignment: center;
+                spacing: 8px;
                 TextField {
                     text <=> SettingsState.pkce-input;
                     placeholder: "Paste the page address";

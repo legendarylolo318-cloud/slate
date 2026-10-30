@@ -856,6 +856,18 @@ pub struct FavoriteMixImageUrl {
     pub url: String,
 }
 
+/// The v2 favorites endpoints answer HTTP 400 for a `limit` above this.
+pub const MAX_V2_FAVORITES_LIMIT: u32 = 50;
+
+/// Synthetic total for a v2 page: a full page implies there may be another.
+fn estimated_total(offset: u32, count: u32, limit: u32) -> u32 {
+    if count == limit {
+        offset + count + 1
+    } else {
+        offset + count
+    }
+}
+
 /// Shape returned by /v2/favorites/mixes — different from the home feed MIX entity.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -3308,6 +3320,7 @@ impl TidalClient {
         order_direction: &str,
     ) -> Result<PaginatedResponse<TidalFavoriteMix>, SlateError> {
         let url = format!("{}/favorites/mixes", self.urls.api_v2);
+        let limit = limit.min(MAX_V2_FAVORITES_LIMIT);
         let cc = self.country_code.clone();
         let limit_str = limit.to_string();
         let offset_str = offset.to_string();
@@ -3349,20 +3362,18 @@ impl TidalClient {
                 Vec::new()
             };
 
+        // Count before filtering: an item that fails to parse must not make a full
+        // page look like the last one.
+        let count = raw_items.len() as u32;
         // Deserialize each item, skipping any that fail to parse
         let items: Vec<TidalFavoriteMix> = raw_items
             .into_iter()
             .filter_map(|v| serde_json::from_value::<TidalFavoriteMix>(v).ok())
             .collect();
 
-        let count = items.len() as u32;
-        log::debug!("[get_favorite_mixes]: found {} mixes", count);
+        log::debug!("[get_favorite_mixes]: found {} mixes", items.len());
         // v2 API doesn't return totalNumberOfItems — this is a synthetic sentinel for hasMore logic only, not a displayable count
-        let estimated_total = if count == limit {
-            offset + count + 1
-        } else {
-            offset + count
-        };
+        let estimated_total = estimated_total(offset, count, limit);
         Ok(PaginatedResponse {
             items,
             total_number_of_items: estimated_total,
@@ -7441,5 +7452,22 @@ mod proxy_routing_tests {
             tc.raw_client().is_err(),
             "a client built earlier must observe the swap"
         );
+    }
+}
+
+#[cfg(test)]
+mod v2_paging_tests {
+    use super::*;
+
+    #[test]
+    fn a_full_page_implies_another() {
+        assert_eq!(estimated_total(0, 50, 50), 51);
+        assert_eq!(estimated_total(50, 50, 50), 101);
+    }
+
+    #[test]
+    fn a_short_page_is_the_last() {
+        assert_eq!(estimated_total(50, 7, 50), 57);
+        assert_eq!(estimated_total(0, 0, 50), 0);
     }
 }

@@ -444,19 +444,7 @@ impl Backend {
         let Some(state) = self.state() else {
             return Vec::new();
         };
-        match lib_cmds::get_playlist_folders(
-            &state,
-            self.app.clone(),
-            "root".into(),
-            Some("FOLDER".into()),
-            0,
-            50,
-            "DATE_UPDATED".into(),
-            "DESC".into(),
-            None,
-        )
-        .await
-        {
+        match self.folder_listing(&state, "root", Some("FOLDER")).await {
             Ok(v) => {
                 let parsed = parse_folder_items(&v);
                 tracing::debug!(folders = parsed.folders.len(), "folder listing parsed");
@@ -472,20 +460,46 @@ impl Backend {
     /// Contents of one folder as playlist cards.
     pub(crate) async fn fetch_folder_playlists(&self, id: &str) -> Result<Vec<CardData>, String> {
         let state = self.state().ok_or("The core is still starting.")?;
-        let v = lib_cmds::get_playlist_folders(
-            &state,
-            self.app.clone(),
-            id.to_string(),
-            None,
-            0,
-            50,
-            "DATE_UPDATED".into(),
-            "DESC".into(),
-            None,
-        )
-        .await
-        .map_err(|e| e.log_safe())?;
+        let v = self
+            .folder_listing(&state, id, None)
+            .await
+            .map_err(|e| e.log_safe())?;
         Ok(parse_folder_items(&v).playlists)
+    }
+
+    /// One folder's whole listing: the endpoint returns at most 50 items per call
+    /// and a `cursor` for the next page.
+    async fn folder_listing(
+        &self,
+        state: &slate_core::AppState,
+        id: &str,
+        include_only: Option<&str>,
+    ) -> Result<Value, slate_core::SlateError> {
+        const MAX_PAGES: usize = 40;
+        let mut items = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_PAGES {
+            let mut v = lib_cmds::get_playlist_folders(
+                state,
+                self.app.clone(),
+                id.to_string(),
+                include_only.map(str::to_string),
+                0,
+                50,
+                "DATE_UPDATED".into(),
+                "DESC".into(),
+                cursor.take(),
+            )
+            .await?;
+            if let Some(Value::Array(page)) = v.get_mut("items").map(Value::take) {
+                items.extend(page);
+            }
+            match v.get("cursor").and_then(Value::as_str) {
+                Some(next) if !next.is_empty() => cursor = Some(next.to_string()),
+                _ => break,
+            }
+        }
+        Ok(serde_json::json!({ "items": items }))
     }
 }
 

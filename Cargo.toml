@@ -3,9 +3,14 @@ resolver = "2"
 members = ["crates/slate-core", "crates/slate-app"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "GPL-3.0-only"
 authors = ["lullabyX", "SLATE Slint port contributors"]
 repository = "https://github.com/legendarylolo318-cloud/slate"
 publish = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

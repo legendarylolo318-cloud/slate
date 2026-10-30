@@ -70,3 +70,5 @@ modes.json
 proxy.mode
 *.key
 .config/
+ui.json
+/cache/

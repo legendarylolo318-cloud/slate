@@ -297,6 +297,8 @@ impl Backend {
             match name.as_str() {
                 "pkce-start" => this.start_pkce(),
                 "pkce-finish" => this.finish_pkce().await,
+                "pkce-open" => this.open_pkce_url().await,
+                "pkce-copy" => this.copy_pkce_url().await,
                 #[cfg(target_os = "linux")]
                 "app-menu-add" | "app-menu-remove" => {
                     let adding = name == "app-menu-add";

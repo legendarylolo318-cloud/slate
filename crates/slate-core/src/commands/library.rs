@@ -1299,8 +1299,8 @@ pub async fn get_playlist_folders(
     );
 
     let cache_key = format!(
-        "playlist-folders:{}:{}:{}:{}:{}:{:?}",
-        folder_id, offset, limit, order, order_direction, cursor
+        "playlist-folders:{}:{:?}:{}:{}:{}:{}:{:?}",
+        folder_id, include_only, offset, limit, order, order_direction, cursor
     );
 
     match state

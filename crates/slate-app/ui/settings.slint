@@ -22,6 +22,8 @@ export global SettingsState {
     in-out property <bool> pkce-pending;
     in-out property <string> pkce-input;
     in-out property <string> pkce-status;
+    // The authorize address of the sign-in in progress (reopened / copied from the UI).
+    in-out property <string> pkce-url;
     // General
     in-out property <bool> minimize-to-tray;
     in-out property <int> ui-scale-index;
@@ -142,6 +144,8 @@ export component SettingsPage inherits Rectangle {
                                 placeholder: "Paste the page address";
                                 field-width: 200px;
                             }
+                            if SettingsState.pkce-pending: Button { label: "Open browser"; clicked => { SettingsState.action("pkce-open"); } }
+                            if SettingsState.pkce-pending: Button { label: "Copy link"; clicked => { SettingsState.action("pkce-copy"); } }
                             if SettingsState.pkce-pending: Button { label: "Finish"; primary: true; clicked => { SettingsState.action("pkce-finish"); } }
                             if !SettingsState.auth-max && !SettingsState.pkce-pending: Button { label: "Sign in with browser"; primary: true; clicked => { SettingsState.action("pkce-start"); } }
                         }

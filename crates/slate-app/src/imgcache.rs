@@ -87,12 +87,17 @@ impl ImageCache {
                 })
                 .clone()
         };
-        let result = pending.await;
-        if let Ok(mut inflight) = self.inflight.lock() {
-            inflight.remove(url);
-        }
+        let result = pending.clone().await;
+        // Cache before leaving the in-flight map, so a request arriving in between
+        // finds the pixels instead of starting a second fetch; and only remove our
+        // own entry, not a newer fetch for the same URL.
         if let Some(px) = &result {
             self.insert(url, px.clone());
+        }
+        if let Ok(mut inflight) = self.inflight.lock() {
+            if inflight.get(url).is_some_and(|p| p.ptr_eq(&pending)) {
+                inflight.remove(url);
+            }
         }
         result
     }

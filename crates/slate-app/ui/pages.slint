@@ -22,8 +22,18 @@ component Card inherits Rectangle {
         Rectangle {
             height: Dim.card-w - 16px;
             border-radius: root.item.kind == "artist" ? (Dim.card-w - 16px) / 2 : 6px;
-            background: Theme.surface-raised;
+            background: root.item.kind == "page" && root.item.cover.width == 0 ? root.item.tint : Theme.surface-raised;
             clip: true;
+            if root.item.kind == "page" && root.item.cover.width == 0: Text {
+                width: parent.width - 16px;
+                text: root.item.title;
+                color: white;
+                font-size: 20px;
+                font-weight: 800;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
             Image { source: root.item.cover; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
             if root.item.kind != "artist": Rectangle {
                 x: parent.width - 48px;
@@ -48,6 +58,7 @@ component Section inherits VerticalLayout {
     in property <length> avail-width;
     callback open(string, string);
     callback play(string, string);
+    alignment: start;
     spacing: 8px;
     property <int> cols: max(1, floor(root.avail-width / Dim.card-w));
     if root.data.title != "": Text { text: root.data.title; font-size: 20px; font-weight: 700; color: Theme.text; }
@@ -103,6 +114,8 @@ export component CardsPage inherits Rectangle {
         VerticalLayout {
             padding: root.compact ? 12px : 24px;
             spacing: 16px;
+            // Keep short pages top-aligned instead of spreading the spare height between the header and the grid.
+            alignment: start;
             if root.has-hero: HorizontalLayout {
                 spacing: 20px;
                 Rectangle {
@@ -128,6 +141,7 @@ export component CardsPage inherits Rectangle {
                 }
             }
             if !root.has-hero: VerticalLayout {
+                alignment: start;
                 spacing: 2px;
                 Text { text: root.title; font-size: 30px; font-weight: 800; color: Theme.text; overflow: elide; }
                 if root.subtitle != "": Text { text: root.subtitle; color: Theme.text-muted; }

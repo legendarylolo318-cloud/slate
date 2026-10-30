@@ -351,9 +351,12 @@ impl Backend {
                         .get(&state, &tidal_image_url(&image, 320))
                         .await
                     {
-                        if this2.lib.generation.load(Ordering::SeqCst) == generation {
-                            this2.ui(move |w| w.set_page_cover(Image::from_rgba8(px)));
-                        }
+                        let lib = Arc::clone(&this2.lib);
+                        this2.ui(move |w| {
+                            if lib.generation.load(Ordering::SeqCst) == generation {
+                                w.set_page_cover(Image::from_rgba8(px));
+                            }
+                        });
                     }
                 });
             }
@@ -636,14 +639,18 @@ impl Backend {
                 .for_each_concurrent(BULK_CONCURRENCY, |(id, indices)| {
                     let (state, this) = (Arc::clone(&state), this.clone());
                     async move {
+                        if this.lib.generation.load(Ordering::SeqCst) != generation {
+                            return;
+                        }
                         let Some(px) = this.images.get(&state, &tidal_image_url(&id, 160)).await
                         else {
                             return;
                         };
-                        if this.lib.generation.load(Ordering::SeqCst) != generation {
-                            return;
-                        }
+                        let lib = Arc::clone(&this.lib);
                         this.ui(move |w| {
+                            if lib.generation.load(Ordering::SeqCst) != generation {
+                                return;
+                            }
                             let img = Image::from_rgba8(px);
                             with_tracks(&w, |m| m.set_cover(&indices, &img));
                         });

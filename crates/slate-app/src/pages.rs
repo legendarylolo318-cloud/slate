@@ -10,7 +10,7 @@ use serde_json::Value;
 use slate_core::commands::{library as lib_cmds, metadata, pages, search};
 use slate_core::queue::{Source, Track};
 use slate_core::tidal_api::{TidalAlbumDetail, TidalArtist, TidalArtistDetail, TidalPlaylist};
-use slint::{Image, Model, ModelRc, VecModel};
+use slint::{Color, Image, Model, ModelRc, VecModel};
 
 use crate::backend::Backend;
 use crate::bootstrap::{AppWindow, CardItem, CardSection};
@@ -18,6 +18,8 @@ use crate::images::tidal_image_url;
 use crate::library::SourceKind;
 
 const GRID_PAGE: u32 = 100;
+/// v2 endpoints reject `limit` above 50 (HTTP 400), so mixes page in 50s.
+const MIXES_PAGE: u32 = slate_core::tidal_api::MAX_V2_FAVORITES_LIMIT;
 const MAX_GRID_PAGES: u32 = 30;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -259,6 +261,33 @@ fn editorial_sections(sections: &[slate_core::tidal_api::HomePageSection]) -> Ve
         .collect()
 }
 
+/// A stable muted colour per title, for tiles that have no artwork.
+fn tile_tint(title: &str) -> Color {
+    let hue = title
+        .bytes()
+        .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)))
+        % 360;
+    Color::from_hsva(hue as f32, 0.5, 0.45, 1.0)
+}
+
+/// A TIDAL image UUID (`8-4-4-4-12` hex) or a URL, as opposed to a slug such as
+/// "hiphop" or "k-pop".
+fn is_image_ref(s: &str) -> bool {
+    if s.starts_with("http") {
+        return true;
+    }
+    let groups: Vec<&str> = s.split('-').collect();
+    groups.iter().map(|g| g.len()).eq([8, 4, 4, 4, 12])
+        && groups
+            .iter()
+            .all(|g| g.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// "1 album" / "2 albums".
+fn count_label(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 /// A link to another page. The card id carries the path and the page title.
 fn page_card(path: &str, label: &str, page_title: &str) -> CardData {
     CardData {
@@ -276,7 +305,9 @@ pub fn card_from_value(v: &Value) -> Option<CardData> {
     // Explore's genre / mood links: a title and a page path, no id.
     if let (Some(path), Some(title), None) = (s("apiPath"), s("title"), v.get("id")) {
         let mut card = page_card(path, title, title);
-        card.image = img("imageId");
+        // TIDAL sends a bare slug ("hiphop") here, which the CDN refuses; only a
+        // real image id or URL is worth requesting, the rest get a name tile.
+        card.image = img("imageId").filter(|i| is_image_ref(i));
         return Some(card);
     }
     if let Some(uuid) = s("uuid") {
@@ -455,7 +486,7 @@ impl Backend {
                     let n = cards.len();
                     this.show_cards(
                         "Folder".into(),
-                        format!("{n} playlists"),
+                        count_label(n, "playlist", "playlists"),
                         vec![SectionData {
                             title: String::new(),
                             wrap: true,
@@ -604,6 +635,7 @@ impl Backend {
                             .map(|c| CardItem {
                                 kind: c.kind.into(),
                                 id: c.id.into(),
+                                tint: tile_tint(&c.title),
                                 title: c.title.into(),
                                 subtitle: c.subtitle.into(),
                                 cover: Image::default(),
@@ -627,23 +659,35 @@ impl Backend {
             let Some(state) = this.state() else { return };
             if let Some(img) = hero_image {
                 if let Some(px) = this.images.get(&state, &tidal_image_url(&img, 320)).await {
-                    if this.lib.cards_generation() == generation {
-                        this.ui(move |w| w.set_hero_image(Image::from_rgba8(px)));
-                    }
+                    let lib = Arc::clone(&this.lib);
+                    this.ui(move |w| {
+                        if lib.cards_generation() == generation {
+                            w.set_hero_image(Image::from_rgba8(px));
+                        }
+                    });
                 }
             }
             stream::iter(plan)
                 .for_each_concurrent(6, |(s, c, img)| {
                     let (state, this) = (Arc::clone(&state), this.clone());
                     async move {
+                        // Stop fetching once the page is gone (a library grid can have
+                        // thousands of covers).
+                        if this.lib.cards_generation() != generation {
+                            return;
+                        }
                         let Some(px) = this.images.get(&state, &tidal_image_url(&img, 320)).await
                         else {
                             return;
                         };
-                        if this.lib.cards_generation() != generation {
-                            return;
-                        }
-                        this.ui(move |w| set_card_cover(&w, s, c, Image::from_rgba8(px)));
+                        // Checked again on the UI thread: a newer page may have been
+                        // published between here and there.
+                        let lib = Arc::clone(&this.lib);
+                        this.ui(move |w| {
+                            if lib.cards_generation() == generation {
+                                set_card_cover(&w, s, c, Image::from_rgba8(px));
+                            }
+                        });
                     }
                 })
                 .await;
@@ -711,6 +755,7 @@ impl Backend {
     /// Pages through a paginated favourites endpoint, mapping items to cards.
     async fn collect_grid<T, F, Fut>(
         &self,
+        page_size: u32,
         mut fetch: F,
         map: impl Fn(&T) -> CardData,
     ) -> Result<Vec<CardData>, String>
@@ -722,7 +767,7 @@ impl Backend {
     {
         let mut cards = Vec::new();
         for page in 0..MAX_GRID_PAGES {
-            let p = fetch(page * GRID_PAGE).await.map_err(|e| e.log_safe())?;
+            let p = fetch(page * page_size).await.map_err(|e| e.log_safe())?;
             let got = p.items.len();
             cards.extend(p.items.iter().map(&map));
             if got == 0 || cards.len() >= p.total_number_of_items as usize {
@@ -792,7 +837,7 @@ impl Backend {
                     let n = cards.len();
                     this.show_cards(
                         "Loved Videos".into(),
-                        format!("{n} videos"),
+                        count_label(n, "video", "videos"),
                         vec![SectionData {
                             title: String::new(),
                             wrap: true,
@@ -818,6 +863,7 @@ impl Backend {
             };
             let res = this
                 .collect_grid(
+                    GRID_PAGE,
                     |off| {
                         lib_cmds::get_favorite_albums(
                             &state,
@@ -841,7 +887,7 @@ impl Backend {
                     let n = cards.len();
                     this.show_cards(
                         "Albums".into(),
-                        format!("{n} albums"),
+                        count_label(n, "album", "albums"),
                         vec![SectionData {
                             title: String::new(),
                             wrap: true,
@@ -867,6 +913,7 @@ impl Backend {
             };
             let res = this
                 .collect_grid(
+                    GRID_PAGE,
                     |off| {
                         lib_cmds::get_favorite_artists(
                             &state,
@@ -892,7 +939,7 @@ impl Backend {
                     let n = cards.len();
                     this.show_cards(
                         "Artists".into(),
-                        format!("{n} artists"),
+                        count_label(n, "artist", "artists"),
                         vec![SectionData {
                             title: String::new(),
                             wrap: true,
@@ -916,12 +963,13 @@ impl Backend {
             let Some(state) = this.state() else { return };
             let res = this
                 .collect_grid(
+                    MIXES_PAGE,
                     |off| {
                         lib_cmds::get_favorite_mixes(
                             &state,
                             this.app.clone(),
                             off,
-                            GRID_PAGE,
+                            MIXES_PAGE,
                             "DATE".into(),
                             "DESC".into(),
                         )
@@ -948,7 +996,7 @@ impl Backend {
                     let n = cards.len();
                     this.show_cards(
                         "Mixes".into(),
-                        format!("{n} mixes"),
+                        count_label(n, "mix", "mixes"),
                         vec![SectionData {
                             title: String::new(),
                             wrap: true,
@@ -1171,6 +1219,36 @@ fn set_card_cover(w: &AppWindow, s: usize, c: usize, cover: Image) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn slug_image_ids_are_not_requested() {
+        for slug in ["pop", "k-pop", "r-b-soul"] {
+            let c = card_from_value(
+                &json!({ "title": "Pop", "apiPath": "pages/genre_pop", "imageId": slug }),
+            )
+            .unwrap();
+            assert_eq!(c.image, None, "{slug}");
+        }
+        let uuid = "0a1b2c3d-4e5f-6789-abcd-ef0123456789";
+        let c = card_from_value(
+            &json!({ "title": "Pop", "apiPath": "pages/genre_pop", "imageId": uuid }),
+        )
+        .unwrap();
+        assert!(c.image.is_some());
+    }
+
+    #[test]
+    fn tile_tint_is_stable_per_title() {
+        assert_eq!(tile_tint("Pop"), tile_tint("Pop"));
+        assert_ne!(tile_tint("Pop"), tile_tint("Latin"));
+    }
+
+    #[test]
+    fn count_labels_are_singular_for_one() {
+        assert_eq!(count_label(0, "album", "albums"), "0 albums");
+        assert_eq!(count_label(1, "album", "albums"), "1 album");
+        assert_eq!(count_label(2, "mix", "mixes"), "2 mixes");
+    }
+
     use super::*;
     use serde_json::json;
 
@@ -1240,14 +1318,17 @@ mod editorial_tests {
     #[test]
     fn page_links_become_page_cards_carrying_path_and_title() {
         let c = card_from_value(
-            &json!({ "title": "Pop", "apiPath": "pages/genre_pop", "imageId": "a-b" }),
+            &json!({ "title": "Pop", "apiPath": "pages/genre_pop", "imageId": "0a1b2c3d-4e5f-6789-abcd-ef0123456789" }),
         )
         .expect("a page link");
         assert_eq!(
             (c.kind, c.id.as_str(), c.title.as_str()),
             ("page", "pages/genre_pop|Pop", "Pop")
         );
-        assert_eq!(c.image.as_deref(), Some("a-b"));
+        assert_eq!(
+            c.image.as_deref(),
+            Some("0a1b2c3d-4e5f-6789-abcd-ef0123456789")
+        );
         // Anything with an id is still content, not a link.
         let album =
             card_from_value(&json!({ "id": 7, "title": "A", "numberOfTracks": 3, "apiPath": "x" }));

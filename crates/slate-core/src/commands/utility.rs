@@ -44,7 +44,8 @@ pub async fn get_image_bytes(state: &AppState, url: String) -> Result<Vec<u8>, S
                 .proxied_http
                 .client()
                 .map_err(|e| SlateError::ProxyBlocked { reason: e.cause })?;
-            let res = http_client.get(&url).send().await?;
+            // An error page (404, 429, 5xx) must not be cached as the image.
+            let res = http_client.get(&url).send().await?.error_for_status()?;
             let bytes = res.bytes().await?.to_vec();
 
             state
