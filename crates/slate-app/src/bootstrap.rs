@@ -424,6 +424,11 @@ fn wire(window: &AppWindow, backend: &Backend) {
             window.$on(move |$($a),*| $body);
         }};
     }
+    crate::keys::init(&crate::uiprefs::UiPrefs::load());
+    crate::keys::apply_ui(window);
+    window.on_resolve_key(|t, c, a, s, m| crate::keys::resolve(&t, c, a, s, m).into());
+    bind!(on_capture_key, |b, t, c, a, s, m| b
+        .capture_key(&t, c, a, s, m));
     bind!(on_start_login, |b| b.start_login());
     bind!(on_open_login_url, |b| b.open_login_url());
     bind!(on_open_update, |b| b.open_update());

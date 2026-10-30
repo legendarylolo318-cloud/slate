@@ -9,6 +9,10 @@
 - Go to album / Go to artist on queue rows (right-click), and clicking the title or artist
   in the player bar, full-screen player or mini-player opens that album or artist. When a
   track has several artists you pick one from a list.
+- Settings → Shortcuts: every in-app shortcut and the three global media shortcuts can be
+  rebound. Click one and press the new combination; a clash names the action already using
+  it, each item has Reset, and "Reset all" restores the defaults. The `?` sheet shows your
+  current bindings, and global shortcuts are re-registered without a restart.
 
 ## [1.1.0] - 2026-10-30
 

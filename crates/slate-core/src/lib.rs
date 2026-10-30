@@ -41,6 +41,7 @@ pub mod embedded_librefm;
 pub mod error;
 pub mod http_util;
 pub mod idle_inhibit;
+pub mod keymap;
 pub mod logging;
 pub mod mcp;
 pub mod overlay;

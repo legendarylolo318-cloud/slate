@@ -299,6 +299,13 @@ impl Backend {
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
             match name.as_str() {
+                "shortcuts-reset-all" => this.reset_shortcut(None),
+                n if n.starts_with("shortcut-rebind:") => {
+                    this.begin_capture(&n["shortcut-rebind:".len()..]);
+                }
+                n if n.starts_with("shortcut-reset:") => {
+                    this.reset_shortcut(Some(&n["shortcut-reset:".len()..]));
+                }
                 "pkce-start" => this.start_pkce(),
                 "pkce-finish" => this.finish_pkce().await,
                 "pkce-open" => this.open_pkce_url().await,

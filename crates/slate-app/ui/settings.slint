@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { Toggle, Button, Segmented, TextField, ColorPicker } from "widgets.slint";
-import { PresetTile } from "types.slint";
+import { PresetTile, ShortcutRow } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
 /// Everything the settings page shows. Rust fills it from the core and handles
@@ -71,6 +71,10 @@ export global SettingsState {
     in-out property <string> mcp-url;
     in-out property <bool> overlay-enabled;
     in-out property <string> overlay-url;
+    // Shortcuts
+    in-out property <[ShortcutRow]> shortcut-rows;
+    in-out property <string> capturing;
+    in-out property <string> capture-warning;
     // About
     in-out property <string> version;
 
@@ -109,7 +113,7 @@ component Row inherits Rectangle {
 export component SettingsPage inherits Rectangle {
     in property <bool> compact: false;
     background: Theme.background;
-    property <[string]> tabs: ["General", "Appearance", "Playback", "Scrobbling", "Network", "Integrations", "About"];
+    property <[string]> tabs: ["General", "Appearance", "Playback", "Scrobbling", "Network", "Integrations", "Shortcuts", "About"];
 
     VerticalLayout {
         padding: root.compact ? 12px : 24px;
@@ -431,6 +435,22 @@ export component SettingsPage inherits Rectangle {
                 }
 
                 if SettingsState.tab == 6: VerticalLayout {
+                    Row {
+                        label: "Reset all shortcuts";
+                        hint: "Click a shortcut to change it. Esc cancels while recording. Global shortcuts work system-wide when turned on in General.";
+                        Button { label: "Reset all"; clicked => { SettingsState.action("shortcuts-reset-all"); } }
+                    }
+                    for s in SettingsState.shortcut-rows: Row {
+                        label: s.label;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { label: s.combo; min-width: 150px; clicked => { SettingsState.capture-warning = ""; SettingsState.action("shortcut-rebind:" + s.id); } }
+                            if s.custom: Button { label: "Reset"; clicked => { SettingsState.action("shortcut-reset:" + s.id); } }
+                        }
+                    }
+                }
+
+                if SettingsState.tab == 7: VerticalLayout {
                     spacing: 8px;
                     padding-top: 12px;
                     Text { text: "Slate " + SettingsState.version; font-size: 22px; font-weight: 700; color: Theme.text; }

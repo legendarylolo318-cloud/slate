@@ -21,6 +21,7 @@ mod images;
 mod imgcache;
 mod import;
 mod ipc;
+mod keys;
 mod library;
 mod mini;
 mod models;
@@ -436,35 +437,25 @@ mod tests {
 
 #[cfg(test)]
 mod shortcut_overlay_tests {
-    /// Every key the window's FocusScope handles must appear in the overlay.
+    /// Every in-app action must be handled by the window's key handler, and the
+    /// handler must not handle anything the keymap does not know.
     #[test]
-    fn shortcut_overlay_lists_every_bound_key() {
+    fn every_in_app_action_is_handled_in_app_slint() {
         let app = include_str!("../ui/app.slint");
-        let overlay = include_str!("../ui/shortcuts.slint");
         let start = app.find("key-pressed(e)").unwrap();
-        let handler = &app[start..start + app[start..].find("reject").unwrap()];
-        let label = |key: &str| -> String {
-            match key {
-                " " => "Space".into(),
-                "Key.RightArrow" | "Key.LeftArrow" => "←".into(),
-                "Key.Escape" => "Esc".into(),
-                k => k.to_uppercase(),
-            }
-        };
-        let mut checked = 0;
-        for part in handler.split("e.text == ").skip(1) {
-            let key = if let Some(rest) = part.strip_prefix('"') {
-                &rest[..rest.find('"').unwrap()]
-            } else {
-                &part[..part.find([')', ' ']).unwrap()]
-            };
-            let want = format!("keys: \"{}", label(key));
-            let found = overlay.contains(&want)
-                || overlay.contains(&format!("{} / ", label(key)))
-                || overlay.contains(&format!("+ {}", label(key)));
-            assert!(found, "key {key:?} is bound but not in shortcuts.slint");
-            checked += 1;
+        let handler = &app[start..start + app[start..].find("reject\n        }").unwrap()];
+        let mut handled = Vec::new();
+        for part in handler.split("a == \"").skip(1) {
+            handled.push(&part[..part.find('"').unwrap()]);
         }
-        assert!(checked >= 12, "parsed only {checked} bindings");
+        for a in slate_core::keymap::ACTIONS {
+            if a.scope == slate_core::keymap::Scope::App {
+                assert!(handled.contains(&a.id), "{} is not handled", a.id);
+            }
+        }
+        for id in handled {
+            let a = slate_core::keymap::action(id);
+            assert!(a.is_some(), "app.slint handles unknown action {id}");
+        }
     }
 }

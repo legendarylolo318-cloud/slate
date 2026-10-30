@@ -6,23 +6,23 @@
 
 use crate::control::{Control, ControlFn};
 
-/// Shortcut id, what it does, proposed trigger (XDG shortcut syntax), label.
-const SHORTCUTS: [(&str, &str, &str, &str); 3] = [
-    (
-        "play-pause",
-        "Play / pause",
-        "CTRL+ALT+space",
-        "Ctrl+Alt+Space",
-    ),
-    ("next", "Next track", "CTRL+ALT+Right", "Ctrl+Alt+→"),
-    ("previous", "Previous track", "CTRL+ALT+Left", "Ctrl+Alt+←"),
+/// Shortcut id, what it does, keymap action id.
+const SHORTCUTS: [(&str, &str, &str); 3] = [
+    ("play-pause", "Play / pause", "g-play-pause"),
+    ("next", "Next track", "g-next"),
+    ("previous", "Previous track", "g-previous"),
 ];
 
 /// "Ctrl+Alt+Space play / pause, …" for the settings hint.
 pub fn describe() -> String {
     SHORTCUTS
         .iter()
-        .map(|(_, what, _, label)| format!("{label} {}", what.to_lowercase()))
+        .map(|(_, what, action)| {
+            let keys = crate::keys::combo(action)
+                .map(|c| c.display())
+                .unwrap_or_default();
+            format!("{keys} {}", what.to_lowercase())
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -65,7 +65,10 @@ pub mod portal {
         let session = portal.create_session().await?;
         let wanted: Vec<NewShortcut> = SHORTCUTS
             .iter()
-            .map(|(id, what, trigger, _)| NewShortcut::new(*id, *what).preferred_trigger(*trigger))
+            .filter_map(|(id, what, action)| {
+                let trigger = crate::keys::combo(action)?.to_xdg();
+                Some(NewShortcut::new(*id, *what).preferred_trigger(trigger.as_str()))
+            })
             .collect();
         portal
             .bind_shortcuts(&session, &wanted, None)
@@ -92,6 +95,35 @@ pub mod hotkeys {
 
     thread_local! {
         static MANAGER: RefCell<Option<GlobalHotKeyManager>> = const { RefCell::new(None) };
+    }
+
+    fn to_hotkey(c: &slate_core::keymap::Combo) -> Option<HotKey> {
+        let mut mods = Modifiers::empty();
+        for (on, m) in [
+            (c.ctrl, Modifiers::CONTROL),
+            (c.alt, Modifiers::ALT),
+            (c.shift, Modifiers::SHIFT),
+            (c.meta, Modifiers::META),
+        ] {
+            if on {
+                mods |= m;
+            }
+        }
+        let name = match c.key.as_str() {
+            "Left" => "ArrowLeft".to_string(),
+            "Right" => "ArrowRight".to_string(),
+            "Up" => "ArrowUp".to_string(),
+            "Down" => "ArrowDown".to_string(),
+            k if k.chars().count() == 1 && k.chars().all(|ch| ch.is_ascii_alphabetic()) => {
+                format!("Key{}", k.to_uppercase())
+            }
+            k if k.chars().count() == 1 && k.chars().all(|ch| ch.is_ascii_digit()) => {
+                format!("Digit{k}")
+            }
+            k => k.to_string(),
+        };
+        let code: Code = name.parse().ok()?;
+        Some(HotKey::new(Some(mods), code))
     }
 
     /// Registers or releases the hotkeys. Must run on the UI thread.

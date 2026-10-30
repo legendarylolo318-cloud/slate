@@ -9,10 +9,10 @@ import { VideoView } from "video.slint";
 import { SettingsPage, SettingsState } from "settings.slint";
 import { ProfilePage, ProfileState } from "profile.slint";
 import { IconButton, TextField, Button } from "widgets.slint";
-import { ShortcutOverlay } from "shortcuts.slint";
+import { ShortcutOverlay, Shortcut, Shortcuts } from "shortcuts.slint";
 import { ListView } from "std-widgets.slint";
-import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice } from "types.slint";
-export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, SettingsState, ProfileState, Theme }
+import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow } from "types.slint";
+export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, Shortcut, Shortcuts, SettingsState, ProfileState, Theme }
 
 export enum Screen { loading, login, main }
 
@@ -33,6 +33,9 @@ export component AppWindow inherits Window {
     property <bool> narrow: self.width < 900px;
     property <bool> compact: self.width < 600px;
     property <int> focus-tick: 0;
+    in-out property <int> filter-tick: 0;
+    pure callback resolve-key(string, bool, bool, bool, bool) -> string;
+    callback capture-key(string, bool, bool, bool, bool);
     // Playlist picker: -1 = just create, -2 = current track, >=0 = list row.
     in-out property <bool> fullscreen: false;
     in-out property <bool> video-open: false;
@@ -216,21 +219,24 @@ export component AppWindow inherits Window {
     // Global shortcuts (ignored while a text field has focus, since fields consume keys).
     fs := FocusScope {
         key-pressed(e) => {
-            if (e.text == " ") { root.toggle-play(); return accept; }
-            if (e.modifiers.control && e.text == Key.RightArrow) { root.next(); return accept; }
-            if (e.modifiers.control && e.text == Key.LeftArrow) { root.previous(); return accept; }
-            if (e.text == Key.RightArrow) { root.seek-relative(5); return accept; }
-            if (e.text == Key.LeftArrow) { root.seek-relative(-5); return accept; }
-            if (e.text == "?") { root.shortcuts-open = !root.shortcuts-open; return accept; }
             if (e.text == Key.Escape && root.shortcuts-open) { root.shortcuts-open = false; return accept; }
             if (e.text == Key.Escape && root.fullscreen) { root.fullscreen = false; return accept; }
-            if (e.text == "f") { root.fullscreen = !root.fullscreen; return accept; }
-            if (e.text == "m") { root.toggle-mute(); return accept; }
-            if (e.text == "s") { root.toggle-shuffle(); return accept; }
-            if (e.text == "r") { root.cycle-repeat(); return accept; }
-            if (e.text == "q") { root.panel = root.panel == "queue" ? "" : "queue"; return accept; }
-            if (e.text == "l") { root.panel = root.panel == "lyrics" ? "" : "lyrics"; return accept; }
-            if (e.text == "/") { root.focus-tick += 1; return accept; }
+            if (SettingsState.capturing != "") { return reject; }
+            let a = root.resolve-key(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta);
+            if (a == "play-pause") { root.toggle-play(); return accept; }
+            if (a == "next") { root.next(); return accept; }
+            if (a == "previous") { root.previous(); return accept; }
+            if (a == "seek-forward") { root.seek-relative(5); return accept; }
+            if (a == "seek-back") { root.seek-relative(-5); return accept; }
+            if (a == "shortcuts") { root.shortcuts-open = !root.shortcuts-open; return accept; }
+            if (a == "fullscreen") { root.fullscreen = !root.fullscreen; return accept; }
+            if (a == "mute") { root.toggle-mute(); return accept; }
+            if (a == "shuffle") { root.toggle-shuffle(); return accept; }
+            if (a == "repeat") { root.cycle-repeat(); return accept; }
+            if (a == "queue") { root.panel = root.panel == "queue" ? "" : "queue"; return accept; }
+            if (a == "lyrics") { root.panel = root.panel == "lyrics" ? "" : "lyrics"; return accept; }
+            if (a == "search") { root.focus-tick += 1; return accept; }
+            if (a == "filter") { root.filter-tick += 1; return accept; }
             reject
         }
 
@@ -610,6 +616,32 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        if SettingsState.capturing != "": Rectangle {
+            background: #000000c0;
+            capture-scope := FocusScope {
+                init => { self.focus(); }
+                key-pressed(e) => {
+                    if (e.text == Key.Escape) { SettingsState.capturing = ""; SettingsState.capture-warning = ""; return accept; }
+                    root.capture-key(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta);
+                    accept
+                }
+            }
+            TouchArea { clicked => { SettingsState.capturing = ""; SettingsState.capture-warning = ""; } }
+            Rectangle {
+                width: min(380px, parent.width - 32px);
+                height: 120px;
+                border-radius: 12px;
+                background: Theme.surface;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 8px;
+                    padding: 16px;
+                    Text { text: "Press the new shortcut"; font-size: 18px; font-weight: 700; color: Theme.text; horizontal-alignment: center; }
+                    Text { text: SettingsState.capture-warning != "" ? SettingsState.capture-warning : "Esc cancels"; color: SettingsState.capture-warning != "" ? Theme.danger : Theme.text-muted; wrap: word-wrap; horizontal-alignment: center; }
                 }
             }
         }

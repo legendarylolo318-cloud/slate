@@ -7,22 +7,8 @@ export struct Shortcut {
 }
 
 export global Shortcuts {
-    // Every key bound in app.slint's FocusScope; `shortcut_overlay_lists_every_bound_key`
-    // (src/main.rs tests) fails if one is missing here.
-    out property <[Shortcut]> list: [
-        { keys: "Space", action: "Play / pause" },
-        { keys: "← / →", action: "Seek back / forward 5 s" },
-        { keys: "Ctrl + ← / →", action: "Previous / next track" },
-        { keys: "M", action: "Mute" },
-        { keys: "S", action: "Shuffle" },
-        { keys: "R", action: "Repeat (off, all, one)" },
-        { keys: "Q", action: "Queue panel" },
-        { keys: "L", action: "Lyrics panel" },
-        { keys: "F", action: "Full-screen player" },
-        { keys: "Esc", action: "Leave full screen / close this sheet" },
-        { keys: "/", action: "Search" },
-        { keys: "?", action: "Show these shortcuts" },
-    ];
+    // Filled by Rust from the current key bindings (keys.rs).
+    in-out property <[Shortcut]> list;
 }
 
 export component ShortcutOverlay inherits Rectangle {

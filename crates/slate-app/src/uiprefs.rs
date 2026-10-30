@@ -59,6 +59,9 @@ pub struct UiPrefs {
     /// The version whose notice the user closed.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub dismissed_update: String,
+    /// Rebound shortcuts: action id → combo (`slate_core::keymap`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub keymap: std::collections::BTreeMap<String, String>,
     /// Sort order per library list (`sort::List::key`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub sorts: std::collections::BTreeMap<String, SortPref>,
@@ -84,6 +87,7 @@ impl Default for UiPrefs {
             last_update_check: 0,
             known_update: None,
             dismissed_update: String::new(),
+            keymap: Default::default(),
             sorts: Default::default(),
         }
     }
