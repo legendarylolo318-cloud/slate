@@ -78,6 +78,9 @@
   agent changed with Undo, and "Let an agent DJ", which gives an agent 10 s to refill an empty
   queue before the autoplay radio.
 
+- Empty playlists show a short "Nothing here yet" message instead of a blank page, and the UI
+  now has one shared set of spacing, radius and text sizes (`Metrics`) for new work.
+
 ### Fixed
 - Player bar in narrow windows: previous / play / next / shuffle / repeat get their own
   centred row and the seek bar its own line, so they never disappear; the less-used buttons

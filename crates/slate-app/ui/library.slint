@@ -1,4 +1,4 @@
-import { Theme } from "theme.slint";
+import { Theme, Metrics } from "theme.slint";
 import { TrackRow, PlaylistEntry } from "types.slint";
 import { ListView } from "std-widgets.slint";
 import { Button, Segmented, QualityBadges, TextField, IconButton } from "widgets.slint";
@@ -535,8 +535,8 @@ export component TrackPage inherits Rectangle {
             VerticalLayout {
                 alignment: end;
                 spacing: 4px;
-                Text { text: root.kind-label; font-size: 11px; color: Theme.text-muted; }
-                Text { text: root.title; font-size: 36px; font-weight: 800; color: Theme.text; overflow: elide; }
+                Text { text: root.kind-label; font-size: Metrics.text-caption; color: Theme.text-muted; }
+                Text { text: root.title; font-size: Metrics.text-display; font-weight: 800; color: Theme.text; overflow: elide; }
                 Text { text: root.loading ? "Loading…" : root.subtitle; color: Theme.text-muted; }
                 if root.quality > 0 || root.atmos: QualityBadges { tier: root.quality; atmos: root.atmos; }
             }
@@ -616,6 +616,13 @@ export component TrackPage inherits Rectangle {
             }
             Rectangle { width: 24px; }
             Text { width: 52px; text: "TIME"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: right; vertical-alignment: center; }
+        }
+        if !root.loading && root.tracks.length == 0 && root.filter-text == "" && root.filter-quality == 0: VerticalLayout {
+            vertical-stretch: 1;
+            alignment: center;
+            spacing: Metrics.space-2;
+            Text { text: "Nothing here yet"; font-size: Metrics.text-title; font-weight: 700; color: Theme.text; horizontal-alignment: center; }
+            Text { text: root.can-reorder ? "Add tracks with ＋ on a song, or drag them onto this playlist in the sidebar." : "This list has no tracks."; color: Theme.text-muted; horizontal-alignment: center; wrap: word-wrap; }
         }
         lv := ListView {
             vertical-stretch: 1;
