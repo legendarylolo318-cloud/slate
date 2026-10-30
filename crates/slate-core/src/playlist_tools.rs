@@ -56,6 +56,24 @@ pub fn removal_order(dups: &[Duplicate]) -> Vec<u32> {
     v
 }
 
+/// Keys of the tracks already in a playlist.
+pub fn keys_of(tracks: &[TidalTrack]) -> std::collections::HashSet<TrackKey> {
+    tracks.iter().map(track_key).collect()
+}
+
+/// Suggestions that are not in the playlist already (by ISRC, else id) and not repeated among
+/// themselves, order kept.
+pub fn filter_suggestions(
+    candidates: Vec<TidalTrack>,
+    existing: &std::collections::HashSet<TrackKey>,
+) -> Vec<TidalTrack> {
+    let mut seen = existing.clone();
+    candidates
+        .into_iter()
+        .filter(|t| seen.insert(track_key(t)))
+        .collect()
+}
+
 /// Result of comparing two playlists; indices point into the lists that were compared.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Comparison {
@@ -171,6 +189,24 @@ mod tests {
     fn no_duplicates_is_empty() {
         assert!(find_duplicates(&[track(1, None), track(2, None)]).is_empty());
         assert!(find_duplicates(&[]).is_empty());
+    }
+
+    #[test]
+    fn suggestions_skip_what_the_playlist_has_and_repeats() {
+        let have = keys_of(&[track(1, Some("A")), track(2, None)]);
+        let cands = vec![
+            track(10, Some("a")), // same ISRC as track 1
+            track(2, None),       // same id as track 2
+            track(11, Some("B")),
+            track(12, Some("B")), // repeat of the previous suggestion
+            track(13, None),
+        ];
+        let ids: Vec<u64> = filter_suggestions(cands, &have)
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, vec![11, 13]);
+        assert!(filter_suggestions(vec![], &have).is_empty());
     }
 
     #[test]

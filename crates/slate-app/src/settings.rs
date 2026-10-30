@@ -90,6 +90,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_minimize_to_tray(s.minimize_to_tray);
     g.set_logging(s.logging);
     g.set_ui_scale_index(prefs.scale_index as i32);
+    g.set_suggest_index(prefs.suggest_index as i32);
     g.set_bar_size_index(prefs.bar_size as i32);
     g.set_lyrics_size_index(prefs.lyrics_size as i32);
     g.set_normalization(s.normalization);
@@ -257,6 +258,7 @@ impl Backend {
                     });
                     saved
                 }
+                "suggest" => this.set_suggest_index(usize_i),
                 "ui-scale" => {
                     let mut p = UiPrefs::load();
                     p.scale_index = usize_i;

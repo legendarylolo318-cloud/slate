@@ -179,13 +179,22 @@ impl Backend {
         let Some(track) = self.cached_track(index) else {
             return;
         };
+        self.track_action(track, Some(index), action);
+    }
+
+    /// A context-menu action on `track`. `index` is its row in the open list, when it has one.
+    pub(crate) fn track_action(&self, track: Track, index: Option<usize>, action: &str) {
         let action = action.to_string();
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(ctl) = this.controller() else { return };
             match action.as_str() {
                 "favorite" => this.toggle_track_favorite(track.id),
-                "remove-from-playlist" => this.remove_from_playlist(this.real_index(index)),
+                "remove-from-playlist" => {
+                    if let Some(i) = index {
+                        this.remove_from_playlist(this.real_index(i));
+                    }
+                }
                 "play-next" => {
                     ctl.play_next_in_queue(track, None).await;
                     this.after_queue_edit("Will play next").await;

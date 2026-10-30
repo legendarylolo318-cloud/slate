@@ -456,6 +456,13 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_save_smart_snapshot, |b| b.save_smart_snapshot());
     bind!(on_toggle_discord_hidden, |b, id| b
         .toggle_playlist_discord_hidden(&id));
+    bind!(on_suggest_load, |b, m| b.suggest_load(&m));
+    bind!(on_suggest_add, |b, i| b
+        .suggest_add(usize::try_from(i).unwrap_or(usize::MAX)));
+    bind!(on_suggest_play, |b, i| b
+        .suggest_play(usize::try_from(i).unwrap_or(usize::MAX)));
+    bind!(on_suggest_action, |b, i, a| b
+        .suggest_action(usize::try_from(i).unwrap_or(usize::MAX), &a));
     bind!(on_start_login, |b| b.start_login());
     bind!(on_open_login_url, |b| b.open_login_url());
     bind!(on_open_update, |b| b.open_update());

@@ -27,6 +27,7 @@ export global SettingsState {
     // General
     in-out property <bool> minimize-to-tray;
     in-out property <int> ui-scale-index;
+    in-out property <int> suggest-index: 2;
     in-out property <int> bar-size-index: 1;
     in-out property <int> lyrics-size-index: 1;
     in-out property <bool> logging;
@@ -180,6 +181,15 @@ export component SettingsPage inherits Rectangle {
                             options: ["Auto", "100%", "125%", "150%", "175%", "200%"];
                             index: SettingsState.ui-scale-index;
                             picked(i) => { SettingsState.ui-scale-index = i; SettingsState.changed-int("ui-scale", i); }
+                        }
+                    }
+                    Row {
+                        label: "Suggested tracks under playlists";
+                        hint: "On playlists you own, shown when you scroll to the end of the list. Off never asks TIDAL.";
+                        Segmented {
+                            options: ["Off", "5", "10", "20"];
+                            index: SettingsState.suggest-index;
+                            picked(i) => { SettingsState.suggest-index = i; SettingsState.changed-int("suggest", i); }
                         }
                     }
                     Row {

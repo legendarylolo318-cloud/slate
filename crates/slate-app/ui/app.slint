@@ -34,6 +34,13 @@ export component AppWindow inherits Window {
     property <bool> compact: self.width < 600px;
     property <int> focus-tick: 0;
     in-out property <int> filter-tick: 0;
+    in-out property <[TrackRow]> suggestions;
+    in-out property <bool> suggest-visible: false;
+    in-out property <string> suggest-status;
+    callback suggest-load(string);
+    callback suggest-add(int);
+    callback suggest-play(int);
+    callback suggest-action(int, string);
     in property <[PlaylistEntry]> smart-lists;
     in property <bool> can-save-smart;
     callback new-smart();
@@ -385,6 +392,13 @@ export component AppWindow inherits Window {
                         export-list(f) => { root.export-list(f); }
                         can-dedupe: root.can-dedupe;
                         can-save-smart: root.can-save-smart;
+                        suggestions: root.suggestions;
+                        suggest-visible: root.suggest-visible;
+                        suggest-status: root.suggest-status;
+                        suggest-load(m) => { root.suggest-load(m); }
+                        suggest-add(i) => { root.suggest-add(i); }
+                        suggest-play(i) => { root.suggest-play(i); }
+                        suggest-action(i, a) => { root.suggest-action(i, a); }
                         save-smart-snapshot => { root.save-smart-snapshot(); }
                         filter-request: root.filter-tick;
                         filter-open <=> root.filter-open;

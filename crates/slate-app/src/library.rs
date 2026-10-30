@@ -77,7 +77,7 @@ pub struct LibState {
     generation: AtomicU64,
     active: Mutex<Option<Active>>,
     pub(crate) tracks: Mutex<BTreeMap<usize, Track>>,
-    total: AtomicUsize,
+    pub(crate) total: AtomicUsize,
     user_id: Mutex<Option<u64>>,
     /// (uuid, title) of the sidebar's playlists, for smart-playlist rules that name one.
     pub(crate) playlist_titles: Mutex<Vec<(String, String)>>,
@@ -365,6 +365,7 @@ impl Backend {
         if let Ok(mut v) = self.lib.view.lock() {
             *v = None;
         }
+        self.suggest_reset();
         let list = match kind {
             SourceKind::Loved => Some(crate::sort::List::Loved),
             SourceKind::Playlist(_) => Some(crate::sort::List::Playlist),
@@ -506,6 +507,11 @@ impl Backend {
                             v["numberOfVideos"].as_u64().unwrap_or(0),
                         );
                         let by = v["creator"]["name"].as_str().unwrap_or("");
+                        let owned = match self.user_id().await {
+                            Some(me) => v["creator"]["id"].as_u64() == Some(me),
+                            None => false,
+                        };
+                        self.suggest_page_opened(uuid, owned);
                         Header {
                             label: "PLAYLIST",
                             title: v["title"].as_str().unwrap_or("Playlist").to_string(),

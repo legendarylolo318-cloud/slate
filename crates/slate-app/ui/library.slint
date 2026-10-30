@@ -263,6 +263,9 @@ component Row inherits Rectangle {
     in property <bool> show-album: true;
     in property <bool> show-artist: true;
     in property <bool> show-quality: true;
+    /// A suggested track: no playlist edits, and a + button.
+    in property <bool> suggestion: false;
+    callback add();
     in property <length> quality-w;
     in property <length> title-w;
     in property <length> artist-w;
@@ -282,8 +285,8 @@ component Row inherits Rectangle {
         Menu {
             MenuItem { title: "Play"; activated => { root.play(); } }
             MenuItem { title: root.item.favorite ? "Remove from Loved Tracks" : "Add to Loved Tracks"; activated => { root.action("favorite"); } }
-            MenuItem { title: "Add to playlist…"; activated => { root.action("add-to-playlist"); } }
-            MenuItem { title: "Remove from this playlist"; activated => { root.action("remove-from-playlist"); } }
+            MenuItem { title: "Add to playlist…"; enabled: !root.suggestion; activated => { root.action("add-to-playlist"); } }
+            MenuItem { title: "Remove from this playlist"; enabled: !root.suggestion; activated => { root.action("remove-from-playlist"); } }
             MenuItem { title: "Play next"; activated => { root.action("play-next"); } }
             MenuItem { title: "Add to queue"; activated => { root.action("queue"); } }
             MenuItem { title: "Go to album"; activated => { root.action("album"); } }
@@ -401,6 +404,11 @@ component Row inherits Rectangle {
             vertical-alignment: center;
             horizontal-alignment: right;
         }
+        if root.suggestion: Rectangle {
+            width: 28px;
+            Text { text: "＋"; color: sa.has-hover ? Theme.accent : Theme.text; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+            sa := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.add(); } }
+        }
     }
 }
 
@@ -437,6 +445,13 @@ export component TrackPage inherits Rectangle {
     }
     in property <bool> can-dedupe: false;
     callback remove-duplicates();
+    in property <[TrackRow]> suggestions;
+    in property <bool> suggest-visible: false;
+    in property <string> suggest-status;
+    callback suggest-load(string);
+    callback suggest-add(int);
+    callback suggest-play(int);
+    callback suggest-action(int, string);
     in property <bool> can-save-smart: false;
     callback save-smart-snapshot();
     in property <bool> page-favorite: false;
@@ -564,8 +579,17 @@ export component TrackPage inherits Rectangle {
             Rectangle { width: 24px; }
             Text { width: 52px; text: "TIME"; color: Theme.text-muted; font-size: 11px; horizontal-alignment: right; vertical-alignment: center; }
         }
-        ListView {
+        lv := ListView {
             vertical-stretch: 1;
+            property <bool> user-scrolled: false;
+            property <bool> at-bottom: self.content-y <= -(self.content-height - self.visible-height - 24px);
+            changed content-y => {
+                if (self.content-y < -4px) { self.user-scrolled = true; }
+            }
+            changed at-bottom => {
+                // Only after the user has scrolled: opening a page never asks for suggestions.
+                if (self.at-bottom && self.user-scrolled && root.suggest-visible) { root.suggest-load("first"); }
+            }
             for r[i] in root.tracks: Row {
                 item: r;
                 index: i;
@@ -579,6 +603,47 @@ export component TrackPage inherits Rectangle {
                 album-w: 2 * root.share;
                 play => { root.play-row(i); }
                 action(a) => { root.row-action(i, a); }
+            }
+        }
+        if root.suggest-visible: Rectangle {
+            height: root.suggestions.length > 0 ? 292px : 48px;
+            VerticalLayout {
+                HorizontalLayout {
+                    height: 48px;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 12px;
+                    Text { text: "Suggested tracks"; font-size: 16px; font-weight: 700; color: Theme.text; vertical-alignment: center; }
+                    Text { text: root.suggest-status; color: Theme.text-muted; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                    VerticalLayout {
+                        alignment: center;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            if root.suggestions.length == 0: Button { label: "Show suggestions"; clicked => { root.suggest-load("first"); } }
+                            if root.suggestions.length > 0: Button { label: "Refresh"; clicked => { root.suggest-load("refresh"); } }
+                            if root.suggestions.length > 0: Button { label: "Show more"; clicked => { root.suggest-load("more"); } }
+                        }
+                    }
+                }
+                if root.suggestions.length > 0: ListView {
+                    height: 244px;
+                    for s[j] in root.suggestions: Row {
+                        item: s;
+                        index: j;
+                        suggestion: true;
+                        playing: s.id != "" && s.id == root.playing-id;
+                        show-artist: root.show-artist;
+                        show-album: root.show-album;
+                        show-quality: root.show-quality;
+                        quality-w: root.quality-w;
+                        title-w: 3 * root.share;
+                        artist-w: 2 * root.share;
+                        album-w: 2 * root.share;
+                        play => { root.suggest-play(j); }
+                        add => { root.suggest-add(j); }
+                        action(a) => { root.suggest-action(j, a); }
+                    }
+                }
             }
         }
     }

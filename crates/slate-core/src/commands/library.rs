@@ -1504,6 +1504,60 @@ pub async fn get_playlist_recommendations(
         .await
 }
 
+/// One batch of suggested tracks for a playlist.
+pub struct Suggestions {
+    pub tracks: Vec<TidalTrack>,
+    /// Where the next batch starts.
+    pub next_offset: u32,
+    /// TIDAL has no more to offer.
+    pub exhausted: bool,
+}
+
+const SUGGEST_PAGE: u32 = 20;
+const SUGGEST_TRIES: u32 = 4;
+
+/// Up to `want` suggestions starting at `offset`, none of them already in the playlist. All
+/// requests go through the paced client; stops after a few pages even if short.
+pub async fn playlist_suggestions(
+    state: &AppState,
+    app_handle: crate::AppHandle,
+    playlist_id: &str,
+    offset: u32,
+    want: usize,
+) -> Result<Suggestions, SlateError> {
+    let existing = crate::playlist_tools::keys_of(
+        &get_playlist_tracks(state, app_handle, playlist_id.to_string()).await?,
+    );
+    let mut out: Vec<TidalTrack> = Vec::new();
+    let mut next = offset;
+    let mut exhausted = false;
+    for _ in 0..SUGGEST_TRIES {
+        let page = get_playlist_recommendations(state, playlist_id.to_string(), next, SUGGEST_PAGE)
+            .await?;
+        let got = page.items.len() as u32;
+        next += got;
+        let mut fresh = crate::playlist_tools::filter_suggestions(page.items, &existing);
+        fresh.retain(|t| {
+            !out.iter()
+                .any(|o| crate::playlist_tools::track_key(o) == crate::playlist_tools::track_key(t))
+        });
+        out.extend(fresh);
+        if got < SUGGEST_PAGE {
+            exhausted = true;
+            break;
+        }
+        if out.len() >= want {
+            break;
+        }
+    }
+    out.truncate(want);
+    Ok(Suggestions {
+        tracks: out,
+        next_offset: next,
+        exhausted,
+    })
+}
+
 /// Tracks added per request when filling a playlist.
 pub const ADD_BATCH: usize = 50;
 const ADD_PAUSE: std::time::Duration = std::time::Duration::from_millis(300);

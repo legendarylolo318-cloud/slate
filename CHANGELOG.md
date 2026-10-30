@@ -41,6 +41,12 @@
   Scrobbling, under Discord). Lines are tidied and cut to Discord's 128 characters. "Hide
   presence for playlists that are not public" and a per-playlist "Hide from / show on
   Discord" in the playlist right-click menu keep chosen playlists off Discord entirely.
+- Suggested tracks: under a playlist you own, a panel offers tracks TIDAL recommends for it
+  (never ones already in the playlist). It loads only after you scroll to the end of the
+  list, or when you press "Show suggestions" — never when the page opens. "＋" adds a track
+  (the next suggestion takes its place), the right-click menu and play work as usual,
+  "Refresh" gets a new batch and "Show more" the next. Settings → General → Suggested
+  tracks under playlists: Off / 5 / 10 / 20 (default 10); Off never asks TIDAL.
 
 ## [1.1.0] - 2026-10-30
 

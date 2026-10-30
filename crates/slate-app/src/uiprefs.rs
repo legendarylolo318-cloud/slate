@@ -19,6 +19,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_suggest() -> usize {
+    2
+}
+
 fn default_size() -> usize {
     DEFAULT_SIZE
 }
@@ -62,6 +66,9 @@ pub struct UiPrefs {
     /// Rebound shortcuts: action id → combo (`slate_core::keymap`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub keymap: std::collections::BTreeMap<String, String>,
+    /// "Suggested tracks under playlists": index into `suggest::COUNTS` (Off, 5, 10, 20).
+    #[serde(default = "default_suggest")]
+    pub suggest_index: usize,
     /// Quality chip per page type (loved / playlist / album / mix): 1 Lossless, 2 Hi-Res, 3 Atmos.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub quality_filters: std::collections::BTreeMap<String, i32>,
@@ -92,6 +99,7 @@ impl Default for UiPrefs {
             dismissed_update: String::new(),
             keymap: Default::default(),
             quality_filters: Default::default(),
+            suggest_index: 2,
             sorts: Default::default(),
         }
     }

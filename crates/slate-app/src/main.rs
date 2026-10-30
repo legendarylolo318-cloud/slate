@@ -41,6 +41,7 @@ mod settings;
 mod signal;
 mod smart;
 mod sort;
+mod suggest;
 mod themes;
 mod uiprefs;
 mod updates;
