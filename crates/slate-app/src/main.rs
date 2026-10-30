@@ -19,6 +19,7 @@ mod custom_themes;
 mod dedupe;
 mod deeplink;
 mod discord_ctx;
+mod dnd;
 mod export;
 mod favorites;
 mod filter;

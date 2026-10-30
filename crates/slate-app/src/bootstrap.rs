@@ -440,6 +440,7 @@ fn wire(window: &AppWindow, backend: &Backend) {
             EventResult::Propagate
         });
     }
+    crate::dnd::install(window, backend);
     crate::keys::init(&crate::uiprefs::UiPrefs::load());
     crate::keys::apply_ui(window);
     window.on_resolve_key(|t, c, a, s, m| crate::keys::resolve(&t, c, a, s, m).into());

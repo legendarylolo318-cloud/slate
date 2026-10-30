@@ -2,6 +2,7 @@ import { Theme } from "theme.slint";
 import { CardItem, CardRow, QueueRow, LyricLine } from "types.slint";
 import { IconButton, Button, Segmented } from "widgets.slint";
 import { ListView } from "std-widgets.slint";
+import { Dnd } from "dnd.slint";
 
 global Dim {
     out property <length> card-w: 168px;
@@ -202,7 +203,17 @@ export component QueuePanel inherits Rectangle {
                     }
                     IconButton { icon: @image-url("icons/close.svg"); side: 28px; visible: qa.has-hover; clicked => { root.remove(i); } }
                 }
-                qa := TouchArea { mouse-cursor: MouseCursor.pointer; z: -1; double-clicked => { root.play(i); } }
+                DragArea {
+                    data: Dnd.make("queue:" + i);
+                    allow-move: true;
+                    changed dragging => { if (self.dragging) { Dnd.cancelled = false; } }
+                    qa := TouchArea { mouse-cursor: MouseCursor.pointer; z: -1; double-clicked => { root.play(i); } }
+                }
+                DropArea {
+                    can-drop(e) => { (Dnd.kind(e.data) == "queue" && !Dnd.cancelled) ? DragAction.move : DragAction.none }
+                    dropped(e) => { Dnd.dropped(e.data, "queue:" + i); DragAction.move }
+                    Rectangle { y: 0; height: 2px; background: Theme.accent; visible: parent.has-drag; }
+                }
                 ContextMenuArea {
                     Menu {
                         MenuItem { title: "Play"; activated => { root.play(i); } }

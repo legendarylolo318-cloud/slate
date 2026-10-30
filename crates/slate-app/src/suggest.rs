@@ -173,14 +173,14 @@ impl Backend {
         });
     }
 
-    fn suggested(&self, index: usize) -> Option<Track> {
+    pub(crate) fn suggested_track(&self, index: usize) -> Option<Track> {
         let g = STATE.lock().ok()?;
         to_track(g.as_ref()?.shown.get(index)?)
     }
 
     /// "+" on a suggestion: add it to the playlist, drop the row, top the section up.
     pub fn suggest_add(&self, index: usize) {
-        let Some(track) = self.suggested(index) else {
+        let Some(track) = self.suggested_track(index) else {
             return;
         };
         let Some(playlist) = STATE
@@ -239,13 +239,13 @@ impl Backend {
     }
 
     pub fn suggest_action(&self, index: usize, action: &str) {
-        if let Some(t) = self.suggested(index) {
+        if let Some(t) = self.suggested_track(index) {
             self.track_action(t, None, action);
         }
     }
 
     pub fn suggest_play(&self, index: usize) {
-        let Some(track) = self.suggested(index) else {
+        let Some(track) = self.suggested_track(index) else {
             return;
         };
         let this = self.clone();

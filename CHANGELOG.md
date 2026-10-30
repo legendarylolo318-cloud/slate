@@ -51,6 +51,10 @@
   explicit / clean, remastered, live and Dolby Atmos versions of the song with year, quality
   and length. Play or queue one, or "Replace" the track in the playlist (same position) or in
   the queue. Album pages have "Other versions" for deluxe / remaster / clean editions.
+- Drag and drop: drag tracks from any list onto a playlist in the sidebar to add them (a
+  highlight shows the target; a track that is already there asks "Already in playlist —
+  Add anyway / Skip"). Drag rows to reorder a playlist you own (shown in its own order) or
+  the queue, and drag playlists into and out of sidebar folders. Esc cancels a drag.
 - MCP for AI agents (full list in docs-assets/MCP.md): new tools for the queue (`add_to_queue`,
   `play_next`, `move_queue_item`, `get_history`), search and browsing (`search_albums`,
   `search_artists`, `search_playlists`, `get_mixes`, `get_explore`, `get_similar_artists`,

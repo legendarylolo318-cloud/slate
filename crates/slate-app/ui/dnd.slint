@@ -1,0 +1,11 @@
+/// Drag and drop between the track lists, the queue and the sidebar. Payloads are plain
+/// text made and read by Rust: "row:<view index>", "sugg:<index>", "queue:<index>",
+/// "pl:<playlist uuid>".
+export global Dnd {
+    /// Set when Esc is pressed during a drag; every drop target then refuses until the next drag.
+    in-out property <bool> cancelled: false;
+    pure callback make(string) -> data-transfer;
+    /// The part of a payload before the first ":".
+    pure callback kind(data-transfer) -> string;
+    callback dropped(data-transfer, string);
+}

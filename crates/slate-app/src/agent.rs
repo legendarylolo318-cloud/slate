@@ -240,6 +240,9 @@ impl Backend {
 mod tests {
     use super::*;
 
+    /// The approval queue is global, so these tests take turns.
+    static TURN: Mutex<()> = Mutex::new(());
+
     fn reset() {
         if let Ok(mut q) = PENDING.lock() {
             q.clear();
@@ -248,6 +251,9 @@ mod tests {
 
     #[test]
     fn approvals_show_one_at_a_time_in_order() {
+        let _turn = TURN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         reset();
         assert!(enqueue(1, "Hermes".into(), "delete playlist “A”".into()));
         assert!(!enqueue(2, "Hermes".into(), "clear the queue".into()));
@@ -262,6 +268,9 @@ mod tests {
 
     #[test]
     fn closing_a_waiting_request_leaves_the_shown_one() {
+        let _turn = TURN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         reset();
         enqueue(10, "a".into(), "x".into());
         enqueue(11, "a".into(), "y".into());

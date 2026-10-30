@@ -170,6 +170,14 @@ impl LibState {
 
 impl Backend {
     /// Row `index` as the window shows it (after any filter) → its place in the list.
+    /// The open playlist is shown in its own order, so dragging rows can reorder it.
+    pub(crate) fn reorderable(&self) -> bool {
+        match self.active_order() {
+            None => true,
+            Some((order, dir)) => order == "INDEX" && dir.eq_ignore_ascii_case("ASC"),
+        }
+    }
+
     pub(crate) fn real_index(&self, index: usize) -> usize {
         match self.lib.view.lock() {
             Ok(v) => v
@@ -366,6 +374,7 @@ impl Backend {
             *v = None;
         }
         self.suggest_reset();
+        self.ui(|w| w.set_can_reorder(false));
         let list = match kind {
             SourceKind::Loved => Some(crate::sort::List::Loved),
             SourceKind::Playlist(_) => Some(crate::sort::List::Playlist),
@@ -512,6 +521,8 @@ impl Backend {
                             None => false,
                         };
                         self.suggest_page_opened(uuid, owned);
+                        let can = owned && self.reorderable();
+                        self.ui(move |w| w.set_can_reorder(can));
                         Header {
                             label: "PLAYLIST",
                             title: v["title"].as_str().unwrap_or("Playlist").to_string(),

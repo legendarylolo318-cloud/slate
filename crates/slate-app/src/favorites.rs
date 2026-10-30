@@ -373,6 +373,15 @@ impl Backend {
                     }
                     return;
                 }
+                ("dup", None) => {
+                    // target is "<playlist uuid>|<track id>": "Add anyway".
+                    if let Some((uuid, id)) = target.split_once('|') {
+                        if let Ok(id) = id.parse() {
+                            this.add_dropped(uuid, id).await;
+                        }
+                    }
+                    return;
+                }
                 ("compare", None) => return this.run_compare(&target, &text).await,
                 ("dedupe", None) => return this.run_dedupe(&target).await,
                 ("delete", None) => lib_cmds::delete_playlist(&state, uid, target.clone())

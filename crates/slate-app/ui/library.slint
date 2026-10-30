@@ -2,6 +2,7 @@ import { Theme } from "theme.slint";
 import { TrackRow, PlaylistEntry } from "types.slint";
 import { ListView } from "std-widgets.slint";
 import { Button, Segmented, QualityBadges, TextField, IconButton } from "widgets.slint";
+import { Dnd } from "dnd.slint";
 
 component NavItem inherits Rectangle {
     in property <string> label;
@@ -131,7 +132,22 @@ component PlaylistItem inherits Rectangle {
             }
         }
     }
-    pt := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+    DragArea {
+        data: Dnd.make("pl:" + root.entry.uuid);
+        allow-move: !root.entry.folder;
+        enabled: !root.entry.folder;
+        changed dragging => { if (self.dragging) { Dnd.cancelled = false; } }
+        pt := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+    }
+    da := DropArea {
+        can-drop(e) => {
+            if (Dnd.cancelled) { return DragAction.none; }
+            if (root.entry.folder) { return Dnd.kind(e.data) == "pl" ? DragAction.move : DragAction.none; }
+            (Dnd.kind(e.data) == "row" || Dnd.kind(e.data) == "sugg") ? DragAction.copy : DragAction.none
+        }
+        dropped(e) => { Dnd.dropped(e.data, root.entry.uuid); DragAction.copy }
+        Rectangle { border-width: 2px; border-color: Theme.accent; border-radius: 6px; visible: parent.has-drag; }
+    }
     ContextMenuArea {
         Menu {
             MenuItem { title: "Rename…"; activated => { root.action("rename"); } }
@@ -187,6 +203,10 @@ export component Sidebar inherits Rectangle {
         }
         HorizontalLayout {
             height: 28px;
+            DropArea {
+                can-drop(e) => { (Dnd.kind(e.data) == "pl" && !Dnd.cancelled) ? DragAction.move : DragAction.none }
+                dropped(e) => { Dnd.dropped(e.data, "root"); DragAction.move }
+            }
             if !root.collapsed: Text {
                 text: "PLAYLISTS";
                 font-size: 11px;
@@ -265,6 +285,8 @@ component Row inherits Rectangle {
     in property <bool> show-quality: true;
     /// A suggested track: no playlist edits, and a + button.
     in property <bool> suggestion: false;
+    /// Rows of an owned playlist in its own order accept other rows dropped on them.
+    in property <bool> reorder-target: false;
     callback add();
     in property <length> quality-w;
     in property <length> title-w;
@@ -276,10 +298,22 @@ component Row inherits Rectangle {
     border-radius: 6px;
     background: ta.has-hover ? Theme.surface : transparent;
 
-    ta := TouchArea {
-        mouse-cursor: MouseCursor.pointer;
-        // One click plays, as people expect from a track list.
-        clicked => { root.play(); }
+    DragArea {
+        data: Dnd.make((root.suggestion ? "sugg:" : "row:") + root.index);
+        allow-copy: true;
+        allow-move: !root.suggestion;
+        changed dragging => { if (self.dragging) { Dnd.cancelled = false; } }
+        ta := TouchArea {
+            mouse-cursor: MouseCursor.pointer;
+            // One click plays, as people expect from a track list.
+            clicked => { root.play(); }
+        }
+    }
+    DropArea {
+        enabled: root.reorder-target && !root.suggestion;
+        can-drop(e) => { (Dnd.kind(e.data) == "row" && !Dnd.cancelled) ? DragAction.move : DragAction.none }
+        dropped(e) => { Dnd.dropped(e.data, "row:" + root.index); DragAction.move }
+        Rectangle { y: 0; height: 2px; background: Theme.accent; visible: parent.has-drag; }
     }
     ContextMenuArea {
         Menu {
@@ -444,6 +478,7 @@ export component TrackPage inherits Rectangle {
         root.filter-text = "";
         root.filter-changed("", root.filter-quality);
     }
+    in property <bool> can-reorder: false;
     in property <bool> can-dedupe: false;
     callback remove-duplicates();
     callback show-album-versions();
@@ -604,6 +639,7 @@ export component TrackPage inherits Rectangle {
                 title-w: 3 * root.share;
                 artist-w: 2 * root.share;
                 album-w: 2 * root.share;
+                reorder-target: root.can-reorder;
                 play => { root.play-row(i); }
                 action(a) => { root.row-action(i, a); }
             }
