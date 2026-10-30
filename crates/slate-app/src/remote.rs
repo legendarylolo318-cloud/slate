@@ -169,6 +169,22 @@ impl Backend {
         });
     }
 
+    /// Adds tracks (by id) to the end of the queue.
+    pub(crate) fn queue_track_ids(&self, ids: Vec<u64>) {
+        self.mcp_play_tracks(ids, "queue".into());
+    }
+
+    /// Replaces the "next up" list with these tracks (a guest following a party's queue).
+    pub(crate) fn queue_track_ids_replace(&self, ids: Vec<u64>) {
+        let this = self.clone();
+        self.rt.spawn(async move {
+            if let Some(ctl) = this.controller() {
+                ctl.clear_next_up().await;
+            }
+            this.mcp_play_tracks(ids, "queue".into());
+        });
+    }
+
     fn mcp_play_tracks(&self, ids: Vec<u64>, action: String) {
         let this = self.clone();
         self.rt.spawn(async move {

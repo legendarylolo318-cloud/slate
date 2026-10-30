@@ -33,6 +33,7 @@ mod mini;
 mod models;
 mod pages;
 mod panels;
+mod party_ui;
 mod pkce;
 mod platform;
 mod profile;

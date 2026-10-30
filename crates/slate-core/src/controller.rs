@@ -497,6 +497,11 @@ impl Controller {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Empties the "next up" list but not the rest of the queue.
+    pub async fn clear_next_up(&self) {
+        self.queue.lock().await.manual.clear();
+    }
+
     pub async fn clear_queue(&self) {
         self.queue.lock().await.clear();
     }

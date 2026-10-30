@@ -101,6 +101,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_bit_perfect(s.bit_perfect);
     g.set_show_alsa_options(cfg!(any(target_os = "linux", windows)));
     crate::custom_themes::sync(w);
+    crate::party_ui::fill(w);
     g.set_global_shortcuts(prefs.global_shortcuts);
     g.set_check_updates(prefs.check_updates);
     g.set_cover_colors(prefs.cover_colors);
@@ -305,6 +306,14 @@ impl Backend {
                 this.discord_template_edited(key.trim_start_matches("discord-"), &v);
                 return;
             }
+            if key == "party-relay" {
+                let mut p = UiPrefs::load();
+                p.party_relay = v.trim().to_string();
+                if let Err(e) = p.save() {
+                    this.settings_status(format!("Could not save: {e}"));
+                }
+                return;
+            }
             if key == "discord-text" {
                 if let Err(e) = utility::set_discord_status_text(&state, v) {
                     this.settings_status(format!("Could not save status text: {}", e.log_safe()));
@@ -328,6 +337,40 @@ impl Backend {
                     this.reset_shortcut(Some(&n["shortcut-reset:".len()..]));
                 }
                 "discord-reset" => this.discord_reset_templates(),
+                "party-start" => {
+                    let allow = this
+                        .read_ui(|w| w.global::<SettingsState>().get_party_allow_suggest())
+                        .await;
+                    this.party_start(allow);
+                }
+                "party-end" => this.party_end(),
+                "party-join" => {
+                    let t = this
+                        .read_ui(|w| w.global::<SettingsState>().get_party_ticket().to_string())
+                        .await;
+                    this.party_join(&t);
+                }
+                "party-copy" => {
+                    let link = this
+                        .read_ui(|w| w.global::<SettingsState>().get_party_link().to_string())
+                        .await;
+                    if !link.is_empty() {
+                        this.copy_setting_url(Some(link), "Party link").await;
+                    }
+                }
+                n if n.starts_with("party-kick:") => this.party_kick(&n["party-kick:".len()..]),
+                n if n.starts_with("party-approve:") => {
+                    this.party_decide(
+                        n["party-approve:".len()..].parse().unwrap_or(usize::MAX),
+                        true,
+                    );
+                }
+                n if n.starts_with("party-deny:") => {
+                    this.party_decide(
+                        n["party-deny:".len()..].parse().unwrap_or(usize::MAX),
+                        false,
+                    );
+                }
                 "agent-refresh" => this.load_settings_ui(),
                 n if n.starts_with("agent-bearer-") => this.agent_bearer_action(n),
                 "pkce-start" => this.start_pkce(),

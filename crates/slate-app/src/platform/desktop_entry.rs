@@ -53,7 +53,7 @@ fn desktop_file(exec: &Path) -> String {
     format!(
         "[Desktop Entry]\nType=Application\nName=Slate\nGenericName=TIDAL Music Client\n\
          Comment=Native TIDAL client\nExec={quoted} %u\nIcon={APP_ID}\nTerminal=false\n\
-         Categories=AudioVideo;Audio;Music;Player;\nMimeType=x-scheme-handler/tidal;\n\
+         Categories=AudioVideo;Audio;Music;Player;\nMimeType=x-scheme-handler/tidal;x-scheme-handler/slate;\n\
          StartupWMClass={APP_ID}\nStartupNotify=true\n"
     )
 }

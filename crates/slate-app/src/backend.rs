@@ -559,6 +559,10 @@ impl Backend {
 
     fn set_playing(&self, playing: bool) {
         self.shared.set_playing(playing);
+        self.party_state_changed(
+            f32::from_bits(self.shared.position.load(Ordering::Relaxed)),
+            playing,
+        );
         self.publish_now(true);
         self.ui(move |w| w.set_playing(playing));
         if let Some(state) = self.state() {
@@ -583,6 +587,7 @@ impl Backend {
             );
         }
         self.shared.current_id.store(track.id, Ordering::Relaxed);
+        self.party_track_changed(track.id);
         self.refresh_favorite_ui();
         self.load_lyrics(track.id);
         let title = track.title().to_string();
@@ -830,6 +835,7 @@ impl Backend {
                 return;
             }
             slate_core::mcp::hooks::seeked(&state, secs as u32);
+            this.party_state_changed(secs, this.shared.playing.load(Ordering::Relaxed));
             this.shared
                 .position
                 .store(secs.to_bits(), Ordering::Relaxed);
@@ -956,6 +962,7 @@ impl Backend {
             Some(DeepLink::Mix(m)) => self.navigate(Route::Mix(m)),
             Some(DeepLink::Track(id)) => self.play_track_id(&id.to_string()),
             Some(DeepLink::Video(id)) => self.play_video(id),
+            Some(DeepLink::Party(t)) => self.party_link_opened(t),
             None => tracing::debug!("ignored an unrecognised link"),
         }
     }

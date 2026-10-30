@@ -96,6 +96,16 @@ export global SettingsState {
     callback edit-color(string, color);
     callback edit-hex(string, string);
     callback edit-name-changed(string);
+    // Listening party
+    in-out property <string> party-role;
+    in-out property <string> party-link;
+    in-out property <image> party-qr;
+    in-out property <[string]> party-guests;
+    in-out property <[string]> party-suggestions;
+    in-out property <string> party-status;
+    in-out property <string> party-ticket;
+    in-out property <string> party-relay;
+    in-out property <bool> party-allow-suggest: true;
     // Shortcuts
     in-out property <[ShortcutRow]> shortcut-rows;
     in-out property <string> capturing;
@@ -138,7 +148,7 @@ component Row inherits Rectangle {
 export component SettingsPage inherits Rectangle {
     in property <bool> compact: false;
     background: Theme.background;
-    property <[string]> tabs: ["General", "Appearance", "Playback", "Scrobbling", "Network", "Integrations", "Shortcuts", "About"];
+    property <[string]> tabs: ["General", "Appearance", "Playback", "Scrobbling", "Network", "Integrations", "Shortcuts", "Party", "About"];
 
     VerticalLayout {
         padding: root.compact ? 12px : 24px;
@@ -641,6 +651,65 @@ export component SettingsPage inherits Rectangle {
                 }
 
                 if SettingsState.tab == 7: VerticalLayout {
+                    Row {
+                        label: "Listening party";
+                        hint: SettingsState.party-role == "" ? "Listen together while each person plays from their own TIDAL account. Slate only syncs what is playing; no audio is sent. Needs no port forwarding." : (SettingsState.party-role == "host" ? "You are hosting. Guests: " + SettingsState.party-guests.length : "You are in a party.");
+                        HorizontalLayout {
+                            spacing: 8px;
+                            if SettingsState.party-role == "": Button { label: "Start a party"; primary: true; clicked => { SettingsState.action("party-start"); } }
+                            if SettingsState.party-role != "": Button { label: SettingsState.party-role == "host" ? "End party" : "Leave"; danger: true; clicked => { SettingsState.action("party-end"); } }
+                        }
+                    }
+                    if SettingsState.party-status != "": Text { text: SettingsState.party-status; color: Theme.text-muted; wrap: word-wrap; font-size: 12px; }
+                    if SettingsState.party-role == "": Row {
+                        label: "Let guests suggest tracks";
+                        hint: "Suggestions wait here for you to approve or deny.";
+                        Toggle { checked: SettingsState.party-allow-suggest; toggled(v) => { SettingsState.party-allow-suggest = v; } }
+                    }
+                    if SettingsState.party-role == "": Row {
+                        label: "Join a party";
+                        hint: "Paste a slate://party/… link (opening one also fills this in).";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            TextField { text <=> SettingsState.party-ticket; placeholder: "slate://party/…"; field-width: 220px; }
+                            Button { label: "Join"; primary: true; clicked => { SettingsState.action("party-join"); } }
+                        }
+                    }
+                    if SettingsState.party-role == "": Row {
+                        label: "Custom relay URL";
+                        hint: "Optional: your own iroh-relay server. Leave empty for the default relays. Everyone must use the same one.";
+                        TextField { text <=> SettingsState.party-relay; placeholder: "https://relay.example.com"; field-width: 260px; edited(t) => { SettingsState.changed-str("party-relay", t); } }
+                    }
+                    if SettingsState.party-role == "host": Row {
+                        label: "Invite link";
+                        hint: "Valid until you end the party.";
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Image { source: SettingsState.party-qr; width: 120px; height: 120px; image-rendering: pixelated; }
+                            Button { label: "Copy link"; clicked => { SettingsState.action("party-copy"); } }
+                        }
+                    }
+                    if SettingsState.party-role != "": Text { text: "In the party"; color: Theme.text; font-weight: 700; }
+                    for g in SettingsState.party-guests: Rectangle {
+                        height: 34px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: g; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
+                            if SettingsState.party-role == "host": Button { label: "Remove"; clicked => { SettingsState.action("party-kick:" + g); } }
+                        }
+                    }
+                    for s[i] in SettingsState.party-suggestions: Rectangle {
+                        height: 38px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: s; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                            Button { label: "Approve"; primary: true; clicked => { SettingsState.action("party-approve:" + i); } }
+                            Button { label: "Deny"; clicked => { SettingsState.action("party-deny:" + i); } }
+                        }
+                    }
+                }
+
+                if SettingsState.tab == 8: VerticalLayout {
                     spacing: 8px;
                     padding-top: 12px;
                     Text { text: "Slate " + SettingsState.version; font-size: 22px; font-weight: 700; color: Theme.text; }

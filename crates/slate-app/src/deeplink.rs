@@ -8,6 +8,8 @@ pub enum DeepLink {
     Video(u64),
     Playlist(String),
     Mix(String),
+    /// `slate://party/<ticket>`
+    Party(String),
 }
 
 fn is_uuid(s: &str) -> bool {
@@ -23,6 +25,9 @@ fn is_mix_id(s: &str) -> bool {
 /// `https://listen.tidal.com/track/1`, and similar.
 pub fn parse(link: &str) -> Option<DeepLink> {
     let link = link.trim();
+    if let Some(t) = link.strip_prefix(slate_core::party::proto::TICKET_PREFIX) {
+        return slate_core::party::proto::parse_ticket(t).map(DeepLink::Party);
+    }
     let rest = link
         .strip_prefix("tidal://")
         .or_else(|| link.strip_prefix("https://tidal.com/"))
@@ -52,6 +57,16 @@ pub fn parse(link: &str) -> Option<DeepLink> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn party_links_carry_the_ticket() {
+        assert_eq!(
+            parse("slate://party/abc-123_X"),
+            Some(DeepLink::Party("abc-123_X".into()))
+        );
+        assert_eq!(parse("slate://party/has space"), None);
+        assert_eq!(parse("slate://other/x"), None);
+    }
 
     #[test]
     fn parses_custom_scheme_and_web_links() {

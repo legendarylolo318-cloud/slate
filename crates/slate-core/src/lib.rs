@@ -48,6 +48,7 @@ pub mod list_filter;
 pub mod logging;
 pub mod mcp;
 pub mod overlay;
+pub mod party;
 pub mod pipeline_probe;
 pub mod playlist_tools;
 pub mod proxy;

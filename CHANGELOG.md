@@ -55,6 +55,12 @@
   highlight shows the target; a track that is already there asks "Already in playlist —
   Add anyway / Skip"). Drag rows to reorder a playlist you own (shown in its own order) or
   the queue, and drag playlists into and out of sidebar folders. Esc cancels a drag.
+- Listening party (Settings → Party): host a session and share a `slate://party/…` link or
+  QR code; guests join from the link and everyone plays from their own TIDAL account. Only
+  playback state is synced (track, play / pause, seek, the next few tracks for prefetch), peer to
+  peer and encrypted, with no port forwarding; up to 10 guests, kick and end. Guests can suggest
+  tracks that you approve or deny. A custom `iroh-relay` URL can be set. Nothing runs or is
+  opened until a party starts, and ending it closes everything.
 - MCP for AI agents (full list in docs-assets/MCP.md): new tools for the queue (`add_to_queue`,
   `play_next`, `move_queue_item`, `get_history`), search and browsing (`search_albums`,
   `search_artists`, `search_playlists`, `get_mixes`, `get_explore`, `get_similar_artists`,

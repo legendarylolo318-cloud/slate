@@ -69,6 +69,9 @@ pub struct UiPrefs {
     /// "Suggested tracks under playlists": index into `suggest::COUNTS` (Off, 5, 10, 20).
     #[serde(default = "default_suggest")]
     pub suggest_index: usize,
+    /// Self-hosted `iroh-relay` for listening parties (empty = the default relays).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub party_relay: String,
     /// Quality chip per page type (loved / playlist / album / mix): 1 Lossless, 2 Hi-Res, 3 Atmos.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub quality_filters: std::collections::BTreeMap<String, i32>,
@@ -100,6 +103,7 @@ impl Default for UiPrefs {
             keymap: Default::default(),
             quality_filters: Default::default(),
             suggest_index: 2,
+            party_relay: String::new(),
             sorts: Default::default(),
         }
     }

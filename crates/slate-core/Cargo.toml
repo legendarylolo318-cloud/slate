@@ -42,6 +42,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
+iroh = { version = "1.4.1", optional = true, default-features = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # A TLS database from the distro's CA bundle for souphttpsrc (audio.rs).
@@ -57,6 +58,11 @@ wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 tempfile = "3"
 proptest = "1"
 wiremock = "0.6"
+
+[features]
+default = ["party"]
+# Listening party (QUIC via iroh). Without it the party code is compiled out.
+party = ["dep:iroh"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Power"] }
