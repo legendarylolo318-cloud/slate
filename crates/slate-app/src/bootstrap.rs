@@ -454,6 +454,8 @@ fn wire(window: &AppWindow, backend: &Backend) {
         .smart_action(id.strip_prefix("smart:").unwrap_or(&id), &a));
     bind!(on_smart_edit, |b, w, i, t| b.smart_edit(&w, i, &t));
     bind!(on_save_smart_snapshot, |b| b.save_smart_snapshot());
+    bind!(on_toggle_discord_hidden, |b, id| b
+        .toggle_playlist_discord_hidden(&id));
     bind!(on_start_login, |b| b.start_login());
     bind!(on_open_login_url, |b| b.open_login_url());
     bind!(on_open_update, |b| b.open_update());

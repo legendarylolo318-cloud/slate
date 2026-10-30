@@ -36,6 +36,11 @@
   sorting and a limit. They are stored on your computer and worked out only when opened,
   from Loved Tracks and the playlists the rules name. Play, shuffle, queue and export work
   as on any playlist, and "Save as TIDAL playlist" makes an unlisted snapshot.
+- Discord Rich Presence text is yours to set: two template lines with `{title}`, `{artist}`,
+  `{album}`, `{quality}`, `{playlist}` and `{year}`, a live preview and Reset (Settings →
+  Scrobbling, under Discord). Lines are tidied and cut to Discord's 128 characters. "Hide
+  presence for playlists that are not public" and a per-playlist "Hide from / show on
+  Discord" in the playlist right-click menu keep chosen playlists off Discord entirely.
 
 ## [1.1.0] - 2026-10-30
 

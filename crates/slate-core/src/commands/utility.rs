@@ -323,6 +323,64 @@ pub fn set_discord_status_text(state: &AppState, text: String) -> Result<(), Sla
     Ok(())
 }
 
+/// The presence templates and privacy options, as saved.
+#[derive(Default)]
+pub struct DiscordPrefs {
+    pub details: String,
+    pub state: String,
+    pub hide_private: bool,
+    pub hidden_playlists: Vec<String>,
+}
+
+pub fn get_discord_prefs(state: &AppState) -> DiscordPrefs {
+    let s = state.load_settings().unwrap_or_default();
+    DiscordPrefs {
+        details: s.discord_details_template,
+        state: s.discord_state_template,
+        hide_private: s.discord_hide_private,
+        hidden_playlists: s.discord_hidden_playlists,
+    }
+}
+
+pub fn set_discord_templates(
+    state: &AppState,
+    details: String,
+    state_line: String,
+) -> Result<(), SlateError> {
+    let details = crate::discord_template::clean_template(&details);
+    let state_line = crate::discord_template::clean_template(&state_line);
+    state
+        .discord
+        .send(crate::discord::DiscordCommand::SetTemplates {
+            details: details.clone(),
+            state: state_line.clone(),
+        });
+    let mut settings = state.load_settings().unwrap_or_default();
+    settings.discord_details_template = details;
+    settings.discord_state_template = state_line;
+    state.save_settings(&settings)
+}
+
+pub fn set_discord_hide_private(state: &AppState, hide: bool) -> Result<(), SlateError> {
+    let mut settings = state.load_settings().unwrap_or_default();
+    settings.discord_hide_private = hide;
+    state.save_settings(&settings)
+}
+
+/// Adds or removes `uuid` from the playlists kept off Discord.
+pub fn set_discord_playlist_hidden(
+    state: &AppState,
+    uuid: &str,
+    hidden: bool,
+) -> Result<(), SlateError> {
+    let mut settings = state.load_settings().unwrap_or_default();
+    settings.discord_hidden_playlists.retain(|u| u != uuid);
+    if hidden {
+        settings.discord_hidden_playlists.push(uuid.to_string());
+    }
+    state.save_settings(&settings)
+}
+
 pub fn get_proxy_settings(state: &AppState) -> crate::ProxySettings {
     state.load_settings().map(|s| s.proxy).unwrap_or_default()
 }

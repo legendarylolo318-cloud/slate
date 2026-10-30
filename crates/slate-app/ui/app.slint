@@ -37,6 +37,7 @@ export component AppWindow inherits Window {
     in property <[PlaylistEntry]> smart-lists;
     in property <bool> can-save-smart;
     callback new-smart();
+    callback toggle-discord-hidden(string);
     callback smart-action(string, string);
     callback save-smart-snapshot();
     in-out property <bool> smart-open: false;
@@ -303,6 +304,7 @@ export component AppWindow inherits Window {
                     entry-action(id, a) => {
                         if (a == "delete") { root.dialog-kind = "delete"; root.dialog-target = id; root.dialog-open = true; }
                         else if (a == "rename") { root.dialog-kind = "rename"; root.dialog-target = id; root.dialog-text = ""; root.dialog-open = true; }
+                        else if (a == "discord-toggle") { root.toggle-discord-hidden(id); }
                         else if (a == "compare") { root.dialog-kind = "compare"; root.dialog-target = id; root.dialog-open = true; }
                         else if (a == "move") { root.dialog-kind = "move"; root.dialog-target = id; root.dialog-open = true; }
                     }

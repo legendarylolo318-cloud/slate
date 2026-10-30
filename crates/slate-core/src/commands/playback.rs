@@ -414,6 +414,14 @@ pub struct MprisMetadata {
     pub url: String,
     #[serde(default)]
     pub quality_text: String,
+    /// Name of the playlist being played from, for the Discord presence.
+    #[serde(default)]
+    pub playlist: String,
+    #[serde(default)]
+    pub year: String,
+    /// Keep this track off Discord.
+    #[serde(default)]
+    pub discord_hidden: bool,
     #[serde(default)]
     pub album_artist: Option<String>,
     #[serde(default)]
@@ -456,6 +464,9 @@ pub fn update_mpris_metadata(state: &AppState, metadata: MprisMetadata) -> Resul
             duration_secs: metadata.duration_secs,
             url: metadata.url,
             quality_text: metadata.quality_text,
+            playlist: metadata.playlist,
+            year: metadata.year,
+            hidden: metadata.discord_hidden,
         });
     Ok(())
 }

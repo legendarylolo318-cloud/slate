@@ -59,6 +59,10 @@ export global SettingsState {
     in-out property <bool> audioscrobbler-pending;
     in-out property <bool> discord-rpc;
     in-out property <string> discord-text;
+    in-out property <string> discord-details;
+    in-out property <string> discord-state;
+    in-out property <string> discord-preview;
+    in-out property <bool> discord-hide-private;
     // Network
     in-out property <bool> proxy-enabled;
     in-out property <int> proxy-type-index;
@@ -479,6 +483,40 @@ export component SettingsPage inherits Rectangle {
                             placeholder: "Listening on Slate";
                             accepted(t) => { SettingsState.changed-str("discord-text", t); }
                         }
+                    }
+                    Row {
+                        label: "Presence first line";
+                        hint: "Placeholders: {title} {artist} {album} {quality} {playlist} {year}. Empty = {title}.";
+                        TextField {
+                            text <=> SettingsState.discord-details;
+                            placeholder: "{title}";
+                            field-width: 280px;
+                            edited(t) => { SettingsState.changed-str("discord-details", t); }
+                        }
+                    }
+                    Row {
+                        label: "Presence second line";
+                        hint: "Empty = by {artist} on {album}. Lines are cut at 128 characters.";
+                        TextField {
+                            text <=> SettingsState.discord-state;
+                            placeholder: "by {artist} on {album}";
+                            field-width: 280px;
+                            edited(t) => { SettingsState.changed-str("discord-state", t); }
+                        }
+                    }
+                    Row {
+                        label: "Preview";
+                        hint: "With an example track.";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: SettingsState.discord-preview; color: Theme.text; width: 280px; wrap: word-wrap; }
+                            Button { label: "Reset"; clicked => { SettingsState.action("discord-reset"); } }
+                        }
+                    }
+                    Row {
+                        label: "Hide presence for playlists that are not public";
+                        hint: "Private and unlisted playlists never show on Discord. You can also hide a single playlist from its right-click menu.";
+                        Toggle { checked: SettingsState.discord-hide-private; toggled(v) => { SettingsState.discord-hide-private = v; SettingsState.changed-bool("discord-hide-private", v); } }
                     }
                 }
 

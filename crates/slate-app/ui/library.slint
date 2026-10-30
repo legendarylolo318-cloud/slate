@@ -137,6 +137,7 @@ component PlaylistItem inherits Rectangle {
             MenuItem { title: "Rename…"; activated => { root.action("rename"); } }
             MenuItem { title: "Move to folder…"; enabled: !root.entry.folder; activated => { root.action("move"); } }
             MenuItem { title: "Compare with…"; enabled: !root.entry.folder; activated => { root.action("compare"); } }
+            MenuItem { title: "Hide from / show on Discord"; enabled: !root.entry.folder; activated => { root.action("discord-toggle"); } }
             MenuItem { title: "Delete…"; activated => { root.action("delete"); } }
         }
     }

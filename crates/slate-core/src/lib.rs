@@ -31,6 +31,7 @@ pub mod custom_theme;
 pub mod discord;
 #[cfg(unix)]
 pub mod discord_ipc;
+pub mod discord_template;
 /// Windows talks to Discord over a named pipe, which the upstream client handles.
 #[cfg(windows)]
 pub mod discord_ipc {
@@ -221,6 +222,17 @@ pub struct Settings {
     pub discord_rpc: bool,
     #[serde(default)]
     pub discord_status_text: String,
+    /// Templates for the presence's two text lines; blank = default.
+    #[serde(default)]
+    pub discord_details_template: String,
+    #[serde(default)]
+    pub discord_state_template: String,
+    /// Keep playlists that are not public off Discord.
+    #[serde(default)]
+    pub discord_hide_private: bool,
+    /// Playlist uuids the user keeps off Discord.
+    #[serde(default)]
+    pub discord_hidden_playlists: Vec<String>,
     /// How many times we've shown the "legacy sign-in" notice to users still
     /// on the device-code (LoginCode) auth method. Caps at 5; never resets.
     #[serde(default)]
@@ -267,6 +279,10 @@ impl Default for Settings {
             proxy: Default::default(),
             discord_rpc: true,
             discord_status_text: String::new(),
+            discord_details_template: String::new(),
+            discord_state_template: String::new(),
+            discord_hide_private: false,
+            discord_hidden_playlists: Vec::new(),
             legacy_auth_notice_count: 0,
             mcp_enabled: false,
             mcp_port: 5577,
@@ -527,6 +543,12 @@ impl AppState {
         discord_handle.send(discord::DiscordCommand::SetStatusText {
             text: discord_status_text,
         });
+        if let Some(s) = saved.as_ref() {
+            discord_handle.send(discord::DiscordCommand::SetTemplates {
+                details: s.discord_details_template.clone(),
+                state: s.discord_state_template.clone(),
+            });
+        }
         if discord_rpc_enabled {
             discord_handle.send(discord::DiscordCommand::Connect);
         }

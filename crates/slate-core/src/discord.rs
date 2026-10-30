@@ -26,6 +26,10 @@ pub enum DiscordCommand {
         duration_secs: f64,
         url: String,
         quality_text: String,
+        playlist: String,
+        year: String,
+        /// Do not show a presence for this track (private playlist, or hidden by the user).
+        hidden: bool,
     },
     SetPlaying {
         is_playing: bool,
@@ -37,6 +41,10 @@ pub enum DiscordCommand {
     },
     SetStatusText {
         text: String,
+    },
+    SetTemplates {
+        details: String,
+        state: String,
     },
     Connect,
     Disconnect,
@@ -56,6 +64,11 @@ struct CurrentActivity {
     url: String,
     quality_text: String,
     status_text: String,
+    details_template: String,
+    state_template: String,
+    playlist: String,
+    year: String,
+    hidden: bool,
     is_playing: bool,
     play_start_epoch: i64,
 }
@@ -177,7 +190,13 @@ impl DiscordHandle {
                         duration_secs,
                         url,
                         quality_text,
+                        playlist,
+                        year,
+                        hidden,
                     } => {
+                        current.playlist = playlist;
+                        current.year = year;
+                        current.hidden = hidden;
                         current.title = title;
                         current.artist = artist;
                         current.album = album;
@@ -221,6 +240,19 @@ impl DiscordHandle {
                                     connected = false;
                                 }
                             }
+                        }
+                    }
+                    DiscordCommand::SetTemplates { details, state } => {
+                        current.details_template = details;
+                        current.state_template = state;
+                        if want_connected
+                            && connected
+                            && current.is_playing
+                            && !current.title.is_empty()
+                            && publish_activity(&mut client, &current).is_err()
+                        {
+                            client.close().ok();
+                            connected = false;
                         }
                     }
                     DiscordCommand::SetStatusText { text } => {
@@ -282,18 +314,28 @@ fn now_epoch_secs() -> i64 {
 }
 
 fn publish_activity(client: &mut SlateDiscordClient, current: &CurrentActivity) -> Result<(), ()> {
-    let state_text = if current.artist.is_empty() {
-        current.album.clone()
-    } else if current.album.is_empty() {
-        format!("by {}", current.artist)
-    } else {
-        format!("by {} on {}", current.artist, current.album)
+    if current.hidden {
+        // Playing from a playlist the user keeps off Discord: show nothing at all.
+        return client.clear_activity().map_err(|_| ());
+    }
+    let fields = crate::discord_template::Fields {
+        title: &current.title,
+        artist: &current.artist,
+        album: &current.album,
+        quality: &current.quality_text,
+        playlist: &current.playlist,
+        year: &current.year,
     };
+    let (details, state_text) =
+        crate::discord_template::lines(&current.details_template, &current.state_template, &fields);
+    let details_text = details.unwrap_or_else(|| current.title.clone());
 
     let mut act = activity::Activity::new()
         .activity_type(activity::ActivityType::Listening)
-        .details(current.title.clone())
-        .state(&state_text);
+        .details(details_text);
+    if let Some(state_text) = &state_text {
+        act = act.state(state_text);
+    }
 
     if !current.status_text.trim().is_empty() {
         let custom_name = render_status_text(

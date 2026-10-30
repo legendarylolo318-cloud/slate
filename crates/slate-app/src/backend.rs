@@ -573,7 +573,9 @@ impl Backend {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let meta = playback::MprisMetadata {
+            let badges = crate::quality::track_badges(track);
+            let year = Self::year_of(track);
+            let mut meta = playback::MprisMetadata {
                 track_id: track.id,
                 title: title.clone(),
                 artist: artist.clone(),
@@ -584,15 +586,30 @@ impl Backend {
                     .unwrap_or_default(),
                 duration_secs: f64::from(duration),
                 url: format!("https://tidal.com/track/{}", track.id),
-                quality_text: String::new(),
+                quality_text: crate::discord_ctx::quality_text(badges.tier, badges.atmos),
+                playlist: String::new(),
+                year,
+                discord_hidden: false,
                 album_artist: None,
                 track_number: None,
                 disc_number: None,
                 content_created: None,
                 user_rating: None,
             };
-            let _ = playback::update_mpris_metadata(&state, meta);
-            let _ = playback::update_mpris_playback_status(&state, playing, Some(0.0));
+            // The playlist (and whether it stays off Discord) is looked up first so the
+            // presence is published once, with the right text.
+            let ticket = crate::discord_ctx::next_ticket();
+            let this = self.clone();
+            self.rt.spawn(async move {
+                let (playlist, hidden) = this.discord_context().await;
+                if !crate::discord_ctx::is_latest(ticket) {
+                    return;
+                }
+                meta.playlist = playlist;
+                meta.discord_hidden = hidden;
+                let _ = playback::update_mpris_metadata(&state, meta);
+                let _ = playback::update_mpris_playback_status(&state, playing, Some(0.0));
+            });
         }
         #[cfg(target_os = "linux")]
         {

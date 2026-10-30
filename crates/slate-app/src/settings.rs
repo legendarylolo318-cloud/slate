@@ -30,6 +30,7 @@ struct Snapshot {
     providers: Vec<(String, bool, String)>,
     discord_rpc: bool,
     discord_text: String,
+    discord: utility::DiscordPrefs,
     proxy: ProxySettings,
     auth_max: bool,
     mcp: (bool, String),
@@ -48,6 +49,7 @@ async fn snapshot(state: &Arc<AppState>) -> Snapshot {
         report_plays: utility::get_report_plays(state),
         discord_rpc: utility::get_discord_rpc(state),
         discord_text: utility::get_discord_status_text(state),
+        discord: utility::get_discord_prefs(state),
         proxy: utility::get_proxy_settings(state),
         auth_max: state
             .load_settings()
@@ -136,6 +138,10 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_auth_max(s.auth_max);
     g.set_discord_rpc(s.discord_rpc);
     g.set_discord_text(s.discord_text.into());
+    g.set_discord_details(s.discord.details.into());
+    g.set_discord_state(s.discord.state.into());
+    g.set_discord_hide_private(s.discord.hide_private);
+    crate::discord_ctx::refresh_preview(w);
     g.set_proxy_enabled(s.proxy.enabled);
     g.set_proxy_type_index(i32::from(s.proxy.proxy_type == ProxyType::Socks5));
     g.set_proxy_host(s.proxy.host.into());
@@ -190,6 +196,7 @@ impl Backend {
                     this.set_global_shortcuts(v);
                     saved
                 }
+                "discord-hide-private" => this.discord_hide_private(v),
                 "check-updates" => this.set_check_updates(v),
                 "cover-colors" => this.set_cover_colors(v),
                 "normalization" => {
@@ -286,6 +293,10 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
+            if key == "discord-details" || key == "discord-state" {
+                this.discord_template_edited(key.trim_start_matches("discord-"), &v);
+                return;
+            }
             if key == "discord-text" {
                 if let Err(e) = utility::set_discord_status_text(&state, v) {
                     this.settings_status(format!("Could not save status text: {}", e.log_safe()));
@@ -308,6 +319,7 @@ impl Backend {
                 n if n.starts_with("shortcut-reset:") => {
                     this.reset_shortcut(Some(&n["shortcut-reset:".len()..]));
                 }
+                "discord-reset" => this.discord_reset_templates(),
                 "pkce-start" => this.start_pkce(),
                 "pkce-finish" => this.finish_pkce().await,
                 "pkce-open" => this.open_pkce_url().await,

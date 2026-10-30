@@ -17,6 +17,7 @@ mod credits;
 mod custom_themes;
 mod dedupe;
 mod deeplink;
+mod discord_ctx;
 mod export;
 mod favorites;
 mod filter;
