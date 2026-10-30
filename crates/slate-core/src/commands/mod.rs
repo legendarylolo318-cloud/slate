@@ -11,3 +11,4 @@ pub mod scrobble;
 pub mod search;
 pub mod updates;
 pub mod utility;
+pub mod versions;

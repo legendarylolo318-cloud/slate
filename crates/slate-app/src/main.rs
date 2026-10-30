@@ -6,6 +6,7 @@
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
 
+mod agent;
 mod backend;
 mod bootstrap;
 // Only Linux has OS media controls and a tray so far (SMTC/tray on Windows are tracked issues).

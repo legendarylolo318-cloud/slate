@@ -745,3 +745,55 @@ fn the_unproxied_http_source_selection_still_prefers_soup_over_curl() {
          work promised to leave untouched"
     );
 }
+
+/// Optional subsystems must cost nothing when off. Every function the player calls on the MCP
+/// server starts with the one atomic check, before any lock, allocation or formatting.
+#[test]
+fn mcp_hooks_return_before_doing_anything_when_the_server_is_off() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/mcp/hooks.rs"))
+        .expect("hooks.rs");
+    let body = src.split("#[cfg(test)]").next().unwrap_or(&src);
+    let mut checked = 0;
+    for chunk in body.split("\npub fn ").skip(1) {
+        let name = chunk.split('(').next().unwrap_or("");
+        if matches!(name, "snapshot" | "is_active" | "undo_event" | "dj_waiting") {
+            continue;
+        }
+        let first_statement = chunk
+            .split_once('{')
+            .map(|(_, rest)| rest.trim_start())
+            .unwrap_or("");
+        assert!(
+            first_statement.starts_with("let Some(rt) = active(state) else { return };")
+                || first_statement.starts_with("if let Some(rt) = active(state)"),
+            "hooks::{name} must begin with the dormancy check"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 4, "checked only {checked} hooks");
+}
+
+/// The app's playback paths reach the MCP server only through those hooks (or the same flag).
+#[test]
+fn the_player_publishes_to_mcp_only_while_it_runs() {
+    let remote = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../slate-app/src/remote.rs"
+    ))
+    .expect("remote.rs");
+    let publish = remote
+        .split("pub(crate) async fn publish_queue_to_mcp")
+        .nth(1)
+        .expect("publish_queue_to_mcp");
+    let first_lines: String = publish.lines().take(8).collect::<Vec<_>>().join("\n");
+    assert!(
+        first_lines.contains("mcp_active"),
+        "publish_queue_to_mcp must check mcp_active before collecting anything"
+    );
+    assert!(
+        remote.contains(
+            "if state.mcp_active.load(Ordering::Relaxed) {\n                state.mcp_state"
+        ),
+        "publish_now must only write the MCP snapshot while the server runs"
+    );
+}

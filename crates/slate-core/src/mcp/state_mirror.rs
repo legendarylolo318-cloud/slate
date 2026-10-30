@@ -20,12 +20,21 @@ pub struct QueueTrackSnapshot {
     pub id: u64,
     pub title: String,
     pub artist: String,
+    #[serde(default)]
+    pub duration_seconds: u32,
 }
 
 #[derive(Default, Debug)]
 pub struct McpState {
     pub now_playing: Option<NowPlayingSnapshot>,
     pub queue: Vec<QueueTrackSnapshot>,
+    /// Most recent first. Kept up to date only while the MCP server runs.
+    pub history: Vec<QueueTrackSnapshot>,
+    pub signal_path: Option<serde_json::Value>,
+    pub lyric_line: Option<String>,
+    pub party: Option<serde_json::Value>,
+    /// Repeat mode "off" | "all" | "one" and shuffle, for `queue_low` and `get_queue`.
+    pub repeat: String,
 }
 
 pub type McpStateRef = Arc<RwLock<McpState>>;

@@ -56,6 +56,10 @@ export component AppWindow inherits Window {
     in-out property <string> smart-limit;
     in-out property <string> smart-error;
     callback smart-edit(string, int, string);
+    in-out property <bool> approval-open: false;
+    in-out property <int> approval-id: 0;
+    in-out property <string> approval-text;
+    callback approval-answer(int, bool);
     in-out property <bool> cmp-open: false;
     in-out property <string> cmp-title;
     in-out property <int> cmp-tab: 0;
@@ -672,6 +676,30 @@ export component AppWindow inherits Window {
                                 Text { text: c.value; color: Theme.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        if root.approval-open: Rectangle {
+            background: #000000c0;
+            TouchArea { }
+            Rectangle {
+                width: min(440px, parent.width - 32px);
+                height: 170px;
+                border-radius: 12px;
+                background: Theme.surface;
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 12px;
+                    Text { text: "An AI agent is asking"; font-size: 14px; color: Theme.text-muted; }
+                    Text { text: root.approval-text; font-size: 17px; font-weight: 700; color: Theme.text; wrap: word-wrap; vertical-stretch: 1; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        Text { text: "No answer in 60 s = Deny"; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; horizontal-stretch: 1; }
+                        Button { label: "Deny"; clicked => { root.approval-answer(root.approval-id, false); } }
+                        Button { label: "Allow"; primary: true; clicked => { root.approval-answer(root.approval-id, true); } }
                     }
                 }
             }

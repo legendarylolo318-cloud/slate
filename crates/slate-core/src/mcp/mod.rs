@@ -1,11 +1,14 @@
 pub mod activity;
 pub mod duration;
 pub mod events;
+pub mod hooks;
 pub mod policy;
 pub mod query;
+pub mod runtime;
 pub mod sanitizer;
 pub mod server;
 pub mod state_mirror;
+pub mod stats;
 pub mod tools;
 pub mod watch;
 

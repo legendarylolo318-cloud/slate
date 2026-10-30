@@ -108,7 +108,7 @@ fn overlap(needles: &[String], hay: &[String]) -> f64 {
 }
 
 /// Similarity of two short strings by character bigrams (Dice), forgiving of typos.
-fn fuzzy(a: &str, b: &str) -> f64 {
+pub fn fuzzy(a: &str, b: &str) -> f64 {
     let (a, b) = (fold(a), fold(b));
     let grams = |s: &str| -> Vec<(char, char)> {
         let c: Vec<char> = s.chars().collect();

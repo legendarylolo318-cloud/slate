@@ -50,7 +50,7 @@ pub struct LyricsArgs {
 impl SlateMcpServer {
     #[rmcp::tool(
         name = "search_tracks",
-        description = "Search the Tidal catalog for tracks, albums, artists, and playlists. Returns up to `limit` of each."
+        description = "Search the Tidal catalog for tracks, albums, artists and playlists. Params: query, limit (≤50, default 10, per category). Example: {\"query\":\"daft punk discovery\",\"limit\":5}."
     )]
     async fn search_tracks(
         &self,
@@ -91,7 +91,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "get_track_radio",
-        description = "Get tracks similar to a given track (Tidal's recommendation engine)."
+        description = "Get tracks similar to a given track (Tidal's recommendation engine). Params: track_id, limit (≤50, default 10). Example: {\"track_id\":123,\"limit\":10}."
     )]
     async fn get_track_radio(
         &self,
@@ -137,7 +137,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "get_artist_top_tracks",
-        description = "Get an artist's most-popular tracks."
+        description = "Get an artist's most-popular tracks. Params: artist_id, limit (≤50, default 10). Example: {\"artist_id\":1566}."
     )]
     async fn get_artist_top_tracks(
         &self,
@@ -162,7 +162,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "get_album_tracks",
-        description = "Get the tracklist of an album."
+        description = "Get the tracklist of an album with track_count and total_duration_seconds. Params: album_id. Example: {\"album_id\":77646168}."
     )]
     async fn get_album_tracks(
         &self,
@@ -178,8 +178,11 @@ impl SlateMcpServer {
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
+        let total_duration: u32 = paginated.items.iter().map(|t| t.duration).sum();
         let tracks = backfill_and_sanitize_tracks(paginated.items);
-        let json = serde_json::json!({ "tracks": tracks });
+        let json = serde_json::json!({
+            "track_count": tracks.len(), "total_duration_seconds": total_duration, "tracks": tracks,
+        });
         Ok(CallToolResult::success(vec![
             rmcp::model::ContentBlock::text(json.to_string()),
         ]))
@@ -187,7 +190,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "get_track_lyrics",
-        description = "Get the lyrics of a track if available. Returns plain text and optional sync points."
+        description = "Get the lyrics of a track if available (plain text and optional synced lines). Params: track_id. Example: {\"track_id\":123}."
     )]
     async fn get_track_lyrics(
         &self,

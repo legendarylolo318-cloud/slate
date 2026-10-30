@@ -95,8 +95,24 @@ impl Backend {
                 }
             }
             ev::EV_CLEAR_QUEUE => self.queue_clear(),
+            ev::EV_MOVE_QUEUE_ITEM => {
+                let n = |k: &str| payload.get(k).and_then(Value::as_u64).map(|v| v as usize);
+                if let (Some(from), Some(to)) = (n("from"), n("to")) {
+                    self.queue_move(from, to);
+                }
+            }
+            slate_core::mcp::runtime::EV_APPROVAL_REQUEST => self.approval_requested(&payload),
+            slate_core::mcp::runtime::EV_APPROVAL_CLOSED => self.approval_closed(&payload),
             ev::EV_REMOVE_FROM_QUEUE => {
+                let ids = payload
+                    .get("trackIds")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_u64).collect::<Vec<_>>())
+                    .unwrap_or_default();
                 if let Some(id) = payload.get("trackId").and_then(Value::as_u64) {
+                    self.remove_track_id_from_queue(id);
+                }
+                for id in ids {
                     self.remove_track_id_from_queue(id);
                 }
             }
@@ -180,6 +196,8 @@ impl Backend {
                     for t in tracks {
                         ctl.add_to_queue(t, None).await;
                     }
+                    // An agent DJ was holding the autoplay radio back: continue from these.
+                    this.dj_refilled();
                 }
                 "play_next" => {
                     // Inserted one by one at the front: reverse keeps their order.
@@ -296,7 +314,10 @@ impl Backend {
                 position_seconds: position.round() as u32,
                 is_playing: playing,
             });
-            state.mcp_state.write().await.now_playing = snapshot;
+            if state.mcp_active.load(Ordering::Relaxed) {
+                state.mcp_state.write().await.now_playing = snapshot;
+                slate_core::mcp::hooks::now_playing_changed(&state);
+            }
             if overlay {
                 let track = now.map(|n| OverlayTrackState {
                     title: n.title,
@@ -318,20 +339,43 @@ impl Backend {
         let (Some(state), Some(ctl)) = (self.state(), self.controller()) else {
             return;
         };
-        let queue: Vec<QueueTrackSnapshot> = ctl
+        // Nothing is collected, cloned or locked unless an MCP server is running.
+        if !state.mcp_active.load(Ordering::Relaxed) {
+            return;
+        }
+        let snap = |t: &Track| {
+            slate_core::mcp::hooks::snapshot(
+                t.id,
+                t.title(),
+                t.artist_name(),
+                t.duration_secs() as u32,
+            )
+        };
+        let (queue, history, repeat_all) = ctl
             .with_queue(|q| {
-                q.manual
-                    .iter()
-                    .chain(q.queue.iter())
-                    .map(|t| QueueTrackSnapshot {
-                        id: t.id,
-                        title: t.title().to_string(),
-                        artist: t.artist_name().to_string(),
-                    })
-                    .collect()
+                (
+                    q.manual
+                        .iter()
+                        .chain(q.queue.iter())
+                        .map(snap)
+                        .collect::<Vec<QueueTrackSnapshot>>(),
+                    q.history
+                        .iter()
+                        .rev()
+                        .take(50)
+                        .map(snap)
+                        .collect::<Vec<_>>(),
+                    q.repeat == Repeat::All,
+                )
             })
             .await;
-        state.mcp_state.write().await.queue = queue;
+        let len = queue.len();
+        {
+            let mut s = state.mcp_state.write().await;
+            s.queue = queue;
+            s.history = history;
+        }
+        slate_core::mcp::hooks::queue_changed(&state, len, repeat_all);
     }
 }
 

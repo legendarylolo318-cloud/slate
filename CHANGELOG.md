@@ -47,6 +47,22 @@
   (the next suggestion takes its place), the right-click menu and play work as usual,
   "Refresh" gets a new batch and "Show more" the next. Settings → General → Suggested
   tracks under playlists: Off / 5 / 10 / 20 (default 10); Off never asks TIDAL.
+- MCP for AI agents (full list in docs-assets/MCP.md): new tools for the queue (`add_to_queue`,
+  `play_next`, `move_queue_item`, `get_history`), search and browsing (`search_albums`,
+  `search_artists`, `search_playlists`, `get_mixes`, `get_explore`, `get_similar_artists`,
+  `get_track_credits`, `get_album_info`, `get_artist_info`, `get_other_versions`), playlists
+  (`reorder_playlist`, `dedupe_playlist`, `compare_playlists`, `match_tracks`,
+  `create_playlist_from_tracks`, `get_playlist_suggestions`) and context (`get_current_lyric_line`,
+  `get_signal_path`, `get_listening_stats`, smart playlists, `get_party_status`). Queue, playlist,
+  album and mix tools report `track_count` and `total_duration_seconds`; `get_queue` also gives
+  `remaining_seconds`, `get_now_playing` gives `remaining_seconds` and `ends_at`. `play_query`
+  understands plain requests ("the new Kendrick album") and only plays when it is confident;
+  `batch` runs up to 20 calls. Now-playing, the queue and `track_skipped` / `track_replayed` /
+  `queue_low` events are MCP resources you can subscribe to.
+- Agent safety: an optional access token, read-only mode, `confirm: true` plus an in-app
+  Allow / Deny for destructive calls (no answer in 60 s denies), an activity log of everything an
+  agent changed with Undo, and "Let an agent DJ", which gives an agent 10 s to refill an empty
+  queue before the autoplay radio.
 
 ## [1.1.0] - 2026-10-30
 

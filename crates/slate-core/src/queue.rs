@@ -525,6 +525,27 @@ impl Queue {
         self.queue = stamped[mc..].to_vec();
     }
 
+    /// Moves the upcoming track at `from` to position `to` of the combined list (manual first,
+    /// then context). The number of "next up" tracks stays the same, so a track moved into the
+    /// front part plays next. Returns false when either index is out of range.
+    pub fn move_upcoming(&mut self, from: usize, to: usize) -> bool {
+        let manual = self.manual.len();
+        let mut all: Vec<Track> = self
+            .manual
+            .iter()
+            .chain(self.queue.iter())
+            .cloned()
+            .collect();
+        if from >= all.len() || to >= all.len() {
+            return false;
+        }
+        let item = all.remove(from);
+        all.insert(to, item);
+        self.manual = all[..manual].to_vec();
+        self.queue = all[manual..].to_vec();
+        true
+    }
+
     fn drop_from_original(&mut self, track: &Track) {
         if let Some(orig) = self.original.as_mut() {
             orig.retain(|t| t.qid != track.qid);
@@ -923,6 +944,32 @@ mod tests {
     use super::*;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
+
+    fn split_ids(q: &Queue) -> (Vec<u64>, Vec<u64>) {
+        (
+            q.manual.iter().map(|t| t.id).collect(),
+            q.queue.iter().map(|t| t.id).collect(),
+        )
+    }
+
+    #[test]
+    fn moving_an_upcoming_track_keeps_the_next_up_count() {
+        let mut q = Queue::new();
+        q.manual = vec![Track::new(1), Track::new(2)];
+        q.queue = vec![Track::new(3), Track::new(4), Track::new(5)];
+        // From the context part to the front: it becomes the first next-up track.
+        assert!(q.move_upcoming(3, 0));
+        assert_eq!(split_ids(&q), (vec![4, 1], vec![2, 3, 5]));
+        // Within the context part.
+        assert!(q.move_upcoming(2, 4));
+        assert_eq!(split_ids(&q), (vec![4, 1], vec![3, 5, 2]));
+        // Out of range changes nothing.
+        assert!(!q.move_upcoming(0, 9));
+        assert!(!q.move_upcoming(9, 0));
+        assert_eq!(split_ids(&q), (vec![4, 1], vec![3, 5, 2]));
+        // Same position is fine.
+        assert!(q.move_upcoming(1, 1));
+    }
 
     #[test]
     fn from_serialized_matches_a_serde_round_trip() {

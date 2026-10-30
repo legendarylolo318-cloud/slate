@@ -59,6 +59,7 @@ pub mod smart;
 pub mod theme_config;
 pub mod tidal_api;
 pub mod tidal_report;
+pub mod versions;
 
 pub use error::SlateError;
 pub use signal_path::{SignalPath, SignalPathTracker};
@@ -245,6 +246,18 @@ pub struct Settings {
     /// "not yet generated" — bootstrap will populate and save on first run.
     #[serde(default)]
     pub mcp_token: String,
+    /// Optional bearer token agents must send (empty = none). The settings file is encrypted.
+    #[serde(default)]
+    pub mcp_bearer: String,
+    /// Hide and reject every MCP tool that changes anything.
+    #[serde(default)]
+    pub mcp_read_only: bool,
+    /// Destructive agent actions wait for the user's OK in the app.
+    #[serde(default = "defaults::yes")]
+    pub mcp_ask_destructive: bool,
+    /// Let an agent DJ: wait for it to refill the queue before the autoplay radio.
+    #[serde(default)]
+    pub mcp_agent_dj: bool,
     #[serde(default = "defaults::overlay_enabled")]
     pub overlay_enabled: bool,
     #[serde(default = "defaults::overlay_port")]
@@ -287,6 +300,10 @@ impl Default for Settings {
             mcp_enabled: false,
             mcp_port: 5577,
             mcp_token: String::new(),
+            mcp_bearer: String::new(),
+            mcp_read_only: false,
+            mcp_ask_destructive: true,
+            mcp_agent_dj: false,
             overlay_enabled: false,
             overlay_port: 5578,
             overlay_host: "127.0.0.1".to_string(),
@@ -337,10 +354,30 @@ pub struct AppState {
     pub idle_inhibitor: Mutex<idle_inhibit::IdleInhibitor>,
     pub mcp_state: crate::mcp::McpStateRef,
     pub mcp_handle: Mutex<Option<crate::mcp::McpHandle>>,
+    /// True only while the MCP server runs; every hook into it checks this first.
+    /// Set by the app: evaluates a smart playlist by id (name, tracks).
+    pub smart_bridge: std::sync::OnceLock<SmartFn>,
+    pub mcp_active: std::sync::atomic::AtomicBool,
+    /// Server-side state (log, approvals, subscribers); exists only while the server runs.
+    pub mcp_rt: std::sync::RwLock<Option<Arc<crate::mcp::runtime::Runtime>>>,
     pub overlay_state: crate::overlay::OverlayStateRef,
     pub overlay_handle: Mutex<Option<crate::overlay::OverlayHandle>>,
     pub signal_path: Arc<SignalPathTracker>,
 }
+
+/// Evaluates a smart playlist for the MCP tools: id → (name, tracks) or a message.
+pub type SmartFn = Arc<
+    dyn Fn(
+            String,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<(String, Vec<tidal_api::TidalTrack>), String>,
+                    > + Send,
+            >,
+        > + Send
+        + Sync,
+>;
 
 /// The config directory, resolvable before `AppState` exists — `main.rs` needs
 /// it while the process is still single-threaded, long before the keyring and
@@ -604,6 +641,9 @@ impl AppState {
             idle_inhibitor: Mutex::new(idle_inhibit::IdleInhibitor::new()),
             mcp_state: crate::mcp::new_state(),
             mcp_handle: Mutex::new(None),
+            smart_bridge: std::sync::OnceLock::new(),
+            mcp_active: std::sync::atomic::AtomicBool::new(false),
+            mcp_rt: std::sync::RwLock::new(None),
             overlay_state: {
                 let (s, _rx, _theme_rx) = crate::overlay::new_state();
                 s

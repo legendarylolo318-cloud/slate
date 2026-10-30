@@ -2408,6 +2408,74 @@ impl TidalClient {
         Ok(())
     }
 
+    /// Moves the playlist entry at `from` so it ends up at `to` (both 0-based indices).
+    pub async fn move_playlist_item(
+        &self,
+        playlist_id: &str,
+        from: u32,
+        to: u32,
+    ) -> Result<(), SlateError> {
+        let _ordered = self.shared.write.lock().await;
+        let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
+
+        // The playlist's ETag is required for any modification.
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .get(format!("{}/playlists/{}", self.urls.api, playlist_id))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .query(&[("countryCode", self.country_code.as_str())]);
+        let head_response = self.send(generation, req).await?;
+        let etag = head_response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("*")
+            .to_string();
+
+        let (generation, client) = self.client_at()?;
+        let req = client
+            .post(format!(
+                "{}/playlists/{}/items/{}",
+                self.urls.api, playlist_id, from
+            ))
+            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .header("If-None-Match", &etag)
+            .query(&[
+                ("countryCode", self.country_code.as_str()),
+                ("toIndex", &to.to_string()),
+            ]);
+        let response = self.send(generation, req).await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(SlateError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+        Ok(())
+    }
+
+    /// Artists similar to `artist_id`.
+    pub async fn get_similar_artists(
+        &mut self,
+        artist_id: u64,
+        limit: u32,
+    ) -> Result<Vec<TidalArtist>, SlateError> {
+        let cc = self.country_code.clone();
+        let limit = limit.to_string();
+        let body = self
+            .api_get_body(
+                &format!("/artists/{}/similar", artist_id),
+                &[("countryCode", &cc), ("limit", &limit)],
+            )
+            .await?;
+        let v: Value = serde_json::from_str(&body).unwrap_or_default();
+        Ok(v.get("items")
+            .and_then(|i| serde_json::from_value(i.clone()).ok())
+            .unwrap_or_default())
+    }
+
     pub async fn delete_playlist(&self, playlist_id: &str) -> Result<(), SlateError> {
         let _ordered = self.shared.write.lock().await;
         let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;

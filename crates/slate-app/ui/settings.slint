@@ -76,6 +76,13 @@ export global SettingsState {
     in-out property <string> mcp-url;
     in-out property <bool> overlay-enabled;
     in-out property <string> overlay-url;
+    // Agents (MCP)
+    in-out property <bool> agent-read-only;
+    in-out property <bool> agent-ask: true;
+    in-out property <bool> agent-dj;
+    in-out property <bool> agent-has-bearer;
+    in-out property <[string]> agent-activity;
+    in-out property <[int]> agent-activity-ids;
     // Custom themes
     in-out property <[string]> custom-themes;
     in-out property <string> custom-active;
@@ -85,6 +92,7 @@ export global SettingsState {
     in-out property <string> edit-role: "accent";
     in-out property <color> edit-picker: #A855F7;
     in-out property <string> edit-warnings;
+    callback agent-undo(int);
     callback edit-color(string, color);
     callback edit-hex(string, string);
     callback edit-name-changed(string);
@@ -554,6 +562,46 @@ export component SettingsPage inherits Rectangle {
                         label: "MCP server";
                         hint: SettingsState.mcp-enabled ? SettingsState.mcp-url : "Lets AI assistants control playback. Local only (127.0.0.1:5577).";
                         Toggle { checked: SettingsState.mcp-enabled; toggled(v) => { SettingsState.mcp-enabled = v; SettingsState.changed-bool("mcp", v); } }
+                    }
+                    if SettingsState.mcp-enabled: Row {
+                        label: "Access token";
+                        hint: SettingsState.agent-has-bearer ? "Clients must send it as “Authorization: Bearer …”; requests without it get 401." : "Optional. Without one, anything that knows the URL can connect.";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { label: SettingsState.agent-has-bearer ? "Regenerate" : "Generate"; clicked => { SettingsState.action("agent-bearer-generate"); } }
+                            if SettingsState.agent-has-bearer: Button { label: "Copy"; clicked => { SettingsState.action("agent-bearer-copy"); } }
+                            if SettingsState.agent-has-bearer: Button { label: "Remove"; clicked => { SettingsState.action("agent-bearer-clear"); } }
+                        }
+                    }
+                    if SettingsState.mcp-enabled: Row {
+                        label: "Read-only mode";
+                        hint: "Hides and rejects every tool that changes anything.";
+                        Toggle { checked: SettingsState.agent-read-only; toggled(v) => { SettingsState.agent-read-only = v; SettingsState.changed-bool("agent-read-only", v); } }
+                    }
+                    if SettingsState.mcp-enabled: Row {
+                        label: "Ask before destructive agent actions";
+                        hint: "Deleting a playlist, clearing the queue, removing or reordering tracks: you allow each one. No answer in 60 s denies.";
+                        Toggle { checked: SettingsState.agent-ask; toggled(v) => { SettingsState.agent-ask = v; SettingsState.changed-bool("agent-ask", v); } }
+                    }
+                    if SettingsState.mcp-enabled: Row {
+                        label: "Let an agent DJ";
+                        hint: "When the queue runs out and an agent is listening for queue_low, wait up to 10 s for it to add tracks before the autoplay radio.";
+                        Toggle { checked: SettingsState.agent-dj; toggled(v) => { SettingsState.agent-dj = v; SettingsState.changed-bool("agent-dj", v); } }
+                    }
+                    if SettingsState.mcp-enabled: Row {
+                        label: "Agent activity";
+                        hint: SettingsState.agent-activity.length == 0 ? "Nothing yet. The last 500 changes an agent made are kept here." : "Newest first. Undo puts back queue, playlist and favourite changes.";
+                        Button { label: "Refresh"; clicked => { SettingsState.action("agent-refresh"); } }
+                    }
+                    if SettingsState.mcp-enabled: VerticalLayout {
+                        for line[i] in SettingsState.agent-activity: Rectangle {
+                            height: 32px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: line; color: Theme.text; font-size: 12px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+                                Button { label: "Undo"; clicked => { SettingsState.agent-undo(SettingsState.agent-activity-ids[i]); } }
+                            }
+                        }
                     }
                     if SettingsState.mcp-enabled: Row {
                         label: "MCP URL";

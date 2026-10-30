@@ -17,6 +17,7 @@ pub const EV_PLAYLIST_CREATED: &str = "mcp:playlist-created";
 pub const EV_PLAYLIST_UPDATED: &str = "mcp:playlist-updated";
 pub const EV_PLAYLIST_DELETED: &str = "mcp:playlist-deleted";
 pub const EV_PLAYLIST_TRACKS_CHANGED: &str = "mcp:playlist-tracks-changed";
+pub const EV_MOVE_QUEUE_ITEM: &str = "mcp:move-queue-item";
 pub const EV_FAVORITE_CHANGED: &str = "mcp:favorite-changed";
 
 #[derive(Serialize, Clone)]

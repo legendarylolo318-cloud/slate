@@ -290,6 +290,16 @@ impl Backend {
                 Err(e) => tracing::warn!("queue restore failed: {}", e.log_safe()),
             }
             let _ = this.shared.controller.set(Arc::clone(&controller));
+            // Lets the MCP tools evaluate a smart playlist (only called when an agent asks).
+            let for_mcp = this.clone();
+            let _ = state.smart_bridge.set(Arc::new(move |id: String| {
+                let this = for_mcp.clone();
+                Box::pin(async move {
+                    this.evaluate_smart(&id)
+                        .await
+                        .map(|(list, tracks)| (list.name, tracks))
+                })
+            }));
             this.shared.shuffle.store(shuffle, Ordering::Relaxed);
             this.ui(move |w| {
                 w.set_shuffle(shuffle);
@@ -507,6 +517,16 @@ impl Backend {
                     w.set_position_text("0:00".into());
                 });
             }
+            Outcome::WaitForAgent => {
+                self.set_playing(false);
+                if !self.dj_wait() {
+                    // Raced with the subscriber leaving: carry on as without a DJ.
+                    if let Some(ctl) = self.controller() {
+                        ctl.allow_autoplay_once();
+                    }
+                    self.next();
+                }
+            }
             Outcome::Stopped | Outcome::GaveUp | Outcome::Nothing => {
                 if matches!(outcome, Outcome::GaveUp) {
                     self.ui(|w| w.set_error("Several tracks in a row could not be played.".into()));
@@ -550,6 +570,18 @@ impl Backend {
     /// Fills the player bar and OS metadata for `track`.
     fn show_track(&self, track: &Track, playing: bool) {
         let id = track.id.to_string();
+        let last_position = f32::from_bits(self.shared.position.load(Ordering::Relaxed)).max(0.0);
+        if let Some(state) = self.state() {
+            // One atomic check when the MCP server is off.
+            slate_core::mcp::hooks::track_changed(
+                &state,
+                track.id,
+                track.title(),
+                track.artist_name(),
+                track.duration_secs() as u32,
+                last_position as u32,
+            );
+        }
         self.shared.current_id.store(track.id, Ordering::Relaxed);
         self.refresh_favorite_ui();
         self.load_lyrics(track.id);
@@ -797,6 +829,7 @@ impl Backend {
                 tracing::warn!("seek: {}", e.log_safe());
                 return;
             }
+            slate_core::mcp::hooks::seeked(&state, secs as u32);
             this.shared
                 .position
                 .store(secs.to_bits(), Ordering::Relaxed);

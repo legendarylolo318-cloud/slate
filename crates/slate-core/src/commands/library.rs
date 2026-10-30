@@ -667,6 +667,24 @@ pub async fn remove_track_from_playlist(
     Ok(())
 }
 
+/// Moves playlist entry `from` to position `to`.
+pub async fn move_playlist_item(
+    state: &AppState,
+    playlist_id: String,
+    from: u32,
+    to: u32,
+) -> Result<(), SlateError> {
+    log::debug!("[move_playlist_item]: playlist_id={playlist_id}, from={from}, to={to}");
+    let client = state.tidal_client.lock().await;
+    client.move_playlist_item(&playlist_id, from, to).await?;
+    drop(client);
+    state
+        .disk_cache
+        .invalidate_tag(&format!("playlist:{playlist_id}"))
+        .await;
+    Ok(())
+}
+
 pub async fn delete_playlist(
     state: &AppState,
     user_id: u64,

@@ -87,6 +87,9 @@ pub enum Outcome {
     Failed(PlayFailure),
     /// Nothing to do (e.g. previous at the very start with no history).
     Nothing,
+    /// The queue is empty and an agent is acting as DJ: wait a moment for it to add tracks
+    /// before the autoplay radio starts.
+    WaitForAgent,
 }
 
 pub struct Controller {
@@ -101,6 +104,8 @@ pub struct Controller {
     stream: std::sync::Mutex<Option<StreamInfo>>,
     /// Stream info of the gapless-armed next track.
     armed_stream: std::sync::Mutex<Option<(u64, StreamInfo)>>,
+    /// Set when the agent-DJ wait ended: the next empty queue goes straight to autoplay.
+    autoplay_once: std::sync::atomic::AtomicBool,
 }
 
 fn now_secs() -> i64 {
@@ -117,6 +122,7 @@ impl Controller {
             arm_failed: std::sync::Mutex::new(None),
             stream: std::sync::Mutex::new(None),
             armed_stream: std::sync::Mutex::new(None),
+            autoplay_once: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -361,6 +367,14 @@ impl Controller {
                         Err(e) => Outcome::Failed(PlayFailure::classify(&e)),
                     };
                 }
+                Next::NeedAutoplay
+                    if crate::mcp::hooks::dj_waiting(&self.state)
+                        && !self
+                            .autoplay_once
+                            .swap(false, std::sync::atomic::Ordering::SeqCst) =>
+                {
+                    return Outcome::WaitForAgent;
+                }
                 Next::NeedAutoplay => match self.autoplay(q).await {
                     Some(first) => match self.start(q, first.clone(), false).await {
                         Ok(()) => return Outcome::Playing(first),
@@ -470,6 +484,17 @@ impl Controller {
 
     pub async fn remove_from_queue(&self, index: usize) {
         self.queue.lock().await.remove_at(index);
+    }
+
+    /// Drag-and-drop or an agent moving an upcoming track; false if the positions are invalid.
+    pub async fn move_in_queue(&self, from: usize, to: usize) -> bool {
+        self.queue.lock().await.move_upcoming(from, to)
+    }
+
+    /// After the agent-DJ wait: let the next empty queue start the autoplay radio.
+    pub fn allow_autoplay_once(&self) {
+        self.autoplay_once
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub async fn clear_queue(&self) {

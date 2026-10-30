@@ -176,7 +176,10 @@ impl Backend {
             let Some(state) = this.state() else { return };
             let snap = snapshot(&state).await;
             let prefs = UiPrefs::load();
-            this.ui(move |w| apply(&w, snap, &prefs));
+            this.ui(move |w| {
+                apply(&w, snap, &prefs);
+                crate::agent::fill_agent_options(&w, &state);
+            });
         });
     }
 
@@ -197,6 +200,9 @@ impl Backend {
                     this.set_global_shortcuts(v);
                     saved
                 }
+                "agent-read-only" => this.agent_option("read-only", v),
+                "agent-ask" => this.agent_option("ask-destructive", v),
+                "agent-dj" => this.agent_option("agent-dj", v),
                 "discord-hide-private" => this.discord_hide_private(v),
                 "check-updates" => this.set_check_updates(v),
                 "cover-colors" => this.set_cover_colors(v),
@@ -322,6 +328,8 @@ impl Backend {
                     this.reset_shortcut(Some(&n["shortcut-reset:".len()..]));
                 }
                 "discord-reset" => this.discord_reset_templates(),
+                "agent-refresh" => this.load_settings_ui(),
+                n if n.starts_with("agent-bearer-") => this.agent_bearer_action(n),
                 "pkce-start" => this.start_pkce(),
                 "pkce-finish" => this.finish_pkce().await,
                 "pkce-open" => this.open_pkce_url().await,

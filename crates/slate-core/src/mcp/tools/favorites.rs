@@ -36,7 +36,7 @@ pub struct FavoriteArgs {
 impl SlateMcpServer {
     #[rmcp::tool(
         name = "get_favorite_tracks",
-        description = "Get the user's favorite tracks, paginated. Returns track id, title, artist, album, and duration in seconds."
+        description = "The user's favourite tracks, newest first. Params: limit (≤100, default 50), offset. Example: {\"limit\":25}."
     )]
     async fn get_favorite_tracks(
         &self,
@@ -66,7 +66,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "get_favorite_albums",
-        description = "Get the user's favorite albums, paginated. Returns album id, title, artist, track count, and release year."
+        description = "The user's favourite albums. Params: limit (≤100, default 50), offset. Example: {\"limit\":25}."
     )]
     async fn get_favorite_albums(
         &self,
@@ -97,7 +97,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "get_favorite_artists",
-        description = "Get the user's favorite artists, paginated. Returns artist id and name."
+        description = "The user's favourite artists. Params: limit (≤100, default 50), offset. Example: {\"limit\":25}."
     )]
     async fn get_favorite_artists(
         &self,
@@ -131,7 +131,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "is_track_favorited",
-        description = "Check whether a track is in the user's favorites."
+        description = "Whether a track is in the user's favourites. Params: track_id. Example: {\"track_id\":123}."
     )]
     async fn is_track_favorited(
         &self,
@@ -152,7 +152,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "favorite_track",
-        description = "Add or remove a track from the user's favorites. action: \"add\" or \"remove\"."
+        description = "Add or remove a track from the favourites. Params: id (track id), action = \"add\" or \"remove\". Example: {\"id\":123,\"action\":\"add\"}."
     )]
     async fn favorite_track(
         &self,
@@ -198,7 +198,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "favorite_album",
-        description = "Add or remove an album from the user's favorites. action: \"add\" or \"remove\"."
+        description = "Add or remove an album from the favourites. Params: id (album id), action = \"add\" or \"remove\". Example: {\"id\":77646168,\"action\":\"add\"}."
     )]
     async fn favorite_album(
         &self,
@@ -244,7 +244,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "favorite_artist",
-        description = "Add or remove an artist from the user's favorites. action: \"add\" or \"remove\"."
+        description = "Add or remove an artist from the favourites. Params: id (artist id), action = \"add\" or \"remove\". Example: {\"id\":1566,\"action\":\"add\"}."
     )]
     async fn favorite_artist(
         &self,

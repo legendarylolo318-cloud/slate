@@ -63,6 +63,19 @@ impl Backend {
         });
     }
 
+    /// Moves an upcoming track (drag-and-drop in the queue, or an agent).
+    pub fn queue_move(&self, from: usize, to: usize) {
+        let this = self.clone();
+        self.rt.spawn(async move {
+            if let Some(ctl) = this.controller() {
+                if ctl.move_in_queue(from, to).await {
+                    this.refresh_queue_info().await;
+                    this.save().await;
+                }
+            }
+        });
+    }
+
     pub fn queue_clear(&self) {
         let this = self.clone();
         self.rt.spawn(async move {
@@ -144,6 +157,21 @@ impl Backend {
         let prev = self.lyric_index.swap(idx, Ordering::Relaxed);
         if prev == idx {
             return;
+        }
+        // Only while an MCP server runs: the line for `get_current_lyric_line`.
+        if let Some(state) = self
+            .state()
+            .filter(|s| s.mcp_active.load(Ordering::Relaxed))
+        {
+            let line = usize::try_from(idx).ok().and_then(|i| {
+                self.lyrics
+                    .lock()
+                    .ok()
+                    .and_then(|l| l.get(i).map(|x| x.text.clone()))
+            });
+            self.rt.spawn(async move {
+                state.mcp_state.write().await.lyric_line = line;
+            });
         }
         self.ui(move |w| {
             let lines = w.get_lyric_lines();

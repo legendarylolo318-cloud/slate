@@ -13,7 +13,7 @@ use crate::mcp::server::SlateMcpServer;
 use crate::tidal_api::TidalClient;
 use crate::AppState;
 
-use super::util::{require_user_id, NoArgs};
+use super::util::require_user_id;
 
 #[derive(Deserialize, JsonSchema)]
 pub struct CreatePlaylistArgs {
@@ -37,6 +37,9 @@ pub struct UpdatePlaylistArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct DeletePlaylistArgs {
     pub playlist_uuid: String,
+    /// Must be true: deleting is permanent.
+    #[allow(dead_code)]
+    pub confirm: Option<bool>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -52,10 +55,25 @@ pub struct RemoveTrackFromPlaylistArgs {
     pub playlist_uuid: String,
     /// 0-based index of the track within the playlist.
     pub index: u32,
+    /// Must be true.
+    #[allow(dead_code)]
+    pub confirm: Option<bool>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ListPlaylistsArgs {
+    /// Max playlists (default 20, max 50).
+    pub limit: Option<u32>,
+    /// Playlists to skip (default 0).
+    pub offset: Option<u32>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct GetPlaylistTracksArgs {
+    /// Max tracks (default 20, max 50).
+    pub limit: Option<u32>,
+    /// Tracks to skip (default 0).
+    pub offset: Option<u32>,
     /// Playlist UUID (preferred when known).
     pub playlist_uuid: Option<String>,
     /// Playlist name (case-insensitive lookup; used only if playlist_uuid is absent).
@@ -99,12 +117,16 @@ async fn resolve_playlist_uuid(
 impl SlateMcpServer {
     #[rmcp::tool(
         name = "get_user_playlists",
-        description = "Get all playlists in the user's library — both owned and favorited (followed). Returns playlist uuid, title, and track count."
+        description = "List the playlists in the user's library, owned and followed, with uuid, title, track_count and total_duration_seconds. Params: limit (≤50, default 20), offset. Example: {\"limit\":20}."
     )]
     async fn get_user_playlists(
         &self,
-        Parameters(_): Parameters<NoArgs>,
+        Parameters(args): Parameters<ListPlaylistsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
+        let (limit, offset) = (
+            args.limit.unwrap_or(20).clamp(1, 50) as usize,
+            args.offset.unwrap_or(0) as usize,
+        );
         let state = self.app_handle.state::<AppState>();
         let mut client = state.tidal_client.lock().await;
         let user_id = require_user_id(&client)?;
@@ -123,9 +145,20 @@ impl SlateMcpServer {
                 combined.push(p);
             }
         }
-        let playlists: Vec<SanitizedPlaylist> =
-            combined.iter().map(SanitizedPlaylist::from_tidal).collect();
-        let json = serde_json::json!({ "playlists": playlists });
+        let total = combined.len();
+        let playlists: Vec<serde_json::Value> = combined
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .map(|p| {
+                let s = SanitizedPlaylist::from_tidal(p);
+                serde_json::json!({
+                    "uuid": s.uuid, "title": s.title, "track_count": s.track_count,
+                    "total_duration_seconds": p.duration,
+                })
+            })
+            .collect();
+        let json = serde_json::json!({ "playlist_count": total, "offset": offset, "playlists": playlists });
         Ok(CallToolResult::success(vec![
             rmcp::model::ContentBlock::text(json.to_string()),
         ]))
@@ -133,7 +166,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "get_playlist_tracks",
-        description = "Get all tracks in a playlist. Provide either playlist_uuid or playlist_name (case-insensitive)."
+        description = "Get the tracks of a playlist with track_count and total_duration_seconds. Params: playlist_uuid or playlist_name (case-insensitive), limit (≤50, default 20), offset. Example: {\"playlist_name\":\"Road trip\",\"limit\":20}."
     )]
     async fn get_playlist_tracks(
         &self,
@@ -153,8 +186,21 @@ impl SlateMcpServer {
             .get_playlist_tracks(&uuid)
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        let tracks = backfill_and_sanitize_tracks(raw_tracks);
-        let json = serde_json::json!({ "tracks": tracks, "uuid": uuid });
+        let (limit, offset) = (
+            args.limit.unwrap_or(20).clamp(1, 50) as usize,
+            args.offset.unwrap_or(0) as usize,
+        );
+        let total_duration: u32 = raw_tracks.iter().map(|t| t.duration).sum();
+        let track_count = raw_tracks.len();
+        let tracks: Vec<_> = backfill_and_sanitize_tracks(raw_tracks)
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect();
+        let json = serde_json::json!({
+            "uuid": uuid, "track_count": track_count, "total_duration_seconds": total_duration,
+            "offset": offset, "tracks": tracks,
+        });
         Ok(CallToolResult::success(vec![
             rmcp::model::ContentBlock::text(json.to_string()),
         ]))
@@ -162,7 +208,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "create_playlist",
-        description = "Create a new playlist with optional initial tracks. Returns the new playlist's uuid."
+        description = "Create a playlist, optionally with initial tracks. Params: name, description (optional), track_ids (optional). Example: {\"name\":\"Focus\",\"track_ids\":[1,2,3]}. Returns the new uuid."
     )]
     async fn create_playlist(
         &self,
@@ -218,7 +264,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "update_playlist",
-        description = "Rename a playlist or change its description."
+        description = "Rename a playlist or change its description. Params: playlist_uuid, name (optional), description (optional). Example: {\"playlist_uuid\":\"abc\",\"name\":\"New name\"}."
     )]
     async fn update_playlist(
         &self,
@@ -280,7 +326,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "delete_playlist",
-        description = "Permanently delete a playlist. Cannot be undone."
+        description = "Permanently delete a playlist (cannot be undone). Destructive: needs confirm=true and may ask the user in the app. Params: playlist_uuid, confirm. Example: {\"playlist_uuid\":\"abc\",\"confirm\":true}."
     )]
     async fn delete_playlist(
         &self,
@@ -318,7 +364,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "add_to_playlist",
-        description = "Add tracks to an existing playlist (by uuid or name)."
+        description = "Add tracks to an existing playlist. Params: playlist_uuid or playlist_name, track_ids. Example: {\"playlist_name\":\"Gym\",\"track_ids\":[1,2]}."
     )]
     async fn add_to_playlist(
         &self,
@@ -366,7 +412,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "remove_track_from_playlist",
-        description = "Remove a track from a playlist by its 0-based index in the tracklist."
+        description = "Remove the track at a 0-based index from a playlist. Destructive: needs confirm=true. Params: playlist_uuid, index, confirm. Example: {\"playlist_uuid\":\"abc\",\"index\":3,\"confirm\":true}."
     )]
     async fn remove_track_from_playlist(
         &self,

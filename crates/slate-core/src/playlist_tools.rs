@@ -131,6 +131,29 @@ pub fn merged_ids(a: &[TidalTrack], b: &[TidalTrack]) -> Vec<u64> {
         .collect()
 }
 
+/// The single-item moves `(from, to)` that turn the order `current` into `target`, applied in
+/// sequence. Ids missing from either side are ignored.
+pub fn moves_to_order(current: &[u64], target: &[u64]) -> Vec<(u32, u32)> {
+    let mut cur: Vec<u64> = current
+        .iter()
+        .copied()
+        .filter(|i| target.contains(i))
+        .collect();
+    let want: Vec<u64> = target.iter().copied().filter(|i| cur.contains(i)).collect();
+    let mut moves = Vec::new();
+    for (i, id) in want.iter().enumerate() {
+        if cur.get(i) == Some(id) {
+            continue;
+        }
+        if let Some(j) = cur.iter().position(|x| x == id) {
+            let item = cur.remove(j);
+            cur.insert(i, item);
+            moves.push((j as u32, i as u32));
+        }
+    }
+    moves
+}
+
 /// `ids` without repeats, order kept.
 pub fn unique_ids(ids: &[u64]) -> Vec<u64> {
     let mut seen = std::collections::HashSet::new();
@@ -249,5 +272,29 @@ mod tests {
         assert_eq!(compare(&a, &[]).only_a, vec![0]);
         assert_eq!(compare(&[], &a).only_b, vec![0]);
         assert_eq!(compare(&a, &a).both, vec![0]);
+    }
+
+    #[test]
+    fn moves_restore_an_order() {
+        let apply = |mut v: Vec<u64>, moves: &[(u32, u32)]| {
+            for (f, t) in moves {
+                let x = v.remove(*f as usize);
+                v.insert(*t as usize, x);
+            }
+            v
+        };
+        let target = vec![1, 2, 3, 4, 5];
+        for cur in [
+            vec![5, 4, 3, 2, 1],
+            vec![2, 1, 3, 4, 5],
+            vec![1, 2, 3, 4, 5],
+            vec![3, 1, 5, 2, 4],
+        ] {
+            let m = moves_to_order(&cur, &target);
+            assert_eq!(apply(cur.clone(), &m), target, "{cur:?}");
+        }
+        assert!(moves_to_order(&target, &target).is_empty());
+        // Ids that vanished are ignored.
+        assert_eq!(moves_to_order(&[2, 1], &[1, 2, 9]), vec![(1, 0)]);
     }
 }

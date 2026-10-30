@@ -72,14 +72,21 @@ impl Watch {
         None
     }
 
-    /// A new track started. `skipped`: the user moved on rather than the track ending.
-    pub fn track_changed(&mut self, new_id: u64, new_duration: u32, skipped: bool) -> Vec<Event> {
+    /// A new track started; `last_position` is where the previous one stopped.
+    pub fn track_changed(
+        &mut self,
+        new_id: u64,
+        new_duration: u32,
+        last_position: u32,
+    ) -> Vec<Event> {
         let mut out = Vec::new();
         if let Some((old, old_dur)) = self.current {
-            if skipped && is_skip(self.position, old_dur) {
+            // A track that played to (nearly) its end was not skipped.
+            let ended = old_dur > 0 && last_position + 2 >= old_dur;
+            if !ended && is_skip(last_position, old_dur) {
                 out.push(Event::TrackSkipped {
                     track_id: old,
-                    position_secs: self.position,
+                    position_secs: last_position,
                 });
             }
         }
@@ -122,9 +129,8 @@ mod tests {
     #[test]
     fn skipping_early_is_reported_with_the_position() {
         let mut w = Watch::new();
-        assert!(w.track_changed(1, 200, false).is_empty());
-        w.position(12);
-        let ev = w.track_changed(2, 180, true);
+        assert!(w.track_changed(1, 200, 0).is_empty());
+        let ev = w.track_changed(2, 180, 12);
         assert_eq!(
             ev,
             vec![Event::TrackSkipped {
@@ -133,26 +139,33 @@ mod tests {
             }]
         );
         // Natural end after a full listen: nothing.
-        w.position(179);
-        assert!(w.track_changed(3, 180, false).is_empty());
+        assert!(w.track_changed(3, 180, 179).is_empty());
         // A late skip is not a skip.
-        w.position(100);
-        assert!(w.track_changed(4, 180, true).is_empty());
+        assert!(w.track_changed(4, 180, 100).is_empty());
+        // A short track that ended by itself is not a skip either.
+        assert!(w.track_changed(5, 45, 44).is_empty());
+        assert_eq!(
+            w.track_changed(6, 200, 10),
+            vec![Event::TrackSkipped {
+                track_id: 5,
+                position_secs: 10
+            }]
+        );
     }
 
     #[test]
     fn replays_by_new_play_and_by_seek() {
         let mut w = Watch::new();
-        w.track_changed(1, 200, false);
+        w.track_changed(1, 200, 0);
         w.position(150);
-        w.track_changed(2, 100, false);
-        let ev = w.track_changed(1, 200, false);
+        w.track_changed(2, 100, 150);
+        let ev = w.track_changed(1, 200, 100);
         assert_eq!(ev, vec![Event::TrackReplayed { track_id: 1 }]);
         // Seek back to the start after more than half.
         w.position(120);
         assert_eq!(w.seeked(0), Some(Event::TrackReplayed { track_id: 1 }));
         // Not after less than half.
-        w.track_changed(9, 200, false);
+        w.track_changed(9, 200, 0);
         w.position(50);
         assert_eq!(w.seeked(0), None);
         // Seeking elsewhere is not a replay.

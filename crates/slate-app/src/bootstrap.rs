@@ -463,6 +463,8 @@ fn wire(window: &AppWindow, backend: &Backend) {
         .suggest_play(usize::try_from(i).unwrap_or(usize::MAX)));
     bind!(on_suggest_action, |b, i, a| b
         .suggest_action(usize::try_from(i).unwrap_or(usize::MAX), &a));
+    bind!(on_approval_answer, |b, id, allow| b
+        .approval_answer(id, allow));
     bind!(on_start_login, |b| b.start_login());
     bind!(on_open_login_url, |b| b.open_login_url());
     bind!(on_open_update, |b| b.open_update());
@@ -547,6 +549,8 @@ fn wire(window: &AppWindow, backend: &Backend) {
     g.on_theme_color_final(move |t, c| b.theme_color(t, c, true));
     let b = backend.clone();
     g.on_theme_hex(move |t, s| b.theme_hex(t, &s));
+    let b = backend.clone();
+    g.on_agent_undo(move |id| b.agent_undo(id));
     let b = backend.clone();
     g.on_edit_color(move |r, c| b.edit_color(&r, c));
     let b = backend.clone();

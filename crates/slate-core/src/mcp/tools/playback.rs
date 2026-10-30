@@ -15,6 +15,13 @@ use crate::mcp::server::SlateMcpServer;
 use super::util::NoArgs;
 
 #[derive(Deserialize, JsonSchema)]
+pub struct ConfirmArgs {
+    /// Must be true; otherwise nothing happens and the call only describes what it would do.
+    #[allow(dead_code)]
+    pub confirm: Option<bool>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct PlayTracksArgs {
     /// List of Tidal track IDs to act on. Must be non-empty.
     pub track_ids: Vec<u64>,
@@ -58,7 +65,7 @@ pub struct RepeatArgs {
 impl SlateMcpServer {
     #[rmcp::tool(
         name = "play_tracks",
-        description = "Play, queue, or insert tracks. action: \"play_now\" replaces the auto queue and plays immediately; \"queue\" appends to the Next-up list; \"play_next\" prepends to the Next-up list."
+        description = "Play, queue or insert tracks. Params: track_ids, action = \"play_now\" (replace the queue and play), \"queue\" (append) or \"play_next\" (insert after the current track). Example: {\"track_ids\":[1,2],\"action\":\"queue\"}."
     )]
     async fn play_tracks(
         &self,
@@ -94,7 +101,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "play_source",
-        description = "Play an entire playlist, album, artist's top tracks, or mix immediately."
+        description = "Play a whole playlist, album, an artist's top tracks or a mix. Params: source_type (\"playlist\"|\"album\"|\"artist\"|\"mix\"), id. Example: {\"source_type\":\"album\",\"id\":\"77646168\"}."
     )]
     async fn play_source(
         &self,
@@ -126,7 +133,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "shuffle_source",
-        description = "Shuffle and play an entire playlist, album, artist's top tracks, or mix. Forces shuffle mode ON."
+        description = "Shuffle and play a whole playlist, album, artist or mix (turns shuffle on). Params: source_type, id. Example: {\"source_type\":\"playlist\",\"id\":\"abc\"}."
     )]
     async fn shuffle_source(
         &self,
@@ -156,7 +163,7 @@ impl SlateMcpServer {
         ]))
     }
 
-    #[rmcp::tool(name = "pause", description = "Pause playback.")]
+    #[rmcp::tool(name = "pause", description = "Pause playback. Example: {}.")]
     async fn pause(&self, Parameters(_): Parameters<NoArgs>) -> Result<CallToolResult, ErrorData> {
         self.app_handle
             .emit(EV_PAUSE, ())
@@ -167,7 +174,7 @@ impl SlateMcpServer {
         ]))
     }
 
-    #[rmcp::tool(name = "resume", description = "Resume playback.")]
+    #[rmcp::tool(name = "resume", description = "Resume playback. Example: {}.")]
     async fn resume(&self, Parameters(_): Parameters<NoArgs>) -> Result<CallToolResult, ErrorData> {
         self.app_handle
             .emit(EV_RESUME, ())
@@ -178,7 +185,10 @@ impl SlateMcpServer {
         ]))
     }
 
-    #[rmcp::tool(name = "skip_next", description = "Skip to the next track.")]
+    #[rmcp::tool(
+        name = "skip_next",
+        description = "Skip to the next track. Example: {}."
+    )]
     async fn skip_next(
         &self,
         Parameters(_): Parameters<NoArgs>,
@@ -192,7 +202,10 @@ impl SlateMcpServer {
         ]))
     }
 
-    #[rmcp::tool(name = "skip_previous", description = "Go back to the previous track.")]
+    #[rmcp::tool(
+        name = "skip_previous",
+        description = "Go back to the previous track (or restart this one). Example: {}."
+    )]
     async fn skip_previous(
         &self,
         Parameters(_): Parameters<NoArgs>,
@@ -206,10 +219,13 @@ impl SlateMcpServer {
         ]))
     }
 
-    #[rmcp::tool(name = "clear_queue", description = "Clear the play queue.")]
+    #[rmcp::tool(
+        name = "clear_queue",
+        description = "Clear the whole play queue. Destructive: needs confirm=true. Params: confirm. Example: {\"confirm\":true}."
+    )]
     async fn clear_queue(
         &self,
-        Parameters(_): Parameters<NoArgs>,
+        Parameters(_): Parameters<ConfirmArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         self.app_handle
             .emit(EV_CLEAR_QUEUE, ())
@@ -220,7 +236,10 @@ impl SlateMcpServer {
         ]))
     }
 
-    #[rmcp::tool(name = "toggle_shuffle", description = "Toggle shuffle on/off.")]
+    #[rmcp::tool(
+        name = "toggle_shuffle",
+        description = "Toggle shuffle on or off. Example: {}."
+    )]
     async fn toggle_shuffle(
         &self,
         Parameters(_): Parameters<NoArgs>,
@@ -236,7 +255,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "seek_to",
-        description = "Seek to a position in the current track (seconds from start)."
+        description = "Seek within the current track. Params: position_seconds. Example: {\"position_seconds\":90}."
     )]
     async fn seek_to(
         &self,
@@ -258,7 +277,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "set_volume",
-        description = "Set playback volume from 0.0 (silent) to 1.0 (max)."
+        description = "Set the volume from 0.0 (silent) to 1.0. Params: level. Example: {\"level\":0.4}."
     )]
     async fn set_volume(
         &self,
@@ -276,7 +295,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "remove_from_queue",
-        description = "Remove a specific track from the play queue by ID."
+        description = "Remove one track from the queue by track id. Params: track_id. Example: {\"track_id\":123}."
     )]
     async fn remove_from_queue(
         &self,
@@ -298,7 +317,7 @@ impl SlateMcpServer {
 
     #[rmcp::tool(
         name = "set_repeat",
-        description = "Set repeat mode. mode: \"off\", \"all\", or \"one\"."
+        description = "Set the repeat mode. Params: mode = \"off\", \"all\" or \"one\". Example: {\"mode\":\"all\"}."
     )]
     async fn set_repeat(
         &self,
