@@ -18,6 +18,12 @@ pub fn color(hex: &str) -> Color {
 
 /// The theme file as saved, or the default preset when there is none / it is invalid.
 pub fn load_saved() -> CoreTheme {
+    let t = load_saved_inner();
+    crate::custom_themes::init(&t);
+    t
+}
+
+fn load_saved_inner() -> CoreTheme {
     match theme_config::theme_file_get() {
         Ok(Some(file)) => theme::resolve(&file).unwrap_or_else(|| {
             tracing::warn!("theme.json did not resolve to a theme; using the default");
@@ -61,6 +67,7 @@ pub fn apply(w: &AppWindow, t: &CoreTheme) {
         })
         .collect();
     s.set_presets(ModelRc::new(VecModel::from(tiles)));
+    crate::custom_themes::apply_active(w);
 }
 
 fn hex_of(c: Color) -> String {
@@ -79,7 +86,18 @@ impl Backend {
             .unwrap_or_else(|_| theme::default_theme())
     }
 
+    /// A preset, picker or external edit: whatever custom theme was in use is left behind.
     fn set_theme(&self, t: CoreTheme, save: bool) {
+        crate::custom_themes::clear_active();
+        self.set_theme_inner(t, save);
+    }
+
+    /// Applies and saves `t` while keeping the active custom theme (it owns these colours).
+    pub(crate) fn set_theme_quiet(&self, t: CoreTheme) {
+        self.set_theme_inner(t, true);
+    }
+
+    fn set_theme_inner(&self, t: CoreTheme, save: bool) {
         if let Ok(mut cur) = self.theme.lock() {
             *cur = t.clone();
         }

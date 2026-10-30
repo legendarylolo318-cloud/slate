@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { Toggle, Button, Segmented, TextField, ColorPicker } from "widgets.slint";
-import { PresetTile, ShortcutRow } from "types.slint";
+import { PresetTile, ShortcutRow, RoleRow } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
 /// Everything the settings page shows. Rust fills it from the core and handles
@@ -71,6 +71,18 @@ export global SettingsState {
     in-out property <string> mcp-url;
     in-out property <bool> overlay-enabled;
     in-out property <string> overlay-url;
+    // Custom themes
+    in-out property <[string]> custom-themes;
+    in-out property <string> custom-active;
+    in-out property <bool> editing;
+    in-out property <string> edit-name;
+    in-out property <[RoleRow]> edit-roles;
+    in-out property <string> edit-role: "accent";
+    in-out property <color> edit-picker: #A855F7;
+    in-out property <string> edit-warnings;
+    callback edit-color(string, color);
+    callback edit-hex(string, string);
+    callback edit-name-changed(string);
     // Shortcuts
     in-out property <[ShortcutRow]> shortcut-rows;
     in-out property <string> capturing;
@@ -248,6 +260,88 @@ export component SettingsPage inherits Rectangle {
                                 Text { text: p.name; color: p.bg.to-hsv().value > 0.5 ? #111111 : #ffffff; vertical-alignment: center; overflow: elide; }
                             }
                             TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { SettingsState.theme-preset(i); } }
+                        }
+                    }
+                    Text { text: "Your themes"; color: Theme.text; font-weight: 700; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Button { label: "New theme"; primary: true; clicked => { SettingsState.action("theme-new"); } }
+                        Button { label: "Import…"; clicked => { SettingsState.action("theme-import"); } }
+                    }
+                    for n in SettingsState.custom-themes: Rectangle {
+                        height: 40px;
+                        border-radius: 8px;
+                        background: n == SettingsState.custom-active ? Theme.surface-raised : Theme.surface;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 8px;
+                            spacing: 6px;
+                            Text { text: n; color: n == SettingsState.custom-active ? Theme.accent : Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                            Button { label: "Use"; clicked => { SettingsState.action("theme-apply:" + n); } }
+                            Button { label: "Edit"; clicked => { SettingsState.action("theme-edit:" + n); } }
+                            Button { label: "Duplicate"; clicked => { SettingsState.action("theme-duplicate:" + n); } }
+                            Button { label: "Export"; clicked => { SettingsState.action("theme-export:" + n); } }
+                            Button { label: "Delete"; danger: true; clicked => { SettingsState.action("theme-delete:" + n); } }
+                        }
+                    }
+                    if SettingsState.custom-themes.length == 0 && !SettingsState.editing: Text { text: "No saved themes yet. “New theme” starts from the colours you are using now."; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; }
+                    if SettingsState.editing: Rectangle {
+                        border-radius: 10px;
+                        background: Theme.surface;
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 8px;
+                            Text { text: "Edit theme (changes show live in the app)"; color: Theme.text; font-weight: 700; }
+                            TextField {
+                                text: SettingsState.edit-name;
+                                placeholder: "Theme name";
+                                field-width: 260px;
+                                edited(t) => { SettingsState.edit-name-changed(t); }
+                            }
+                            for r in SettingsState.edit-roles: Rectangle {
+                                height: 36px;
+                                border-radius: 6px;
+                                background: r.id == SettingsState.edit-role ? Theme.surface-raised : transparent;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 10px;
+                                    Rectangle { width: 22px; height: 22px; y: 7px; border-radius: 4px; background: r.color; border-width: 1px; border-color: Theme.text-muted; }
+                                    Text { text: r.label; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                                    Text { text: r.hex; color: Theme.text-muted; vertical-alignment: center; font-size: 12px; }
+                                    if r.custom: Button { label: "Reset"; clicked => { SettingsState.action("theme-role-reset:" + r.id); } }
+                                }
+                                TouchArea { z: -1; mouse-cursor: MouseCursor.pointer; clicked => { SettingsState.action("theme-role:" + r.id); } }
+                            }
+                            HorizontalLayout {
+                                spacing: 16px;
+                                alignment: start;
+                                ColorPicker {
+                                    value: SettingsState.edit-picker;
+                                    changed(c) => { SettingsState.edit-color(SettingsState.edit-role, c); }
+                                    released(c) => { SettingsState.edit-color(SettingsState.edit-role, c); }
+                                }
+                                VerticalLayout {
+                                    alignment: start;
+                                    spacing: 8px;
+                                    Text { text: "Selected colour"; color: Theme.text-muted; }
+                                    TextField {
+                                        placeholder: "#RRGGBB";
+                                        field-width: 140px;
+                                        accepted(t) => { SettingsState.edit-hex(SettingsState.edit-role, t); }
+                                    }
+                                    Text { text: "Press Enter to apply a hex value."; color: Theme.text-muted; font-size: 11px; }
+                                }
+                            }
+                            if SettingsState.edit-warnings != "": Text { text: "⚠ " + SettingsState.edit-warnings; color: Theme.danger; font-size: 12px; wrap: word-wrap; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                Button { label: "Generate from album cover"; clicked => { SettingsState.action("theme-cover"); } }
+                                Button { label: "Save"; primary: true; clicked => { SettingsState.action("theme-save"); } }
+                                Button { label: "Cancel"; clicked => { SettingsState.action("theme-cancel"); } }
+                            }
                         }
                     }
                     Text { text: "Custom colours"; color: Theme.text; font-weight: 700; }

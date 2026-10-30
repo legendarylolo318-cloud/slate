@@ -424,6 +424,22 @@ fn wire(window: &AppWindow, backend: &Backend) {
             window.$on(move |$($a),*| $body);
         }};
     }
+    {
+        // A `.slatetheme` dropped on the window is imported.
+        use slint::winit_030::{winit::event::WindowEvent, EventResult, WinitWindowAccessor};
+        let b = backend.clone();
+        window.window().on_winit_window_event(move |_, event| {
+            if let WindowEvent::DroppedFile(path) = event {
+                if path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("slatetheme"))
+                {
+                    b.import_theme_path(path.clone());
+                }
+            }
+            EventResult::Propagate
+        });
+    }
     crate::keys::init(&crate::uiprefs::UiPrefs::load());
     crate::keys::apply_ui(window);
     window.on_resolve_key(|t, c, a, s, m| crate::keys::resolve(&t, c, a, s, m).into());
@@ -514,6 +530,12 @@ fn wire(window: &AppWindow, backend: &Backend) {
     g.on_theme_color_final(move |t, c| b.theme_color(t, c, true));
     let b = backend.clone();
     g.on_theme_hex(move |t, s| b.theme_hex(t, &s));
+    let b = backend.clone();
+    g.on_edit_color(move |r, c| b.edit_color(&r, c));
+    let b = backend.clone();
+    g.on_edit_hex(move |r, t| b.edit_hex(&r, &t));
+    let b = backend.clone();
+    g.on_edit_name_changed(move |n| b.edit_name(&n));
     let b = backend.clone();
     g.on_changed_bool(move |k, v| b.setting_bool(&k, v));
     let b = backend.clone();

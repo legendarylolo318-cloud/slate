@@ -112,7 +112,7 @@ pub fn to_file(theme: &Theme) -> ThemeFile {
 
 // ---- derivation ----
 
-fn hex_to_hsl(hex: &str) -> (f64, f64, f64) {
+pub(crate) fn hex_to_hsl(hex: &str) -> (f64, f64, f64) {
     let h = hex.trim_start_matches('#');
     let p = |i: usize| {
         u8::from_str_radix(h.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0) as f64 / 255.0
@@ -139,7 +139,7 @@ fn hex_to_hsl(hex: &str) -> (f64, f64, f64) {
     (hue * 360.0, s * 100.0, l * 100.0)
 }
 
-fn hsl_to_hex(h: f64, s: f64, l: f64) -> String {
+pub(crate) fn hsl_to_hex(h: f64, s: f64, l: f64) -> String {
     let (sn, ln) = (s / 100.0, l / 100.0);
     let c = (1.0 - (2.0 * ln - 1.0).abs()) * sn;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());

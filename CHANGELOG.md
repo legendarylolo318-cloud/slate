@@ -19,6 +19,13 @@
   track from a filtered list plays the filtered tracks.
 - A chip row (All / Lossless / Hi-Res / Atmos) on the same pages narrows the list by quality,
   combines with the filter, and is remembered per kind of page.
+- Settings → Appearance → Your themes: make your own themes. "New theme" opens an editor for
+  every colour role (accent, background, surfaces, text, error…) with the colour picker and
+  a live preview in the real app; text pairs below a 4.5:1 contrast ratio get a warning that
+  names the pair. "Generate from album cover" builds a palette from the playing cover.
+  Themes can be used, edited, duplicated, renamed and deleted, exported to a `.slatetheme`
+  file and imported again (invalid or oversized files give a clear message). Dropping a
+  `.slatetheme` on the window imports it.
 
 ## [1.1.0] - 2026-10-30
 

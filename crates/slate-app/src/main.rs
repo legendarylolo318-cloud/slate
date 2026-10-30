@@ -13,6 +13,7 @@ mod bootstrap;
 mod control;
 mod cover_tint;
 mod credits;
+mod custom_themes;
 mod dedupe;
 mod deeplink;
 mod export;

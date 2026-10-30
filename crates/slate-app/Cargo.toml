@@ -20,7 +20,7 @@ renderer-software = ["slint/renderer-software"]
 
 [dependencies]
 slate-core = { path = "../slate-core" }
-slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "accessibility"] }
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "accessibility", "unstable-winit-030"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-appender = "0.2"

@@ -27,6 +27,7 @@ pub mod cache;
 pub mod commands;
 pub mod controller;
 pub mod crypto;
+pub mod custom_theme;
 pub mod discord;
 #[cfg(unix)]
 pub mod discord_ipc;

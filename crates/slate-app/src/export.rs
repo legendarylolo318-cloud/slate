@@ -152,6 +152,11 @@ pub fn m3u(tracks: &[Track]) -> String {
 
 /// A file name that is valid on Linux and Windows.
 pub fn file_name(title: &str, format: Format) -> String {
+    named(title, format.extension())
+}
+
+/// `title` made into a file name with extension `ext`.
+pub fn named(title: &str, ext: &str) -> String {
     let cleaned: String = title
         .chars()
         .map(|c| {
@@ -174,7 +179,7 @@ pub fn file_name(title: &str, format: Format) -> String {
     if stem.is_empty() || reserved.contains(&base) || numbered {
         stem = format!("Slate {stem}").trim().to_string();
     }
-    format!("{stem}.{}", format.extension())
+    format!("{stem}.{ext}")
 }
 
 impl Backend {

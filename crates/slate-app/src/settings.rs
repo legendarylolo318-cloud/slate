@@ -97,6 +97,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_exclusive(s.exclusive);
     g.set_bit_perfect(s.bit_perfect);
     g.set_show_alsa_options(cfg!(any(target_os = "linux", windows)));
+    crate::custom_themes::sync(w);
     g.set_global_shortcuts(prefs.global_shortcuts);
     g.set_check_updates(prefs.check_updates);
     g.set_cover_colors(prefs.cover_colors);
@@ -156,7 +157,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
 }
 
 impl Backend {
-    fn settings_status(&self, text: impl Into<String>) {
+    pub(crate) fn settings_status(&self, text: impl Into<String>) {
         let text = text.into();
         self.ui(move |w| w.global::<SettingsState>().set_status(text.into()));
     }
@@ -299,6 +300,7 @@ impl Backend {
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
             match name.as_str() {
+                n if n.starts_with("theme-") => this.custom_theme_action(n),
                 "shortcuts-reset-all" => this.reset_shortcut(None),
                 n if n.starts_with("shortcut-rebind:") => {
                     this.begin_capture(&n["shortcut-rebind:".len()..]);
