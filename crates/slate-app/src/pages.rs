@@ -40,6 +40,7 @@ pub enum Route {
     Album(u64),
     Artist(u64),
     Mix(String),
+    Smart(String),
     Search(String),
     /// A TIDAL editorial page (`pages/explore`, a genre, a mood…) and its title.
     Page(String, String),
@@ -74,6 +75,7 @@ impl Route {
             Self::Mixes => "mixes".into(),
             Self::Loved => "loved".into(),
             Self::Playlist(u) => u.clone(),
+            Self::Smart(id) => format!("smart:{id}"),
             Self::Settings => "settings".into(),
             Self::Profile => "profile".into(),
             _ => String::new(),
@@ -461,6 +463,7 @@ impl Backend {
             Route::Playlist(u) => self.open(SourceKind::Playlist(u.clone()), u),
             Route::Album(id) => self.open(SourceKind::Album(id), String::new()),
             Route::Mix(id) => self.open(SourceKind::Mix(id), String::new()),
+            Route::Smart(id) => self.open(SourceKind::Smart(id.clone()), format!("smart:{id}")),
             Route::Profile => {
                 self.load_profile();
                 self.ui(|w| w.set_view("profile".into()));
@@ -473,6 +476,10 @@ impl Backend {
     }
 
     pub fn open_playlist(&self, uuid: &str) {
+        if let Some(id) = uuid.strip_prefix("smart:") {
+            self.navigate(Route::Smart(id.to_string()));
+            return;
+        }
         match uuid.strip_prefix("folder:") {
             Some(folder) => self.navigate(Route::Folder(folder.to_string())),
             None => self.navigate(Route::Playlist(uuid.to_string())),
@@ -1233,10 +1240,18 @@ pub(crate) async fn fetch_all(
                 (r.tracks, n)
             }
             SourceKind::Loved => return Err("unsupported".into()),
+            SourceKind::Smart(id) => {
+                let (_, tracks) = this.evaluate_smart(id).await?;
+                let n = tracks.len();
+                (tracks, n)
+            }
         };
         let got = items.len();
         out.extend(items.iter().filter_map(Track::from_serialized));
-        if got == 0 || out.len() >= total || matches!(kind, SourceKind::Mix(_)) {
+        if got == 0
+            || out.len() >= total
+            || matches!(kind, SourceKind::Mix(_) | SourceKind::Smart(_))
+        {
             break;
         }
     }

@@ -38,6 +38,7 @@ mod remote;
 mod selftest;
 mod settings;
 mod signal;
+mod smart;
 mod sort;
 mod themes;
 mod uiprefs;

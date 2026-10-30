@@ -11,8 +11,8 @@ import { ProfilePage, ProfileState } from "profile.slint";
 import { IconButton, TextField, Button, Segmented } from "widgets.slint";
 import { ShortcutOverlay, Shortcut, Shortcuts } from "shortcuts.slint";
 import { ListView } from "std-widgets.slint";
-import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow } from "types.slint";
-export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, Shortcut, Shortcuts, SettingsState, ProfileState, Theme }
+import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow } from "types.slint";
+export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, Shortcut, Shortcuts, SettingsState, ProfileState, Theme }
 
 export enum Screen { loading, login, main }
 
@@ -34,6 +34,20 @@ export component AppWindow inherits Window {
     property <bool> compact: self.width < 600px;
     property <int> focus-tick: 0;
     in-out property <int> filter-tick: 0;
+    in property <[PlaylistEntry]> smart-lists;
+    in property <bool> can-save-smart;
+    callback new-smart();
+    callback smart-action(string, string);
+    callback save-smart-snapshot();
+    in-out property <bool> smart-open: false;
+    in-out property <string> smart-name;
+    in-out property <bool> smart-all: true;
+    in-out property <[SmartRuleRow]> smart-rules;
+    in-out property <string> smart-sort;
+    in-out property <bool> smart-desc: true;
+    in-out property <string> smart-limit;
+    in-out property <string> smart-error;
+    callback smart-edit(string, int, string);
     in-out property <bool> cmp-open: false;
     in-out property <string> cmp-title;
     in-out property <int> cmp-tab: 0;
@@ -279,6 +293,9 @@ export component AppWindow inherits Window {
                 Sidebar {
                     playlists: root.playlists;
                     playlists-loading: root.playlists-loading;
+                    smart-lists: root.smart-lists;
+                    new-smart => { root.new-smart(); }
+                    smart-action(id, a) => { root.smart-action(id, a); }
                     selected: root.selected-source;
                     collapsed: root.narrow;
                     go(id) => { root.go(id); }
@@ -365,6 +382,8 @@ export component AppWindow inherits Window {
                         can-export: root.can-export;
                         export-list(f) => { root.export-list(f); }
                         can-dedupe: root.can-dedupe;
+                        can-save-smart: root.can-save-smart;
+                        save-smart-snapshot => { root.save-smart-snapshot(); }
                         filter-request: root.filter-tick;
                         filter-open <=> root.filter-open;
                         filter-text <=> root.filter-text;
@@ -637,6 +656,65 @@ export component AppWindow inherits Window {
                                 Text { text: c.value; color: Theme.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        if root.smart-open: Rectangle {
+            background: #000000a0;
+            TouchArea { clicked => { root.smart-edit("cancel", 0, ""); } }
+            Rectangle {
+                width: min(640px, parent.width - 32px);
+                height: min(600px, parent.height - 48px);
+                border-radius: 12px;
+                background: Theme.surface;
+                TouchArea { }
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+                    Text { text: "Smart playlist"; font-size: 18px; font-weight: 700; color: Theme.text; }
+                    TextField {
+                        text: root.smart-name;
+                        placeholder: "Name";
+                        field-width: 280px;
+                        edited(t) => { root.smart-edit("name", 0, t); }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Text { text: "Include tracks that match"; color: Theme.text-muted; vertical-alignment: center; }
+                        Button { label: root.smart-all ? "all rules" : "any rule"; clicked => { root.smart-edit("match", 0, ""); } }
+                    }
+                    Flickable {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 6px;
+                            for r[i] in root.smart-rules: HorizontalLayout {
+                                spacing: 6px;
+                                height: 34px;
+                                Button { label: r.field; min-width: 170px; clicked => { root.smart-edit("field", i, ""); } }
+                                Button { label: r.op; min-width: 100px; clicked => { root.smart-edit("op", i, ""); } }
+                                TextField { text: r.value; placeholder: r.hint; field-width: 170px; edited(t) => { root.smart-edit("value", i, t); } }
+                                IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.smart-edit("remove", i, ""); } }
+                            }
+                            Button { label: "＋ Add rule"; clicked => { root.smart-edit("add", 0, ""); } }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Text { text: "Sort by"; color: Theme.text-muted; vertical-alignment: center; }
+                        Button { label: root.smart-sort; clicked => { root.smart-edit("sort", 0, ""); } }
+                        Button { label: root.smart-desc ? "↓ newest / largest first" : "↑ oldest / smallest first"; clicked => { root.smart-edit("desc", 0, ""); } }
+                        TextField { text: root.smart-limit; placeholder: "Limit (none)"; field-width: 120px; edited(t) => { root.smart-edit("limit", 0, t); } }
+                    }
+                    if root.smart-error != "": Text { text: root.smart-error; color: Theme.danger; wrap: word-wrap; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        Button { label: "Cancel"; clicked => { root.smart-edit("cancel", 0, ""); } }
+                        Button { label: "Save"; primary: true; clicked => { root.smart-edit("save", 0, ""); } }
                     }
                 }
             }

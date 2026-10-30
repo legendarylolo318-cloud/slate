@@ -30,6 +30,8 @@ pub enum SourceKind {
     Playlist(String),
     Album(u64),
     Mix(String),
+    /// A smart playlist (its id); the tracks are computed when it opens.
+    Smart(String),
 }
 
 /// What the page header shows.
@@ -77,10 +79,12 @@ pub struct LibState {
     pub(crate) tracks: Mutex<BTreeMap<usize, Track>>,
     total: AtomicUsize,
     user_id: Mutex<Option<u64>>,
+    /// (uuid, title) of the sidebar's playlists, for smart-playlist rules that name one.
+    pub(crate) playlist_titles: Mutex<Vec<(String, String)>>,
     /// Playlist uuid → TIDAL image id, for the page header.
     playlist_images: Mutex<HashMap<String, Option<String>>>,
     /// Mix items arrive in one response; paging serves slices of it.
-    static_tracks: Mutex<Vec<TidalTrack>>,
+    pub(crate) static_tracks: Mutex<Vec<TidalTrack>>,
     /// Artist page "Play top tracks" list.
     pub hero_tracks: Mutex<Vec<Track>>,
     /// While a filter is active: source index of each row shown (see `filter.rs`).
@@ -256,6 +260,13 @@ impl Backend {
                     }
                 }
             }
+            if let Ok(mut t) = this.lib.playlist_titles.lock() {
+                *t = data
+                    .iter()
+                    .map(|(u, title, _, _)| (u.clone(), title.clone()))
+                    .collect();
+            }
+            this.load_smart_sidebar();
             if let Ok(mut m) = this.lib.playlist_images.lock() {
                 m.clear();
                 for (uuid, _, _, img) in &data {
@@ -357,7 +368,7 @@ impl Backend {
         let list = match kind {
             SourceKind::Loved => Some(crate::sort::List::Loved),
             SourceKind::Playlist(_) => Some(crate::sort::List::Playlist),
-            SourceKind::Album(_) | SourceKind::Mix(_) => None,
+            SourceKind::Album(_) | SourceKind::Mix(_) | SourceKind::Smart(_) => None,
         };
         let prefs = crate::uiprefs::UiPrefs::load();
         if let Ok(mut a) = self.lib.active.lock() {
@@ -553,6 +564,26 @@ impl Backend {
                     }
                 }
                 Err(_) => none("ALBUM", "Album"),
+            },
+            SourceKind::Smart(id) => match self.evaluate_smart(id).await {
+                Ok((list, tracks)) => {
+                    let count = tracks.len();
+                    if let Ok(mut s) = self.lib.static_tracks.lock() {
+                        *s = tracks;
+                    }
+                    Header {
+                        label: "SMART PLAYLIST",
+                        title: list.name,
+                        subtitle: format!("{count} tracks"),
+                        cover: None,
+                        loved: false,
+                        badges: Default::default(),
+                    }
+                }
+                Err(msg) => {
+                    self.ui(move |w| w.set_error(msg.into()));
+                    none("SMART PLAYLIST", "Smart playlist")
+                }
             },
             SourceKind::Mix(id) => match pages::get_mix_items(&state, id.clone()).await {
                 Ok(m) => {
@@ -813,7 +844,7 @@ impl Backend {
                 .await
             }
             SourceKind::Album(id) => pages::get_album_tracks(&state, *id, offset, limit).await,
-            SourceKind::Mix(_) => {
+            SourceKind::Mix(_) | SourceKind::Smart(_) => {
                 // Served from the single response stashed when the header loaded.
                 let all = self
                     .lib
@@ -935,6 +966,7 @@ impl Backend {
             SourceKind::Playlist(u) => ("playlist", serde_json::Value::from(u.as_str())),
             SourceKind::Album(a) => ("album", serde_json::Value::from(a.to_string())),
             SourceKind::Mix(m) => ("mix", serde_json::Value::from(m.as_str())),
+            SourceKind::Smart(s) => ("smart", serde_json::Value::from(s.as_str())),
         };
         Source {
             kind: kind.into(),

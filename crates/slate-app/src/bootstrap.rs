@@ -449,6 +449,11 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_compare_tab, |b, i| b.compare_tab(i));
     bind!(on_compare_action, |b, a| b.compare_action(&a));
     bind!(on_compare_close, |b| b.compare_close());
+    bind!(on_new_smart, |b| b.new_smart());
+    bind!(on_smart_action, |b, id, a| b
+        .smart_action(id.strip_prefix("smart:").unwrap_or(&id), &a));
+    bind!(on_smart_edit, |b, w, i, t| b.smart_edit(&w, i, &t));
+    bind!(on_save_smart_snapshot, |b| b.save_smart_snapshot());
     bind!(on_start_login, |b| b.start_login());
     bind!(on_open_login_url, |b| b.open_login_url());
     bind!(on_open_update, |b| b.open_update());

@@ -69,6 +69,38 @@ component CoverTile inherits Rectangle {
     }
 }
 
+component SmartItem inherits Rectangle {
+    in property <PlaylistEntry> entry;
+    in property <bool> collapsed: false;
+    in property <bool> active;
+    callback clicked();
+    callback action(string);
+    height: 36px;
+    border-radius: 6px;
+    background: root.active ? Theme.surface-raised : (st.has-hover ? Theme.background : transparent);
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 6px;
+        spacing: 8px;
+        Text { text: "✦"; color: Theme.accent; vertical-alignment: center; }
+        if !root.collapsed: Text {
+            text: root.entry.title;
+            color: Theme.text;
+            font-weight: root.active ? 700 : 500;
+            overflow: elide;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+    st := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+    ContextMenuArea {
+        Menu {
+            MenuItem { title: "Edit…"; activated => { root.action("edit"); } }
+            MenuItem { title: "Delete"; activated => { root.action("delete"); } }
+        }
+    }
+}
+
 component PlaylistItem inherits Rectangle {
     in property <PlaylistEntry> entry;
     in property <bool> collapsed: false;
@@ -118,6 +150,9 @@ export component Sidebar inherits Rectangle {
     callback go(string);
     callback open-playlist(string);
     callback new-playlist();
+    in property <[PlaylistEntry]> smart-lists;
+    callback new-smart();
+    callback smart-action(string, string);
     callback entry-action(string, string);
     callback logout();
 
@@ -180,6 +215,22 @@ export component Sidebar inherits Rectangle {
                 }
             }
             lt := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.go("loved"); } }
+        }
+        HorizontalLayout {
+            height: 28px;
+            if !root.collapsed: Text { text: "SMART"; font-size: 11px; color: Theme.text-muted; vertical-alignment: bottom; horizontal-stretch: 1; }
+            Rectangle {
+                width: 24px;
+                Text { text: "＋"; color: ns.has-hover ? Theme.accent : Theme.text-muted; horizontal-alignment: center; vertical-alignment: bottom; }
+                ns := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.new-smart(); } }
+            }
+        }
+        for s in root.smart-lists: SmartItem {
+            entry: s;
+            collapsed: root.collapsed;
+            active: root.selected == s.uuid;
+            clicked => { root.open-playlist(s.uuid); }
+            action(a) => { root.smart-action(s.uuid, a); }
         }
         if root.playlists-loading && !root.collapsed: Text { text: "Loading…"; color: Theme.text-muted; height: 28px; }
         ListView {
@@ -385,6 +436,8 @@ export component TrackPage inherits Rectangle {
     }
     in property <bool> can-dedupe: false;
     callback remove-duplicates();
+    in property <bool> can-save-smart: false;
+    callback save-smart-snapshot();
     in property <bool> page-favorite: false;
     callback toggle-page-favorite();
     in property <bool> sort-visible;
@@ -451,6 +504,7 @@ export component TrackPage inherits Rectangle {
                     }
                 }
             }
+            if root.can-save-smart: Button { label: "Save as TIDAL playlist"; clicked => { root.save-smart-snapshot(); } }
             if root.can-dedupe: Button { label: "Remove duplicates…"; clicked => { root.remove-duplicates(); } }
             if root.sort-visible: Button { label: "⇅  " + root.sort-label; clicked => { root.cycle-sort(); } }
             if root.sort-visible: Button { label: root.sort-desc ? "↓" : "↑"; clicked => { root.flip-sort(); } }

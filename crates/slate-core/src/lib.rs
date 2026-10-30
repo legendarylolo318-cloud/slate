@@ -54,6 +54,7 @@ pub mod proxy_http;
 pub mod rate_gate;
 pub mod scrobble;
 pub mod signal_path;
+pub mod smart;
 pub mod theme_config;
 pub mod tidal_api;
 pub mod tidal_report;

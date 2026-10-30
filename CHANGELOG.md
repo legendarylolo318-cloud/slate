@@ -30,6 +30,12 @@
   only in B and in both (matched by ISRC, else track), with counts. Make a new playlist from
   any tab, merge both into a new de-duplicated playlist, or add the missing tracks to
   whichever of the two you own.
+- Smart playlists: a "Smart" section in the sidebar with "＋" to make one. Rules (all or any)
+  on loved, artist, album, quality (Lossless / Hi-Res / Atmos), explicit, duration, release
+  year, how long ago it was added to Loved Tracks, and membership of a named playlist, plus
+  sorting and a limit. They are stored on your computer and worked out only when opened,
+  from Loved Tracks and the playlists the rules name. Play, shuffle, queue and export work
+  as on any playlist, and "Save as TIDAL playlist" makes an unlisted snapshot.
 
 ## [1.1.0] - 2026-10-30
 

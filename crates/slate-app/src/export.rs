@@ -192,7 +192,10 @@ impl Backend {
             return;
         };
         let (kind, title) = active;
-        if !matches!(kind, SourceKind::Loved | SourceKind::Playlist(_)) {
+        if !matches!(
+            kind,
+            SourceKind::Loved | SourceKind::Playlist(_) | SourceKind::Smart(_)
+        ) {
             return;
         }
         // Taken now, before the dialog: by the time it closes the user may be

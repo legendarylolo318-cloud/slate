@@ -108,7 +108,11 @@ impl Backend {
             self.lib.active_kind_pub(),
             self.lib.artist_id(),
         );
-        let can_export = matches!(kind, Some(SourceKind::Loved | SourceKind::Playlist(_)));
+        let can_export = matches!(
+            kind,
+            Some(SourceKind::Loved | SourceKind::Playlist(_) | SourceKind::Smart(_))
+        );
+        let can_save_smart = matches!(kind, Some(SourceKind::Smart(_)));
         let can_dedupe = matches!(kind, Some(SourceKind::Playlist(_)));
         let (track_fav, page_fav, can, hero_fav) = {
             let Ok(f) = self.favs.lock() else { return };
@@ -131,6 +135,7 @@ impl Backend {
             w.set_can_favorite(can);
             w.set_can_export(can_export);
             w.set_can_dedupe(can_dedupe);
+            w.set_can_save_smart(can_save_smart);
             w.set_hero_favorite(hero_fav);
         });
     }
