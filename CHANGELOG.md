@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.1.0] - 2026-10-30
+
+### Added
+- Import: New playlist → Import from file… turns a CSV or M3U into a new playlist. Slate's
+  own exports and any file with TIDAL track links need no lookups; other files (Spotify
+  exports via Exportify, M3U with `#EXTINF` lines) are matched by artist and title, one
+  search at a time with a pause between them, stopping if TIDAL starts rate-limiting.
+
+### Changed
+- Card pages (library albums, artists, mixes, videos, folders, Explore and search grids) only
+  build the rows on screen and load covers as their rows scroll into view. Covers far from
+  the viewport are dropped (at most 240 kept) and fetched again on return; resizing the
+  window regroups the rows without fetching anything.
+- Thumbnails are decoded at the size they are shown at (times the display's scale factor)
+  instead of the CDN size: card covers 152 px, track-row covers 34 px, sidebar 40 px.
+  Moving the window to a display with another scale factor decodes the visible covers again
+  at the new size, from the disk cache.
+- Smaller build: `image` in the core is built with JPEG, PNG and WebP only (no AVIF/EXR
+  encoders or rayon), and two unused dependencies (`walkdir`, `id3`) are gone.
+- Track lists collected for playback (play all, autoplay radio, search, top tracks) are
+  converted without a second JSON pass; API items are parsed without copying them first.
+
+### Fixed
+- MCP playback tools (play, pause, resume, skip, seek, volume, queue, repeat, shuffle, play a
+  playlist/album/artist/mix) reported success but did nothing: the app never handled them.
+  `get_now_playing` and `get_queue` always came back empty. Both now work.
+- Creating a playlist (New playlist, Import) and renaming a private one failed with HTTP 400:
+  Slate sent the access type `PRIVATE`, which TIDAL's playlist API does not accept; it is now
+  `UNLISTED`.
+- The OBS overlay never showed the playing track. It now updates on every track change,
+  pause and seek, with cover and stream quality.
+
+### Performance (measured)
+Same scripted session (Explore → genre page scrolled to the end, a 174-track playlist
+scrolled to the end, Home), fresh launch, 1884×988, Skia/Vulkan, AMD: GPU memory 183 → 95 MiB,
+resident memory 349 → 225 MiB. FemtoVG lands in the same range (84–106 MiB VRAM).
+
 ## [1.0.0] - 2026-10-29
 
 ### Added
@@ -9,10 +46,6 @@
   default); closing the notice remembers that version.
 - Export: playlists and Loved Tracks have an Export… button (CSV or M3U), with a save dialog,
   progress, and pages not yet loaded fetched one at a time.
-- Import: New playlist → Import from file… turns a CSV or M3U into a new playlist. Slate's
-  own exports and any file with TIDAL track links need no lookups; other files (Spotify
-  exports via Exportify, M3U with `#EXTINF` lines) are matched by artist and title, one
-  search at a time with a pause between them, stopping if TIDAL starts rate-limiting.
 - Track credits: right-click a track → Credits lists producers, writers, engineers and
   musicians (one request, cached).
 - Hi-Res, Lossless and Dolby Atmos badges in their own Quality column on track lists, on
@@ -55,14 +88,6 @@
 - Tracks in TIDAL's old MQA tier were badged Hi-Res; they stream as 16-bit FLAC and are
   now badged Lossless.
 - The request log included the account id from `/users/<id>/…` paths.
-- MCP playback tools (play, pause, resume, skip, seek, volume, queue, repeat, shuffle, play a
-  playlist/album/artist/mix) reported success but did nothing: the app never handled them.
-  `get_now_playing` and `get_queue` always came back empty. Both now work.
-- Creating a playlist (New playlist, Import) and renaming a private one failed with HTTP 400:
-  Slate sent the access type `PRIVATE`, which TIDAL's playlist API does not accept; it is now
-  `UNLISTED`.
-- The OBS overlay never showed the playing track. It now updates on every track change,
-  pause and seek, with cover and stream quality.
 
 ### Performance (measured)
 Release builds, empty profile, login screen, 60 s after a 12 s warm-up, two runs each:

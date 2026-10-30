@@ -3,8 +3,12 @@
 //! Network fetch and decode run off the UI thread; concurrent requests for the
 //! same URL share one fetch. Callers get a `SharedPixelBuffer`, which is cheap
 //! to clone and `Send`; the `slint::Image` is built on the UI thread.
+//!
+//! [`ImageCache::get_fit`] decodes at the size an image is shown at (times the
+//! window's scale factor); each size is its own entry, keyed `url@px`.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::{BoxFuture, FutureExt, Shared};
@@ -35,6 +39,8 @@ pub struct ImageCache {
     lru: Mutex<Lru>,
     inflight: Mutex<HashMap<String, Pending>>,
     net: Arc<Semaphore>,
+    /// Window scale factor (`f32` bits), for [`ImageCache::get_fit`].
+    scale: AtomicU32,
 }
 
 fn size_of(p: &Pixels) -> usize {
@@ -50,34 +56,62 @@ impl Default for ImageCache {
             }),
             inflight: Mutex::new(HashMap::new()),
             net: Arc::new(Semaphore::new(MAX_FETCHES)),
+            scale: AtomicU32::new(1.0f32.to_bits()),
         }
     }
 }
 
 impl ImageCache {
+    /// Records the window's scale factor (call from the UI thread on changes).
+    pub fn set_scale(&self, scale: f32) {
+        if scale.is_finite() && scale > 0.0 {
+            self.scale.store(scale.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    /// The full-size image.
     pub async fn get(&self, state: &Arc<AppState>, url: &str) -> Option<Pixels> {
+        self.fetch(state, url, 0).await
+    }
+
+    /// The image shrunk to fit a `side` × `side` logical-pixel box.
+    pub async fn get_fit(&self, state: &Arc<AppState>, url: &str, side: u32) -> Option<Pixels> {
+        let scale = f32::from_bits(self.scale.load(Ordering::Relaxed));
+        // Saturating float → int; a nonsensical scale falls back to full size.
+        let px = (side as f32 * scale).ceil() as u32;
+        self.fetch(state, url, px).await
+    }
+
+    /// `max_edge` 0 = original size.
+    async fn fetch(&self, state: &Arc<AppState>, url: &str, max_edge: u32) -> Option<Pixels> {
         if url.is_empty() {
             return None;
         }
+        let key = if max_edge == 0 {
+            url.to_string()
+        } else {
+            format!("{url}@{max_edge}")
+        };
+        let key = key.as_str();
         if let Some(hit) = self
             .lru
             .lock()
             .ok()
-            .and_then(|mut l| l.map.get(url).cloned())
+            .and_then(|mut l| l.map.get(key).cloned())
         {
             return Some(hit);
         }
         let pending = {
             let mut inflight = self.inflight.lock().ok()?;
             inflight
-                .entry(url.to_string())
+                .entry(key.to_string())
                 .or_insert_with(|| {
                     let (state, url, net) =
                         (Arc::clone(state), url.to_string(), Arc::clone(&self.net));
                     async move {
                         let _permit = net.acquire().await.ok()?;
                         let bytes = utility::get_image_bytes(&state, url).await.ok()?;
-                        tokio::task::spawn_blocking(move || images::decode(&bytes))
+                        tokio::task::spawn_blocking(move || images::decode_fit(&bytes, max_edge))
                             .await
                             .ok()
                             .flatten()
@@ -92,11 +126,11 @@ impl ImageCache {
         // finds the pixels instead of starting a second fetch; and only remove our
         // own entry, not a newer fetch for the same URL.
         if let Some(px) = &result {
-            self.insert(url, px.clone());
+            self.insert(key, px.clone());
         }
         if let Ok(mut inflight) = self.inflight.lock() {
-            if inflight.get(url).is_some_and(|p| p.ptr_eq(&pending)) {
-                inflight.remove(url);
+            if inflight.get(key).is_some_and(|p| p.ptr_eq(&pending)) {
+                inflight.remove(key);
             }
         }
         result

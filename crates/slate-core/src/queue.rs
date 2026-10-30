@@ -59,6 +59,23 @@ impl Track {
         }
     }
 
+    /// Builds a queue entry from any serializable item (a `TidalTrack`, a
+    /// video). Takes the serialized object as the field map directly instead of
+    /// deserializing it again, which `#[serde(flatten)]` makes expensive.
+    /// `None` when it does not serialize to an object with a numeric `id`.
+    pub fn from_serialized<T: Serialize>(item: &T) -> Option<Self> {
+        let Value::Object(mut extra) = serde_json::to_value(item).ok()? else {
+            return None;
+        };
+        let id = extra.remove("id")?.as_u64()?;
+        let qid = match extra.remove("_qid") {
+            Some(Value::String(q)) => Some(q),
+            Some(Value::Null) | None => None,
+            Some(_) => return None,
+        };
+        Some(Self { id, qid, extra })
+    }
+
     pub fn is_video(&self) -> bool {
         self.extra.get("itemType").and_then(Value::as_str) == Some("video")
     }
@@ -906,6 +923,23 @@ mod tests {
     use super::*;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
+
+    #[test]
+    fn from_serialized_matches_a_serde_round_trip() {
+        let t: crate::tidal_api::TidalTrack = serde_json::from_value(serde_json::json!({
+            "id": 42, "title": "T", "duration": 180,
+            "artist": { "id": 1, "name": "A" },
+            "album": { "id": 2, "title": "Al", "cover": "ab-cd" },
+        }))
+        .expect("track");
+        let old: Track =
+            serde_json::from_value(serde_json::to_value(&t).expect("value")).expect("track");
+        assert_eq!(Track::from_serialized(&t), Some(old));
+        assert_eq!(
+            Track::from_serialized(&serde_json::json!({ "title": "no id" })),
+            None
+        );
+    }
 
     fn rng() -> StdRng {
         StdRng::seed_from_u64(7)

@@ -10,14 +10,17 @@ use serde_json::Value;
 use slate_core::commands::{library as lib_cmds, metadata, pages, search};
 use slate_core::queue::{Source, Track};
 use slate_core::tidal_api::{TidalAlbumDetail, TidalArtist, TidalArtistDetail, TidalPlaylist};
-use slint::{Color, Image, Model, ModelRc, VecModel};
+use slint::{Color, Image, ModelRc};
 
 use crate::backend::Backend;
-use crate::bootstrap::{AppWindow, CardItem, CardSection};
+use crate::bootstrap::CardItem;
 use crate::images::tidal_image_url;
 use crate::library::SourceKind;
+use crate::models::{with_card_rows, CardRows, CardSectionData, CoverRequest};
 
 const GRID_PAGE: u32 = 100;
+/// Logical size of a card cover (`Dim.card-w` - 16px in pages.slint).
+const CARD_COVER: u32 = 152;
 /// v2 endpoints reject `limit` above 50 (HTTP 400), so mixes page in 50s.
 const MIXES_PAGE: u32 = slate_core::tidal_api::MAX_V2_FAVORITES_LIMIT;
 const MAX_GRID_PAGES: u32 = 30;
@@ -614,40 +617,41 @@ impl Backend {
         hero: Option<Hero>,
     ) {
         let generation = self.lib.bump_cards();
-        let plan: Vec<(usize, usize, String)> = sections
-            .iter()
-            .enumerate()
-            .flat_map(|(s, sec)| {
-                sec.cards
-                    .iter()
-                    .enumerate()
-                    .filter_map(move |(c, card)| card.image.clone().map(|i| (s, c, i)))
-            })
-            .collect();
         let hero_image = hero.as_ref().and_then(|h| h.image.clone());
         let hero_label = hero.map(|h| h.label);
+        let this = self.clone();
         self.ui(move |w| {
-            let model: Vec<CardSection> = sections
+            let sections: Vec<CardSectionData> = sections
                 .into_iter()
-                .map(|s| CardSection {
+                .map(|s| CardSectionData {
                     title: s.title.into(),
                     wrap: s.wrap,
-                    cards: ModelRc::new(VecModel::from(
-                        s.cards
-                            .into_iter()
-                            .map(|c| CardItem {
+                    cards: s
+                        .cards
+                        .into_iter()
+                        .map(|c| {
+                            let item = CardItem {
                                 kind: c.kind.into(),
                                 id: c.id.into(),
                                 tint: tile_tint(&c.title),
                                 title: c.title.into(),
                                 subtitle: c.subtitle.into(),
                                 cover: Image::default(),
-                            })
-                            .collect::<Vec<_>>(),
-                    )),
+                            };
+                            (item, c.image)
+                        })
+                        .collect(),
                 })
                 .collect();
-            w.set_sections(ModelRc::new(VecModel::from(model)));
+            // Covers are fetched as their rows come on screen.
+            let cols = usize::try_from(w.get_card_cols()).unwrap_or(1);
+            let fetch = this.clone();
+            let rows = CardRows::new(
+                sections,
+                cols,
+                Box::new(move |epoch, req| fetch.load_card_covers(generation, epoch, req)),
+            );
+            w.set_card_rows(ModelRc::new(rows));
             w.set_cards_title(title.into());
             w.set_cards_subtitle(subtitle.into());
             w.set_cards_loading(false);
@@ -661,7 +665,11 @@ impl Backend {
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
             if let Some(img) = hero_image {
-                if let Some(px) = this.images.get(&state, &tidal_image_url(&img, 320)).await {
+                if let Some(px) = this
+                    .images
+                    .get_fit(&state, &tidal_image_url(&img, 320), 160)
+                    .await
+                {
                     let lib = Arc::clone(&this.lib);
                     this.ui(move |w| {
                         if lib.cards_generation() == generation {
@@ -670,16 +678,26 @@ impl Backend {
                     });
                 }
             }
-            stream::iter(plan)
+        });
+    }
+
+    /// Fetches covers for card rows that came on screen.
+    fn load_card_covers(&self, generation: u64, epoch: u64, req: CoverRequest) {
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let Some(state) = this.state() else { return };
+            stream::iter(req)
                 .for_each_concurrent(6, |(s, c, img)| {
                     let (state, this) = (Arc::clone(&state), this.clone());
                     async move {
-                        // Stop fetching once the page is gone (a library grid can have
-                        // thousands of covers).
+                        // Stop fetching once the page is gone.
                         if this.lib.cards_generation() != generation {
                             return;
                         }
-                        let Some(px) = this.images.get(&state, &tidal_image_url(&img, 320)).await
+                        let Some(px) = this
+                            .images
+                            .get_fit(&state, &tidal_image_url(&img, 320), CARD_COVER)
+                            .await
                         else {
                             return;
                         };
@@ -688,13 +706,32 @@ impl Backend {
                         let lib = Arc::clone(&this.lib);
                         this.ui(move |w| {
                             if lib.cards_generation() == generation {
-                                set_card_cover(&w, s, c, Image::from_rgba8(px));
+                                with_card_rows(&w, |m| {
+                                    m.set_cover(epoch, s, c, Image::from_rgba8(px))
+                                });
                             }
                         });
                     }
                 })
                 .await;
         });
+    }
+
+    /// The window moved to a monitor with another scale factor: thumbnails are
+    /// decoded again at the new size (from the disk cache, not the network).
+    pub fn scale_factor_changed(&self, scale: f32) {
+        self.images.set_scale(scale);
+        let Some(w) = self.ui.upgrade() else { return };
+        with_card_rows(&w, |m| m.refresh_covers());
+        crate::models::with_tracks(&w, |m| m.refresh_covers());
+        self.reload_playlist_covers(&w);
+    }
+
+    /// The card page's column count changed (resize, scale): regroup its rows.
+    pub fn card_cols_changed(&self, cols: i32) {
+        if let Some(w) = self.ui.upgrade() {
+            with_card_rows(&w, |m| m.set_cols(usize::try_from(cols).unwrap_or(1)));
+        }
     }
 
     fn begin_cards(&self, title: &str) -> u64 {
@@ -707,7 +744,11 @@ impl Backend {
             w.set_cards_subtitle("".into());
             w.set_cards_loading(true);
             w.set_has_hero(false);
-            w.set_sections(ModelRc::new(VecModel::<CardSection>::default()));
+            w.set_card_rows(ModelRc::new(CardRows::new(
+                Vec::new(),
+                1,
+                Box::new(|_, _| {}),
+            )));
             w.set_view("cards".into());
         });
         generation
@@ -1026,8 +1067,7 @@ impl Backend {
                     let tracks: Vec<CardData> = r
                         .tracks
                         .iter()
-                        .filter_map(|t| serde_json::to_value(t).ok())
-                        .filter_map(|v| serde_json::from_value::<Track>(v).ok())
+                        .filter_map(Track::from_serialized)
                         .map(|t| track_card(&t))
                         .collect();
                     let mut push = |title: &str, cards: Vec<CardData>| {
@@ -1095,8 +1135,7 @@ impl Backend {
             let tracks: Vec<Track> = top
                 .unwrap_or_default()
                 .iter()
-                .filter_map(|t| serde_json::to_value(t).ok())
-                .filter_map(|v| serde_json::from_value(v).ok())
+                .filter_map(Track::from_serialized)
                 .collect();
             let mut sections = Vec::new();
             if !tracks.is_empty() {
@@ -1196,32 +1235,12 @@ pub(crate) async fn fetch_all(
             SourceKind::Loved => return Err("unsupported".into()),
         };
         let got = items.len();
-        out.extend(
-            items
-                .iter()
-                .filter_map(|t| serde_json::to_value(t).ok())
-                .filter_map(|v| serde_json::from_value::<Track>(v).ok()),
-        );
+        out.extend(items.iter().filter_map(Track::from_serialized));
         if got == 0 || out.len() >= total || matches!(kind, SourceKind::Mix(_)) {
             break;
         }
     }
     Ok(out)
-}
-
-fn set_card_cover(w: &AppWindow, s: usize, c: usize, cover: Image) {
-    let sections = w.get_sections();
-    let Some(section) = sections.row_data(s) else {
-        return;
-    };
-    let cards = section.cards;
-    let Some(list) = cards.as_any().downcast_ref::<VecModel<CardItem>>() else {
-        return;
-    };
-    if let Some(mut item) = list.row_data(c) {
-        item.cover = cover;
-        list.set_row_data(c, item);
-    }
 }
 
 /// Fetches a paginated list: the first page for the total, then the remaining

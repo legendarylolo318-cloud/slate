@@ -412,8 +412,7 @@ impl Controller {
         let radio: Vec<Track> = result
             .tracks
             .iter()
-            .filter_map(|t| serde_json::to_value(t).ok())
-            .filter_map(|v| serde_json::from_value(v).ok())
+            .filter_map(Track::from_serialized)
             .collect();
         let prefs = self.prefs();
         q.install_autoplay(radio, |t| {

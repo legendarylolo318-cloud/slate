@@ -11,8 +11,8 @@ import { ProfilePage, ProfileState } from "profile.slint";
 import { IconButton, TextField, Button } from "widgets.slint";
 import { ShortcutOverlay } from "shortcuts.slint";
 import { ListView } from "std-widgets.slint";
-import { TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile, KeyValue } from "types.slint";
-export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardSection, QueueRow, LyricLine, PresetTile, KeyValue, SettingsState, ProfileState, Theme }
+import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue } from "types.slint";
+export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, SettingsState, ProfileState, Theme }
 
 export enum Screen { loading, login, main }
 
@@ -140,7 +140,15 @@ export component AppWindow inherits Window {
     in property <string> cards-title;
     in property <string> cards-subtitle;
     in property <bool> cards-loading;
-    in property <[CardSection]> sections;
+    in property <[CardRow]> card-rows;
+    // Grid columns the card page fits; the model regroups its rows when it changes.
+    in-out property <int> card-cols: 1;
+    callback card-cols-changed(int);
+    // Window scale factor (logical / physical pixel); changes when the window moves
+    // to a monitor with another scale, so thumbnails are decoded again at that size.
+    property <float> scale-factor: 1px / 1phx;
+    callback scale-factor-changed(float);
+    changed scale-factor => { root.scale-factor-changed(self.scale-factor); }
     in property <bool> has-hero;
     in property <image> hero-image;
     in property <string> hero-label;
@@ -352,7 +360,8 @@ export component AppWindow inherits Window {
                         title: root.cards-title;
                         subtitle: root.cards-subtitle;
                         loading: root.cards-loading;
-                        sections: root.sections;
+                        rows: root.card-rows;
+                        cols-changed(n) => { root.card-cols = n; root.card-cols-changed(n); }
                         has-hero: root.has-hero;
                         hero-image: root.hero-image;
                         hero-label: root.hero-label;

@@ -435,6 +435,8 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_open_playlist, |b, id| b.open_playlist(&id));
     bind!(on_open_card, |b, kind, id| b.open_card(&kind, &id));
     bind!(on_play_card, |b, kind, id| b.play_card(&kind, &id));
+    bind!(on_card_cols_changed, |b, n| b.card_cols_changed(n));
+    bind!(on_scale_factor_changed, |b, s| b.scale_factor_changed(s));
     bind!(on_search, |b, q| b.search(&q));
     bind!(on_play_row, |b, i| b
         .play_row(usize::try_from(i).unwrap_or(0)));

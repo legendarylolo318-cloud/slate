@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
-import { CardItem, CardSection, QueueRow, LyricLine } from "types.slint";
+import { CardItem, CardRow, QueueRow, LyricLine } from "types.slint";
 import { IconButton, Button, Segmented } from "widgets.slint";
-import { ScrollView, ListView } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
 
 global Dim {
     out property <length> card-w: 168px;
@@ -53,42 +53,12 @@ component Card inherits Rectangle {
     ta := TouchArea { mouse-cursor: MouseCursor.pointer; z: -1; clicked => { root.open(); } }
 }
 
-component Section inherits VerticalLayout {
-    in property <CardSection> data;
-    in property <length> avail-width;
-    callback open(string, string);
-    callback play(string, string);
-    alignment: start;
-    spacing: 8px;
-    property <int> cols: max(1, floor(root.avail-width / Dim.card-w));
-    if root.data.title != "": Text { text: root.data.title; font-size: 20px; font-weight: 700; color: Theme.text; }
-    if root.data.wrap: Rectangle {
-        height: ceil(root.data.cards.length / root.cols) * Dim.card-h;
-        for c[i] in root.data.cards: Card {
-            x: mod(i, root.cols) * Dim.card-w;
-            y: floor(i / root.cols) * Dim.card-h;
-            item: c;
-            open => { root.open(c.kind, c.id); }
-            play => { root.play(c.kind, c.id); }
-        }
-    }
-    if !root.data.wrap: Flickable {
-        height: Dim.card-h;
-        content-width: root.data.cards.length * Dim.card-w;
-        for c[i] in root.data.cards: Card {
-            x: i * Dim.card-w;
-            item: c;
-            open => { root.open(c.kind, c.id); }
-            play => { root.play(c.kind, c.id); }
-        }
-    }
-}
-
 export component CardsPage inherits Rectangle {
     in property <string> title;
     in property <string> subtitle;
     in property <bool> loading;
-    in property <[CardSection]> sections;
+    // Header, section titles, strips and grid rows; only the rows on screen exist.
+    in property <[CardRow]> rows;
     in property <bool> has-hero;
     in property <image> hero-image;
     in property <string> hero-label;
@@ -108,13 +78,22 @@ export component CardsPage inherits Rectangle {
     in property <bool> loved-tabs;
     in property <int> loved-tab;
     callback loved-tab-picked(int);
+    // Grid columns that fit; the model regroups its rows when this changes.
+    callback cols-changed(int);
+    property <length> pad: root.compact ? 12px : 24px;
+    property <int> cols: max(1, floor((root.width - 2 * root.pad) / Dim.card-w));
+    init => { root.cols-changed(root.cols); }
+    changed cols => { root.cols-changed(root.cols); }
     background: Theme.background;
 
-    ScrollView {
-        VerticalLayout {
-            padding: root.compact ? 12px : 24px;
+    ListView {
+        for row in root.rows: VerticalLayout {
+            padding-left: root.pad;
+            padding-right: root.pad;
+            padding-top: row.kind == 0 ? root.pad : 0px;
+            padding-bottom: row.last && root.rows.length > 1 ? 16px : (row.kind == 1 ? 8px : 0px);
+            if row.kind == 0: VerticalLayout {
             spacing: 16px;
-            // Keep short pages top-aligned instead of spreading the spare height between the header and the grid.
             alignment: start;
             if root.has-hero: HorizontalLayout {
                 spacing: 20px;
@@ -159,12 +138,27 @@ export component CardsPage inherits Rectangle {
                 }
             }
             if root.loading: Text { text: "Loading…"; color: Theme.text-muted; }
-            if !root.loading && root.sections.length == 0: Text { text: root.empty-text; color: Theme.text-muted; }
-            for s in root.sections: Section {
-                data: s;
-                avail-width: root.width - (root.compact ? 24px : 48px);
-                open(k, id) => { root.open(k, id); }
-                play(k, id) => { root.play(k, id); }
+            if !root.loading && root.rows.length <= 1: Text { text: root.empty-text; color: Theme.text-muted; }
+            }
+            if row.kind == 1: Text { text: row.title; font-size: 20px; font-weight: 700; color: Theme.text; }
+            if row.kind == 2: Flickable {
+                height: Dim.card-h;
+                content-width: row.cards.length * Dim.card-w;
+                for c[i] in row.cards: Card {
+                    x: i * Dim.card-w;
+                    item: c;
+                    open => { root.open(c.kind, c.id); }
+                    play => { root.play(c.kind, c.id); }
+                }
+            }
+            if row.kind == 3: Rectangle {
+                height: Dim.card-h;
+                for c[i] in row.cards: Card {
+                    x: i * Dim.card-w;
+                    item: c;
+                    open => { root.open(c.kind, c.id); }
+                    play => { root.play(c.kind, c.id); }
+                }
             }
         }
     }

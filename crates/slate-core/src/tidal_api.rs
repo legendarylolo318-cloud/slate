@@ -188,7 +188,7 @@ fn parse_playlist_items(items: Vec<Value>) -> Result<Vec<TidalTrack>, SlateError
                 obj.insert("duration".to_string(), Value::from(0u32));
             }
         }
-        let mut track: TidalTrack = serde_json::from_value(inner.clone())
+        let mut track = TidalTrack::deserialize(&inner)
             .map_err(|e| SlateError::Parse(format!("{} - Item: {}", e, inner)))?;
         if track.image_id.is_none() {
             track.image_id = inner
@@ -1065,12 +1065,10 @@ impl DirectHitItem {
                 let album = val.get("album");
                 // Deserialize the whole entity; the flat fields below stay as a
                 // fallback for a payload too partial to satisfy TidalTrack.
-                let track = serde_json::from_value::<TidalTrack>(val.clone())
-                    .ok()
-                    .map(|mut t| {
-                        t.backfill_artist();
-                        t
-                    });
+                let track = TidalTrack::deserialize(val).ok().map(|mut t| {
+                    t.backfill_artist();
+                    t
+                });
                 Some(DirectHitItem {
                     hit_type,
                     id: val.get("id").and_then(|v| v.as_u64()),
@@ -1113,7 +1111,7 @@ impl DirectHitItem {
                     .map(String::from);
                 // Deserialize the whole entity; the flat fields below stay as a
                 // fallback for a payload too partial to satisfy TidalVideo.
-                let video = serde_json::from_value::<TidalVideo>(val.clone()).ok();
+                let video = TidalVideo::deserialize(val).ok();
                 Some(DirectHitItem {
                     hit_type,
                     id: val.get("id").and_then(|v| v.as_u64()),
@@ -5411,9 +5409,7 @@ impl TidalClient {
                         {
                             tracks = items
                                 .iter()
-                                .filter_map(|item| {
-                                    serde_json::from_value::<TidalTrack>(item.clone()).ok()
-                                })
+                                .filter_map(|item| TidalTrack::deserialize(item).ok())
                                 .collect();
                             for t in &mut tracks {
                                 t.backfill_artist();
@@ -5489,7 +5485,7 @@ impl TidalClient {
                 .filter_map(|entry| {
                     entry
                         .get("item")
-                        .and_then(|item| serde_json::from_value::<TidalTrack>(item.clone()).ok())
+                        .and_then(|item| TidalTrack::deserialize(item).ok())
                 })
                 .collect();
             for t in &mut tracks {
@@ -5728,9 +5724,7 @@ impl TidalClient {
                 match mtype {
                     "ALBUM_HEADER" => {
                         if let Some(album_val) = module.get("album") {
-                            if let Ok(mut detail) =
-                                serde_json::from_value::<TidalAlbumDetail>(album_val.clone())
-                            {
+                            if let Ok(mut detail) = TidalAlbumDetail::deserialize(album_val) {
                                 detail.backfill_artist();
                                 copyright = detail.copyright.clone();
                                 album = Some(detail);
@@ -5739,15 +5733,14 @@ impl TidalClient {
                         // Credits
                         if let Some(creds) = module.get("credits").and_then(|c| c.as_array()) {
                             for c in creds {
-                                if let Ok(credit) = serde_json::from_value::<TidalCredit>(c.clone())
-                                {
+                                if let Ok(credit) = TidalCredit::deserialize(c) {
                                     credits.push(credit);
                                 }
                             }
                         }
                         // Review
                         if let Some(rev) = module.get("review") {
-                            if let Ok(r) = serde_json::from_value::<TidalReview>(rev.clone()) {
+                            if let Ok(r) = TidalReview::deserialize(rev) {
                                 if r.text.is_some() {
                                     review = Some(r);
                                 }
@@ -5766,9 +5759,7 @@ impl TidalClient {
                                     // Items are wrapped as {item: {...}, type: "track"}
                                     let track_val =
                                         item_wrapper.get("item").unwrap_or(item_wrapper);
-                                    if let Ok(mut track) =
-                                        serde_json::from_value::<TidalTrack>(track_val.clone())
-                                    {
+                                    if let Ok(mut track) = TidalTrack::deserialize(track_val) {
                                         track.backfill_artist();
                                         // Extract vibrant color from first track's album
                                         if vibrant_color.is_none() {

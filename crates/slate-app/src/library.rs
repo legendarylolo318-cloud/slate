@@ -90,9 +90,7 @@ pub struct LibState {
 }
 
 pub(crate) fn to_track(t: &TidalTrack) -> Option<Track> {
-    serde_json::to_value(t)
-        .ok()
-        .and_then(|v| serde_json::from_value(v).ok())
+    Track::from_serialized(t)
 }
 
 fn row_of(t: &Track) -> RowData {
@@ -276,6 +274,28 @@ impl Backend {
         });
     }
 
+    /// Fetches the sidebar thumbnails again (after a scale-factor change).
+    pub(crate) fn reload_playlist_covers(&self, w: &AppWindow) {
+        let Ok(images) = self.lib.playlist_images.lock() else {
+            return;
+        };
+        let ids: Vec<(usize, String, Option<String>)> = w
+            .get_playlists()
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| !e.folder)
+            .map(|(i, e)| {
+                let uuid = e.uuid.to_string();
+                let image = images.get(&uuid).cloned().flatten();
+                (i, uuid, image)
+            })
+            .collect();
+        drop(images);
+        let this = self.clone();
+        self.rt
+            .spawn(async move { this.load_playlist_covers(ids).await });
+    }
+
     /// Thumbnails for the sidebar, a few at a time; entries appear first, art fills in.
     async fn load_playlist_covers(&self, ids: Vec<(usize, String, Option<String>)>) {
         let Some(state) = self.state() else { return };
@@ -284,7 +304,10 @@ impl Backend {
                 let state = Arc::clone(&state);
                 async move {
                     let Some(img) = image else { return };
-                    let Some(px) = self.images.get(&state, &tidal_image_url(&img, 160)).await
+                    let Some(px) = self
+                        .images
+                        .get_fit(&state, &tidal_image_url(&img, 160), 40)
+                        .await
                     else {
                         return;
                     };
@@ -374,7 +397,7 @@ impl Backend {
                 this.rt.spawn(async move {
                     if let Some(px) = this2
                         .images
-                        .get(&state, &tidal_image_url(&image, 320))
+                        .get_fit(&state, &tidal_image_url(&image, 320), 160)
                         .await
                     {
                         let lib = Arc::clone(&this2.lib);
@@ -694,7 +717,10 @@ impl Backend {
                         if this.lib.generation.load(Ordering::SeqCst) != generation {
                             return;
                         }
-                        let Some(px) = this.images.get(&state, &tidal_image_url(&id, 160)).await
+                        let Some(px) = this
+                            .images
+                            .get_fit(&state, &tidal_image_url(&id, 160), 34)
+                            .await
                         else {
                             return;
                         };

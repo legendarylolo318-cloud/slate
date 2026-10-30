@@ -185,6 +185,7 @@ impl Backend {
             in_main: Arc::new(AtomicBool::new(false)),
             theme_watcher: Arc::new(Mutex::new(None)),
         };
+        backend.images.set_scale(window.window().scale_factor());
         let finished = backend.clone();
         let _ = backend
             .shared

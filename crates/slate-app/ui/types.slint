@@ -31,11 +31,15 @@ export struct CardItem {
     tint: color,
 }
 
-export struct CardSection {
+/// One row of a card page's virtualised list (built by `models::CardRows`).
+export struct CardRow {
+    /// 0 page header, 1 section title, 2 horizontally scrolling strip,
+    /// 3 one row of a wrapping grid.
+    kind: int,
     title: string,
-    /// true: wrapping grid; false: single horizontally scrolling row.
-    wrap: bool,
     cards: [CardItem],
+    /// Last row of its section: the gap between sections follows it.
+    last: bool,
 }
 
 export struct QueueRow {

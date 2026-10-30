@@ -3,13 +3,29 @@
 
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 
-/// Decodes encoded image bytes (JPEG/PNG) into an RGBA buffer. The pixels are
-/// written straight into the final buffer, so a JPEG (RGB) is converted and
-/// copied once instead of converted into a temporary and then copied again.
-pub fn decode(bytes: &[u8]) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+/// Decodes encoded image bytes (JPEG/PNG) into an RGBA buffer at full size.
+#[cfg(test)]
+fn decode(bytes: &[u8]) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+    decode_fit(bytes, 0)
+}
+
+/// Decodes encoded image bytes (JPEG/PNG) into an RGBA buffer, first shrinking
+/// the image to fit `max_edge` pixels on its longer side, so a small thumbnail
+/// does not keep (or upload to the GPU) the full CDN size. `0` keeps the
+/// original size.
+pub fn decode_fit(bytes: &[u8], max_edge: u32) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+    let img = image::load_from_memory(bytes).ok()?;
+    if max_edge == 0 || img.width().max(img.height()) <= max_edge {
+        return Some(to_buffer(img));
+    }
+    Some(to_buffer(img.thumbnail(max_edge, max_edge)))
+}
+
+/// The pixels are written straight into the final buffer, so a JPEG (RGB) is
+/// converted and copied once instead of into a temporary and then again.
+fn to_buffer(img: image::DynamicImage) -> SharedPixelBuffer<Rgba8Pixel> {
     use image::DynamicImage;
 
-    let img = image::load_from_memory(bytes).ok()?;
     let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(img.width(), img.height());
     let out = buf.make_mut_bytes();
     match img {
@@ -23,7 +39,7 @@ pub fn decode(bytes: &[u8]) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
         DynamicImage::ImageRgba8(rgba) => out.copy_from_slice(rgba.as_raw()),
         other => out.copy_from_slice(other.into_rgba8().as_raw()),
     }
-    Some(buf)
+    buf
 }
 
 /// Renders `data` as a QR code with a 4-module quiet zone.
@@ -186,6 +202,20 @@ mod tests {
             assert_eq!(a.as_bytes(), b.as_bytes());
         }
         assert!(decode(b"not an image").is_none());
+    }
+
+    #[test]
+    fn decode_fit_shrinks_to_the_longer_edge_and_never_enlarges() {
+        let jpeg = encoded(
+            image::DynamicImage::ImageRgba8(gradient(320, 160)),
+            image::ImageFormat::Png,
+        );
+        let small = decode_fit(&jpeg, 80).expect("decode");
+        assert_eq!((small.width(), small.height()), (80, 40));
+        let full = decode_fit(&jpeg, 0).expect("decode");
+        assert_eq!((full.width(), full.height()), (320, 160));
+        let same = decode_fit(&jpeg, 1000).expect("decode");
+        assert_eq!((same.width(), same.height()), (320, 160));
     }
 
     #[test]
