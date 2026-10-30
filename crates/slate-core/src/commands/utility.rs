@@ -205,6 +205,29 @@ pub fn set_gapless(state: &AppState, enabled: bool) -> Result<(), SlateError> {
     Ok(())
 }
 
+pub fn get_crossfade(state: &AppState) -> crate::crossfade::Settings {
+    let s = state.load_settings().unwrap_or_default();
+    crate::crossfade::Settings {
+        secs: s.crossfade_secs,
+        skip_same_album: s.crossfade_skip_same_album,
+    }
+    .clamped()
+}
+
+/// Crossfade length (0 = off) and the same-album rule. Applies to the next track change.
+pub fn set_crossfade(state: &AppState, secs: u32, skip_same_album: bool) -> Result<(), SlateError> {
+    let c = crate::crossfade::Settings {
+        secs,
+        skip_same_album,
+    }
+    .clamped();
+    state.audio_player.set_crossfade(c.secs, c.skip_same_album);
+    let mut settings = state.load_settings().unwrap_or_default();
+    settings.crossfade_secs = c.secs;
+    settings.crossfade_skip_same_album = c.skip_same_album;
+    state.save_settings(&settings)
+}
+
 pub fn get_max_quality(state: &AppState) -> String {
     state.max_quality.lock_safe().clone()
 }

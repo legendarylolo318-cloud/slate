@@ -30,6 +30,11 @@ pub async fn run_startup(app: &AppHandle) {
         let _ = state
             .audio_player
             .set_gapless(state.gapless.load(Ordering::Relaxed));
+        if let Some(s) = state.load_settings() {
+            state
+                .audio_player
+                .set_crossfade(s.crossfade_secs, s.crossfade_skip_same_album);
+        }
     }
 
     #[cfg(target_os = "linux")]

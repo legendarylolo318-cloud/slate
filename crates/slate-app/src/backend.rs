@@ -340,6 +340,13 @@ impl Backend {
                     continue;
                 };
                 this.shared.position.store(pos.to_bits(), Ordering::Relaxed);
+                // Crossfade: near the end of a track the next one may start as a fade.
+                if let Some(ctl) = this.controller() {
+                    if let Some(outcome) = ctl.maybe_crossfade(pos, this.shared.duration()).await {
+                        this.apply(outcome).await;
+                        continue;
+                    }
+                }
                 this.publish_now(false);
                 this.update_lyric_position(pos);
                 let dur = this.shared.duration();

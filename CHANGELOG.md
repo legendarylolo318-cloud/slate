@@ -78,6 +78,12 @@
   agent changed with Undo, and "Let an agent DJ", which gives an agent 10 s to refill an empty
   queue before the autoplay radio.
 
+- Crossfade (Settings → Playback, off by default): blend the end of a track into the next, 2–12 s,
+  with equal-power curves. Consecutive tracks of one album stay gapless by default, and it
+  switches itself off while exclusive or bit-perfect output is on. While two tracks mix the signal
+  path reads MODIFIED. Each track keeps its own ReplayGain level; skipping or seeking during a fade
+  ends it at once, and pausing pauses both. The second player exists only for the length of a
+  fade; with crossfade off nothing changes in playback.
 - Empty playlists show a short "Nothing here yet" message instead of a blank page, and the UI
   now has one shared set of spacing, radius and text sizes (`Metrics`) for new work.
 

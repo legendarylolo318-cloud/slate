@@ -215,6 +215,12 @@ pub struct Settings {
     pub bit_perfect: bool,
     #[serde(default = "defaults::yes")]
     pub gapless: bool,
+    /// Crossfade length in seconds; 0 (the default) is off.
+    #[serde(default)]
+    pub crossfade_secs: u32,
+    /// Keep consecutive tracks of one album gapless.
+    #[serde(default = "defaults::yes")]
+    pub crossfade_skip_same_album: bool,
     #[serde(default = "defaults::max_quality")]
     pub max_quality: String,
     #[serde(default)]
@@ -289,6 +295,8 @@ impl Default for Settings {
             exclusive_device: None,
             bit_perfect: false,
             gapless: true,
+            crossfade_secs: 0,
+            crossfade_skip_same_album: true,
             max_quality: "HI_RES_LOSSLESS".to_string(),
             scrobble: Default::default(),
             proxy: Default::default(),

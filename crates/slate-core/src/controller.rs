@@ -106,6 +106,8 @@ pub struct Controller {
     armed_stream: std::sync::Mutex<Option<(u64, StreamInfo)>>,
     /// Set when the agent-DJ wait ended: the next empty queue goes straight to autoplay.
     autoplay_once: std::sync::atomic::AtomicBool,
+    /// Track for which a crossfade was already decided, so it is decided once.
+    fade_checked: std::sync::Mutex<Option<u64>>,
 }
 
 fn now_secs() -> i64 {
@@ -123,6 +125,7 @@ impl Controller {
             stream: std::sync::Mutex::new(None),
             armed_stream: std::sync::Mutex::new(None),
             autoplay_once: std::sync::atomic::AtomicBool::new(false),
+            fade_checked: std::sync::Mutex::new(None),
         }
     }
 
@@ -330,6 +333,59 @@ impl Controller {
     }
 
     // ---------- navigation ----------
+
+    /// Called from the playback tick. When crossfade is on and the current track is about to
+    /// end, starts the next queued track as a fade instead of waiting for the end. Returns the
+    /// outcome to show, or `None` when nothing was done (the usual case).
+    pub async fn maybe_crossfade(&self, position: f32, duration: f32) -> Option<Outcome> {
+        let settings = self.state.audio_player.crossfade_settings();
+        if settings.secs == 0 || duration <= 0.0 {
+            return None;
+        }
+        let remaining = duration - position;
+        if remaining > settings.secs as f32 + 1.0 || remaining < 0.8 {
+            return None;
+        }
+        let mut q = self.queue.lock().await;
+        let current = q.current.as_ref()?;
+        let id = current.id;
+        {
+            let mut done = self.fade_checked.lock().ok()?;
+            if *done == Some(id) {
+                return None;
+            }
+            *done = Some(id);
+        }
+        // Repeat-one replays the same track; an empty queue has nothing to fade into.
+        if q.repeat == crate::queue::Repeat::One {
+            return None;
+        }
+        let next = q.manual.first().or_else(|| q.queue.first())?;
+        let album = |t: &Track| {
+            t.extra
+                .get("album")
+                .and_then(|a| a.get("id"))
+                .and_then(serde_json::Value::as_u64)
+        };
+        let s = self.state.load_settings().unwrap_or_default();
+        let boundary = crate::crossfade::Boundary {
+            exclusive_or_bit_perfect: s.exclusive_mode || s.bit_perfect,
+            same_album: album(current).is_some() && album(current) == album(next),
+            current_secs: duration as u32,
+            next_secs: Some(next.duration_secs() as u32),
+        };
+        let crate::crossfade::Plan::Fade { secs } = crate::crossfade::plan(settings, boundary)
+        else {
+            return None;
+        };
+        // The fade ends a little before the old track would, so it never reaches its end.
+        let player = &self.state.audio_player;
+        player.arm_crossfade((secs as f32).min(remaining - 0.3).max(0.5));
+        crate::startup::on_track_finished(&self.state).await;
+        let outcome = self.advance(&mut q, false).await;
+        player.disarm_crossfade();
+        Some(outcome)
+    }
 
     /// Track ended on its own (`explicit == false`) or the user pressed Next.
     pub async fn next(&self, explicit: bool) -> Outcome {

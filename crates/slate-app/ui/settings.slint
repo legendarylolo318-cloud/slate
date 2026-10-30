@@ -35,6 +35,9 @@ export global SettingsState {
     in-out property <bool> normalization;
     in-out property <bool> gapless;
     in-out property <bool> gapless-supported: true;
+    in-out property <int> crossfade-index: 0;
+    in-out property <bool> crossfade-same-album: true;
+    in-out property <bool> crossfade-blocked: false;
     in-out property <int> quality-index;
     in-out property <bool> exclusive;
     in-out property <bool> bit-perfect;
@@ -428,6 +431,20 @@ export component SettingsPage inherits Rectangle {
                         label: "Gapless playback";
                         hint: SettingsState.gapless-supported ? "Seamless transitions between tracks." : "Needs GStreamer 1.24 or newer.";
                         Toggle { enabled: SettingsState.gapless-supported; checked: SettingsState.gapless; toggled(v) => { SettingsState.gapless = v; SettingsState.changed-bool("gapless", v); } }
+                    }
+                    Row {
+                        label: "Crossfade";
+                        hint: SettingsState.crossfade-blocked ? "Crossfade is off while exclusive or bit-perfect output is on." : "Blend the end of a track into the next one. While two tracks mix, the signal path reads MODIFIED. Off keeps playback exactly as it was.";
+                        Segmented {
+                            options: ["Off", "2 s", "4 s", "6 s", "8 s", "10 s", "12 s"];
+                            index: SettingsState.crossfade-index;
+                            picked(i) => { SettingsState.crossfade-index = i; SettingsState.changed-int("crossfade", i); }
+                        }
+                    }
+                    Row {
+                        label: "Keep albums gapless";
+                        hint: "Don't crossfade consecutive tracks from the same album.";
+                        Toggle { checked: SettingsState.crossfade-same-album; toggled(v) => { SettingsState.crossfade-same-album = v; SettingsState.changed-bool("crossfade-same-album", v); } }
                     }
                     if SettingsState.show-alsa-options: Row {
                         label: "Exclusive mode";

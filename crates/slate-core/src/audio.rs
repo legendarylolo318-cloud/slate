@@ -1923,13 +1923,22 @@ enum AudioCommand {
     ListDevices {
         reply: Reply<Result<Vec<AudioDevice>, String>>,
     },
+    /// Crossfade: scale this worker's output by `factor` (0..=1) on top of the user volume.
+    SetFade {
+        factor: f64,
+    },
+    /// Ends the worker thread (after `Stop`). Used for the outgoing side of a crossfade.
+    Quit,
 }
 
 // ── AudioPlayer (public API unchanged) ─────────────────────────────────
 
 #[derive(Clone)]
 pub struct AudioPlayer {
-    cmd_tx: mpsc::Sender<AudioCommand>,
+    /// The worker that plays now. A crossfade swaps it for the incoming track's worker, so
+    /// every clone of the player follows.
+    cmd_tx: Arc<Mutex<mpsc::Sender<AudioCommand>>>,
+    fade: Arc<FadeState>,
     /// Latest exclusive ALSA device set via `SetExclusiveMode`. Mirrored from
     /// the audio thread so the pipeline probe can read it without messaging.
     exclusive_device: Arc<Mutex<Option<String>>>,
@@ -1952,25 +1961,112 @@ impl AudioReply for () {
     fn thread_dead() {}
 }
 
+/// Probe cells shared by every worker of one player.
+#[derive(Clone, Default)]
+struct Cells {
+    exclusive: Arc<Mutex<Option<String>>>,
+    decoded: Arc<Mutex<Option<crate::pipeline_probe::PadCaps>>>,
+    output: Arc<Mutex<Option<crate::pipeline_probe::PadCaps>>>,
+}
+
+/// Crossfade bookkeeping. A fade exists only between `crossfade_to` and its end; outside one,
+/// nothing here runs and no thread or second worker exists.
+struct FadeState {
+    app_handle: crate::AppHandle,
+    signal_path: Arc<SignalPathTracker>,
+    cells: Cells,
+    /// What a second worker needs to match the first.
+    proxy: Mutex<crate::ProxySettings>,
+    gapless: AtomicBool,
+    volume: Mutex<f32>,
+    /// Settings: fade length in seconds (0 = off) and whether same-album neighbours stay gapless.
+    secs: AtomicU32,
+    skip_same_album: AtomicBool,
+    /// Set by the controller just before it starts the next track on purpose.
+    armed: Mutex<Option<ArmedFade>>,
+    /// The worker that is fading out.
+    outgoing: Mutex<Option<mpsc::Sender<AudioCommand>>>,
+    /// Bumped to end a fade early (skip, seek, stop) so its ramp thread quits.
+    generation: AtomicU64,
+    fading: AtomicBool,
+    paused: AtomicBool,
+}
+
+struct ArmedFade {
+    secs: f32,
+    gain: Option<f64>,
+}
+
+impl FadeState {
+    fn new(
+        app_handle: crate::AppHandle,
+        signal_path: Arc<SignalPathTracker>,
+        proxy: crate::ProxySettings,
+        cells: Cells,
+    ) -> Self {
+        Self {
+            app_handle,
+            signal_path,
+            cells,
+            proxy: Mutex::new(proxy),
+            gapless: AtomicBool::new(true),
+            volume: Mutex::new(1.0),
+            secs: AtomicU32::new(0),
+            skip_same_album: AtomicBool::new(true),
+            armed: Mutex::new(None),
+            outgoing: Mutex::new(None),
+            generation: AtomicU64::new(0),
+            fading: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
+        }
+    }
+}
+
+/// Steps of the volume ramp.
+const FADE_STEP: std::time::Duration = std::time::Duration::from_millis(40);
+
 impl AudioPlayer {
     pub fn new(
         app_handle: crate::AppHandle,
         signal_path: Arc<SignalPathTracker>,
         proxy_settings: crate::ProxySettings,
     ) -> Self {
+        let cells = Cells::default();
+        let cmd_tx = Self::spawn_worker(
+            app_handle.clone(),
+            Arc::clone(&signal_path),
+            proxy_settings.clone(),
+            &cells,
+        );
+        Self {
+            cmd_tx: Arc::new(Mutex::new(cmd_tx)),
+            fade: Arc::new(FadeState::new(
+                app_handle,
+                signal_path,
+                proxy_settings,
+                cells.clone(),
+            )),
+            exclusive_device: cells.exclusive,
+            decoded_caps_cell: cells.decoded,
+            output_caps_cell: cells.output,
+        }
+    }
+
+    /// Starts one audio worker thread and returns its command channel.
+    fn spawn_worker(
+        app_handle: crate::AppHandle,
+        signal_path: Arc<SignalPathTracker>,
+        proxy_settings: crate::ProxySettings,
+        cells: &Cells,
+    ) -> mpsc::Sender<AudioCommand> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<AudioCommand>();
         // Clone a self-sender into the worker so the Normal bus thread can send
         // HandleGaplessAdvance back to this loop (Task 3). `cmd_tx` itself is
         // owned by AudioPlayer, not the worker closure.
         let cmd_tx_worker = cmd_tx.clone();
-        let exclusive_device: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let exclusive_device_thread = exclusive_device.clone();
-        let decoded_caps_cell: Arc<Mutex<Option<crate::pipeline_probe::PadCaps>>> =
-            Arc::new(Mutex::new(None));
-        let output_caps_cell: Arc<Mutex<Option<crate::pipeline_probe::PadCaps>>> =
-            Arc::new(Mutex::new(None));
-        let decoded_cell_thread = Arc::clone(&decoded_caps_cell);
-        let output_cell_thread = Arc::clone(&output_caps_cell);
+        let exclusive_device_thread = cells.exclusive.clone();
+        let decoded_cell_thread = Arc::clone(&cells.decoded);
+        let output_cell_thread = Arc::clone(&cells.output);
 
         std::thread::spawn(move || {
             // GST_PLUGIN_PATH is set in main(), before any thread exists.
@@ -2040,6 +2136,8 @@ impl AudioPlayer {
             let mut device: Option<String> = None;
 
             let mut current_volume: f64 = 1.0;
+            // Crossfade scaling on top of the user volume; 1.0 outside a fade.
+            let mut fade_factor: f64 = 1.0;
             let mut current_norm_gain: f64 = 1.0;
             let mut track_generation: u64 = 0;
             // 2b: under `concat` (adjust-base=true), `query_position(TIME)` re-bases
@@ -2471,7 +2569,10 @@ impl AudioPlayer {
                                     .build()
                                     .map_err(|e| format!("Failed to create norm volume: {e}"))?;
                                 let user_vol = gst::ElementFactory::make("volume")
-                                    .property("volume", slider_to_amplitude(current_volume))
+                                    .property(
+                                        "volume",
+                                        slider_to_amplitude(current_volume) * fade_factor,
+                                    )
                                     .build()
                                     .map_err(|e| format!("Failed to create user volume: {e}"))?;
                                 // Windows exclusive: WASAPI in exclusive mode on the chosen
@@ -3083,11 +3184,23 @@ impl AudioPlayer {
                         reply.send(result).ok();
                     }
 
+                    AudioCommand::SetFade { factor } => {
+                        fade_factor = factor.clamp(0.0, 1.0);
+                        if let Some(vol) = backend.as_ref().and_then(|b| b.user_volume_el()) {
+                            vol.set_property(
+                                "volume",
+                                slider_to_amplitude(current_volume) * fade_factor,
+                            );
+                        }
+                    }
+
+                    AudioCommand::Quit => break,
+
                     AudioCommand::SetVolume { level, reply } => {
                         current_volume = level as f64;
                         let amplitude = slider_to_amplitude(current_volume);
                         if let Some(vol) = backend.as_ref().and_then(|b| b.user_volume_el()) {
-                            vol.set_property("volume", amplitude);
+                            vol.set_property("volume", amplitude * fade_factor);
                         }
                         combined_vol.store(
                             ((amplitude * current_norm_gain) as f32).to_bits(),
@@ -3776,17 +3889,20 @@ impl AudioPlayer {
             }
         });
 
-        Self {
-            cmd_tx,
-            exclusive_device,
-            decoded_caps_cell,
-            output_caps_cell,
-        }
+        cmd_tx
+    }
+
+    /// The sender of the worker that plays now.
+    fn tx(&self) -> mpsc::Sender<AudioCommand> {
+        self.cmd_tx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn send_cmd<T: AudioReply>(&self, build: impl FnOnce(Reply<T>) -> AudioCommand) -> T {
         let (tx, rx) = mpsc::channel();
-        if self.cmd_tx.send(build(tx)).is_err() {
+        if self.tx().send(build(tx)).is_err() {
             return T::thread_dead();
         }
         rx.recv().unwrap_or_else(|_| T::thread_dead())
@@ -3799,7 +3915,7 @@ impl AudioPlayer {
         build: impl FnOnce(Reply<Result<(), String>>) -> AudioCommand,
     ) -> Result<(), String> {
         let (tx, _rx) = mpsc::channel();
-        self.cmd_tx
+        self.tx()
             .send(build(tx))
             .map_err(|_| "Audio thread dead".to_string())
     }
@@ -3812,7 +3928,7 @@ impl AudioPlayer {
         build: impl FnOnce(Reply<Result<T, String>>) -> AudioCommand,
     ) -> Result<T, String> {
         let (tx, rx) = mpsc::channel();
-        self.cmd_tx
+        self.tx()
             .send(build(tx))
             .map_err(|_| "Audio thread dead".to_string())?;
         match rx.recv_timeout(timeout) {
@@ -3823,6 +3939,17 @@ impl AudioPlayer {
     }
 
     pub fn play_url(&self, uri: &str, start_secs: Option<f32>) -> Result<(), String> {
+        let armed = self
+            .fade
+            .armed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(armed) = armed.filter(|_| start_secs.is_none()) {
+            return self.crossfade_to(uri, armed);
+        }
+        // Any other start (a skip, a pick, a rebuild) ends a fade in progress first.
+        self.end_fade();
         self.send_cmd(|reply| AudioCommand::PlayUrl {
             uri: uri.to_string(),
             start_secs,
@@ -3830,21 +3957,53 @@ impl AudioPlayer {
         })
     }
     pub fn pause(&self) -> Result<(), String> {
+        self.fade.paused.store(true, Ordering::SeqCst);
+        if let Some(out) = self.outgoing_tx() {
+            let (reply, _rx) = mpsc::channel();
+            let _ = out.send(AudioCommand::Pause { reply });
+        }
         self.send_cmd(|reply| AudioCommand::Pause { reply })
     }
     pub fn resume(&self) -> Result<(), String> {
+        self.fade.paused.store(false, Ordering::SeqCst);
+        if let Some(out) = self.outgoing_tx() {
+            let (reply, _rx) = mpsc::channel();
+            let _ = out.send(AudioCommand::Resume { reply });
+        }
         self.send_cmd(|reply| AudioCommand::Resume { reply })
     }
     pub fn stop(&self) -> Result<(), String> {
+        self.end_fade();
         self.send_cmd(|reply| AudioCommand::Stop { reply })
     }
     pub fn set_volume(&self, level: f32) -> Result<(), String> {
+        *self
+            .fade
+            .volume
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = level;
+        if let Some(out) = self.outgoing_tx() {
+            let (reply, _rx) = mpsc::channel();
+            let _ = out.send(AudioCommand::SetVolume { level, reply });
+        }
         self.post_cmd(|reply| AudioCommand::SetVolume { level, reply })
     }
     pub fn set_normalization_gain(&self, gain: f64) -> Result<(), String> {
+        // An armed crossfade applies it to the incoming worker when that is started.
+        if let Some(a) = self
+            .fade
+            .armed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            a.gain = Some(gain);
+            return Ok(());
+        }
         self.post_cmd(|reply| AudioCommand::SetNormalizationGain { gain, reply })
     }
     pub fn seek(&self, position_secs: f32) -> Result<(), String> {
+        self.end_fade();
         self.send_cmd(|reply| AudioCommand::Seek {
             position_secs,
             reply,
@@ -3872,9 +4031,15 @@ impl AudioPlayer {
         self.post_cmd(|reply| AudioCommand::SetBitPerfect { enabled, reply })
     }
     pub fn set_proxy_settings(&self, settings: crate::ProxySettings) {
+        *self
+            .fade
+            .proxy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = settings.clone();
         self.send_cmd(|reply| AudioCommand::SetProxySettings { settings, reply });
     }
     pub fn set_gapless(&self, enabled: bool) -> Result<(), String> {
+        self.fade.gapless.store(enabled, Ordering::Relaxed);
         self.post_cmd(|reply| AudioCommand::SetGapless { enabled, reply })
     }
     #[allow(clippy::too_many_arguments)]
@@ -3912,6 +4077,178 @@ impl AudioPlayer {
 
     pub fn snapshot_output_caps(&self) -> Option<crate::pipeline_probe::PadCaps> {
         self.output_caps_cell.lock().ok()?.clone()
+    }
+
+    // ---------------- crossfade ----------------
+
+    /// Crossfade length in seconds (0 = off) and the same-album rule, from Settings.
+    pub fn set_crossfade(&self, secs: u32, skip_same_album: bool) {
+        self.fade.secs.store(secs, Ordering::Relaxed);
+        self.fade
+            .skip_same_album
+            .store(skip_same_album, Ordering::Relaxed);
+    }
+
+    pub fn crossfade_settings(&self) -> crate::crossfade::Settings {
+        crate::crossfade::Settings {
+            secs: self.fade.secs.load(Ordering::Relaxed),
+            skip_same_album: self.fade.skip_same_album.load(Ordering::Relaxed),
+        }
+        .clamped()
+    }
+
+    /// The next `play_url` fades into the new track over `secs` instead of replacing the old.
+    pub fn arm_crossfade(&self, secs: f32) {
+        *self
+            .fade
+            .armed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(ArmedFade { secs, gain: None });
+    }
+
+    pub fn disarm_crossfade(&self) {
+        *self
+            .fade
+            .armed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    pub fn is_crossfading(&self) -> bool {
+        self.fade.fading.load(Ordering::Relaxed)
+    }
+
+    fn outgoing_tx(&self) -> Option<mpsc::Sender<AudioCommand>> {
+        if !self.fade.fading.load(Ordering::Relaxed) {
+            return None;
+        }
+        self.fade
+            .outgoing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Ends a fade at once: the outgoing worker is stopped and shut down, the incoming one
+    /// goes to full level. A no-op when nothing is fading.
+    fn end_fade(&self) {
+        self.fade.generation.fetch_add(1, Ordering::SeqCst);
+        let out = self
+            .fade
+            .outgoing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(out) = out {
+            let (reply, _rx) = mpsc::channel();
+            let _ = out.send(AudioCommand::Stop { reply });
+            let _ = out.send(AudioCommand::Quit);
+            let _ = self.tx().send(AudioCommand::SetFade { factor: 1.0 });
+        }
+        if self.fade.fading.swap(false, Ordering::SeqCst) {
+            self.fade.signal_path.set_crossfading(false);
+        }
+    }
+
+    /// Starts `uri` on a second worker at silence and ramps the two against each other with
+    /// equal-power curves. The new worker becomes the player at once, so position and
+    /// pause/seek refer to the new track; the old one is shut down when the ramp ends.
+    fn crossfade_to(&self, uri: &str, armed: ArmedFade) -> Result<(), String> {
+        self.end_fade();
+        let fade = &self.fade;
+        let proxy = fade
+            .proxy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let incoming = Self::spawn_worker(
+            fade.app_handle.clone(),
+            Arc::clone(&fade.signal_path),
+            proxy,
+            &fade.cells,
+        );
+        let level = *fade
+            .volume
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let ask =
+            |build: &dyn Fn(Reply<Result<(), String>>) -> AudioCommand| -> Result<(), String> {
+                let (tx, rx) = mpsc::channel();
+                incoming
+                    .send(build(tx))
+                    .map_err(|_| "Audio thread dead".to_string())?;
+                rx.recv()
+                    .unwrap_or_else(|_| Err("Audio thread dead".into()))
+            };
+        let started = (|| {
+            incoming
+                .send(AudioCommand::SetFade { factor: 0.0 })
+                .map_err(|_| "Audio thread dead".to_string())?;
+            ask(&|reply| AudioCommand::SetVolume { level, reply })?;
+            ask(&|reply| AudioCommand::SetGapless {
+                enabled: fade.gapless.load(Ordering::Relaxed),
+                reply,
+            })?;
+            if let Some(gain) = armed.gain {
+                ask(&|reply| AudioCommand::SetNormalizationGain { gain, reply })?;
+            }
+            ask(&|reply| AudioCommand::PlayUrl {
+                uri: uri.to_string(),
+                start_secs: None,
+                reply,
+            })
+        })();
+        if let Err(e) = started {
+            let (reply, _rx) = mpsc::channel();
+            let _ = incoming.send(AudioCommand::Stop { reply });
+            let _ = incoming.send(AudioCommand::Quit);
+            return Err(e);
+        }
+
+        let outgoing = {
+            let mut cur = self
+                .cmd_tx
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::replace(&mut *cur, incoming.clone())
+        };
+        *fade
+            .outgoing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outgoing.clone());
+        fade.fading.store(true, Ordering::SeqCst);
+        fade.paused.store(false, Ordering::SeqCst);
+        fade.signal_path.set_crossfading(true);
+        let generation = fade.generation.fetch_add(1, Ordering::SeqCst) + 1;
+
+        let player = self.clone();
+        let total = std::time::Duration::from_secs_f32(armed.secs.max(0.5));
+        // The only thread a fade owns: it sleeps between ramp steps and ends with the fade.
+        std::thread::spawn(move || {
+            let mut elapsed = std::time::Duration::ZERO;
+            while elapsed < total {
+                if player.fade.generation.load(Ordering::SeqCst) != generation {
+                    return; // ended early by a skip, seek or stop
+                }
+                let t = elapsed.as_secs_f64() / total.as_secs_f64();
+                let _ = outgoing.send(AudioCommand::SetFade {
+                    factor: crate::crossfade::fade_out(t),
+                });
+                let _ = incoming.send(AudioCommand::SetFade {
+                    factor: crate::crossfade::fade_in(t),
+                });
+                std::thread::sleep(FADE_STEP);
+                // Paused: the ramp waits where it is.
+                if !player.fade.paused.load(Ordering::SeqCst) {
+                    elapsed += FADE_STEP;
+                }
+            }
+            if player.fade.generation.load(Ordering::SeqCst) == generation {
+                player.end_fade();
+            }
+        });
+        Ok(())
     }
 
     /// Returns the ALSA device string for DirectAlsa, or None for Normal mode.

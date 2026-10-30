@@ -20,6 +20,7 @@ struct Snapshot {
     logging: bool,
     normalization: bool,
     gapless: bool,
+    crossfade: slate_core::crossfade::Settings,
     gapless_supported: bool,
     quality_index: i32,
     exclusive: bool,
@@ -37,12 +38,16 @@ struct Snapshot {
     overlay: (bool, String),
 }
 
+/// Choices of the crossfade setting, in seconds (0 = off).
+const CROSSFADE_SECS: [u32; 7] = [0, 2, 4, 6, 8, 10, 12];
+
 async fn snapshot(state: &Arc<AppState>) -> Snapshot {
     let mut s = Snapshot {
         minimize_to_tray: utility::get_minimize_to_tray(state),
         logging: utility::get_enable_logging(),
         normalization: utility::get_volume_normalization(state),
         gapless: utility::get_gapless(state),
+        crossfade: utility::get_crossfade(state),
         gapless_supported: utility::get_gapless_supported(),
         exclusive: utility::get_exclusive_mode(state),
         bit_perfect: utility::get_bit_perfect(state),
@@ -95,6 +100,14 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_lyrics_size_index(prefs.lyrics_size as i32);
     g.set_normalization(s.normalization);
     g.set_gapless(s.gapless);
+    g.set_crossfade_index(
+        CROSSFADE_SECS
+            .iter()
+            .position(|x| *x == s.crossfade.secs)
+            .unwrap_or(0) as i32,
+    );
+    g.set_crossfade_same_album(s.crossfade.skip_same_album);
+    g.set_crossfade_blocked(s.exclusive || s.bit_perfect);
     g.set_gapless_supported(s.gapless_supported);
     g.set_quality_index(s.quality_index);
     g.set_exclusive(s.exclusive);
@@ -210,6 +223,10 @@ impl Backend {
                 "normalization" => {
                     utility::set_volume_normalization(&state, v).map_err(|e| e.log_safe())
                 }
+                "crossfade-same-album" => {
+                    let c = utility::get_crossfade(&state);
+                    utility::set_crossfade(&state, c.secs, v).map_err(|e| e.log_safe())
+                }
                 "gapless" => utility::set_gapless(&state, v).map_err(|e| e.log_safe()),
                 "exclusive" => utility::set_exclusive_mode(&state, v).map_err(|e| e.log_safe()),
                 "bit-perfect" => utility::set_bit_perfect(&state, v).map_err(|e| e.log_safe()),
@@ -264,6 +281,12 @@ impl Backend {
                         w.set_lyrics_scale(lyrics);
                     });
                     saved
+                }
+                "crossfade" => {
+                    let c = utility::get_crossfade(&state);
+                    let secs = CROSSFADE_SECS.get(usize_i).copied().unwrap_or(0);
+                    utility::set_crossfade(&state, secs, c.skip_same_album)
+                        .map_err(|e| e.log_safe())
                 }
                 "suggest" => this.set_suggest_index(usize_i),
                 "ui-scale" => {

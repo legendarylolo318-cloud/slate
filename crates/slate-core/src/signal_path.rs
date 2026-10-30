@@ -60,6 +60,9 @@ pub struct SignalPath {
     /// pipeline_probe; None until first refresh or when no DAC active.
     pub dac: Option<crate::pipeline_probe::DacHwParams>,
 
+    /// Two tracks are being mixed for a crossfade: the path is MODIFIED while it lasts.
+    pub crossfading: bool,
+
     /// OS-mixer info (PulseAudio/PipeWire). None when probe failed or
     /// pactl is unavailable.
     pub os_mixer: Option<crate::pipeline_probe::OsMixerInfo>,
@@ -118,6 +121,18 @@ impl SignalPathTracker {
             let mut s = self.state.lock_safe();
             s.backend = Some(backend.to_string());
             s.output_device = device;
+            s.clone()
+        };
+        self.emit(snap);
+    }
+
+    pub fn set_crossfading(&self, on: bool) {
+        let snap = {
+            let mut s = self.state.lock_safe();
+            if s.crossfading == on {
+                return;
+            }
+            s.crossfading = on;
             s.clone()
         };
         self.emit(snap);
@@ -379,6 +394,7 @@ pub fn verdict(sp: &SignalPath) -> Verdict {
         && sp.format_fallback_from.is_none()
         && !user_altered
         && !norm_altered
+        && !sp.crossfading
         && !lossy
         && dac_matches;
 
