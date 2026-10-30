@@ -6,6 +6,9 @@
 - Playlists you own have a "Remove duplicates…" button. It reads the whole playlist (with
   progress), lists the repeated tracks (same ISRC, or the same TIDAL track when there is no
   ISRC), and after you confirm removes every copy except the first.
+- Go to album / Go to artist on queue rows (right-click), and clicking the title or artist
+  in the player bar, full-screen player or mini-player opens that album or artist. When a
+  track has several artists you pick one from a list.
 
 ## [1.1.0] - 2026-10-30
 

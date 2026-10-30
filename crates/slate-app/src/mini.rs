@@ -53,6 +53,10 @@ impl Backend {
             let b = this.clone();
             mini.on_seek(move |f| b.seek(f));
             let b = this.clone();
+            mini.on_go_album(move || b.go_current("album"));
+            let b = this.clone();
+            mini.on_go_artist(move || b.go_current("artist"));
+            let b = this.clone();
             mini.on_expand(move || {
                 MINI.with(|m| {
                     m.borrow_mut().take();

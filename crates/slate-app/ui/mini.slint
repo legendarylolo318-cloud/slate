@@ -26,6 +26,8 @@ export component MiniPlayerWindow inherits Window {
     callback previous();
     callback seek(float);
     callback expand();
+    callback go-album();
+    callback go-artist();
 
     // Absolute positioning on purpose: layouts here would make the window's own
     // size constraints depend on its size (a binding loop).
@@ -57,6 +59,8 @@ export component MiniPlayerWindow inherits Window {
         font-weight: 700;
         overflow: elide;
     }
+    TouchArea { x: root.text-x; y: root.row-h / 2 - 20px; width: max(0px, root.width - root.text-x - root.controls-w - 2 * root.pad); height: 20px; enabled: root.has-track; mouse-cursor: MouseCursor.pointer; clicked => { root.go-album(); } }
+    TouchArea { x: root.text-x; y: root.row-h / 2; width: max(0px, root.width - root.text-x - root.controls-w - 2 * root.pad); height: 18px; enabled: root.has-track; mouse-cursor: MouseCursor.pointer; clicked => { root.go-artist(); } }
     Text {
         x: root.text-x;
         y: root.row-h / 2;

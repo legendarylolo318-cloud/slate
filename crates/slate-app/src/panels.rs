@@ -8,7 +8,7 @@ use slate_core::queue::Track;
 use slint::{Model, ModelRc, VecModel};
 
 use crate::backend::Backend;
-use crate::bootstrap::{LyricLine, QueueRow};
+use crate::bootstrap::{Choice, LyricLine, QueueRow};
 use crate::pages::Route;
 
 const MAX_QUEUE_ROWS: usize = 300;
@@ -194,37 +194,69 @@ impl Backend {
                     ctl.add_to_queue(track, None).await;
                     this.after_queue_edit("Added to queue").await;
                 }
-                "album" => {
-                    if let Some(id) = track
-                        .extra
-                        .get("album")
-                        .and_then(|a| a.get("id"))
-                        .and_then(|v| v.as_u64())
-                    {
-                        this.navigate(Route::Album(id));
-                    }
-                }
-                "artist" => {
-                    let id = track
-                        .extra
-                        .get("artist")
-                        .and_then(|a| a.get("id"))
-                        .and_then(|v| v.as_u64())
-                        .or_else(|| {
-                            track
-                                .extra
-                                .get("artists")
-                                .and_then(|a| a.get(0))
-                                .and_then(|a| a.get("id"))
-                                .and_then(|v| v.as_u64())
-                        });
-                    if let Some(id) = id {
-                        this.navigate(Route::Artist(id));
-                    }
-                }
+                "album" => this.go_album(&track),
+                "artist" => this.go_artist(&track),
                 "copy-link" => this.copy_link(&track).await,
                 "credits" => this.show_credits(&track),
                 _ => {}
+            }
+        });
+    }
+
+    pub(crate) fn go_album(&self, track: &Track) {
+        match album_id(track) {
+            Some(id) => self.navigate(Route::Album(id)),
+            None => self.notify("This track has no album page"),
+        }
+    }
+
+    /// One artist: open the page. Several: ask which.
+    pub(crate) fn go_artist(&self, track: &Track) {
+        let mut artists = artists_of(track);
+        match artists.len() {
+            0 => self.notify("This track has no artist page"),
+            1 => self.navigate(Route::Artist(artists.remove(0).0)),
+            _ => self.ui(move |w| {
+                let model: Vec<Choice> = artists
+                    .into_iter()
+                    .map(|(id, name)| Choice {
+                        title: name.into(),
+                        id: id.to_string().into(),
+                    })
+                    .collect();
+                w.set_dialog_choices(ModelRc::new(VecModel::from(model)));
+                w.set_dialog_kind("artists".into());
+                w.set_dialog_open(true);
+            }),
+        }
+    }
+
+    fn go_to(&self, track: &Track, kind: &str) {
+        match kind {
+            "album" => self.go_album(track),
+            "artist" => self.go_artist(track),
+            _ => {}
+        }
+    }
+
+    /// Title / artist click on the player bar, full-screen player or mini-player.
+    pub fn go_current(&self, kind: &str) {
+        let (this, kind) = (self.clone(), kind.to_string());
+        self.rt.spawn(async move {
+            let Some(ctl) = this.controller() else { return };
+            if let Some(t) = ctl.with_queue(|q| q.current.clone()).await {
+                this.go_to(&t, &kind);
+            }
+        });
+    }
+
+    /// "Go to" on a queue row.
+    pub fn queue_go(&self, index: usize, kind: &str) {
+        let (this, kind) = (self.clone(), kind.to_string());
+        self.rt.spawn(async move {
+            let Some(ctl) = this.controller() else { return };
+            if let Some(t) = ctl.with_queue(|q| q.upcoming().nth(index).cloned()).await {
+                this.go_to(&t, &kind);
             }
         });
     }
@@ -256,5 +288,63 @@ impl Backend {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             this.ui(|w| w.set_notice("".into()));
         });
+    }
+}
+
+/// TIDAL album id of a queue track.
+pub(crate) fn album_id(t: &Track) -> Option<u64> {
+    t.extra.get("album")?.get("id")?.as_u64()
+}
+
+/// Every credited artist with a page, primary first, without repeats.
+pub(crate) fn artists_of(t: &Track) -> Vec<(u64, String)> {
+    let mut out: Vec<(u64, String)> = Vec::new();
+    let one = |v: &serde_json::Value| {
+        Some((v.get("id")?.as_u64()?, v.get("name")?.as_str()?.to_string()))
+    };
+    let primary = t.extra.get("artist").and_then(one);
+    let all = t
+        .extra
+        .get("artists")
+        .and_then(|a| a.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(one);
+    for a in primary.into_iter().chain(all) {
+        if !out.iter().any(|(id, _)| *id == a.0) {
+            out.push(a);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod goto_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn track(v: serde_json::Value) -> Track {
+        let mut t = Track::new(1);
+        if let serde_json::Value::Object(m) = v {
+            t.extra = m;
+        }
+        t
+    }
+
+    #[test]
+    fn artists_are_unique_and_primary_first() {
+        let t = track(json!({
+            "artist": {"id": 2, "name": "B"},
+            "artists": [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}],
+        }));
+        assert_eq!(artists_of(&t), vec![(2, "B".into()), (1, "A".into())]);
+    }
+
+    #[test]
+    fn missing_ids_give_nothing() {
+        let t = track(json!({"artist": {"name": "X"}, "album": {"title": "Y"}}));
+        assert!(artists_of(&t).is_empty());
+        assert_eq!(album_id(&t), None);
+        assert_eq!(album_id(&track(json!({"album": {"id": 9}}))), Some(9));
     }
 }

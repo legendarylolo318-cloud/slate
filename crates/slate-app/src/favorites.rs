@@ -362,6 +362,12 @@ impl Backend {
                         .map(|()| "Folder deleted")
                         .map_err(|e| e.log_safe())
                 }
+                ("artist", None) => {
+                    if let Ok(id) = target.parse() {
+                        this.navigate(crate::pages::Route::Artist(id));
+                    }
+                    return;
+                }
                 ("dedupe", None) => return this.run_dedupe(&target).await,
                 ("delete", None) => lib_cmds::delete_playlist(&state, uid, target.clone())
                     .await

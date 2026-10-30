@@ -2,6 +2,8 @@ import { Theme } from "theme.slint";
 import { IconButton, Bar, QualityBadges } from "widgets.slint";
 
 export component PlayerBar inherits Rectangle {
+    callback go-album();
+    callback go-artist();
     in property <string> title;
     in property <string> artist;
     in property <bool> tint-on;
@@ -82,8 +84,16 @@ export component PlayerBar inherits Rectangle {
                 }
                 VerticalLayout {
                     alignment: center;
-                    Text { text: root.video-mini ? root.video-title : root.title; color: Theme.text; font-size: 14.5px * root.scale; font-weight: 600; overflow: elide; }
-                    Text { text: root.artist; color: Theme.text-muted; font-size: 12.5px * root.scale; overflow: elide; }
+                    Rectangle {
+                        height: tt.preferred-height;
+                        tt := Text { width: parent.width; text: root.video-mini ? root.video-title : root.title; color: Theme.text; font-size: 14.5px * root.scale; font-weight: 600; overflow: elide; }
+                        TouchArea { enabled: root.has-track && !root.video-mini; mouse-cursor: self.enabled ? MouseCursor.pointer : MouseCursor.default; clicked => { root.go-album(); } }
+                    }
+                    Rectangle {
+                        height: ta.preferred-height;
+                        ta := Text { width: parent.width; text: root.artist; color: Theme.text-muted; font-size: 12.5px * root.scale; overflow: elide; }
+                        TouchArea { enabled: root.has-track && !root.video-mini; mouse-cursor: self.enabled ? MouseCursor.pointer : MouseCursor.default; clicked => { root.go-artist(); } }
+                    }
                     if root.quality != "" || root.badge > 0 || root.atmos: HorizontalLayout {
                         spacing: 6px * root.scale;
                         QualityBadges { tier: root.badge; atmos: root.atmos; long-atmos: false; scale: root.scale; }

@@ -27,6 +27,8 @@ export component FullscreenPlayer inherits Rectangle {
     in property <float> lyrics-scale: 1.0;
     property <length> lyric-size: clamp(root.height / 38, 18px, 34px) * root.lyrics-scale;
     callback close();
+    callback go-album();
+    callback go-artist();
     callback toggle-play();
     callback next();
     callback previous();
@@ -74,8 +76,16 @@ export component FullscreenPlayer inherits Rectangle {
                 Image { source: root.cover; width: parent.width; height: parent.height; image-fit: ImageFit.cover; }
             }
             }
-            Text { text: root.title; font-size: 28px; font-weight: 800; color: Theme.text; overflow: elide; horizontal-alignment: center; }
-            Text { text: root.artist; font-size: 18px; color: Theme.text-muted; overflow: elide; horizontal-alignment: center; }
+            Rectangle {
+                height: ft.preferred-height;
+                ft := Text { width: parent.width; text: root.title; font-size: 28px; font-weight: 800; color: Theme.text; overflow: elide; horizontal-alignment: center; }
+                TouchArea { enabled: root.has-track; mouse-cursor: MouseCursor.pointer; clicked => { root.go-album(); } }
+            }
+            Rectangle {
+                height: fa.preferred-height;
+                fa := Text { width: parent.width; text: root.artist; font-size: 18px; color: Theme.text-muted; overflow: elide; horizontal-alignment: center; }
+                TouchArea { enabled: root.has-track; mouse-cursor: MouseCursor.pointer; clicked => { root.go-artist(); } }
+            }
             VerticalLayout {
                 opacity: root.idle ? 0.0 : 1.0;
                 animate opacity { duration: 250ms; }

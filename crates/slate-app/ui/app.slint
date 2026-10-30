@@ -11,8 +11,8 @@ import { ProfilePage, ProfileState } from "profile.slint";
 import { IconButton, TextField, Button } from "widgets.slint";
 import { ShortcutOverlay } from "shortcuts.slint";
 import { ListView } from "std-widgets.slint";
-import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue } from "types.slint";
-export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, SettingsState, ProfileState, Theme }
+import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice } from "types.slint";
+export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, SettingsState, ProfileState, Theme }
 
 export enum Screen { loading, login, main }
 
@@ -165,6 +165,9 @@ export component AppWindow inherits Window {
     in property <bool> lyrics-synced;
     in property <int> lyric-current: -1;
     callback queue-play(int);
+    callback queue-go(int, string);
+    callback go-current(string);
+    in property <[Choice]> dialog-choices;
     callback queue-remove(int);
     callback queue-clear();
     callback lyric-seek(int);
@@ -400,6 +403,7 @@ export component AppWindow inherits Window {
                     now-artist: root.track-artist;
                     play(i) => { root.queue-play(i); }
                     remove(i) => { root.queue-remove(i); }
+                    go(i, k) => { root.queue-go(i, k); }
                     clear => { root.queue-clear(); }
                     close => { root.panel = ""; }
                 }
@@ -454,6 +458,8 @@ export component AppWindow inherits Window {
                 set-volume(v) => { root.set-volume(v); }
                 open-signal-path => { root.open-signal-path(); }
                 open-miniplayer => { root.open-miniplayer(); }
+                go-album => { root.go-current("album"); }
+                go-artist => { root.go-current("artist"); }
                 toggle-fullscreen => { root.fullscreen = true; }
                 toggle-queue => { root.panel = root.panel == "queue" ? "" : "queue"; }
                 toggle-lyrics => { root.panel = root.panel == "lyrics" ? "" : "lyrics"; }
@@ -481,6 +487,8 @@ export component AppWindow inherits Window {
             lyric-current: root.lyric-current;
             lyrics-status: root.lyrics-status;
             close => { root.fullscreen = false; }
+            go-album => { root.fullscreen = false; root.go-current("album"); }
+            go-artist => { root.fullscreen = false; root.go-current("artist"); }
             toggle-play => { root.toggle-play(); }
             next => { root.next(); }
             previous => { root.previous(); }
@@ -611,7 +619,7 @@ export component AppWindow inherits Window {
             TouchArea { clicked => { root.dialog-open = false; } }
             Rectangle {
                 width: min(400px, parent.width - 32px);
-                height: root.dialog-kind == "move" ? min(420px, parent.height - 48px) : root.dialog-kind == "dedupe" ? min(420px, parent.height - 48px) : 190px;
+                height: root.dialog-kind == "move" ? min(420px, parent.height - 48px) : root.dialog-kind == "dedupe" || root.dialog-kind == "artists" ? min(420px, parent.height - 48px) : 190px;
                 border-radius: 12px;
                 background: Theme.surface;
                 TouchArea { }
@@ -619,12 +627,24 @@ export component AppWindow inherits Window {
                     padding: 16px;
                     spacing: 10px;
                     Text {
-                        text: root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : "Move to folder";
+                        text: root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : "Move to folder";
                         font-size: 18px; font-weight: 700; color: Theme.text;
                     }
                     if root.dialog-kind == "delete": Text {
                         text: "This cannot be undone.";
                         color: Theme.text-muted;
+                    }
+                    if root.dialog-kind == "artists": Flickable {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            for c in root.dialog-choices: Rectangle {
+                                height: 40px;
+                                border-radius: 6px;
+                                background: ca.has-hover ? Theme.surface-raised : transparent;
+                                Text { x: 10px; text: c.title; color: Theme.text; vertical-alignment: center; }
+                                ca := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.dialog-accepted("artist", c.id, ""); root.dialog-open = false; } }
+                            }
+                        }
                     }
                     if root.dialog-kind == "dedupe": Flickable {
                         vertical-stretch: 1;

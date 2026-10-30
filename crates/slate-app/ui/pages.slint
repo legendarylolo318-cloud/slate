@@ -170,6 +170,7 @@ export component QueuePanel inherits Rectangle {
     in property <string> now-artist;
     callback play(int);
     callback remove(int);
+    callback go(int, string);
     callback clear();
     callback close();
     background: Theme.surface;
@@ -202,6 +203,14 @@ export component QueuePanel inherits Rectangle {
                     IconButton { icon: @image-url("icons/close.svg"); side: 28px; visible: qa.has-hover; clicked => { root.remove(i); } }
                 }
                 qa := TouchArea { mouse-cursor: MouseCursor.pointer; z: -1; double-clicked => { root.play(i); } }
+                ContextMenuArea {
+                    Menu {
+                        MenuItem { title: "Play"; activated => { root.play(i); } }
+                        MenuItem { title: "Go to album"; activated => { root.go(i, "album"); } }
+                        MenuItem { title: "Go to artist"; activated => { root.go(i, "artist"); } }
+                        MenuItem { title: "Remove from queue"; activated => { root.remove(i); } }
+                    }
+                }
             }
         }
     }
