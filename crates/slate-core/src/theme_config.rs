@@ -245,7 +245,7 @@ pub fn theme_file_set(file: ThemeFile) -> Result<(), String> {
 /// Emitted to the frontend when `theme.json` changes on disk.
 pub const THEME_FILE_CHANGED_EVENT: &str = "theme-file-changed";
 
-/// Holds the debouncer for the process lifetime. Dropping it stops the watch,
+/// Holds the watcher for the process lifetime. Dropping it stops the watch,
 /// so this lives in Tauri state rather than in a local. The `Mutex` is only
 /// here to satisfy Tauri's `Sync` bound on managed state -- nothing locks it.
 pub struct ThemeWatcher(#[allow(dead_code)] std::sync::Mutex<Box<dyn std::any::Any + Send>>);
@@ -276,9 +276,8 @@ fn is_content_change(kind: &notify::EventKind) -> bool {
 /// Non-fatal: on any failure the app keeps working, it just stops noticing
 /// external edits until the next launch.
 pub fn spawn_theme_watcher(app: crate::AppHandle) -> Option<ThemeWatcher> {
-    use notify::RecursiveMode;
-    use notify_debouncer_full::{new_debouncer, DebounceEventResult};
-    use std::time::Duration;
+    use notify::{RecursiveMode, Watcher};
+    use std::sync::mpsc;
 
     let dir = match config_slate_dir() {
         Ok(d) => d,
@@ -289,51 +288,9 @@ pub fn spawn_theme_watcher(app: crate::AppHandle) -> Option<ThemeWatcher> {
     };
     let path = dir.join("theme.json");
 
-    let handler = {
-        let path = path.clone();
-        let app = app.clone();
-        move |res: DebounceEventResult| {
-            let events = match res {
-                Ok(events) => events,
-                Err(errors) => {
-                    for e in errors {
-                        log::warn!("theme: watch error: {e}");
-                    }
-                    return;
-                }
-            };
-            if !events
-                .iter()
-                .any(|e| is_content_change(&e.kind) && event_touches(&e.paths, &path))
-            {
-                return;
-            }
-            let mut last = last_known();
-            match read_theme_file(&path) {
-                // `None` means the file is gone, and the frontend re-creates it
-                // from the live theme. Debouncing means a delete-then-rewrite
-                // still reads as `Some` -- only a lasting deletion gets here.
-                Ok(file) => {
-                    if note_disk_state(&mut last, &file) {
-                        drop(last);
-                        let _ = app.emit(THEME_FILE_CHANGED_EVENT, file);
-                    }
-                }
-                Err(e) => log::warn!("theme: ignoring external change: {e}"),
-            }
-        }
-    };
-
-    // Debounce coalesces the tmp-file churn of a single atomic write, and any
-    // editor that saves more than once in quick succession.
-    let mut debouncer = match new_debouncer(
-        Duration::from_millis(250),
-        // The debouncer thread wakes once per tick, forever; its default of a
-        // quarter of the timeout is 16 idle wakeups a second.
-        Some(Duration::from_millis(250)),
-        handler,
-    ) {
-        Ok(d) => d,
+    let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
+    let mut watcher = match notify::recommended_watcher(tx) {
+        Ok(w) => w,
         Err(e) => {
             log::warn!("theme: could not start watcher: {e}");
             return None;
@@ -341,12 +298,73 @@ pub fn spawn_theme_watcher(app: crate::AppHandle) -> Option<ThemeWatcher> {
     };
     // NonRecursive: the config dir has subdirectories (logs, cache) we do not
     // want events from.
-    if let Err(e) = debouncer.watch(&dir, RecursiveMode::NonRecursive) {
+    if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
         log::warn!("theme: could not watch {dir:?}: {e}");
         return None;
     }
+    // The thread sleeps in `recv` until the directory changes: no timer, no idle wakeups
+    // (a debouncer with a tick woke 4 times a second forever). It ends when the watcher,
+    // which owns the sender, is dropped.
+    let watch_path = path.clone();
+    let spawned = std::thread::Builder::new()
+        .name("slate-theme-watch".into())
+        .spawn(move || theme_watch_loop(&rx, &watch_path, &app));
+    if let Err(e) = spawned {
+        log::warn!("theme: could not start watcher thread: {e}");
+        return None;
+    }
     log::info!("theme: watching {path:?} for external changes");
-    Some(ThemeWatcher(std::sync::Mutex::new(Box::new(debouncer))))
+    Some(ThemeWatcher(std::sync::Mutex::new(Box::new(watcher))))
+}
+
+/// Coalesces the tmp-file churn of one atomic write, and any editor that saves more than once
+/// in quick succession, into one read.
+const THEME_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Waits for an event naming `path`, then for [`THEME_DEBOUNCE`] of quiet, then reads it.
+fn theme_watch_loop(
+    rx: &std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
+    path: &Path,
+    app: &crate::AppHandle,
+) {
+    use std::sync::mpsc::RecvTimeoutError;
+    while let Some(()) = next_theme_change(rx, path) {
+        loop {
+            match rx.recv_timeout(THEME_DEBOUNCE) {
+                Ok(_) => continue,
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
+        let mut last = last_known();
+        match read_theme_file(path) {
+            // `None` means the file is gone, and the frontend re-creates it
+            // from the live theme. Debouncing means a delete-then-rewrite
+            // still reads as `Some` -- only a lasting deletion gets here.
+            Ok(file) => {
+                if note_disk_state(&mut last, &file) {
+                    drop(last);
+                    let _ = app.emit(THEME_FILE_CHANGED_EVENT, file);
+                }
+            }
+            Err(e) => log::warn!("theme: ignoring external change: {e}"),
+        }
+    }
+}
+
+/// Blocks until an event that changes `path` arrives; None once the watcher is gone. Reads
+/// (our own included) and other files are skipped.
+fn next_theme_change(
+    rx: &std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
+    path: &Path,
+) -> Option<()> {
+    loop {
+        match rx.recv().ok()? {
+            Ok(e) if is_content_change(&e.kind) && event_touches(&e.paths, path) => return Some(()),
+            Ok(_) => {}
+            Err(e) => log::warn!("theme: watch error: {e}"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -541,30 +559,24 @@ mod tests {
     /// `theme.json`, which is what `event_touches` filters on.
     #[test]
     fn directory_watch_sees_an_atomic_write() {
-        use notify::RecursiveMode;
-        use notify_debouncer_full::{new_debouncer, DebounceEventResult};
+        use notify::{RecursiveMode, Watcher};
         use std::sync::mpsc;
         use std::time::Duration;
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("theme.json");
 
-        let (tx, rx) = mpsc::channel();
-        let mut debouncer = new_debouncer(
-            Duration::from_millis(80),
-            None,
-            move |res: DebounceEventResult| {
-                if let Ok(events) = res {
-                    for e in events {
-                        let _ = tx.send((e.kind, e.paths.clone()));
-                    }
-                }
-            },
-        )
-        .unwrap();
-        debouncer
+        let (raw_tx, raw_rx) = mpsc::channel::<notify::Result<notify::Event>>();
+        let mut watcher = notify::recommended_watcher(raw_tx).unwrap();
+        watcher
             .watch(dir.path(), RecursiveMode::NonRecursive)
             .unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok(Ok(e)) = raw_rx.recv() {
+                let _ = tx.send((e.kind, e.paths.clone()));
+            }
+        });
 
         write_theme_file(&path, &custom("#3B82F6", "#0E1118")).unwrap();
 
@@ -595,8 +607,7 @@ mod tests {
     /// every debounce period and push stale content over in-app changes.
     #[test]
     fn reading_the_file_is_not_a_content_change() {
-        use notify::RecursiveMode;
-        use notify_debouncer_full::{new_debouncer, DebounceEventResult};
+        use notify::{RecursiveMode, Watcher};
         use std::sync::mpsc;
         use std::time::Duration;
 
@@ -604,22 +615,17 @@ mod tests {
         let path = dir.path().join("theme.json");
         write_theme_file(&path, &custom("#3B82F6", "#0E1118")).unwrap();
 
-        let (tx, rx) = mpsc::channel();
-        let mut debouncer = new_debouncer(
-            Duration::from_millis(80),
-            None,
-            move |res: DebounceEventResult| {
-                if let Ok(events) = res {
-                    for e in events {
-                        let _ = tx.send((e.kind, e.paths.clone()));
-                    }
-                }
-            },
-        )
-        .unwrap();
-        debouncer
+        let (raw_tx, raw_rx) = mpsc::channel::<notify::Result<notify::Event>>();
+        let mut watcher = notify::recommended_watcher(raw_tx).unwrap();
+        watcher
             .watch(dir.path(), RecursiveMode::NonRecursive)
             .unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok(Ok(e)) = raw_rx.recv() {
+                let _ = tx.send((e.kind, e.paths.clone()));
+            }
+        });
 
         read_theme_file(&path).unwrap();
 
@@ -641,6 +647,29 @@ mod tests {
         // Not asserted: the open event is backend-specific. Logged so a
         // future notify upgrade that drops it is visible.
         eprintln!("read produced an access event: {saw_open}");
+    }
+
+    /// The debounce thread waits in `recv`: an event for another file, or a read of ours, does
+    /// not count; a change to theme.json does, and dropping the sender ends the wait.
+    #[test]
+    fn the_watch_thread_waits_for_a_change_to_the_theme_file() {
+        use notify::event::{AccessKind, AccessMode, CreateKind};
+        use notify::{Event, EventKind};
+        let path = PathBuf::from("/x/theme.json");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ev = |kind, p: &str| Ok(Event::new(kind).add_path(PathBuf::from(p)));
+        tx.send(ev(EventKind::Create(CreateKind::File), "/x/other.json"))
+            .unwrap();
+        tx.send(ev(
+            EventKind::Access(AccessKind::Open(AccessMode::Any)),
+            "/x/theme.json",
+        ))
+        .unwrap();
+        tx.send(ev(EventKind::Create(CreateKind::File), "/x/theme.json"))
+            .unwrap();
+        assert_eq!(next_theme_change(&rx, &path), Some(()));
+        drop(tx);
+        assert_eq!(next_theme_change(&rx, &path), None);
     }
 
     #[test]

@@ -1838,6 +1838,9 @@ fn direct_alsa_seek(
 
 // ── Audio command protocol ─────────────────────────────────────────────
 
+/// Segment size (µs) of the shared-mode output sink; see where autoaudiosink's child is added.
+const SINK_LATENCY_US: i64 = 40_000;
+
 /// Name of the equalizer element in the pipeline, so a live edit can find it.
 const EQ_NAME: &str = "slate-eq";
 const EQ_PREAMP_NAME: &str = "slate-eq-preamp";
@@ -2852,6 +2855,15 @@ impl AudioPlayer {
                                 if let Ok(sink_bin) = sink.clone().dynamic_cast::<gst::Bin>() {
                                     let output_cell = Arc::clone(&output_cell_thread);
                                     sink_bin.connect_element_added(move |_bin, element| {
+                                        // The sound server is fed in 40 ms segments instead
+                                        // of GStreamer's 10 ms: a quarter of the wakeups while
+                                        // playing. The buffer stays 200 ms, so nothing is
+                                        // added to the latency and underruns are no likelier.
+                                        if element.find_property("latency-time").is_some()
+                                            && element.find_property("buffer-time").is_some()
+                                        {
+                                            element.set_property("latency-time", SINK_LATENCY_US);
+                                        }
                                         let cell = Arc::clone(&output_cell);
                                         if let Some(sink_pad) = element.static_pad("sink") {
                                             sink_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
