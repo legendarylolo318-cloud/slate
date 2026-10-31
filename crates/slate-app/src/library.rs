@@ -308,6 +308,17 @@ impl Backend {
                             }),
                     )
                     .collect();
+                let clone_entry = |e: &PlaylistEntry| PlaylistEntry {
+                    uuid: e.uuid.clone(),
+                    title: e.title.clone(),
+                    subtitle: e.subtitle.clone(),
+                    folder: e.folder,
+                    cover: Image::default(),
+                };
+                let (folders, lists): (Vec<_>, Vec<_>) =
+                    entries.iter().map(clone_entry).partition(|e| e.folder);
+                w.set_pick_lists(ModelRc::new(VecModel::from(lists)));
+                w.set_folder_lists(ModelRc::new(VecModel::from(folders)));
                 w.set_playlists(ModelRc::new(VecModel::from(entries)));
                 w.set_playlists_loading(false);
             });

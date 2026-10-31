@@ -683,6 +683,7 @@ export component TrackPage inherits Rectangle {
                             if root.suggestions.length == 0: Button { label: "Show suggestions"; clicked => { root.suggest-load("first"); } }
                             if root.suggestions.length > 0: Button { label: "Refresh"; clicked => { root.suggest-load("refresh"); } }
                             if root.suggestions.length > 0: Button { label: "Show more"; clicked => { root.suggest-load("more"); } }
+                            if root.suggestions.length > 0: Button { label: "Hide"; clicked => { root.suggest-load("hide"); } }
                         }
                     }
                 }

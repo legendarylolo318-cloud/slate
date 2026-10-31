@@ -43,6 +43,8 @@ export component AppWindow inherits Window {
     callback suggest-play(int);
     callback suggest-action(int, string);
     in property <[PlaylistEntry]> smart-lists;
+    in-out property <[PlaylistEntry]> pick-lists;
+    in-out property <[PlaylistEntry]> folder-lists;
     in property <bool> can-save-smart;
     callback new-smart();
     callback toggle-discord-hidden(string);
@@ -637,9 +639,9 @@ export component AppWindow inherits Window {
                     if root.picker-target != -1: Text { text: "OR PICK ONE"; font-size: 11px; color: Theme.text-muted; }
                     if root.picker-target != -1: ListView {
                         vertical-stretch: 1;
-                        for p in root.playlists: Rectangle {
+                        for p in root.pick-lists: Rectangle {
                             height: 40px;
-                            visible: !p.folder;
+                            clip: true;
                             border-radius: 6px;
                             background: pk.has-hover ? Theme.surface-raised : transparent;
                             Text { x: 10px; text: p.title; color: Theme.text; vertical-alignment: center; overflow: elide; width: parent.width - 20px; }
@@ -902,9 +904,10 @@ export component AppWindow inherits Window {
                     if root.dialog-kind == "compare": Flickable {
                         vertical-stretch: 1;
                         VerticalLayout {
-                            for p in root.playlists: Rectangle {
-                                height: (p.folder || p.uuid == root.dialog-target) ? 0px : 40px;
-                                visible: !p.folder && p.uuid != root.dialog-target;
+                            for p in root.pick-lists: Rectangle {
+                                height: p.uuid == root.dialog-target ? 0px : 40px;
+                                clip: true;
+                                visible: p.uuid != root.dialog-target;
                                 border-radius: 6px;
                                 background: cp.has-hover ? Theme.surface-raised : transparent;
                                 Text { x: 10px; text: p.title; color: Theme.text; vertical-alignment: center; overflow: elide; width: parent.width - 20px; }
@@ -945,9 +948,9 @@ export component AppWindow inherits Window {
                             Text { x: 10px; text: "Top level (no folder)"; color: Theme.text; vertical-alignment: center; }
                             mr := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.dialog-accepted("move", root.dialog-target, "root"); root.dialog-open = false; } }
                         }
-                        for p in root.playlists: Rectangle {
-                            height: p.folder ? 40px : 0px;
-                            visible: p.folder;
+                        for p in root.folder-lists: Rectangle {
+                            height: 40px;
+                            clip: true;
                             border-radius: 6px;
                             background: mf.has-hover ? Theme.surface-raised : transparent;
                             Text { x: 10px; text: "📁  " + p.title; color: Theme.text; vertical-alignment: center; }

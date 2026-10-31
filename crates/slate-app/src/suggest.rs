@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use slate_core::commands::library as lib_cmds;
 use slate_core::queue::Track;
 use slate_core::tidal_api::TidalTrack;
-use slint::{Image, ModelRc, VecModel};
+use slint::{Image, Model, ModelRc, VecModel};
 
 use crate::backend::Backend;
 use crate::bootstrap::TrackRow;
@@ -89,6 +89,16 @@ impl Backend {
                 "refresh" => (if st.exhausted { 0 } else { st.next_offset }, count),
                 "more" => (st.next_offset, count),
                 "top-up" => (st.next_offset, count.saturating_sub(st.shown.len())),
+                "hide" => {
+                    st.shown.clear();
+                    st.next_offset = 0;
+                    st.exhausted = false;
+                    drop(guard);
+                    self.show_suggestions(
+                        "Scroll down or press the button for suggested tracks.".into(),
+                    );
+                    return;
+                }
                 // First load: only when nothing has been fetched yet.
                 _ if st.next_offset == 0 && st.shown.is_empty() => (0, count),
                 _ => return,
@@ -137,6 +147,42 @@ impl Backend {
         });
     }
 
+    /// Thumbnails for the suggestion rows (the page's own loader only knows the track list).
+    fn load_suggestion_covers(&self, tracks: &[Track]) {
+        let mut by_cover: std::collections::HashMap<String, Vec<usize>> = Default::default();
+        for (i, t) in tracks.iter().enumerate() {
+            if let Some(c) = t.cover_id() {
+                by_cover.entry(c.to_string()).or_default().push(i);
+            }
+        }
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let Some(state) = this.state() else { return };
+            for (id, rows) in by_cover {
+                let Some(px) = this
+                    .images
+                    .get_fit(&state, &crate::images::tidal_image_url(&id, 160), 34)
+                    .await
+                else {
+                    continue;
+                };
+                this.ui(move |w| {
+                    let img = Image::from_rgba8(px);
+                    let model = w.get_suggestions();
+                    let Some(list) = model.as_any().downcast_ref::<VecModel<TrackRow>>() else {
+                        return;
+                    };
+                    for i in rows {
+                        if let Some(mut row) = list.row_data(i) {
+                            row.cover = img.clone();
+                            list.set_row_data(i, row);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
     fn show_suggestions(&self, status: String) {
         let tracks = STATE
             .lock()
@@ -171,6 +217,7 @@ impl Backend {
             w.set_suggestions(ModelRc::new(VecModel::from(model)));
             w.set_suggest_status(status.into());
         });
+        self.load_suggestion_covers(&tracks);
     }
 
     pub(crate) fn suggested_track(&self, index: usize) -> Option<Track> {

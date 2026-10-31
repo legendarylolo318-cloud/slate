@@ -93,6 +93,9 @@
   now has one shared set of spacing, radius and text sizes (`Metrics`) for new work.
 
 ### Fixed
+- "Add to playlist" (and Compare, Move to folder) showed gaps and overlapping text when you had
+  folders: the lists now contain only what can be picked.
+- Suggested tracks show their cover art and have a Hide button.
 - Player bar in narrow windows: previous / play / next / shuffle / repeat get their own
   centred row and the seek bar its own line, so they never disappear; the less-used buttons
   (add to playlist, mini-player, signal path, full screen) drop out first.
