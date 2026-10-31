@@ -261,18 +261,27 @@ async fn run_undo(
         Undo::RemoveFromPlaylist {
             playlist,
             track_ids,
+            from_index,
         } => {
-            let tracks = lib::get_playlist_tracks(state, app.clone(), playlist.clone())
+            // Fresh and in the playlist's own order, so the indices are the ones TIDAL uses.
+            let tracks = state
+                .tidal_client
+                .lock()
+                .await
+                .get_playlist_tracks(playlist)
                 .await
                 .map_err(fail)?;
-            let mut idx: Vec<u32> = tracks
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| track_ids.contains(&t.id))
-                .map(|(i, _)| i as u32)
+            let ids: Vec<u64> = tracks.iter().map(|t| t.id).collect();
+            // Entries before `from_index` were there before the add and stay.
+            let skip = from_index.map_or(0, |n| (n as usize).min(ids.len()));
+            let idx: Vec<u32> = crate::playlist_tools::last_occurrences(&ids[skip..], track_ids)
+                .into_iter()
+                .map(|i| i + skip as u32)
                 .collect();
-            idx.sort_unstable_by(|a, b| b.cmp(a));
-            for i in &idx {
+            for (n, i) in idx.iter().enumerate() {
+                if n > 0 {
+                    tokio::time::sleep(lib::EDIT_PAUSE).await;
+                }
                 lib::remove_track_from_playlist(state, playlist.clone(), *i)
                     .await
                     .map_err(fail)?;
@@ -291,14 +300,21 @@ async fn run_undo(
             ))
         }
         Undo::ReorderPlaylist { playlist, order } => {
-            let cur: Vec<u64> = lib::get_playlist_tracks(state, app.clone(), playlist.clone())
+            let cur: Vec<u64> = state
+                .tidal_client
+                .lock()
+                .await
+                .get_playlist_tracks(playlist)
                 .await
                 .map_err(fail)?
                 .iter()
                 .map(|t| t.id)
                 .collect();
             let moves = crate::playlist_tools::moves_to_order(&cur, order);
-            for (from, to) in &moves {
+            for (n, (from, to)) in moves.iter().enumerate() {
+                if n > 0 {
+                    tokio::time::sleep(lib::EDIT_PAUSE).await;
+                }
                 lib::move_playlist_item(state, playlist.clone(), *from, *to)
                     .await
                     .map_err(fail)?;

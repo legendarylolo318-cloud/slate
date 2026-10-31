@@ -134,12 +134,18 @@ pub fn merged_ids(a: &[TidalTrack], b: &[TidalTrack]) -> Vec<u64> {
 /// The single-item moves `(from, to)` that turn the order `current` into `target`, applied in
 /// sequence. Ids missing from either side are ignored.
 pub fn moves_to_order(current: &[u64], target: &[u64]) -> Vec<(u32, u32)> {
+    let in_target: std::collections::HashSet<u64> = target.iter().copied().collect();
     let mut cur: Vec<u64> = current
         .iter()
         .copied()
-        .filter(|i| target.contains(i))
+        .filter(|i| in_target.contains(i))
         .collect();
-    let want: Vec<u64> = target.iter().copied().filter(|i| cur.contains(i)).collect();
+    let in_cur: std::collections::HashSet<u64> = cur.iter().copied().collect();
+    let want: Vec<u64> = target
+        .iter()
+        .copied()
+        .filter(|i| in_cur.contains(i))
+        .collect();
     let mut moves = Vec::new();
     for (i, id) in want.iter().enumerate() {
         if cur.get(i) == Some(id) {
@@ -152,6 +158,24 @@ pub fn moves_to_order(current: &[u64], target: &[u64]) -> Vec<(u32, u32)> {
         }
     }
     moves
+}
+
+/// Indices of the last `n` copies of each id in `ids` (an id listed `n` times in `wanted`),
+/// highest first: what undoing an add at the end of a playlist removes, leaving copies that
+/// were there before.
+pub fn last_occurrences(ids: &[u64], wanted: &[u64]) -> Vec<u32> {
+    let mut left: HashMap<u64, usize> = HashMap::new();
+    for id in wanted {
+        *left.entry(*id).or_default() += 1;
+    }
+    let mut out = Vec::new();
+    for (i, id) in ids.iter().enumerate().rev() {
+        if let Some(n) = left.get_mut(id).filter(|n| **n > 0) {
+            *n -= 1;
+            out.push(i as u32);
+        }
+    }
+    out
 }
 
 /// `ids` without repeats, order kept.
@@ -170,6 +194,16 @@ mod tests {
             v["isrc"] = serde_json::json!(i);
         }
         serde_json::from_value(v).expect("track json")
+    }
+
+    #[test]
+    fn undoing_an_add_removes_only_the_added_copies() {
+        // 7 was already in the playlist; the add appended 7 and 9.
+        let ids = [7, 1, 7, 9];
+        assert_eq!(last_occurrences(&ids, &[7, 9]), vec![3, 2]);
+        assert_eq!(last_occurrences(&ids, &[]), Vec::<u32>::new());
+        assert_eq!(last_occurrences(&ids, &[5]), Vec::<u32>::new());
+        assert_eq!(last_occurrences(&ids, &[7, 7]), vec![2, 0]);
     }
 
     #[test]

@@ -22,6 +22,10 @@ pub enum Undo {
     RemoveFromPlaylist {
         playlist: String,
         track_ids: Vec<u64>,
+        /// Length of the playlist before the add: TIDAL appends and skips tracks already in
+        /// it, so only entries from here on were added. Absent in older logs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_index: Option<u32>,
     },
     /// Add tracks the agent removed back to a playlist (at the end, as TIDAL has no position add).
     AddToPlaylist {

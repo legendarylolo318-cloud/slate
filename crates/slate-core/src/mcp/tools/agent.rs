@@ -153,6 +153,8 @@ pub(crate) enum Before {
     Queue(Vec<u64>),
     Order(Vec<u64>),
     Track(Option<u64>),
+    /// Number of entries in a playlist.
+    Count(u32),
     Favorite(bool),
 }
 
@@ -190,6 +192,22 @@ impl SlateMcpServer {
             .unwrap_or_else(|| uuid.clone());
         let tracks = client.get_playlist_tracks(&uuid).await.ok()?;
         Some((uuid, title, tracks))
+    }
+
+    /// Entries (tracks and videos) in the playlist a call names, fresh from TIDAL.
+    async fn playlist_len(&self, req: &CallToolRequestParams) -> Option<u32> {
+        let state = self.app_handle.try_state()?;
+        let mut client = state.tidal_client.lock().await;
+        let uuid = resolve_playlist(
+            &mut client,
+            Self::arg_str(req, "playlist_uuid").as_deref(),
+            Self::arg_str(req, "playlist_name").as_deref(),
+        )
+        .await
+        .ok()?;
+        let d = client.get_playlist_details(&uuid).await.ok()?;
+        let n = d["numberOfTracks"].as_u64()? + d["numberOfVideos"].as_u64().unwrap_or(0);
+        u32::try_from(n).ok()
     }
 
     /// For playlist tools: the helpful error ("did you mean …?") when the playlist cannot be found.
@@ -295,6 +313,10 @@ impl SlateMcpServer {
                 Some((_, _, tracks)) => Before::Order(tracks.iter().map(|t| t.id).collect()),
                 None => Before::None,
             },
+            "add_to_playlist" => self
+                .playlist_len(req)
+                .await
+                .map_or(Before::None, Before::Count),
             "remove_track_from_playlist" => match self.playlist_of(req).await {
                 Some((_, _, tracks)) => {
                     let idx = Self::arg_u64(req, "index").unwrap_or(0) as usize;
@@ -398,10 +420,16 @@ impl SlateMcpServer {
                         to: from,
                     })
                 }
-                ("add_to_playlist", _) if !playlist.is_empty() => Some(Undo::RemoveFromPlaylist {
-                    playlist: playlist.clone(),
-                    track_ids: ids("track_ids"),
-                }),
+                ("add_to_playlist", before) if !playlist.is_empty() => {
+                    Some(Undo::RemoveFromPlaylist {
+                        playlist: playlist.clone(),
+                        track_ids: ids("track_ids"),
+                        from_index: match before {
+                            Before::Count(n) => Some(n),
+                            _ => None,
+                        },
+                    })
+                }
                 ("remove_track_from_playlist", Before::Track(Some(id))) => {
                     Some(Undo::AddToPlaylist {
                         playlist: playlist.clone(),
@@ -1115,7 +1143,10 @@ impl SlateMcpServer {
             return ok(json!({ "playlist_uuid": uuid, "dry_run": true, "duplicates": listing }));
         }
         let mut removed = 0;
-        for index in playlist_tools::removal_order(&dups) {
+        for (n, index) in playlist_tools::removal_order(&dups).into_iter().enumerate() {
+            if n > 0 {
+                tokio::time::sleep(lib_cmds::EDIT_PAUSE).await;
+            }
             lib_cmds::remove_track_from_playlist(&state, uuid.clone(), index)
                 .await
                 .map_err(ierr)?;
