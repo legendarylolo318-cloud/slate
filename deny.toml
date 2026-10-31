@@ -35,6 +35,8 @@ allow = [
     "MPL-2.0",
     "NCSA",
     "Unicode-3.0",
+    # Mozilla's CA certificate list (webpki-roots / webpki-root-certs, via reqwest and iroh).
+    "CDLA-Permissive-2.0",
     "Unlicense",
 ]
 
