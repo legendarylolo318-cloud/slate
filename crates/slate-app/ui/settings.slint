@@ -178,8 +178,8 @@ export component SettingsPage inherits Rectangle {
             // Scrolls sideways when the tabs do not fit.
             content-width: max(self.visible-width, tabs-seg.preferred-width);
             tabs-seg := Segmented {
-                x: 0;
-                width: self.preferred-width;
+                // Spread over the whole bar, as in 1.1.0; never narrower than the labels.
+                width: tabs-sv.content-width;
                 options: root.tabs;
                 index <=> SettingsState.tab;
             }
@@ -214,10 +214,10 @@ export component SettingsPage inherits Rectangle {
         page := ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
-                // Fills the page up to 760px; narrower windows get the visible width.
-                // Room on the right for the scroll bar, which floats over the content.
+                // The full page width, as in 1.1.0, less room on the right for the scroll bar,
+                // which floats over the content.
                 x: 0;
-                width: min(760px, page.visible-width - 14px);
+                width: page.visible-width - 14px;
                 alignment: start;
 
                 if SettingsState.tab == 0 && SettingsState.query == "": VerticalLayout {
