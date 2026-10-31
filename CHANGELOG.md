@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.2.0] - 2026-10-30
 
 ### Added
 - Playlists you own have a "Remove duplicates…" button. It reads the whole playlist (with
@@ -83,8 +83,8 @@
   with equal-power curves. Consecutive tracks of one album stay gapless by default, and it
   switches itself off while exclusive or bit-perfect output is on. While two tracks mix the signal
   path reads MODIFIED. Each track keeps its own ReplayGain level; skipping or seeking during a fade
-  ends it at once, and pausing pauses both. The second player exists only for the length of a
-  fade; with crossfade off nothing changes in playback.
+  ends it at once, and pausing finishes it (the new track waits at full level). The second player
+  exists only for the length of a fade; with crossfade off nothing changes in playback.
 - Album and playlist headers show the total length (for example "13 tracks · 1 h 1 min").
 - Settings has a search box: type a word and pick the setting from the list to jump to its page.
 - The sidebar uses one set of line icons instead of mixed symbols; icon-only buttons in the player
@@ -92,6 +92,13 @@
   Enter.
 - Empty playlists show a short "Nothing here yet" message instead of a blank page, and the UI
   now has one shared set of spacing, radius and text sizes (`Metrics`) for new work.
+
+### Changed
+- Long playlist edits (remove duplicates, merge from Compare, adding missing tracks, saving a
+  smart playlist, replacing a version) run one at a time, paced, with a Cancel button on the
+  notice bar. Signing out stops them.
+- The app has its own `party` Cargo feature (on by default). Built without it, the Party page
+  says so and no party code is compiled.
 
 ### Fixed
 - Track-page header: the extra buttons (export, remove duplicates, sort, save as TIDAL playlist,
@@ -104,6 +111,38 @@
 - Player bar in narrow windows: previous / play / next / shuffle / repeat get their own
   centred row and the seek bar its own line, so they never disappear; the less-used buttons
   (add to playlist, mini-player, signal path, full screen) drop out first.
+
+### Notes
+- The MCP server is now a stateful Streamable-HTTP session (same URL, still loopback-only with
+  the Host check), so client names and resource subscriptions work. Its older
+  `create_playlist` tool still makes public playlists; the new tools make unlisted ones.
+- Ctrl+F works on playlist, album, Loved Tracks and mix pages, not on an artist's top tracks.
+- Suggested tracks are a panel under the list rather than rows inside it.
+- The Discord "Ask to join" button for parties is not there: the presence library Slate uses
+  cannot subscribe to Discord's join events.
+- Not tested before release: crossfade by ear on real tracks, a party across two different
+  networks (hole punching and relay fallback; only loopback is covered by tests), the Windows
+  global-shortcut code, and the full scripted session below on a signed-in account.
+
+### Performance (measured)
+Release builds of 1.1.0 and 1.2.0 from the same disk, empty profile, login screen, 12 s
+warm-up then a 60 s window, two runs each, optional subsystems (MCP, party, crossfade,
+suggestions) off as they are by default:
+
+| | 1.1.0 | 1.2.0 |
+|---|---|---|
+| Wakeups/s (voluntary context switches, all threads) | 6, 6 | 6, 6 |
+| CPU ticks in 60 s | 2, 1 | 2, 1 |
+| PSS | 177.7, 177.6 MB | 173.6, 173.8 MB |
+| Anonymous PSS | 42.4, 42.3 MB | 43.0, 43.1 MB |
+| Threads | 34 | 34 (same names) |
+| Network sockets | none | none (no MCP listener, no iroh endpoint) |
+| Binary | 52 MB | 72 MB (iroh and the MCP tools) |
+
+PSS depends on where the binary sits: run from tmpfs, 1.1.0 measured 154 MB, because btrfs
+maps more of the binary per page fault. Both columns above are from the same btrfs disk.
+Not measured for this release: the signed-in scripted session and GPU memory, and the cost of
+MCP with a client, a running party and a crossfade (all off by default).
 
 ## [1.1.0] - 2026-10-30
 

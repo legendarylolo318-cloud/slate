@@ -25,3 +25,6 @@ Name: "{group}\Uninstall Slate"; Filename: "{uninstallexe}"
 Root: HKA; Subkey: "Software\Classes\tidal"; ValueType: string; ValueData: "URL:TIDAL"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\tidal"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
 Root: HKA; Subkey: "Software\Classes\tidal\shell\open\command"; ValueType: string; ValueData: """{app}\slate.exe"" ""%1"""
+Root: HKA; Subkey: "Software\Classes\slate"; ValueType: string; ValueData: "URL:Slate"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\slate"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\slate\shell\open\command"; ValueType: string; ValueData: """{app}\slate.exe"" ""%1"""
