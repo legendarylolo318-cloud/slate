@@ -141,11 +141,13 @@ pub mod hotkeys {
                     return;
                 }
             };
-            let mods = Some(Modifiers::CONTROL | Modifiers::ALT);
-            let keys = [Code::Space, Code::ArrowRight, Code::ArrowLeft];
             let mut ids = Vec::new();
-            for ((id, ..), code) in SHORTCUTS.iter().zip(keys) {
-                let hotkey = HotKey::new(mods, code);
+            // The bindings from Settings → Shortcuts (their defaults are Ctrl+Alt+Space / → / ←).
+            for (id, _, action) in SHORTCUTS {
+                let Some(hotkey) = crate::keys::combo(action).as_ref().and_then(to_hotkey) else {
+                    tracing::warn!("shortcut {id}: its key cannot be a system-wide shortcut");
+                    continue;
+                };
                 match manager.register(hotkey) {
                     Ok(()) => ids.push((hotkey.id(), *id)),
                     Err(e) => tracing::warn!("shortcut {id} not registered: {e}"),

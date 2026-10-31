@@ -15,6 +15,8 @@ pub enum Control {
     SeekRelative(f64),
     SetPosition(f64),
     SetVolume(f64),
+    /// Only MPRIS (Linux) sets shuffle directly.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     SetShuffle(bool),
     /// 0 = off, 1 = all, 2 = one.
     SetLoop(u8),
