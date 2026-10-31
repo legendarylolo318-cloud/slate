@@ -1579,6 +1579,8 @@ pub async fn playlist_suggestions(
 /// Tracks added per request when filling a playlist.
 pub const ADD_BATCH: usize = 50;
 const ADD_PAUSE: std::time::Duration = std::time::Duration::from_millis(300);
+/// Pause between single-item edits (remove, move) of one bulk operation.
+pub const EDIT_PAUSE: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Adds `ids` to a playlist in batches with a pause between them (all requests go through the
 /// paced client). A batch TIDAL rejects is retried one track at a time so the rest still land.
@@ -1588,10 +1590,23 @@ pub async fn add_tracks_paced(
     playlist_id: &str,
     ids: &[u64],
 ) -> Result<usize, SlateError> {
+    add_tracks_paced_until(state, playlist_id, ids, &|| false).await
+}
+
+/// [`add_tracks_paced`] that stops before the next batch once `stop` says so.
+pub async fn add_tracks_paced_until(
+    state: &AppState,
+    playlist_id: &str,
+    ids: &[u64],
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<usize, SlateError> {
     let mut added = 0usize;
     for (n, batch) in ids.chunks(ADD_BATCH).enumerate() {
         if n > 0 {
             tokio::time::sleep(ADD_PAUSE).await;
+        }
+        if stop() {
+            break;
         }
         match add_tracks_to_playlist(state, playlist_id.to_string(), batch.to_vec()).await {
             Ok(()) => added += batch.len(),
@@ -1618,8 +1633,19 @@ pub async fn create_playlist_with_tracks(
     access_type: &str,
     ids: &[u64],
 ) -> Result<(TidalPlaylist, usize), SlateError> {
+    create_playlist_with_tracks_until(state, title, access_type, ids, &|| false).await
+}
+
+/// [`create_playlist_with_tracks`] whose adding stops once `stop` says so.
+pub async fn create_playlist_with_tracks_until(
+    state: &AppState,
+    title: String,
+    access_type: &str,
+    ids: &[u64],
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<(TidalPlaylist, usize), SlateError> {
     let ids = crate::playlist_tools::unique_ids(ids);
     let playlist = create_playlist(state, title, String::new(), access_type.into()).await?;
-    let added = add_tracks_paced(state, &playlist.uuid, &ids).await?;
+    let added = add_tracks_paced_until(state, &playlist.uuid, &ids, stop).await?;
     Ok((playlist, added))
 }

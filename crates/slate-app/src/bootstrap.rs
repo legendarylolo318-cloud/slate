@@ -504,6 +504,7 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_toggle_page_favorite, |b| b.toggle_page_favorite());
     bind!(on_export_list, |b, f| b.export_list(&f));
     bind!(on_remove_duplicates, |b| b.scan_duplicates());
+    bind!(on_cancel_bulk, |b| b.cancel_bulk());
     bind!(on_go_current, |b, k| b.go_current(&k));
     bind!(on_queue_go, |b, i, k| b
         .queue_go(usize::try_from(i).unwrap_or(0), &k));

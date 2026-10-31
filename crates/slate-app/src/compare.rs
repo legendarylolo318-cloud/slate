@@ -180,6 +180,8 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
+            let Some(job) = this.begin_bulk() else { return };
+            let stop = || job.cancelled();
             if let Ok(mut s) = STATE.lock() {
                 *s = None;
             }
@@ -191,11 +193,12 @@ impl Backend {
                 Plan::New(name, ids) => {
                     let name: String = name.chars().take(100).collect();
                     this.ui(|w| w.set_notice("Creating the playlist…".into()));
-                    match lib_cmds::create_playlist_with_tracks(
+                    match lib_cmds::create_playlist_with_tracks_until(
                         &state,
                         name.clone(),
                         "UNLISTED",
                         &ids,
+                        &stop,
                     )
                     .await
                     {
@@ -205,12 +208,18 @@ impl Backend {
                 }
                 Plan::Add(uuid, ids) => {
                     this.ui(|w| w.set_notice("Adding tracks…".into()));
-                    match lib_cmds::add_tracks_paced(&state, &uuid, &ids).await {
+                    match lib_cmds::add_tracks_paced_until(&state, &uuid, &ids, &stop).await {
                         Ok(n) => format!("Added {n} tracks"),
                         Err(e) => format!("Could not add the tracks: {}", e.log_safe()),
                     }
                 }
             };
+            let msg = if job.cancelled() {
+                format!("Stopped. {msg}")
+            } else {
+                msg
+            };
+            drop(job);
             this.load_library();
             this.notify(&msg);
         });

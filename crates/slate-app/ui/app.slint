@@ -252,6 +252,9 @@ export component AppWindow inherits Window {
     in property <int> repeat;
     in property <string> error;
     in property <string> notice;
+    /// A paced playlist edit is running: the notice bar shows Cancel.
+    in property <bool> bulk-running;
+    callback cancel-bulk();
     in property <string> update-notice;
     callback next();
     callback previous();
@@ -387,7 +390,13 @@ export component AppWindow inherits Window {
                     if root.notice != "": Rectangle {
                         height: 28px;
                         background: Theme.accent;
-                        Text { text: root.notice; color: Theme.on-accent; overflow: elide; horizontal-alignment: center; vertical-alignment: center; }
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 8px;
+                            spacing: 12px;
+                            Text { horizontal-stretch: 1; text: root.notice; color: Theme.on-accent; overflow: elide; horizontal-alignment: center; vertical-alignment: center; }
+                            if root.bulk-running: Button { label: "Cancel"; height: 22px; y: (parent.height - self.height) / 2; clicked => { root.cancel-bulk(); } }
+                        }
                     }
                     if root.error != "": Rectangle {
                         height: 32px;

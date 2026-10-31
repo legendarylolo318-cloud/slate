@@ -377,19 +377,25 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
+            let Some(job) = this.begin_bulk() else { return };
             this.ui(|w| w.set_notice("Saving the playlist…".into()));
             let title: String = name.chars().take(100).collect();
-            let msg = match lib_cmds::create_playlist_with_tracks(
+            let msg = match lib_cmds::create_playlist_with_tracks_until(
                 &state,
                 title.clone(),
                 "UNLISTED",
                 &ids,
+                &|| job.cancelled(),
             )
             .await
             {
+                Ok((_, n)) if job.cancelled() => {
+                    format!("Stopped: saved “{title}” with {n} tracks")
+                }
                 Ok((_, n)) => format!("Saved “{title}” as a TIDAL playlist with {n} tracks"),
                 Err(e) => format!("Could not save the playlist: {}", e.log_safe()),
             };
+            drop(job);
             this.load_library();
             this.notify(&msg);
         });

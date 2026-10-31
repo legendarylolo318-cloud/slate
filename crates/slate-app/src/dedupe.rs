@@ -10,9 +10,10 @@ use slate_core::tidal_api::TidalTrack;
 
 use crate::backend::Backend;
 use crate::library::SourceKind;
-use crate::models::PAGE_SIZE;
 
 const PAGE_PAUSE: Duration = Duration::from_millis(300);
+/// Tracks per request while scanning (TIDAL's maximum for playlist items).
+const SCAN_PAGE: u32 = 100;
 /// Longest preview list; the rest is summarised.
 const PREVIEW_ROWS: usize = 60;
 
@@ -78,20 +79,34 @@ impl Backend {
         if details["creator"]["id"].as_u64() != Some(user) {
             return Err("You can only remove duplicates from playlists you own.".into());
         }
-        let total = details["numberOfTracks"].as_u64().unwrap_or(0) as usize;
-        let kind = SourceKind::Playlist(uuid.to_string());
-        let mut tracks: Vec<TidalTrack> = Vec::with_capacity(total);
-        for page in 0..total.div_ceil(PAGE_SIZE) {
+        // Fresh from TIDAL in the playlist's own order, whatever the page is sorted by: the
+        // indices found here are what the removal sends.
+        let mut client = state.tidal_client.lock().await;
+        let mut tracks: Vec<TidalTrack> = Vec::new();
+        let mut total = details["numberOfTracks"].as_u64().unwrap_or(0) as usize;
+        for page in 0.. {
             if self.lib.generation_now() != generation {
                 return Err("Scan cancelled: the page changed.".into());
             }
             if page > 0 {
                 tokio::time::sleep(PAGE_PAUSE).await;
             }
-            let (items, _) = self.fetch_page_for_export(&kind, page).await?;
-            tracks.extend(items);
+            let offset = u32::try_from(tracks.len()).unwrap_or(u32::MAX);
+            let got = client
+                .get_playlist_tracks_page(uuid, offset, SCAN_PAGE, Some("INDEX"), Some("ASC"))
+                .await
+                .map_err(|e| format!("Could not read the playlist: {}", e.log_safe()))?;
+            total = got.total_number_of_items as usize;
+            let fetched = got.items.len();
+            tracks.extend(got.items);
             let text = format!("Looking for duplicates… {} of {total} tracks", tracks.len());
             self.ui(move |w| w.set_notice(text.into()));
+            if fetched == 0 || tracks.len() >= total {
+                break;
+            }
+        }
+        if tracks.len() != total {
+            return Err("The playlist changed while it was read. Try again.".into());
         }
         if self.lib.generation_now() != generation {
             return Err("Scan cancelled: the page changed.".into());
@@ -125,10 +140,16 @@ impl Backend {
         if planned != uuid {
             return;
         }
+        let Some(job) = self.begin_bulk() else {
+            return;
+        };
         let order = removal_order(&dups);
         let total = order.len();
         let mut removed = 0usize;
         for (n, index) in order.into_iter().enumerate() {
+            if !job.step(n).await {
+                break;
+            }
             self.ui({
                 let text = format!("Removing duplicates… {n} of {total}");
                 move |w| w.set_notice(text.into())
@@ -149,6 +170,14 @@ impl Backend {
                 }
             }
         }
+        if job.cancelled() {
+            drop(job);
+            self.ui(|w| w.set_notice("".into()));
+            self.notify(&format!("Stopped: removed {removed} of {total} duplicates"));
+            self.navigate_refresh(crate::pages::Route::Playlist(uuid.to_string()));
+            return;
+        }
+        drop(job);
         self.ui(|w| w.set_notice("".into()));
         self.notify(&format!("Removed {removed} duplicates"));
         self.navigate_refresh(crate::pages::Route::Playlist(uuid.to_string()));

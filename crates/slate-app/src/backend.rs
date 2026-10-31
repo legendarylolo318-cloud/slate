@@ -471,6 +471,7 @@ impl Backend {
     }
 
     pub fn logout(&self) {
+        self.cancel_bulk();
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
