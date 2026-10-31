@@ -538,6 +538,11 @@ impl Controller {
             .play_next_in_queue(track, source.as_ref());
     }
 
+    /// Inserts into the "next up" list at `index`.
+    pub async fn insert_in_queue(&self, index: usize, track: Track) {
+        self.queue.lock().await.insert_manual(index, track, None);
+    }
+
     pub async fn remove_from_queue(&self, index: usize) {
         self.queue.lock().await.remove_at(index);
     }

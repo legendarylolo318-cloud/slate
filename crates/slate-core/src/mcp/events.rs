@@ -19,6 +19,7 @@ pub const EV_PLAYLIST_DELETED: &str = "mcp:playlist-deleted";
 pub const EV_PLAYLIST_TRACKS_CHANGED: &str = "mcp:playlist-tracks-changed";
 pub const EV_MOVE_QUEUE_ITEM: &str = "mcp:move-queue-item";
 pub const EV_FAVORITE_CHANGED: &str = "mcp:favorite-changed";
+pub const EV_PARTY_DECIDE: &str = "mcp:party-decide";
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -91,4 +92,11 @@ pub struct FavoriteChangedPayload {
     pub id: u64,
     /// "add" | "remove"
     pub action: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PartyDecidePayload {
+    pub request_id: u64,
+    pub approve: bool,
 }

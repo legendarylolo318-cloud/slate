@@ -72,6 +72,23 @@ pub struct UiPrefs {
     /// Self-hosted `iroh-relay` for listening parties (empty = the default relays).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub party_relay: String,
+    /// Your name as a party guest (empty = "Guest").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub party_name: String,
+    /// Host: "approval" (default), "auto" or "off" (`party::requests::RequestMode`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub party_mode: String,
+    /// Host: where approved requests go: "next", "end" or "fair" (default).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub party_placement: String,
+    /// Host: requests one guest may have waiting (0 = the default, 3).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub party_cap: usize,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub party_no_explicit: bool,
+    /// Host: share of guests that makes a vote skip pass (0 = vote skip off).
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub party_vote: u8,
     /// Quality chip per page type (loved / playlist / album / mix): 1 Lossless, 2 Hi-Res, 3 Atmos.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub quality_filters: std::collections::BTreeMap<String, i32>,
@@ -104,9 +121,23 @@ impl Default for UiPrefs {
             quality_filters: Default::default(),
             suggest_index: 2,
             party_relay: String::new(),
+            party_name: String::new(),
+            party_mode: String::new(),
+            party_placement: String::new(),
+            party_cap: 0,
+            party_no_explicit: false,
+            party_vote: 0,
             sorts: Default::default(),
         }
     }
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+fn is_zero_u8(n: &u8) -> bool {
+    *n == 0
 }
 
 fn path() -> Option<PathBuf> {

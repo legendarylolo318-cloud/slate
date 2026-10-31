@@ -6,7 +6,11 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+/// 1 = Slate 1.2, 2 = Slate 1.3 (requests, co-host, vote skip). A peer on another version is
+/// refused with a message saying which side should update; it never crashes either side.
+pub const PROTOCOL_VERSION: u32 = 2;
+/// Requests shown to co-hosts in one message (keeps it under [`MAX_MESSAGE_BYTES`]).
+pub const MAX_REQUEST_VIEWS: usize = 12;
 /// Largest message accepted from a peer, in bytes.
 pub const MAX_MESSAGE_BYTES: usize = 4096;
 pub const MAX_GUESTS: usize = 10;
@@ -32,6 +36,11 @@ pub enum HostMsg {
         guests: Vec<String>,
         state: PlayState,
         allow_suggest: bool,
+        /// The name the host gave this guest (names are made unique).
+        #[serde(default)]
+        you: String,
+        #[serde(default)]
+        vote_skip: bool,
     },
     /// A track started (or the first state for a late joiner).
     Track {
@@ -49,9 +58,32 @@ pub enum HostMsg {
     /// The next few track ids, for prefetch.
     Queue {
         next: Vec<u64>,
+        /// Who asked for each of `next` ("" for the host's own tracks).
+        #[serde(default)]
+        by: Vec<String>,
     },
     Guests {
         guests: Vec<String>,
+        #[serde(default)]
+        cohosts: Vec<String>,
+    },
+    /// The answer to a request.
+    RequestResult {
+        track_id: u64,
+        ok: bool,
+        reason: String,
+    },
+    /// Co-hosts only: the requests waiting for a decision.
+    Requests {
+        pending: Vec<ReqView>,
+        total: u32,
+    },
+    /// Sent to a guest when they are made (or stop being) co-host.
+    Role {
+        cohost: bool,
+    },
+    Notice {
+        text: String,
     },
     Pong {
         token: u64,
@@ -67,6 +99,20 @@ pub enum HostMsg {
     Rejected {
         reason: String,
     },
+    /// A message from a newer Slate this one does not know; ignored.
+    #[serde(other)]
+    Unknown,
+}
+
+/// A waiting request as shown to the host's helpers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReqView {
+    pub id: u64,
+    pub guest: String,
+    pub title: String,
+    pub artist: String,
+    pub quality: String,
+    pub unavailable: u32,
 }
 
 /// What a guest tells the host.
@@ -84,7 +130,30 @@ pub enum GuestMsg {
     Suggest {
         track_id: u64,
     },
+    /// This guest cannot play the track (region or plan).
+    Unavailable {
+        track_id: u64,
+    },
+    VoteSkip,
+    /// Co-host only.
+    Decide {
+        request_id: u64,
+        approve: bool,
+    },
+    /// Co-host only.
+    DecideAll {
+        approve: bool,
+    },
+    /// Co-host only.
+    Skip,
+    /// Co-host only: move upcoming entry `from` to `to`.
+    Move {
+        from: u32,
+        to: u32,
+    },
     Leave,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -127,13 +196,40 @@ pub fn clean_name(raw: &str) -> String {
     }
 }
 
+/// What a host tells a guest whose Slate speaks protocol version `theirs`.
+pub fn version_gap(theirs: u32) -> String {
+    if theirs < PROTOCOL_VERSION {
+        "This party's host is on a newer version of Slate. Update Slate to join.".into()
+    } else {
+        "This party's host is on an older version of Slate. Ask them to update.".into()
+    }
+}
+
+/// What a guest says about a host that speaks protocol version `theirs`.
+pub fn host_version_gap(theirs: u32) -> String {
+    if theirs > PROTOCOL_VERSION {
+        "The host is on a newer version of Slate. Update Slate to join.".into()
+    } else {
+        "The host is on an older version of Slate. Ask them to update.".into()
+    }
+}
+
+/// Clips text for the wire, on a character boundary.
+pub fn clip(s: &str, max_chars: usize) -> String {
+    s.chars()
+        .filter(|c| !c.is_control())
+        .take(max_chars)
+        .collect()
+}
+
 /// Validates a guest message beyond its shape.
 pub fn validate_guest(m: &GuestMsg) -> Result<(), String> {
     match m {
-        GuestMsg::Hello { v, .. } if *v != PROTOCOL_VERSION => Err(format!(
-            "protocol version {v} is not supported (need {PROTOCOL_VERSION})"
-        )),
-        GuestMsg::Suggest { track_id } if *track_id == 0 => Err("bad track id".into()),
+        GuestMsg::Hello { v, .. } if *v != PROTOCOL_VERSION => Err(version_gap(*v)),
+        GuestMsg::Suggest { track_id } | GuestMsg::Unavailable { track_id } if *track_id == 0 => {
+            Err("bad track id".into())
+        }
+        GuestMsg::Move { from, to } if *from > 64 || *to > 64 => Err("bad position".into()),
         _ => Ok(()),
     }
 }
@@ -141,11 +237,16 @@ pub fn validate_guest(m: &GuestMsg) -> Result<(), String> {
 /// Validates a host message beyond its shape.
 pub fn validate_host(m: &HostMsg) -> Result<(), String> {
     match m {
-        HostMsg::Welcome { v, .. } if *v != PROTOCOL_VERSION => Err(format!(
-            "the host speaks protocol version {v}; this Slate speaks {PROTOCOL_VERSION}"
-        )),
-        HostMsg::Queue { next } if next.len() > PREFETCH_TRACKS * 2 => Err("queue too long".into()),
-        HostMsg::Welcome { guests, .. } | HostMsg::Guests { guests }
+        HostMsg::Welcome { v, .. } if *v != PROTOCOL_VERSION => Err(host_version_gap(*v)),
+        HostMsg::Queue { next, by }
+            if next.len() > PREFETCH_TRACKS * 2 || by.len() > next.len() =>
+        {
+            Err("queue too long".into())
+        }
+        HostMsg::Requests { pending, .. } if pending.len() > MAX_REQUEST_VIEWS => {
+            Err("too many requests".into())
+        }
+        HostMsg::Welcome { guests, .. } | HostMsg::Guests { guests, .. }
             if guests.len() > MAX_GUESTS + 1 =>
         {
             Err("too many guests".into())
@@ -233,6 +334,7 @@ pub fn ticket_link(ticket: &str) -> String {
 pub struct Guest {
     pub id: u64,
     pub name: String,
+    pub cohost: bool,
 }
 
 #[derive(Debug, Default)]
@@ -251,6 +353,7 @@ impl Roster {
         self.guests.push(Guest {
             id: self.next_id,
             name: unique_name(&self.guests, &clean_name(name)),
+            cohost: false,
         });
         Ok(self.next_id)
     }
@@ -259,6 +362,34 @@ impl Roster {
         let n = self.guests.len();
         self.guests.retain(|g| g.id != id);
         self.guests.len() != n
+    }
+
+    pub fn set_cohost(&mut self, id: u64, on: bool) -> bool {
+        self.guests
+            .iter_mut()
+            .find(|g| g.id == id)
+            .map(|g| g.cohost = on)
+            .is_some()
+    }
+
+    pub fn is_cohost(&self, id: u64) -> bool {
+        self.guests.iter().any(|g| g.id == id && g.cohost)
+    }
+
+    pub fn cohosts(&self) -> Vec<String> {
+        self.guests
+            .iter()
+            .filter(|g| g.cohost)
+            .map(|g| g.name.clone())
+            .collect()
+    }
+
+    /// (id, name, cohost) in join order, for choosing a successor.
+    pub fn successor_input(&self) -> Vec<(u64, String, bool)> {
+        self.guests
+            .iter()
+            .map(|g| (g.id, g.name.clone(), g.cohost))
+            .collect()
     }
 
     pub fn names(&self) -> Vec<String> {
@@ -338,11 +469,12 @@ mod tests {
     #[test]
     fn oversized_and_malformed_input_is_refused() {
         assert!(decode::<GuestMsg>(&vec![b' '; MAX_MESSAGE_BYTES + 1]).is_err());
-        assert!(decode::<GuestMsg>(b"{\"t\":\"nope\"}").is_err());
+        assert!(decode::<GuestMsg>(b"{\"nope\":1}").is_err());
         assert!(decode::<GuestMsg>(b"garbage").is_err());
         assert!(decode::<HostMsg>(b"").is_err());
         let big = HostMsg::Queue {
             next: vec![1; 3000],
+            by: vec![],
         };
         assert!(encode(&big).is_err());
     }
@@ -356,20 +488,30 @@ mod tests {
         })
         .is_err());
         assert!(validate_guest(&GuestMsg::Hello {
-            v: 1,
+            v: PROTOCOL_VERSION,
             name: "x".into(),
             secret: String::new()
         })
         .is_ok());
         assert!(validate_guest(&GuestMsg::Suggest { track_id: 0 }).is_err());
-        assert!(validate_host(&HostMsg::Queue { next: vec![1; 11] }).is_err());
-        assert!(validate_host(&HostMsg::Queue { next: vec![1; 5] }).is_ok());
+        assert!(validate_host(&HostMsg::Queue {
+            next: vec![1; 11],
+            by: vec![]
+        })
+        .is_err());
+        assert!(validate_host(&HostMsg::Queue {
+            next: vec![1; 5],
+            by: vec![]
+        })
+        .is_ok());
         let w = HostMsg::Welcome {
-            v: 2,
+            v: PROTOCOL_VERSION + 1,
             host: "h".into(),
             guests: vec![],
             state: PlayState::default(),
             allow_suggest: false,
+            you: String::new(),
+            vote_skip: false,
         };
         assert!(validate_host(&w).is_err());
     }
@@ -476,5 +618,87 @@ mod tests {
     fn prefetch_is_capped_at_five() {
         assert_eq!(prefetch_list(&[1, 2, 3]), vec![1, 2, 3]);
         assert_eq!(prefetch_list(&[1, 2, 3, 4, 5, 6, 7]).len(), PREFETCH_TRACKS);
+    }
+
+    #[test]
+    fn a_1_2_guest_is_told_the_host_is_newer_and_a_newer_host_is_told_the_reverse() {
+        // Slate 1.2 spoke protocol 1.
+        let old_guest = GuestMsg::Hello {
+            v: 1,
+            name: "x".into(),
+            secret: String::new(),
+        };
+        let e = validate_guest(&old_guest).unwrap_err();
+        assert!(e.contains("host is on a newer version"), "{e}");
+        let new_guest = GuestMsg::Hello {
+            v: PROTOCOL_VERSION + 1,
+            name: "x".into(),
+            secret: String::new(),
+        };
+        assert!(validate_guest(&new_guest)
+            .unwrap_err()
+            .contains("older version"));
+        assert!(host_version_gap(PROTOCOL_VERSION + 1).contains("newer version"));
+        assert!(host_version_gap(1).contains("older version"));
+    }
+
+    #[test]
+    fn a_1_2_welcome_still_parses_and_unknown_messages_are_ignored_not_fatal() {
+        // A 1.2 host's Welcome has none of the 1.3 fields.
+        let old = br#"{"t":"welcome","v":1,"host":"h","guests":[],"state":{"track":null,"position_ms":0,"playing":false,"at_ms":0},"allow_suggest":true}"#;
+        let m: HostMsg = decode(old).expect("parse");
+        assert!(matches!(m, HostMsg::Welcome { v: 1, .. }));
+        assert!(validate_host(&m).unwrap_err().contains("older version"));
+        // A future message type decodes to Unknown instead of failing the connection.
+        assert_eq!(
+            decode::<HostMsg>(br#"{"t":"hologram","x":1}"#),
+            Ok(HostMsg::Unknown)
+        );
+        assert_eq!(
+            decode::<GuestMsg>(br#"{"t":"hologram"}"#),
+            Ok(GuestMsg::Unknown)
+        );
+        // And a 1.2 Queue (no `by`) parses.
+        assert!(matches!(
+            decode::<HostMsg>(br#"{"t":"queue","next":[1,2]}"#),
+            Ok(HostMsg::Queue { .. })
+        ));
+    }
+
+    #[test]
+    fn request_lists_fit_in_one_message() {
+        let view = ReqView {
+            id: u64::MAX,
+            guest: "g".repeat(MAX_NAME_CHARS),
+            title: clip(&"t".repeat(99), 48),
+            artist: clip(&"a".repeat(99), 32),
+            quality: "HI_RES_LOSSLESS".into(),
+            unavailable: 10,
+        };
+        let m = HostMsg::Requests {
+            pending: vec![view; MAX_REQUEST_VIEWS],
+            total: 30,
+        };
+        assert!(encode(&m).is_ok());
+        assert!(validate_host(&HostMsg::Requests {
+            pending: vec![],
+            total: 0
+        })
+        .is_ok());
+    }
+
+    #[test]
+    fn cohosts_are_tracked_in_the_roster() {
+        let mut r = Roster::default();
+        let a = r.join("A").expect("room");
+        let b = r.join("B").expect("room");
+        assert!(r.set_cohost(b, true));
+        assert!(!r.set_cohost(99, true));
+        assert!(r.is_cohost(b) && !r.is_cohost(a));
+        assert_eq!(r.cohosts(), vec!["B"]);
+        assert_eq!(
+            super::super::requests::successor(&r.successor_input()),
+            Some(b)
+        );
     }
 }

@@ -98,3 +98,26 @@ export struct KeyValue {
     key: string,
     value: string,
 }
+
+/// A guest's request waiting for the host (Settings → Party).
+export struct PartyRequest {
+    id: string,
+    guest: string,
+    track: string,
+    quality: string,
+    /// Guests who cannot play it.
+    unavailable: int,
+}
+
+export struct PartyGuest {
+    name: string,
+    cohost: bool,
+}
+
+/// What the track lists need to know about a party.
+export global PartyState {
+    /// "", "host" or "guest".
+    in-out property <string> role;
+    /// A guest may send the host a track.
+    in-out property <bool> can-suggest;
+}

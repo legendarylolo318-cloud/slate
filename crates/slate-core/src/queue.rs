@@ -467,6 +467,14 @@ impl Queue {
         self.manual.insert(0, Self::tagged(track, source).stamped());
     }
 
+    /// Insert into the manual queue at `index` (clamped to its end): where a party request
+    /// lands.
+    pub fn insert_manual(&mut self, index: usize, track: Track, source: Option<&Source>) {
+        let at = index.min(self.manual.len());
+        self.manual
+            .insert(at, Self::tagged(track, source).stamped());
+    }
+
     fn tagged(mut track: Track, source: Option<&Source>) -> Track {
         if let Some(s) = source {
             if let Ok(v) = serde_json::to_value(s.tag()) {
@@ -950,6 +958,16 @@ mod tests {
             q.manual.iter().map(|t| t.id).collect(),
             q.queue.iter().map(|t| t.id).collect(),
         )
+    }
+
+    #[test]
+    fn a_party_request_can_be_inserted_anywhere_in_next_up() {
+        let mut q = Queue::new();
+        q.manual = vec![Track::new(1), Track::new(2)];
+        q.insert_manual(0, Track::new(7), None);
+        q.insert_manual(2, Track::new(8), None);
+        q.insert_manual(99, Track::new(9), None);
+        assert_eq!(split_ids(&q).0, vec![7, 1, 8, 2, 9]);
     }
 
     #[test]

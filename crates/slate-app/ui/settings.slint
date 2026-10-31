@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { Toggle, Button, Segmented, TextField, ColorPicker } from "widgets.slint";
-import { PresetTile, ShortcutRow, RoleRow } from "types.slint";
+import { PresetTile, ShortcutRow, RoleRow, PartyRequest, PartyGuest } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
 /// Everything the settings page shows. Rust fills it from the core and handles
@@ -108,12 +108,26 @@ export global SettingsState {
     in-out property <string> party-role;
     in-out property <string> party-link;
     in-out property <image> party-qr;
-    in-out property <[string]> party-guests;
-    in-out property <[string]> party-suggestions;
+    in-out property <[PartyGuest]> party-guests;
+    in-out property <[PartyRequest]> party-requests;
+    // Guests: the next tracks, with who asked for each.
+    in-out property <[string]> party-upcoming;
     in-out property <string> party-status;
     in-out property <string> party-ticket;
     in-out property <string> party-relay;
-    in-out property <bool> party-allow-suggest: true;
+    in-out property <string> party-name;
+    // Host: what happens to a request (Approval / Auto-approve / Off), where an approved one
+    // goes (Play next / Add to end / Fair queue), the per-guest cap and the vote-skip share.
+    in-out property <int> party-mode: 0;
+    in-out property <int> party-placement: 2;
+    in-out property <int> party-cap-index: 2;
+    in-out property <bool> party-no-explicit;
+    in-out property <int> party-vote-index: 0;
+    // Guest: the host allows vote skip / this guest is a co-host.
+    in-out property <bool> party-vote-available;
+    in-out property <bool> party-cohost;
+    // The host went away and this guest may take the party over.
+    in-out property <bool> party-offer;
     // Shortcuts
     in-out property <[ShortcutRow]> shortcut-rows;
     in-out property <string> capturing;
@@ -721,16 +735,62 @@ export component SettingsPage inherits Rectangle {
                         }
                     }
                     if SettingsState.party-status != "": Text { text: SettingsState.party-status; color: Theme.text-muted; wrap: word-wrap; font-size: 12px; }
-                    if SettingsState.party-role == "": Row {
-                        label: "Let guests suggest tracks";
-                        hint: "Suggestions wait here for you to approve or deny.";
-                        Toggle { checked: SettingsState.party-allow-suggest; toggled(v) => { SettingsState.party-allow-suggest = v; } }
+                    if SettingsState.party-offer: Row {
+                        label: "The host left";
+                        hint: "You are next in line. Take over to keep the party going; you get a new invite link to share.";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { label: "Take over"; primary: true; clicked => { SettingsState.action("party-takeover"); } }
+                            Button { label: "Not now"; clicked => { SettingsState.action("party-decline"); } }
+                        }
+                    }
+                    if SettingsState.party-role != "guest": Row {
+                        label: "Guest requests";
+                        hint: "What happens when a guest sends you a track: wait for your approval, add it straight away, or don't take requests.";
+                        Segmented {
+                            options: ["Approval required", "Auto-approve", "Requests off"];
+                            index: SettingsState.party-mode;
+                            picked(i) => { SettingsState.party-mode = i; SettingsState.changed-int("party-mode", i); }
+                        }
+                    }
+                    if SettingsState.party-role != "guest": Row {
+                        label: "Approved requests go";
+                        hint: "Fair queue takes turns between guests so nobody floods the queue. Remembered for next time.";
+                        Segmented {
+                            options: ["Play next", "Add to end", "Fair queue"];
+                            index: SettingsState.party-placement;
+                            picked(i) => { SettingsState.party-placement = i; SettingsState.changed-int("party-placement", i); }
+                        }
+                    }
+                    if SettingsState.party-role != "guest": Row {
+                        label: "Requests waiting per guest";
+                        hint: "The most requests one guest can have waiting at once.";
+                        Segmented {
+                            options: ["1", "2", "3", "5", "10"];
+                            index: SettingsState.party-cap-index;
+                            picked(i) => { SettingsState.party-cap-index = i; SettingsState.changed-int("party-cap", i); }
+                        }
+                    }
+                    if SettingsState.party-role != "guest": Row {
+                        label: "No explicit tracks";
+                        hint: "Turn down requests for tracks marked explicit.";
+                        Toggle { checked: SettingsState.party-no-explicit; toggled(v) => { SettingsState.party-no-explicit = v; SettingsState.changed-bool("party-no-explicit", v); } }
+                    }
+                    if SettingsState.party-role != "guest": Row {
+                        label: "Vote to skip";
+                        hint: "Guests can vote to skip the current track. It passes when this share of the guests agree.";
+                        Segmented {
+                            options: ["Off", "25%", "50%", "75%"];
+                            index: SettingsState.party-vote-index;
+                            picked(i) => { SettingsState.party-vote-index = i; SettingsState.changed-int("party-vote", i); }
+                        }
                     }
                     if SettingsState.party-role == "": Row {
                         label: "Join a party";
                         hint: "Paste a slate://party/… link (opening one also fills this in).";
                         HorizontalLayout {
                             spacing: 8px;
+                            TextField { text <=> SettingsState.party-name; placeholder: "Your name"; field-width: 120px; edited(t) => { SettingsState.changed-str("party-name", t); } }
                             TextField { text <=> SettingsState.party-ticket; placeholder: "slate://party/…"; field-width: 220px; }
                             Button { label: "Join"; primary: true; clicked => { SettingsState.action("party-join"); } }
                         }
@@ -749,23 +809,48 @@ export component SettingsPage inherits Rectangle {
                             Button { label: "Copy link"; clicked => { SettingsState.action("party-copy"); } }
                         }
                     }
+                    if SettingsState.party-role == "guest" && SettingsState.party-vote-available: Row {
+                        label: "Skip this track";
+                        hint: "Counts as your vote; the host's setting decides how many are needed.";
+                        Button { label: "Vote to skip"; clicked => { SettingsState.action("party-vote"); } }
+                    }
                     if SettingsState.party-role != "": Text { text: "In the party"; color: Theme.text; font-weight: 700; }
                     for g in SettingsState.party-guests: Rectangle {
                         height: 34px;
                         HorizontalLayout {
                             spacing: 8px;
-                            Text { text: g; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
-                            if SettingsState.party-role == "host": Button { label: "Remove"; clicked => { SettingsState.action("party-kick:" + g); } }
+                            Text { text: g.cohost ? g.name + "  ·  co-host" : g.name; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
+                            if SettingsState.party-role == "host": Button { label: g.cohost ? "Remove co-host" : "Make co-host"; clicked => { SettingsState.action((g.cohost ? "party-uncohost:" : "party-cohost:") + g.name); } }
+                            if SettingsState.party-role == "host": Button { label: "Remove"; clicked => { SettingsState.action("party-kick:" + g.name); } }
                         }
                     }
-                    for s[i] in SettingsState.party-suggestions: Rectangle {
-                        height: 38px;
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Text { text: s; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                            Button { label: "Approve"; primary: true; clicked => { SettingsState.action("party-approve:" + i); } }
-                            Button { label: "Deny"; clicked => { SettingsState.action("party-deny:" + i); } }
+                    if SettingsState.party-role == "host" || SettingsState.party-cohost: HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: "Requests (" + SettingsState.party-requests.length + ")"; color: Theme.text; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                        if SettingsState.party-requests.length > 1: Button { label: "Approve all"; primary: true; clicked => { SettingsState.action("party-approve-all"); } }
+                        if SettingsState.party-requests.length > 1: Button { label: "Deny all"; clicked => { SettingsState.action("party-deny-all"); } }
+                    }
+                    if (SettingsState.party-role == "host" || SettingsState.party-cohost) && SettingsState.party-requests.length == 0: Text { text: "No requests waiting."; color: Theme.text-muted; font-size: 12px; }
+                    if SettingsState.party-role == "host" || SettingsState.party-cohost: VerticalLayout {
+                        for r in SettingsState.party-requests: Rectangle {
+                            height: 52px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    Text { text: r.track; color: Theme.text; overflow: elide; }
+                                    Text { text: r.guest + (r.quality != "" ? "  ·  " + r.quality : "") + (r.unavailable > 0 ? "  ·  unavailable for " + r.unavailable + (r.unavailable == 1 ? " guest" : " guests") : ""); color: r.unavailable > 0 ? Theme.danger : Theme.text-muted; font-size: 12px; overflow: elide; }
+                                }
+                                Button { label: "Approve"; primary: true; clicked => { SettingsState.action("party-approve:" + r.id); } }
+                                Button { label: "Deny"; clicked => { SettingsState.action("party-deny:" + r.id); } }
+                            }
                         }
+                    }
+                    if SettingsState.party-role == "guest": Text { text: "Up next"; color: Theme.text; font-weight: 700; }
+                    if SettingsState.party-role == "guest" && SettingsState.party-upcoming.length == 0: Text { text: "Nothing queued yet."; color: Theme.text-muted; font-size: 12px; }
+                    if SettingsState.party-role == "guest": VerticalLayout {
+                        for u in SettingsState.party-upcoming: Text { text: u; color: Theme.text-muted; overflow: elide; height: 24px; vertical-alignment: center; }
                     }
                 }
 

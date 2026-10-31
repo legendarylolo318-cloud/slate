@@ -17,7 +17,7 @@ impl Backend {
         self.ui(|w| w.global::<SettingsState>().set_party_status(OFF.into()));
     }
 
-    pub fn party_start(&self, _allow_suggest: bool) {
+    pub fn party_start(&self) {
         self.party_off();
     }
 
@@ -29,7 +29,25 @@ impl Backend {
 
     pub fn party_kick(&self, _name: &str) {}
 
-    pub fn party_decide(&self, _index: usize, _approve: bool) {}
+    pub fn party_cohost(&self, _name: &str, _on: bool) {}
+
+    pub fn party_decide_id(&self, _id: &str, _approve: bool) {}
+
+    pub fn party_decide_all(&self, _approve: bool) {}
+
+    pub(crate) fn party_mcp_decide(&self, _request_id: u64, _approve: bool) {}
+
+    pub fn party_takeover(&self) {}
+
+    pub fn party_decline(&self) {}
+
+    pub fn party_suggest(&self, _track_id: u64) {}
+
+    pub fn party_vote(&self) {}
+
+    pub fn party_pref_int(&self, _key: &str, _value: i32) {}
+
+    pub fn party_pref_bool(&self, _key: &str, _on: bool) {}
 
     pub(crate) fn party_track_changed(&self, _id: u64) {}
 

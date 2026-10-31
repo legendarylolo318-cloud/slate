@@ -16,7 +16,10 @@ use crate::commands::library as lib_cmds;
 use crate::error::SlateError;
 use crate::mcp::activity::Undo;
 use crate::mcp::duration::{self, Item};
-use crate::mcp::events::{PlayTracksPayload, EV_MOVE_QUEUE_ITEM, EV_PLAY_SOURCE, EV_PLAY_TRACKS};
+use crate::mcp::events::{
+    PartyDecidePayload, PlayTracksPayload, EV_MOVE_QUEUE_ITEM, EV_PARTY_DECIDE, EV_PLAY_SOURCE,
+    EV_PLAY_TRACKS,
+};
 use crate::mcp::query::{self, Hit, Kind};
 use crate::mcp::sanitizer::SanitizedTrack;
 use crate::mcp::server::SlateMcpServer;
@@ -279,6 +282,17 @@ impl SlateMcpServer {
                 ),
                 None => "reorder a playlist".into(),
             },
+            "deny_request" => {
+                let id = Self::arg_u64(req, "request_id").unwrap_or(0);
+                match party_request(&state.mcp_state.read().await.party, id) {
+                    Some(r) => format!(
+                        "turn down {}’s request for “{}”",
+                        r["guest"].as_str().unwrap_or("a guest"),
+                        r["title"].as_str().unwrap_or("a track")
+                    ),
+                    None => "turn down a guest's request".into(),
+                }
+            }
             other => format!("run {other}"),
         }
     }
@@ -377,6 +391,8 @@ impl SlateMcpServer {
         let summary = match tool {
             "add_to_queue" | "play_next" => format!("{tool}: {} tracks", ids("track_ids").len()),
             "add_to_playlist" => format!("Added {} tracks to a playlist", ids("track_ids").len()),
+            "approve_request" => "Approved a guest's track request".to_string(),
+            "deny_request" => "Denied a guest's track request".to_string(),
             _ => format!(
                 "{tool} {}",
                 args.map(|m| Value::Object(m.clone()).to_string())
@@ -459,9 +475,16 @@ impl SlateMcpServer {
                     let id = a("id").and_then(Value::as_u64).unwrap_or(0);
                     Some(Undo::SetFavorite { kind, id, on: !on })
                 }
-                ("delete_playlist", _) => {
+                ("delete_playlist" | "deny_request", _) => {
                     not_undoable = true;
                     None
+                }
+                ("approve_request", _) => {
+                    payload.get("track_id").and_then(Value::as_u64).map(|id| {
+                        Undo::RemoveFromQueue {
+                            track_ids: vec![id],
+                        }
+                    })
                 }
                 _ => None,
             }
@@ -602,6 +625,26 @@ pub struct SearchArgs {
     pub query: String,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct RequestArgs {
+    /// The request's id from `get_party_requests`.
+    pub request_id: u64,
+    /// Must be true to deny (destructive).
+    #[allow(dead_code)]
+    pub confirm: Option<bool>,
+}
+
+/// The waiting request `request_id` in the mirrored party state.
+fn party_request(party: &Option<Value>, request_id: u64) -> Option<Value> {
+    party
+        .as_ref()?
+        .get("requests")?
+        .as_array()?
+        .iter()
+        .find(|r| r.get("request_id").and_then(Value::as_u64) == Some(request_id))
+        .cloned()
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -1291,6 +1334,70 @@ impl SlateMcpServer {
         ok(s.party
             .clone()
             .unwrap_or_else(|| json!({ "active": false })))
+    }
+
+    #[rmcp::tool(
+        name = "get_party_requests",
+        description = "Tracks guests have asked to add to the listening party, waiting for the host: request_id, guest, track, quality and how many guests cannot play it. Empty when no party is hosted. Read-only. Example: {}."
+    )]
+    async fn get_party_requests(
+        &self,
+        Parameters(_): Parameters<NoArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let state = self.app_handle.state::<AppState>();
+        let s = state.mcp_state.read().await;
+        let requests = s
+            .party
+            .as_ref()
+            .and_then(|p| p.get("requests").cloned())
+            .unwrap_or_else(|| json!([]));
+        ok(json!({ "requests": requests }))
+    }
+
+    #[rmcp::tool(
+        name = "approve_request",
+        description = "Approve a guest's track request: it is placed in the queue the way the host chose (play next, add to end or fair queue). Undo removes the track again. Params: request_id (from get_party_requests). Example: {\"request_id\":3}."
+    )]
+    async fn approve_request(
+        &self,
+        Parameters(a): Parameters<RequestArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let state = self.app_handle.state::<AppState>();
+        let req = party_request(&state.mcp_state.read().await.party, a.request_id)
+            .ok_or_else(|| bad("No waiting request with that id. Call get_party_requests."))?;
+        self.app_handle
+            .emit(
+                EV_PARTY_DECIDE,
+                PartyDecidePayload {
+                    request_id: a.request_id,
+                    approve: true,
+                },
+            )
+            .map_err(|e| ErrorData::internal_error(format!("emit failed: {e}"), None))?;
+        ok(json!({ "status": "approved", "track_id": req.get("track_id") }))
+    }
+
+    #[rmcp::tool(
+        name = "deny_request",
+        description = "Turn down a guest's track request (the guest is told). Destructive: needs confirm=true and may ask the user in the app. Params: request_id, confirm. Example: {\"request_id\":3,\"confirm\":true}."
+    )]
+    async fn deny_request(
+        &self,
+        Parameters(a): Parameters<RequestArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let state = self.app_handle.state::<AppState>();
+        party_request(&state.mcp_state.read().await.party, a.request_id)
+            .ok_or_else(|| bad("No waiting request with that id. Call get_party_requests."))?;
+        self.app_handle
+            .emit(
+                EV_PARTY_DECIDE,
+                PartyDecidePayload {
+                    request_id: a.request_id,
+                    approve: false,
+                },
+            )
+            .map_err(|e| ErrorData::internal_error(format!("emit failed: {e}"), None))?;
+        ok(json!({ "status": "denied" }))
     }
 
     #[rmcp::tool(

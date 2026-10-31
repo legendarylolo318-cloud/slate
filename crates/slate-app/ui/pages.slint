@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { CardItem, CardRow, QueueRow, LyricLine } from "types.slint";
+import { CardItem, CardRow, QueueRow, LyricLine, PartyState } from "types.slint";
 import { IconButton, Button, Segmented } from "widgets.slint";
 import { ListView } from "std-widgets.slint";
 import { Dnd } from "dnd.slint";
@@ -13,6 +13,7 @@ component Card inherits Rectangle {
     in property <CardItem> item;
     callback open();
     callback play();
+    callback suggest();
     width: Dim.card-w;
     height: Dim.card-h;
     border-radius: 8px;
@@ -46,6 +47,18 @@ component Card inherits Rectangle {
                 visible: ta.has-hover;
                 Text { text: "▶"; color: Theme.on-accent; horizontal-alignment: center; vertical-alignment: center; }
                 pt := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.play(); } }
+            }
+            // In a party, a search result can be sent to the host instead of played.
+            if root.item.kind == "track" && PartyState.can-suggest: Rectangle {
+                x: parent.width - 40px;
+                y: 8px;
+                width: 32px;
+                height: 32px;
+                border-radius: 16px;
+                background: st.has-hover ? Theme.accent.brighter(0.2) : Theme.accent;
+                visible: ta.has-hover || st.has-hover;
+                Text { text: "＋"; color: Theme.on-accent; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+                st := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.suggest(); } }
             }
         }
         Text { text: root.item.title; color: Theme.text; font-weight: 600; overflow: elide; horizontal-alignment: root.item.kind == "artist" ? TextHorizontalAlignment.center : TextHorizontalAlignment.left; }
@@ -159,6 +172,7 @@ export component CardsPage inherits Rectangle {
                     item: c;
                     open => { root.open(c.kind, c.id); }
                     play => { root.play(c.kind, c.id); }
+                    suggest => { root.play("suggest", c.id); }
                 }
             }
             if row.kind == 3: Rectangle {
@@ -168,6 +182,7 @@ export component CardsPage inherits Rectangle {
                     item: c;
                     open => { root.open(c.kind, c.id); }
                     play => { root.play(c.kind, c.id); }
+                    suggest => { root.play("suggest", c.id); }
                 }
             }
         }

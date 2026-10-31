@@ -21,7 +21,7 @@ impl Backend {
         let Some(ctl) = self.controller() else { return };
         if crate::party_ui::hosting() {
             let ids: Vec<u64> = ctl
-                .with_queue(|q| q.upcoming().take(8).map(|t| t.id).collect())
+                .with_queue(|q| q.upcoming().take(300).map(|t| t.id).collect())
                 .await;
             self.party_queue_changed(&ids);
         }
@@ -241,6 +241,7 @@ impl Backend {
                 "artist" => this.go_artist(&track),
                 "copy-link" => this.copy_link(&track).await,
                 "credits" => this.show_credits(&track),
+                "suggest" => this.party_suggest(track.id),
                 "versions" => this.show_track_versions(track, index, None),
                 _ => {}
             }

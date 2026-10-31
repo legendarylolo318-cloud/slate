@@ -595,6 +595,13 @@ impl Backend {
 
     /// A card's hover play button was clicked: play the whole thing.
     pub fn play_card(&self, kind: &str, id: &str) {
+        // The ＋ on a search result while in a party sends the track to the host.
+        if kind == "suggest" {
+            if let Ok(id) = id.parse() {
+                self.party_suggest(id);
+            }
+            return;
+        }
         let (kind, id) = (kind.to_string(), id.to_string());
         let this = self.clone();
         self.rt.spawn(async move {

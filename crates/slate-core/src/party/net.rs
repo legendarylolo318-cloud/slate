@@ -16,8 +16,12 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::proto::{
-    self, GuestMsg, HostMsg, PingSample, PlayState, RateLimit, Roster, MAX_MESSAGE_BYTES,
-    PROTOCOL_VERSION,
+    self, GuestMsg, HostMsg, PingSample, PlayState, RateLimit, ReqView, Roster, MAX_MESSAGE_BYTES,
+    MAX_REQUEST_VIEWS, PROTOCOL_VERSION,
+};
+use super::requests::{
+    Policy, Reject, Request, RequestBook, RequestMode, RequestTrack, Submitted, Vote, VoteSkip,
+    RECENT_HISTORY,
 };
 
 const ALPN: &[u8] = b"slate/party/1";
@@ -32,12 +36,32 @@ pub enum Event {
     /// Host side.
     GuestJoined(String),
     GuestLeft(String),
+    /// A guest asked for a track; the app looks it up and calls [`Host::submit`].
     Suggestion {
+        guest_id: u64,
         guest: String,
         track_id: u64,
     },
-    /// The connection ended (guest side) or the party closed (host side).
+    /// The waiting requests changed (host side).
+    RequestsChanged,
+    /// A co-host decided a request (host side); the app calls [`Host::decide`].
+    CohostDecide {
+        request_id: Option<u64>,
+        approve: bool,
+        by: String,
+    },
+    CohostSkip(String),
+    CohostMove {
+        from: u32,
+        to: u32,
+        by: String,
+    },
+    /// Enough guests voted to skip (host side).
+    VoteSkipPassed,
+    /// The connection ended on purpose (guest side: ended, kicked, left) or the party closed.
     Closed(String),
+    /// Guest side: the connection dropped without a goodbye; the host may come back.
+    Lost(String),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -121,6 +145,21 @@ struct HostState {
     roster: Roster,
     limit: RateLimit,
     kicks: HashMap<u64, CancellationToken>,
+    book: RequestBook,
+    vote: VoteSkip,
+    /// Every upcoming track id (capped) and who asked for the first few.
+    upcoming: Vec<u64>,
+    by: Vec<String>,
+    /// Recently played ids, oldest first.
+    recent: Vec<u64>,
+}
+
+/// Who a broadcast is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Audience {
+    All,
+    Guest(u64),
+    Cohosts,
 }
 
 struct HostInner {
@@ -128,8 +167,7 @@ struct HostInner {
     secret: Mutex<String>,
     started: Instant,
     host_name: String,
-    allow_suggest: bool,
-    tx: broadcast::Sender<HostMsg>,
+    tx: broadcast::Sender<(Audience, HostMsg)>,
     state: Mutex<HostState>,
     events: mpsc::UnboundedSender<Event>,
 }
@@ -137,6 +175,42 @@ struct HostInner {
 impl HostInner {
     fn now_ms(&self) -> u64 {
         self.started.elapsed().as_millis() as u64
+    }
+
+    fn send(&self, to: Audience, m: HostMsg) {
+        let _ = self.tx.send((to, m));
+    }
+
+    /// The waiting requests, for co-hosts and the host's own tray.
+    fn views(&self, s: &HostState) -> (Vec<ReqView>, u32) {
+        let all = s.book.pending();
+        let v = all
+            .iter()
+            .take(MAX_REQUEST_VIEWS)
+            .map(|r| ReqView {
+                id: r.id,
+                guest: r.guest.clone(),
+                title: proto::clip(&r.track.title, 48),
+                artist: proto::clip(&r.track.artist, 32),
+                quality: proto::clip(&r.track.quality, 16),
+                unavailable: s.book.unavailable_for(r.track.id) as u32,
+            })
+            .collect();
+        (v, all.len() as u32)
+    }
+
+    fn push_requests(&self) {
+        let (pending, total) = self.views(&self.lock());
+        self.send(Audience::Cohosts, HostMsg::Requests { pending, total });
+        let _ = self.events.send(Event::RequestsChanged);
+    }
+
+    fn push_guests(&self) {
+        let (guests, cohosts) = {
+            let s = self.lock();
+            (s.roster.names(), s.roster.cohosts())
+        };
+        self.send(Audience::All, HostMsg::Guests { guests, cohosts });
     }
 
     fn secret(&self) -> std::sync::MutexGuard<'_, String> {
@@ -171,7 +245,8 @@ impl Host {
     pub async fn start(
         relay: Option<&str>,
         host_name: &str,
-        allow_suggest: bool,
+        policy: Policy,
+        vote_percent: Option<u8>,
         events: mpsc::UnboundedSender<Event>,
     ) -> Result<Self, String> {
         let endpoint = bind(relay, true).await?;
@@ -189,7 +264,6 @@ impl Host {
             secret: Mutex::new(secret),
             started: Instant::now(),
             host_name: proto::clean_name(host_name),
-            allow_suggest,
             tx,
             state: Mutex::new(HostState {
                 play: PlayState::default(),
@@ -197,6 +271,11 @@ impl Host {
                 roster: Roster::default(),
                 limit: RateLimit::default(),
                 kicks: HashMap::new(),
+                book: RequestBook::new(policy),
+                vote: VoteSkip::new(vote_percent),
+                upcoming: Vec::new(),
+                by: Vec::new(),
+                recent: Vec::new(),
             }),
             events,
         });
@@ -231,18 +310,30 @@ impl Host {
     /// A track started (or restarted).
     pub fn track_changed(&self, id: u64, position_ms: u64, playing: bool) {
         let at_ms = self.inner.now_ms();
-        self.inner.lock().play = PlayState {
-            track: Some(id),
-            position_ms,
-            playing,
-            at_ms,
-        };
-        let _ = self.inner.tx.send(HostMsg::Track {
-            id,
-            position_ms,
-            playing,
-            at_ms,
-        });
+        {
+            let mut s = self.inner.lock();
+            if let Some(prev) = s.play.track.filter(|p| *p != id) {
+                s.recent.push(prev);
+                let extra = s.recent.len().saturating_sub(RECENT_HISTORY);
+                s.recent.drain(..extra);
+            }
+            s.vote.reset();
+            s.play = PlayState {
+                track: Some(id),
+                position_ms,
+                playing,
+                at_ms,
+            };
+        }
+        self.inner.send(
+            Audience::All,
+            HostMsg::Track {
+                id,
+                position_ms,
+                playing,
+                at_ms,
+            },
+        );
     }
 
     /// Pause, resume or seek.
@@ -254,18 +345,194 @@ impl Host {
             s.play.playing = playing;
             s.play.at_ms = at_ms;
         }
-        let _ = self.inner.tx.send(HostMsg::State {
-            position_ms,
-            playing,
-            at_ms,
-        });
+        self.inner.send(
+            Audience::All,
+            HostMsg::State {
+                position_ms,
+                playing,
+                at_ms,
+            },
+        );
     }
 
-    /// The upcoming queue changed; the next few ids go to the guests.
-    pub fn queue_changed(&self, upcoming: &[u64]) {
+    /// The upcoming queue changed; the next few ids go to the guests. `by[i]` names who asked
+    /// for `upcoming[i]` (empty for the host's own tracks).
+    pub fn queue_changed(&self, upcoming: &[u64], by: &[String]) {
         let next = proto::prefetch_list(upcoming);
-        self.inner.lock().queue = next.clone();
-        let _ = self.inner.tx.send(HostMsg::Queue { next });
+        let by: Vec<String> = by
+            .iter()
+            .take(next.len())
+            .map(|n| proto::clip(n, proto::MAX_NAME_CHARS))
+            .collect();
+        {
+            let mut s = self.inner.lock();
+            s.queue = next.clone();
+            s.by = by.clone();
+            s.upcoming = upcoming.iter().copied().take(1000).collect();
+        }
+        self.inner.send(Audience::All, HostMsg::Queue { next, by });
+    }
+
+    pub fn set_policy(&self, policy: Policy) {
+        self.inner.lock().book.policy = policy;
+    }
+
+    pub fn set_vote_percent(&self, percent: Option<u8>) {
+        self.inner.lock().vote.percent = percent;
+    }
+
+    /// A guest's request, looked up by the app. Tells the guest what happened. `Approved`
+    /// (auto mode) means the app should place it now.
+    pub fn submit(&self, guest_id: u64, track: RequestTrack) -> Result<Submitted, Reject> {
+        let track_id = track.id;
+        let (result, guest_known) = {
+            let mut s = self.inner.lock();
+            let known = s
+                .roster
+                .guests()
+                .iter()
+                .find(|g| g.id == guest_id)
+                .map(|g| g.name.clone());
+            let Some(name) = known else {
+                return Err(Reject::Off);
+            };
+            let (upcoming, recent) = (s.upcoming.clone(), s.recent.clone());
+            let view = super::requests::QueueView {
+                upcoming: &upcoming,
+                recent: &recent,
+            };
+            (s.book.submit(guest_id, &name, track, view), true)
+        };
+        let _ = guest_known;
+        let (ok, reason) = match &result {
+            Ok(Submitted::Pending(_)) => (true, "Sent to the host.".to_string()),
+            Ok(Submitted::Approved(_)) => (true, "Added to the queue.".to_string()),
+            Err(r) => (false, r.message()),
+        };
+        self.inner.send(
+            Audience::Guest(guest_id),
+            HostMsg::RequestResult {
+                track_id,
+                ok,
+                reason,
+            },
+        );
+        if matches!(result, Ok(Submitted::Pending(_))) {
+            self.inner.push_requests();
+        }
+        result
+    }
+
+    /// Approve or deny one request. On approve the caller places the returned request.
+    pub fn decide(&self, request_id: u64, approve: bool) -> Option<Request> {
+        let r = self.inner.lock().book.take(request_id)?;
+        self.tell_decision(&r, approve);
+        self.inner.push_requests();
+        Some(r)
+    }
+
+    pub fn decide_all(&self, approve: bool) -> Vec<Request> {
+        let all = self.inner.lock().book.take_all();
+        for r in &all {
+            self.tell_decision(r, approve);
+        }
+        self.inner.push_requests();
+        all
+    }
+
+    fn tell_decision(&self, r: &Request, approve: bool) {
+        let reason = if approve {
+            "The host approved your request."
+        } else {
+            "The host passed on your request."
+        };
+        self.inner.send(
+            Audience::Guest(r.guest_id),
+            HostMsg::RequestResult {
+                track_id: r.track.id,
+                ok: approve,
+                reason: reason.into(),
+            },
+        );
+    }
+
+    /// Tells a guest their request could not be looked up or placed.
+    pub fn reject(&self, guest_id: u64, track_id: u64, reason: &str) {
+        self.inner.send(
+            Audience::Guest(guest_id),
+            HostMsg::RequestResult {
+                track_id,
+                ok: false,
+                reason: proto::clip(reason, 120),
+            },
+        );
+    }
+
+    /// Waiting requests with how many guests cannot play each.
+    pub fn pending(&self) -> Vec<(Request, usize)> {
+        let s = self.inner.lock();
+        s.book
+            .pending()
+            .iter()
+            .map(|r| (r.clone(), s.book.unavailable_for(r.track.id)))
+            .collect()
+    }
+
+    /// How many guests said they cannot play `track_id`.
+    pub fn unavailable_for(&self, track_id: u64) -> usize {
+        self.inner.lock().book.unavailable_for(track_id)
+    }
+
+    /// Guests and whether each is a co-host, in join order.
+    pub fn guests_detail(&self) -> Vec<(String, bool)> {
+        self.inner
+            .lock()
+            .roster
+            .guests()
+            .iter()
+            .map(|g| (g.name.clone(), g.cohost))
+            .collect()
+    }
+
+    /// Promotes or demotes a guest by name.
+    pub fn set_cohost(&self, name: &str, on: bool) -> bool {
+        let id = {
+            let mut s = self.inner.lock();
+            let id = s
+                .roster
+                .guests()
+                .iter()
+                .find(|g| g.name == name)
+                .map(|g| g.id);
+            match id {
+                Some(id) if s.roster.set_cohost(id, on) => id,
+                _ => return false,
+            }
+        };
+        self.inner
+            .send(Audience::Guest(id), HostMsg::Role { cohost: on });
+        self.inner.push_guests();
+        if on {
+            self.inner.push_requests();
+        }
+        true
+    }
+
+    pub fn notice(&self, text: &str) {
+        self.inner.send(
+            Audience::All,
+            HostMsg::Notice {
+                text: proto::clip(text, 120),
+            },
+        );
+    }
+
+    /// The guest who should be offered the party if this host vanishes (for tests and the UI).
+    pub fn successor(&self) -> Option<String> {
+        let s = self.inner.lock();
+        let input = s.roster.successor_input();
+        super::requests::successor(&input)
+            .and_then(|id| input.into_iter().find(|g| g.0 == id).map(|g| g.1))
     }
 
     pub fn kick(&self, name: &str) -> bool {
@@ -292,7 +559,7 @@ impl Host {
 
     /// Ends the party: guests are told, the ticket dies with the endpoint.
     pub async fn end(self) {
-        let _ = self.inner.tx.send(HostMsg::Ended);
+        self.inner.send(Audience::All, HostMsg::Ended);
         tokio::time::sleep(Duration::from_millis(250)).await;
         self.cancel.cancel();
         self.endpoint.close().await;
@@ -311,7 +578,7 @@ async fn heartbeat_loop(inner: Arc<HostInner>, cancel: CancellationToken) {
                     (s.play.clone(), !s.roster.is_empty())
                 };
                 if has_guests && p.track.is_some() {
-                    let _ = inner.tx.send(HostMsg::Heartbeat { position_ms: p.position_ms, playing: p.playing, at_ms: p.at_ms });
+                    inner.send(Audience::All, HostMsg::Heartbeat { position_ms: p.position_ms, playing: p.playing, at_ms: p.at_ms });
                 }
             }
         }
@@ -354,11 +621,7 @@ async fn serve_guest(
         reason: reason.to_string(),
     };
     if v != PROTOCOL_VERSION {
-        let _ = write_frame(
-            &mut send,
-            &proto::encode(&reject("Different Slate versions: update both."))?,
-        )
-        .await;
+        let _ = write_frame(&mut send, &proto::encode(&reject(&proto::version_gap(v)))?).await;
         linger(&mut send, &conn).await;
         return Err("version mismatch".into());
     }
@@ -372,7 +635,17 @@ async fn serve_guest(
         linger(&mut send, &conn).await;
         return Err("bad ticket".into());
     }
-    let joined: Result<(u64, String, HostMsg, CancellationToken), String> = {
+    let joined: Result<
+        (
+            u64,
+            String,
+            HostMsg,
+            CancellationToken,
+            Vec<u64>,
+            Vec<String>,
+        ),
+        String,
+    > = {
         let mut s = inner.lock();
         match s.roster.join(&name) {
             Err(reason) => Err(reason),
@@ -391,13 +664,15 @@ async fn serve_guest(
                     host: inner.host_name.clone(),
                     guests: s.roster.names(),
                     state: s.play.clone(),
-                    allow_suggest: inner.allow_suggest,
+                    allow_suggest: s.book.policy.mode != RequestMode::Off,
+                    you: name.clone(),
+                    vote_skip: s.vote.percent.is_some(),
                 };
-                Ok((id, name, welcome, kick))
+                Ok((id, name, welcome, kick, s.queue.clone(), s.by.clone()))
             }
         }
     };
-    let (id, name, welcome, kick) = match joined {
+    let (id, name, welcome, kick, queued, queued_by) = match joined {
         Ok(j) => j,
         Err(reason) => {
             let _ = write_frame(&mut send, &proto::encode(&reject(&reason))?).await;
@@ -406,14 +681,17 @@ async fn serve_guest(
         }
     };
     write_frame(&mut send, &proto::encode(&welcome)?).await?;
-    let queued = inner.lock().queue.clone();
+    // A late joiner gets the current track and position (in the welcome) and the prefetch
+    // list straight away.
     if !queued.is_empty() {
-        write_frame(&mut send, &proto::encode(&HostMsg::Queue { next: queued })?).await?;
+        let q = HostMsg::Queue {
+            next: queued,
+            by: queued_by,
+        };
+        write_frame(&mut send, &proto::encode(&q)?).await?;
     }
     let _ = inner.events.send(Event::GuestJoined(name.clone()));
-    let _ = inner.tx.send(HostMsg::Guests {
-        guests: inner.lock().roster.names(),
-    });
+    inner.push_guests();
 
     let mut rx = inner.tx.subscribe();
     let result: Result<(), String> = async {
@@ -426,7 +704,16 @@ async fn serve_guest(
                     return Ok(());
                 }
                 msg = rx.recv() => match msg {
-                    Ok(m) => write_frame(&mut send, &proto::encode(&m)?).await?,
+                    Ok((to, m)) => {
+                        let mine = match to {
+                            Audience::All => true,
+                            Audience::Guest(g) => g == id,
+                            Audience::Cohosts => inner.lock().roster.is_cohost(id),
+                        };
+                        if mine {
+                            write_frame(&mut send, &proto::encode(&m)?).await?;
+                        }
+                    }
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => return Ok(()),
                 },
@@ -439,11 +726,55 @@ async fn serve_guest(
                             write_frame(&mut send, &proto::encode(&pong)?).await?;
                         }
                         GuestMsg::Suggest { track_id } => {
-                            let ok = inner.allow_suggest && inner.lock().limit.allow(id, inner.now_ms());
+                            let (on, ok) = {
+                                let mut s = inner.lock();
+                                let on = s.book.policy.mode != RequestMode::Off;
+                                let now = inner.now_ms();
+                                (on, on && s.limit.allow(id, now))
+                            };
                             if ok {
-                                let _ = inner.events.send(Event::Suggestion { guest: name.clone(), track_id });
+                                let _ = inner.events.send(Event::Suggestion { guest_id: id, guest: name.clone(), track_id });
+                            } else {
+                                let reason = if on { "Slow down: too many requests." } else { &Reject::Off.message() };
+                                inner.send(Audience::Guest(id), HostMsg::RequestResult { track_id, ok: false, reason: reason.to_string() });
                             }
                         }
+                        GuestMsg::Unavailable { track_id } => {
+                            inner.lock().book.mark_unavailable(track_id, id);
+                            inner.push_requests();
+                        }
+                        GuestMsg::VoteSkip => {
+                            let outcome = {
+                                let mut s = inner.lock();
+                                let n = s.roster.len();
+                                s.vote.vote(id, n)
+                            };
+                            match outcome {
+                                Some(Vote::Passed) => {
+                                    inner.send(Audience::All, HostMsg::Notice { text: "Vote passed: skipping.".into() });
+                                    let _ = inner.events.send(Event::VoteSkipPassed);
+                                }
+                                Some(Vote::Waiting { have, need }) => inner.send(
+                                    Audience::All,
+                                    HostMsg::Notice { text: format!("{name} voted to skip ({have} of {need})") },
+                                ),
+                                None => inner.send(Audience::Guest(id), HostMsg::Notice { text: "Vote skip is off.".into() }),
+                            }
+                        }
+                        GuestMsg::Decide { request_id, approve } if inner.lock().roster.is_cohost(id) => {
+                            let _ = inner.events.send(Event::CohostDecide { request_id: Some(request_id), approve, by: name.clone() });
+                        }
+                        GuestMsg::DecideAll { approve } if inner.lock().roster.is_cohost(id) => {
+                            let _ = inner.events.send(Event::CohostDecide { request_id: None, approve, by: name.clone() });
+                        }
+                        GuestMsg::Skip if inner.lock().roster.is_cohost(id) => {
+                            let _ = inner.events.send(Event::CohostSkip(name.clone()));
+                        }
+                        GuestMsg::Move { from, to } if inner.lock().roster.is_cohost(id) => {
+                            let _ = inner.events.send(Event::CohostMove { from, to, by: name.clone() });
+                        }
+                        // Co-host actions from a guest who is not one are ignored.
+                        GuestMsg::Decide { .. } | GuestMsg::DecideAll { .. } | GuestMsg::Skip | GuestMsg::Move { .. } | GuestMsg::Unknown => {}
                         GuestMsg::Leave => return Ok(()),
                         GuestMsg::Hello { .. } => return Err("unexpected hello".into()),
                     }
@@ -457,11 +788,12 @@ async fn serve_guest(
         s.roster.leave(id);
         s.limit.forget(id);
         s.kicks.remove(&id);
+        s.book.forget_guest(id);
+        s.vote.forget(id);
     }
     let _ = inner.events.send(Event::GuestLeft(name));
-    let _ = inner.tx.send(HostMsg::Guests {
-        guests: inner.lock().roster.names(),
-    });
+    inner.push_guests();
+    inner.push_requests();
     conn.close(0u32.into(), b"bye");
     result
 }
@@ -470,6 +802,8 @@ async fn serve_guest(
 
 pub struct Guest {
     endpoint: Endpoint,
+    /// The name the host gave us.
+    pub you: String,
     send: tokio::sync::Mutex<SendStream>,
     started: Instant,
     offset_ms: i64,
@@ -486,9 +820,21 @@ impl Guest {
         relay: Option<&str>,
         events: mpsc::UnboundedSender<Event>,
     ) -> Result<(Self, HostMsg), String> {
+        Self::join_with_protocol(ticket, name, relay, events, PROTOCOL_VERSION).await
+    }
+
+    /// `join` speaking another protocol version (tests: what a Slate 1.2 guest sees).
+    #[doc(hidden)]
+    pub async fn join_with_protocol(
+        ticket: &str,
+        name: &str,
+        relay: Option<&str>,
+        events: mpsc::UnboundedSender<Event>,
+        protocol: u32,
+    ) -> Result<(Self, HostMsg), String> {
         let t = decode_ticket(ticket)?;
         let endpoint = bind(relay, false).await?;
-        let result = Self::handshake(&endpoint, t, name, events).await;
+        let result = Self::handshake(&endpoint, t, name, events, protocol).await;
         if result.is_err() {
             endpoint.close().await;
         }
@@ -500,6 +846,7 @@ impl Guest {
         t: Ticket,
         name: &str,
         events: mpsc::UnboundedSender<Event>,
+        protocol: u32,
     ) -> Result<(Self, HostMsg), String> {
         let conn = tokio::time::timeout(Duration::from_secs(20), endpoint.connect(t.a, ALPN))
             .await
@@ -507,7 +854,7 @@ impl Guest {
             .map_err(|_| "Could not reach the host. Is the party still running?".to_string())?;
         let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
         let hello = GuestMsg::Hello {
-            v: PROTOCOL_VERSION,
+            v: protocol,
             name: proto::clean_name(name),
             secret: t.s,
         };
@@ -520,10 +867,10 @@ impl Guest {
             return Err(reason.clone());
         }
         proto::validate_host(&welcome)?;
-        let HostMsg::Welcome { host, .. } = &welcome else {
+        let HostMsg::Welcome { host, you, .. } = &welcome else {
             return Err("unexpected reply from the host".into());
         };
-        let host_name = host.clone();
+        let (host_name, you) = (host.clone(), you.clone());
 
         // Clock offset: three pings now, then none until the party ends.
         let started = Instant::now();
@@ -565,15 +912,29 @@ impl Guest {
                     .and_then(|b| proto::decode::<HostMsg>(&b))
                     .and_then(|m| proto::validate_host(&m).map(|()| m))
                 {
-                    Ok(HostMsg::Ended) => break "The host ended the party.".to_string(),
-                    Ok(HostMsg::Kicked) => break "You were removed from the party.".to_string(),
+                    Ok(HostMsg::Ended) => {
+                        let _ = events.send(Event::Closed("The host ended the party.".into()));
+                        return;
+                    }
+                    Ok(HostMsg::Kicked) => {
+                        let _ =
+                            events.send(Event::Closed("You were removed from the party.".into()));
+                        return;
+                    }
+                    Ok(HostMsg::Unknown) => {}
                     Ok(m) => {
                         let _ = events.send(Event::Host(m));
                     }
                     Err(_) => break "Lost the connection to the host.".to_string(),
                 }
             };
-            let _ = events.send(Event::Closed(reason));
+            // A deliberate leave is not a loss.
+            let ev = if reader_cancel.is_cancelled() {
+                Event::Closed(reason)
+            } else {
+                Event::Lost(reason)
+            };
+            let _ = events.send(ev);
         });
         let guest = Self {
             endpoint: endpoint.clone(),
@@ -582,6 +943,7 @@ impl Guest {
             offset_ms,
             cancel,
             host_name,
+            you,
         };
         Ok((guest, welcome))
     }
@@ -592,9 +954,43 @@ impl Guest {
         (local + self.offset_ms).max(0) as u64
     }
 
-    pub async fn suggest(&self, track_id: u64) -> Result<(), String> {
-        let bytes = proto::encode(&GuestMsg::Suggest { track_id })?;
+    async fn send_msg(&self, m: &GuestMsg) -> Result<(), String> {
+        let bytes = proto::encode(m)?;
         write_frame(&mut *self.send.lock().await, &bytes).await
+    }
+
+    pub async fn suggest(&self, track_id: u64) -> Result<(), String> {
+        self.send_msg(&GuestMsg::Suggest { track_id }).await
+    }
+
+    /// Tells the host this guest cannot play `track_id` (region or plan).
+    pub async fn unavailable(&self, track_id: u64) -> Result<(), String> {
+        self.send_msg(&GuestMsg::Unavailable { track_id }).await
+    }
+
+    pub async fn vote_skip(&self) -> Result<(), String> {
+        self.send_msg(&GuestMsg::VoteSkip).await
+    }
+
+    /// Co-host actions; the host ignores them from anyone else.
+    pub async fn decide(&self, request_id: u64, approve: bool) -> Result<(), String> {
+        self.send_msg(&GuestMsg::Decide {
+            request_id,
+            approve,
+        })
+        .await
+    }
+
+    pub async fn decide_all(&self, approve: bool) -> Result<(), String> {
+        self.send_msg(&GuestMsg::DecideAll { approve }).await
+    }
+
+    pub async fn skip(&self) -> Result<(), String> {
+        self.send_msg(&GuestMsg::Skip).await
+    }
+
+    pub async fn move_upcoming(&self, from: u32, to: u32) -> Result<(), String> {
+        self.send_msg(&GuestMsg::Move { from, to }).await
     }
 
     /// Tells the host and closes the connection. Takes `&self` so it works while the event

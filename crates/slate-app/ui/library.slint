@@ -1,5 +1,5 @@
 import { Theme, Metrics } from "theme.slint";
-import { TrackRow, PlaylistEntry } from "types.slint";
+import { TrackRow, PlaylistEntry, PartyState } from "types.slint";
 import { ListView } from "std-widgets.slint";
 import { Button, Segmented, QualityBadges, TextField, IconButton } from "widgets.slint";
 import { Dnd } from "dnd.slint";
@@ -344,6 +344,7 @@ component Row inherits Rectangle {
             MenuItem { title: "Go to artist"; activated => { root.action("artist"); } }
             MenuItem { title: "Other versions…"; activated => { root.action("versions"); } }
             MenuItem { title: "Credits"; activated => { root.action("credits"); } }
+            if PartyState.can-suggest: MenuItem { title: "Suggest to party"; activated => { root.action("suggest"); } }
             MenuItem { title: "Copy TIDAL link"; activated => { root.action("copy-link"); } }
         }
     }

@@ -103,6 +103,12 @@ impl Backend {
             }
             slate_core::mcp::runtime::EV_APPROVAL_REQUEST => self.approval_requested(&payload),
             slate_core::mcp::runtime::EV_APPROVAL_CLOSED => self.approval_closed(&payload),
+            ev::EV_PARTY_DECIDE => {
+                if let Some(id) = payload.get("requestId").and_then(Value::as_u64) {
+                    let approve = payload.get("approve").and_then(Value::as_bool) == Some(true);
+                    self.party_mcp_decide(id, approve);
+                }
+            }
             ev::EV_REMOVE_FROM_QUEUE => {
                 let ids = payload
                     .get("trackIds")
@@ -166,24 +172,6 @@ impl Backend {
             if let Some(index) = index {
                 this.queue_remove(index);
             }
-        });
-    }
-
-    /// Adds tracks (by id) to the end of the queue.
-    #[cfg(feature = "party")]
-    pub(crate) fn queue_track_ids(&self, ids: Vec<u64>) {
-        self.mcp_play_tracks(ids, "queue".into());
-    }
-
-    /// Replaces the "next up" list with these tracks (a guest following a party's queue).
-    #[cfg(feature = "party")]
-    pub(crate) fn queue_track_ids_replace(&self, ids: Vec<u64>) {
-        let this = self.clone();
-        self.rt.spawn(async move {
-            if let Some(ctl) = this.controller() {
-                ctl.clear_next_up().await;
-            }
-            this.mcp_play_tracks(ids, "queue".into());
         });
     }
 

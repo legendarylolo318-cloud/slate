@@ -60,6 +60,7 @@ handshake and can push notifications.
 | `get_listening_stats` | read | Top artists and tracks from Slate's local play log (kept only while the MCP server runs). | period (day|week|month|year|all), limit | `{"period":"week"}` |
 | `get_smart_playlists` | read | The user's smart playlists (rule-based, local). | — | `{}` |
 | `get_party_status` | read | Whether a listening party is active: role, guest count and the current track. Read-only. | — | `{}` |
+| `get_party_requests` | read | Tracks guests asked to add to the listening party, waiting for the host: `request_id`, guest, track, quality and how many guests cannot play it. Empty when no party is hosted. | — | `{}` |
 | `search_tracks` | read | Search the Tidal catalog for tracks, albums, artists and playlists. | query, limit (≤50, default 10, per category) | `{"query":"daft punk discovery","limit":5}` |
 | `get_track_radio` | read | Get tracks similar to a given track (Tidal's recommendation engine). | track_id, limit (≤50, default 10) | `{"track_id":123,"limit":10}` |
 | `get_artist_top_tracks` | read | Get an artist's most-popular tracks. | artist_id, limit (≤50, default 10) | `{"artist_id":1566}` |
@@ -99,6 +100,7 @@ handshake and can push notifications.
 | `seek_to` | write | Seek within the current track. | position_seconds | `{"position_seconds":90}` |
 | `set_volume` | write | Set the volume from 0.0 (silent) to 1.0. | level | `{"level":0.4}` |
 | `remove_from_queue` | write | Remove one track from the queue by track id. | track_id | `{"track_id":123}` |
+| `approve_request` | write | Approve a guest's track request; it is placed the way the host chose (play next, add to end or fair queue). Undo removes the track again. | request_id (from `get_party_requests`) | `{"request_id":3}` |
 | `set_repeat` | write | Set the repeat mode. | mode = "off", "all" or "one" | `{"mode":"all"}` |
 | `create_playlist` | write | Create a playlist, optionally with initial tracks. | name, description (optional), track_ids (optional) | `{"name":"Focus","track_ids":[1,2,3]}` |
 | `update_playlist` | write | Rename a playlist or change its description. | playlist_uuid, name (optional), description (optional) | `{"playlist_uuid":"abc","name":"New name"}` |
@@ -111,6 +113,7 @@ handshake and can push notifications.
 | `dedupe_playlist` | destructive | Remove duplicate tracks (same ISRC, else same track) from a playlist, keeping the first. | playlist_uuid|playlist_name, dry_run (true = report only), confirm (must be true to remove) | `{"playlist_name":"Gym","dry_run":true}` |
 | `reorder_playlist` | destructive | Move one track within a playlist. | playlist_uuid|playlist_name, from_index, to_index (0-based), confirm (must be true) | `{"playlist_name":"Gym","from_index":10,"to_index":0,"confirm":true}` |
 | `clear_queue` | destructive | Clear the whole play queue. Destructive: needs confirm=true. | confirm | `{"confirm":true}` |
+| `deny_request` | destructive | Turn down a guest's track request (the guest is told). Asks the user in the app like the other destructive tools; cannot be undone, but the guest can ask again. | request_id, confirm | `{"request_id":3,"confirm":true}` |
 | `delete_playlist` | destructive | Permanently delete a playlist (cannot be undone). Destructive: needs confirm=true and may ask the user in the app. | playlist_uuid, confirm | `{"playlist_uuid":"abc","confirm":true}` |
 | `remove_track_from_playlist` | destructive | Remove the track at a 0-based index from a playlist. Destructive: needs confirm=true. | playlist_uuid, index, confirm | `{"playlist_uuid":"abc","index":3,"confirm":true}` |
 

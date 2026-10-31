@@ -198,6 +198,10 @@ impl Backend {
     }
 
     pub fn setting_bool(&self, key: &str, v: bool) {
+        if key.starts_with("party-") {
+            self.party_pref_bool(key, v);
+            return;
+        }
         let key = key.to_string();
         let this = self.clone();
         self.rt.spawn(async move {
@@ -260,6 +264,10 @@ impl Backend {
     }
 
     pub fn setting_int(&self, key: &str, i: i32) {
+        if key.starts_with("party-") {
+            self.party_pref_int(key, i);
+            return;
+        }
         let key = key.to_string();
         let this = self.clone();
         self.rt.spawn(async move {
@@ -329,6 +337,15 @@ impl Backend {
                 this.discord_template_edited(key.trim_start_matches("discord-"), &v);
                 return;
             }
+            if key == "party-name" {
+                let mut p = UiPrefs::load();
+                p.party_name = slate_core::party::proto::clean_name(&v);
+                if v.trim().is_empty() {
+                    p.party_name.clear();
+                }
+                let _ = p.save();
+                return;
+            }
             if key == "party-relay" {
                 let mut p = UiPrefs::load();
                 p.party_relay = v.trim().to_string();
@@ -360,11 +377,17 @@ impl Backend {
                     this.reset_shortcut(Some(&n["shortcut-reset:".len()..]));
                 }
                 "discord-reset" => this.discord_reset_templates(),
-                "party-start" => {
-                    let allow = this
-                        .read_ui(|w| w.global::<SettingsState>().get_party_allow_suggest())
-                        .await;
-                    this.party_start(allow);
+                "party-start" => this.party_start(),
+                "party-takeover" => this.party_takeover(),
+                "party-decline" => this.party_decline(),
+                "party-vote" => this.party_vote(),
+                "party-approve-all" => this.party_decide_all(true),
+                "party-deny-all" => this.party_decide_all(false),
+                n if n.starts_with("party-cohost:") => {
+                    this.party_cohost(&n["party-cohost:".len()..], true)
+                }
+                n if n.starts_with("party-uncohost:") => {
+                    this.party_cohost(&n["party-uncohost:".len()..], false)
                 }
                 "party-end" => this.party_end(),
                 "party-join" => {
@@ -383,16 +406,10 @@ impl Backend {
                 }
                 n if n.starts_with("party-kick:") => this.party_kick(&n["party-kick:".len()..]),
                 n if n.starts_with("party-approve:") => {
-                    this.party_decide(
-                        n["party-approve:".len()..].parse().unwrap_or(usize::MAX),
-                        true,
-                    );
+                    this.party_decide_id(&n["party-approve:".len()..], true);
                 }
                 n if n.starts_with("party-deny:") => {
-                    this.party_decide(
-                        n["party-deny:".len()..].parse().unwrap_or(usize::MAX),
-                        false,
-                    );
+                    this.party_decide_id(&n["party-deny:".len()..], false);
                 }
                 "agent-refresh" => this.load_settings_ui(),
                 n if n.starts_with("agent-bearer-") => this.agent_bearer_action(n),

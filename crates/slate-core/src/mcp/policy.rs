@@ -24,6 +24,7 @@ pub const TOOLS: &[(&str, Kind)] = &[
     ("get_current_lyric_line", Read),
     ("get_listening_stats", Read),
     ("get_party_status", Read),
+    ("get_party_requests", Read),
     // catalogue
     ("search_tracks", Read),
     ("search_albums", Read),
@@ -70,6 +71,9 @@ pub const TOOLS: &[(&str, Kind)] = &[
     ("move_queue_item", Write),
     ("remove_from_queue", Write),
     ("clear_queue", Destructive),
+    // listening party
+    ("approve_request", Write),
+    ("deny_request", Destructive),
     // library writes
     ("create_playlist", Write),
     ("create_playlist_from_tracks", Write),
@@ -200,6 +204,25 @@ mod tests {
         ] {
             assert_eq!(kind_of(t), Some(Destructive), "{t}");
         }
+    }
+
+    #[test]
+    fn party_requests_follow_the_same_rules() {
+        assert_eq!(kind_of("get_party_requests"), Some(Read));
+        assert_eq!(kind_of("approve_request"), Some(Write));
+        assert_eq!(kind_of("deny_request"), Some(Destructive));
+        let p = Policy::default();
+        assert_eq!(decide(&p, "deny_request", false), Decision::Describe);
+        assert_eq!(decide(&p, "deny_request", true), Decision::AskUser);
+        assert_eq!(decide(&p, "approve_request", false), Decision::Allow);
+        let ro = Policy {
+            read_only: true,
+            ..p
+        };
+        assert!(matches!(
+            decide(&ro, "approve_request", false),
+            Decision::Reject(_)
+        ));
     }
 
     #[test]

@@ -4,16 +4,21 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use slate_core::commands::metadata;
+use slate_core::commands::{metadata, versions};
 use slate_core::party::net::{Event, Guest, Host};
-use slate_core::party::proto::{self, Correction, HostMsg};
+use slate_core::party::proto::{self, Correction, HostMsg, ReqView};
+use slate_core::party::requests::{
+    self, Handoff, Placement, Policy, RequestMode, RequestTrack, Submitted, HANDOFF_GRACE,
+};
 use slate_core::queue::Track;
 use slint::{ComponentHandle, Image, ModelRc, SharedString, VecModel};
 use tokio::sync::mpsc;
 
 use crate::backend::Backend;
-use crate::bootstrap::{AppWindow, SettingsState};
+use crate::bootstrap::{AppWindow, PartyGuest, PartyRequest, PartyState, SettingsState};
+use crate::uiprefs::UiPrefs;
 
 /// One atomic read on the playback paths; true only while hosting.
 static HOSTING: AtomicBool = AtomicBool::new(false);
@@ -24,16 +29,83 @@ enum Role {
 }
 
 static ROLE: Mutex<Option<Role>> = Mutex::new(None);
-/// Suggestions waiting for the host's decision: (guest, track id, title).
-static SUGGESTIONS: Mutex<Vec<(String, u64, String)>> = Mutex::new(Vec::new());
+/// Host: who asked for each track that is in the queue because of a request.
+static OWNERS: Mutex<Vec<(u64, u64, String)>> = Mutex::new(Vec::new());
+/// Host: the tracks behind waiting requests, so approving needs no second lookup.
+static PENDING: Mutex<Vec<Track>> = Mutex::new(Vec::new());
+/// Guest: what we know about the party we are in (also while reconnecting).
+static GUEST: Mutex<Option<GuestCtx>> = Mutex::new(None);
+
+#[derive(Clone, Default)]
+struct GuestCtx {
+    ticket: String,
+    you: String,
+    cohost: bool,
+    requests_on: bool,
+    /// Join order, with co-host flags.
+    guests: Vec<(String, bool)>,
+}
 
 pub fn hosting() -> bool {
     HOSTING.load(Ordering::Relaxed)
 }
 
 fn relay_pref() -> Option<String> {
-    let r = crate::uiprefs::UiPrefs::load().party_relay;
+    let r = UiPrefs::load().party_relay;
     (!r.trim().is_empty()).then_some(r)
+}
+
+/// Pending-request caps offered in Settings → Party.
+const CAPS: [usize; 5] = [1, 2, 3, 5, 10];
+/// Vote-skip shares: Off, 25 %, 50 %, 75 %.
+const VOTES: [u8; 4] = [0, 25, 50, 75];
+
+fn policy_of(p: &UiPrefs) -> Policy {
+    Policy {
+        mode: RequestMode::from_str_or_default(&p.party_mode),
+        cap: if p.party_cap == 0 {
+            requests::DEFAULT_PENDING_CAP
+        } else {
+            p.party_cap
+        },
+        no_explicit: p.party_no_explicit,
+    }
+}
+
+fn vote_of(p: &UiPrefs) -> Option<u8> {
+    (p.party_vote > 0).then_some(p.party_vote)
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn track_label(t: &Track) -> String {
+    format!("{} – {}", t.artist_name(), t.title())
+}
+
+fn request_track(t: &Track) -> RequestTrack {
+    RequestTrack {
+        id: t.id,
+        title: t.title().to_string(),
+        artist: t.artist_name().to_string(),
+        quality: t
+            .extra
+            .get("audioQuality")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        explicit: t.extra.get("explicit").and_then(|v| v.as_bool()) == Some(true),
+    }
+}
+
+fn quality_label(q: &str) -> String {
+    match q {
+        "HI_RES_LOSSLESS" | "HIRES_LOSSLESS" => "Hi-Res".into(),
+        "LOSSLESS" | "HI_RES" => "Lossless".into(),
+        "" => String::new(),
+        other => other.to_lowercase(),
+    }
 }
 
 fn strings(v: Vec<String>) -> ModelRc<SharedString> {
@@ -48,18 +120,36 @@ impl Backend {
         self.ui(move |w| w.global::<SettingsState>().set_party_status(text.into()));
     }
 
-    fn party_show(&self, role: &'static str, link: String, guests: Vec<String>) {
+    fn party_show(&self, role: &'static str, link: String, guests: Vec<(String, bool)>) {
         let qr = if link.is_empty() {
             None
         } else {
             crate::images::qr(&link)
         };
+        let can_suggest = role == "guest" && lock(&GUEST).as_ref().is_some_and(|g| g.requests_on);
+        let cohost = role == "guest" && lock(&GUEST).as_ref().is_some_and(|g| g.cohost);
         self.ui(move |w| {
             let s = w.global::<SettingsState>();
             s.set_party_role(role.into());
             s.set_party_link(link.into());
             s.set_party_qr(qr.map(Image::from_rgba8).unwrap_or_default());
-            s.set_party_guests(strings(guests));
+            s.set_party_cohost(cohost);
+            let rows: Vec<PartyGuest> = guests
+                .into_iter()
+                .map(|(name, cohost)| PartyGuest {
+                    name: name.into(),
+                    cohost,
+                })
+                .collect();
+            s.set_party_guests(ModelRc::new(VecModel::from(rows)));
+            let p = w.global::<PartyState>();
+            p.set_role(role.into());
+            p.set_can_suggest(can_suggest);
+            if role.is_empty() {
+                s.set_party_requests(ModelRc::default());
+                s.set_party_upcoming(ModelRc::default());
+                s.set_party_offer(false);
+            }
         });
     }
 
@@ -68,7 +158,26 @@ impl Backend {
         if !state.mcp_active.load(Ordering::Relaxed) {
             return;
         }
-        let v = serde_json::json!({ "active": active, "role": role, "guest_count": guests });
+        let requests: Vec<serde_json::Value> = with_host(|h| {
+            h.pending()
+                .into_iter()
+                .map(|(r, unavailable)| {
+                    serde_json::json!({
+                        "request_id": r.id,
+                        "guest": r.guest,
+                        "track_id": r.track.id,
+                        "title": r.track.title,
+                        "artist": r.track.artist,
+                        "quality": quality_label(&r.track.quality),
+                        "unavailable_for": unavailable,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+        let v = serde_json::json!({
+            "active": active, "role": role, "guest_count": guests, "requests": requests,
+        });
         self.rt.spawn(async move {
             state.mcp_state.write().await.party = Some(v);
         });
@@ -76,26 +185,27 @@ impl Backend {
 
     // ---- host ----
 
-    pub fn party_start(&self, allow_suggest: bool) {
-        if ROLE.lock().is_ok_and(|r| r.is_some()) {
+    pub fn party_start(&self) {
+        if lock(&ROLE).is_some() {
             self.party_status("A party is already running.");
             return;
         }
         self.party_status("Starting the party…");
+        let prefs = UiPrefs::load();
+        let (policy, vote) = (policy_of(&prefs), vote_of(&prefs));
         let (tx, rx) = mpsc::unbounded_channel();
         let this = self.clone();
         self.rt.spawn(async move {
-            match Host::start(relay_pref().as_deref(), "Host", allow_suggest, tx).await {
+            match Host::start(relay_pref().as_deref(), "Host", policy, vote, tx).await {
                 Ok(host) => {
                     let link = host.link();
-                    if let Ok(mut r) = ROLE.lock() {
-                        *r = Some(Role::Host(host));
-                    }
+                    *lock(&ROLE) = Some(Role::Host(host));
                     HOSTING.store(true, Ordering::Relaxed);
                     this.party_show("host", link, Vec::new());
                     this.party_status("Party started. Share the link or QR code.");
                     this.party_mirror(true, "host", 0);
                     this.host_sync_now();
+                    this.party_publish_queue_soon();
                     this.pump_host_events(rx);
                 }
                 Err(e) => this.party_status(e),
@@ -110,132 +220,282 @@ impl Backend {
                 match e {
                     Event::GuestJoined(n) => this.party_status(format!("{n} joined")),
                     Event::GuestLeft(n) => this.party_status(format!("{n} left")),
-                    Event::Suggestion { guest, track_id } => {
-                        this.host_got_suggestion(guest, track_id)
+                    Event::Suggestion {
+                        guest_id,
+                        guest,
+                        track_id,
+                    } => this.host_got_request(guest_id, guest, track_id),
+                    Event::CohostDecide {
+                        request_id,
+                        approve,
+                        ..
+                    } => match request_id {
+                        Some(id) => this.host_decide(id, approve),
+                        None => this.party_decide_all(approve),
+                    },
+                    Event::CohostSkip(_) | Event::VoteSkipPassed => this.next(),
+                    Event::CohostMove { from, to, .. } => {
+                        this.queue_move(from as usize, to as usize)
                     }
-                    Event::Closed(_) | Event::Host(_) => {}
+                    Event::RequestsChanged => {}
+                    Event::Closed(_) | Event::Lost(_) | Event::Host(_) => {}
                 }
-                let names = ROLE
-                    .lock()
-                    .ok()
-                    .and_then(|r| match r.as_ref() {
-                        Some(Role::Host(h)) => Some(h.guest_names()),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                let (link, n) = (this.current_party_link(), names.len());
-                this.party_show("host", link, names);
+                let guests = with_host(Host::guests_detail).unwrap_or_default();
+                let (link, n) = (this.current_party_link(), guests.len());
+                this.party_show("host", link, guests);
+                this.show_requests();
                 this.party_mirror(true, "host", n);
             }
         });
     }
 
     fn current_party_link(&self) -> String {
-        ROLE.lock()
-            .ok()
-            .and_then(|r| match r.as_ref() {
-                Some(Role::Host(h)) => Some(h.link()),
-                _ => None,
-            })
-            .unwrap_or_default()
+        with_host(Host::link).unwrap_or_default()
     }
 
-    fn host_got_suggestion(&self, guest: String, track_id: u64) {
+    /// A guest asked for a track: look it up, then let the request book decide.
+    fn host_got_request(&self, guest_id: u64, guest: String, track_id: u64) {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
-            let title = match metadata::get_track(&state, track_id).await {
-                Ok(v) => serde_json::from_value::<Track>(v)
-                    .map(|t| format!("{} – {}", t.artist_name(), t.title()))
-                    .unwrap_or_else(|_| format!("track {track_id}")),
-                Err(_) => return,
+            let track = match metadata::get_track(&state, track_id).await {
+                Ok(v) => serde_json::from_value::<Track>(v).ok(),
+                Err(_) => None,
             };
-            if let Ok(mut s) = SUGGESTIONS.lock() {
-                if s.len() >= proto::MAX_PENDING_SUGGESTIONS {
-                    return;
+            let Some(track) = track.filter(|t| !t.is_video()) else {
+                with_host(|h| h.reject(guest_id, track_id, "That track could not be found."));
+                return;
+            };
+            let rt = request_track(&track);
+            let label = track_label(&track);
+            let result = with_host(|h| h.submit(guest_id, rt));
+            match result {
+                Some(Ok(Submitted::Pending(_))) => {
+                    lock(&PENDING).push(track);
+                    this.notify(&format!("{guest} requested {label}"));
                 }
-                s.push((guest, track_id, title));
+                Some(Ok(Submitted::Approved(req))) => {
+                    this.place_request(req.guest_id, req.guest, track, true);
+                }
+                _ => {}
             }
-            this.show_party_suggestions();
+            this.show_requests();
         });
     }
 
-    fn show_party_suggestions(&self) {
-        let lines: Vec<String> = SUGGESTIONS
-            .lock()
-            .map(|s| {
-                s.iter()
-                    .map(|(g, _, t)| format!("{g} suggests {t}"))
-                    .collect()
-            })
-            .unwrap_or_default();
+    /// The tray under Settings → Party (host, and co-hosts see their own copy).
+    fn show_requests(&self) {
+        let rows: Vec<PartyRequest> = with_host(|h| {
+            h.pending()
+                .into_iter()
+                .map(|(r, unavailable)| PartyRequest {
+                    id: r.id.to_string().into(),
+                    guest: r.guest.into(),
+                    track: format!("{} – {}", r.track.artist, r.track.title).into(),
+                    quality: quality_label(&r.track.quality).into(),
+                    unavailable: unavailable as i32,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
         self.ui(move |w| {
             w.global::<SettingsState>()
-                .set_party_suggestions(strings(lines))
+                .set_party_requests(ModelRc::new(VecModel::from(rows)))
         });
     }
 
-    /// Approve (add to the queue) or deny suggestion `index`.
-    pub fn party_decide(&self, index: usize, approve: bool) {
-        let picked = SUGGESTIONS
-            .lock()
-            .ok()
-            .and_then(|mut s| (index < s.len()).then(|| s.remove(index)));
-        if let Some((_, id, _)) = picked.filter(|_| approve) {
-            self.queue_track_ids(vec![id]);
+    /// Approve or deny the request with this id (the host's tray, a co-host, or an agent).
+    fn host_decide(&self, id: u64, approve: bool) {
+        let Some(req) = with_host(|h| h.decide(id, approve)).flatten() else {
+            return;
+        };
+        let track = {
+            let mut p = lock(&PENDING);
+            p.iter()
+                .position(|t| t.id == req.track.id)
+                .map(|i| p.remove(i))
+        };
+        if let (true, Some(track)) = (approve, track) {
+            self.place_request(req.guest_id, req.guest, track, false);
         }
-        self.show_party_suggestions();
+        self.show_requests();
+    }
+
+    /// Tray buttons (host) and co-host buttons (guest). `id` is the request id.
+    pub fn party_decide_id(&self, id: &str, approve: bool) {
+        let Ok(id) = id.parse::<u64>() else { return };
+        if hosting() {
+            self.host_decide(id, approve);
+        } else if let Some(g) = guest_handle() {
+            self.rt.spawn(async move {
+                let _ = g.decide(id, approve).await;
+            });
+        }
+    }
+
+    pub fn party_decide_all(&self, approve: bool) {
+        if hosting() {
+            let all = with_host(|h| h.decide_all(approve)).unwrap_or_default();
+            for req in all {
+                let track = {
+                    let mut p = lock(&PENDING);
+                    p.iter()
+                        .position(|t| t.id == req.track.id)
+                        .map(|i| p.remove(i))
+                };
+                if let (true, Some(track)) = (approve, track) {
+                    self.place_request(req.guest_id, req.guest, track, false);
+                }
+            }
+            self.show_requests();
+        } else if let Some(g) = guest_handle() {
+            self.rt.spawn(async move {
+                let _ = g.decide_all(approve).await;
+            });
+        }
+    }
+
+    /// An agent's `approve_request` / `deny_request`.
+    pub(crate) fn party_mcp_decide(&self, request_id: u64, approve: bool) {
+        self.host_decide(request_id, approve);
+    }
+
+    /// Puts an approved request in the queue where the host's placement choice says.
+    fn place_request(&self, guest_id: u64, guest: String, track: Track, auto: bool) {
+        let placement = Placement::from_str_or_default(&UiPrefs::load().party_placement);
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let Some(ctl) = this.controller() else { return };
+            let id = track.id;
+            let own = lock(&OWNERS).clone();
+            let owners: Vec<Option<u64>> = ctl
+                .with_queue(|q| {
+                    q.manual
+                        .iter()
+                        .map(|t| own.iter().find(|o| o.0 == t.id).map(|o| o.1))
+                        .collect()
+                })
+                .await;
+            let at = requests::insert_index(placement, &owners, guest_id);
+            lock(&OWNERS).push((id, guest_id, guest.clone()));
+            ctl.insert_in_queue(at, track.clone()).await;
+            this.refresh_queue_info().await;
+            this.save().await;
+            let how = if auto { "Added" } else { "Approved" };
+            this.notify(&format!("{how}: {} (from {guest})", track_label(&track)));
+        });
+    }
+
+    /// The host's request settings changed (Settings → Party).
+    fn host_policy_changed(&self) {
+        let prefs = UiPrefs::load();
+        with_host(|h| {
+            h.set_policy(policy_of(&prefs));
+            h.set_vote_percent(vote_of(&prefs));
+        });
     }
 
     pub fn party_kick(&self, name: &str) {
-        if let Ok(r) = ROLE.lock() {
-            if let Some(Role::Host(h)) = r.as_ref() {
-                h.kick(name);
+        with_host(|h| h.kick(name));
+    }
+
+    pub fn party_cohost(&self, name: &str, on: bool) {
+        with_host(|h| h.set_cohost(name, on));
+        let guests = with_host(Host::guests_detail).unwrap_or_default();
+        self.party_show("host", self.current_party_link(), guests);
+    }
+
+    /// Settings → Party choices that are stored. `value` is the index of the option picked.
+    pub fn party_pref_int(&self, key: &str, value: i32) {
+        let i = usize::try_from(value).unwrap_or(0);
+        let mut p = UiPrefs::load();
+        match key {
+            "party-mode" => {
+                p.party_mode = ["approval", "auto", "off"]
+                    .get(i)
+                    .copied()
+                    .unwrap_or("approval")
+                    .into()
             }
+            "party-placement" => {
+                p.party_placement = ["next", "end", "fair"]
+                    .get(i)
+                    .copied()
+                    .unwrap_or("fair")
+                    .into()
+            }
+            "party-cap" => p.party_cap = CAPS.get(i).copied().unwrap_or(3),
+            "party-vote" => p.party_vote = VOTES.get(i).copied().unwrap_or(0),
+            _ => return,
+        }
+        if let Err(e) = p.save() {
+            self.party_status(format!("Could not save: {e}"));
+        }
+        self.host_policy_changed();
+    }
+
+    pub fn party_pref_bool(&self, key: &str, on: bool) {
+        if key == "party-no-explicit" {
+            let mut p = UiPrefs::load();
+            p.party_no_explicit = on;
+            let _ = p.save();
+            self.host_policy_changed();
         }
     }
 
     // ---- hooks from playback (host) ----
-
-    fn host_do(&self, f: impl FnOnce(&Host)) {
-        if let Ok(r) = ROLE.lock() {
-            if let Some(Role::Host(h)) = r.as_ref() {
-                f(h);
-            }
-        }
-    }
 
     /// The current track and play state, sent to guests (at party start).
     fn host_sync_now(&self) {
         let pos = f32::from_bits(self.shared.position.load(Ordering::Relaxed)).max(0.0);
         let playing = self.shared.playing.load(Ordering::Relaxed);
         if let Some(id) = self.current_track_id() {
-            self.host_do(|h| h.track_changed(id, (pos * 1000.0) as u64, playing));
+            with_host(|h| h.track_changed(id, (pos * 1000.0) as u64, playing));
         }
+    }
+
+    /// Sends the queue to guests (a new party, or after a takeover).
+    fn party_publish_queue_soon(&self) {
+        let this = self.clone();
+        self.rt.spawn(async move { this.publish_queue().await });
     }
 
     pub(crate) fn party_track_changed(&self, id: u64) {
         if hosting() {
-            self.host_do(|h| h.track_changed(id, 0, true));
+            lock(&OWNERS).retain(|o| o.0 != id);
+            with_host(|h| h.track_changed(id, 0, true));
         }
     }
 
     pub(crate) fn party_state_changed(&self, position_secs: f32, playing: bool) {
         if hosting() {
-            self.host_do(|h| h.state_changed((position_secs.max(0.0) * 1000.0) as u64, playing));
+            with_host(|h| h.state_changed((position_secs.max(0.0) * 1000.0) as u64, playing));
         }
     }
 
     pub(crate) fn party_queue_changed(&self, upcoming: &[u64]) {
         if hosting() {
-            self.host_do(|h| h.queue_changed(upcoming));
+            let by: Vec<String> = {
+                let own = lock(&OWNERS);
+                upcoming
+                    .iter()
+                    .take(proto::PREFETCH_TRACKS)
+                    .map(|id| {
+                        own.iter()
+                            .find(|o| o.0 == *id)
+                            .map(|o| o.2.clone())
+                            .unwrap_or_default()
+                    })
+                    .collect()
+            };
+            with_host(|h| h.queue_changed(upcoming, &by));
         }
     }
 
     // ---- guest ----
 
     pub fn party_join(&self, ticket: &str) {
-        if ROLE.lock().is_ok_and(|r| r.is_some()) {
+        if lock(&ROLE).is_some() {
             self.party_status("Leave the current party first.");
             return;
         }
@@ -244,41 +504,74 @@ impl Backend {
             return;
         };
         self.party_status("Joining…");
+        let name = UiPrefs::load().party_name;
+        self.guest_connect(ticket, name);
+    }
+
+    fn guest_connect(&self, ticket: String, name: String) {
         let (tx, rx) = mpsc::unbounded_channel();
         let this = self.clone();
         self.rt.spawn(async move {
-            match Guest::join(&ticket, "Guest", relay_pref().as_deref(), tx).await {
-                Ok((guest, welcome)) => {
-                    let guest = Arc::new(guest);
-                    if let Ok(mut r) = ROLE.lock() {
-                        *r = Some(Role::Guest(Arc::clone(&guest)));
-                    }
-                    let (host, guests) = match &welcome {
-                        HostMsg::Welcome { host, guests, .. } => (host.clone(), guests.clone()),
-                        _ => (String::new(), Vec::new()),
-                    };
-                    this.party_show("guest", String::new(), guests);
-                    this.party_status(format!(
-                        "Joined {host}'s party. Everyone plays from their own account."
-                    ));
-                    this.party_mirror(true, "guest", 0);
-                    if let HostMsg::Welcome { state, .. } = welcome {
-                        if let Some(id) = state.track {
-                            let now = guest.host_now_ms();
-                            let pos = proto::host_position_now(
-                                state.position_ms,
-                                state.playing,
-                                state.at_ms,
-                                now,
-                            );
-                            this.guest_play(id, pos, state.playing);
-                        }
-                    }
-                    this.pump_guest_events(rx, guest);
-                }
+            match Guest::join(&ticket, &name, relay_pref().as_deref(), tx).await {
+                Ok((guest, welcome)) => this.guest_joined(guest, welcome, ticket, name, rx),
                 Err(e) => this.party_status(e),
             }
         });
+    }
+
+    fn guest_joined(
+        &self,
+        guest: Guest,
+        welcome: HostMsg,
+        ticket: String,
+        name: String,
+        rx: mpsc::UnboundedReceiver<Event>,
+    ) {
+        let guest = Arc::new(guest);
+        let HostMsg::Welcome {
+            host,
+            guests,
+            state,
+            allow_suggest,
+            vote_skip,
+            ..
+        } = welcome
+        else {
+            return;
+        };
+        *lock(&GUEST) = Some(GuestCtx {
+            ticket,
+            you: guest.you.clone(),
+            cohost: false,
+            requests_on: allow_suggest,
+            guests: guests.iter().map(|g| (g.clone(), false)).collect(),
+        });
+        let _ = name;
+        *lock(&ROLE) = Some(Role::Guest(Arc::clone(&guest)));
+        self.party_show(
+            "guest",
+            String::new(),
+            guests.iter().map(|g| (g.clone(), false)).collect(),
+        );
+        self.party_status(format!(
+            "Joined {host}'s party. Everyone plays from their own account."
+        ));
+        self.ui(move |w| {
+            w.global::<SettingsState>()
+                .set_party_vote_available(vote_skip)
+        });
+        self.party_mirror(true, "guest", 0);
+        // A late joiner starts with the host's current track and position.
+        if let Some(id) = state.track {
+            let pos = proto::host_position_now(
+                state.position_ms,
+                state.playing,
+                state.at_ms,
+                guest.host_now_ms(),
+            );
+            self.guest_play(id, pos, state.playing);
+        }
+        self.pump_guest_events(rx, guest);
     }
 
     fn pump_guest_events(&self, mut rx: mpsc::UnboundedReceiver<Event>, guest: Arc<Guest>) {
@@ -287,27 +580,129 @@ impl Backend {
             while let Some(e) = rx.recv().await {
                 // After leaving (or once another party took its place) nothing from this
                 // connection is applied any more.
-                let current = ROLE.lock().is_ok_and(
-                    |r| matches!(r.as_ref(), Some(Role::Guest(g)) if Arc::ptr_eq(g, &guest)),
-                );
+                let current = lock(&ROLE)
+                    .as_ref()
+                    .is_some_and(|r| matches!(r, Role::Guest(g) if Arc::ptr_eq(g, &guest)));
                 if !current {
                     return;
                 }
                 match e {
                     Event::Host(m) => this.guest_apply(&guest, m),
                     Event::Closed(reason) => {
-                        if let Ok(mut r) = ROLE.lock() {
-                            *r = None;
-                        }
+                        *lock(&ROLE) = None;
+                        *lock(&GUEST) = None;
                         this.party_show("", String::new(), Vec::new());
                         this.party_status(reason);
                         this.party_mirror(false, "", 0);
+                        return;
+                    }
+                    Event::Lost(reason) => {
+                        *lock(&ROLE) = None;
+                        this.guest_lost(reason);
                         return;
                     }
                     _ => {}
                 }
             }
         });
+    }
+
+    /// The host went quiet: keep the party for a grace period and try to get back in.
+    fn guest_lost(&self, reason: String) {
+        let Some(ctx) = lock(&GUEST).clone() else {
+            return;
+        };
+        self.party_status(format!(
+            "{reason} Trying to reconnect for {} seconds…",
+            HANDOFF_GRACE.as_secs()
+        ));
+        let lost = Instant::now();
+        let this = self.clone();
+        self.rt.spawn(async move {
+            this.guest_grace(ctx, lost).await;
+        });
+    }
+
+    /// Retries every few seconds until the grace period is over, then decides what happens to
+    /// the party (see `requests::handoff_state`).
+    async fn guest_grace(&self, ctx: GuestCtx, lost: Instant) {
+        LOST_SINCE.with_lock(|l| *l = Some(lost));
+        loop {
+            // "Leave" while waiting clears the context.
+            if lock(&GUEST).is_none() {
+                LOST_SINCE.with_lock(|l| *l = None);
+                return;
+            }
+            let order: Vec<(u64, String, bool)> = ctx
+                .guests
+                .iter()
+                .enumerate()
+                .map(|(i, (n, c))| (i as u64, n.clone(), *c))
+                .collect();
+            let me = order
+                .iter()
+                .find(|(_, n, _)| *n == ctx.you)
+                .map_or(u64::MAX, |g| g.0);
+            match requests::handoff_state(
+                Some(lost.elapsed()),
+                HANDOFF_GRACE,
+                me,
+                requests::successor(&order),
+            ) {
+                Handoff::Waiting { .. } => {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    let name = UiPrefs::load().party_name;
+                    let (tx, rx) = mpsc::unbounded_channel();
+                    if let Ok((guest, welcome)) =
+                        Guest::join(&ctx.ticket, &name, relay_pref().as_deref(), tx).await
+                    {
+                        LOST_SINCE.with_lock(|l| *l = None);
+                        self.guest_joined(guest, welcome, ctx.ticket.clone(), name, rx);
+                        return;
+                    }
+                }
+                Handoff::OfferToMe => {
+                    LOST_SINCE.with_lock(|l| *l = None);
+                    self.party_status("The host is gone. You are next in line to host.");
+                    self.ui(|w| w.global::<SettingsState>().set_party_offer(true));
+                    return;
+                }
+                Handoff::OfferToOther => {
+                    LOST_SINCE.with_lock(|l| *l = None);
+                    *lock(&GUEST) = None;
+                    self.party_show("", String::new(), Vec::new());
+                    let next = order
+                        .iter()
+                        .find(|(i, _, _)| Some(*i) == requests::successor(&order))
+                        .map(|g| g.1.clone())
+                        .unwrap_or_default();
+                    self.party_status(format!(
+                        "The host is gone. {next} can take the party over; ask them for the new link."
+                    ));
+                    return;
+                }
+                Handoff::Over | Handoff::Live => {
+                    LOST_SINCE.with_lock(|l| *l = None);
+                    *lock(&GUEST) = None;
+                    self.party_show("", String::new(), Vec::new());
+                    self.party_status("The host left and the party ended.");
+                    return;
+                }
+            }
+        }
+    }
+
+    /// "Take over" after the host left: this Slate becomes the host.
+    pub fn party_takeover(&self) {
+        *lock(&GUEST) = None;
+        self.ui(|w| w.global::<SettingsState>().set_party_offer(false));
+        self.party_start();
+    }
+
+    pub fn party_decline(&self) {
+        *lock(&GUEST) = None;
+        self.party_show("", String::new(), Vec::new());
+        self.party_status("Left the party.");
     }
 
     fn guest_apply(&self, guest: &Guest, m: HostMsg) {
@@ -335,18 +730,88 @@ impl Backend {
                 let target = proto::host_position_now(position_ms, playing, at_ms, now);
                 self.guest_follow(target, playing);
             }
-            HostMsg::Queue { next } => self.guest_prefetch(next),
-            HostMsg::Guests { guests } => {
-                let link = String::new();
-                let n = guests.len();
-                self.party_show("guest", link, guests);
+            HostMsg::Queue { next, by } => self.guest_prefetch(next, by),
+            HostMsg::Guests { guests, cohosts } => {
+                let rows: Vec<(String, bool)> = guests
+                    .iter()
+                    .map(|g| (g.clone(), cohosts.contains(g)))
+                    .collect();
+                if let Some(c) = lock(&GUEST).as_mut() {
+                    c.guests = rows.clone();
+                }
+                let n = rows.len();
+                self.party_show("guest", String::new(), rows);
                 self.party_mirror(true, "guest", n);
             }
+            HostMsg::Role { cohost } => {
+                if let Some(c) = lock(&GUEST).as_mut() {
+                    c.cohost = cohost;
+                }
+                self.ui(move |w| w.global::<SettingsState>().set_party_cohost(cohost));
+                self.notify(if cohost {
+                    "The host made you a co-host: you can approve requests and skip."
+                } else {
+                    "You are no longer a co-host."
+                });
+            }
+            HostMsg::Requests { pending, .. } => self.show_cohost_requests(pending),
+            HostMsg::RequestResult { reason, .. } => self.notify(&reason),
+            HostMsg::Notice { text } => self.notify(&text),
             _ => {}
         }
     }
 
-    /// Plays the host's track from its position; skips with a notice if it is not available here.
+    fn show_cohost_requests(&self, pending: Vec<ReqView>) {
+        let rows: Vec<PartyRequest> = pending
+            .into_iter()
+            .map(|r| PartyRequest {
+                id: r.id.to_string().into(),
+                guest: r.guest.into(),
+                track: format!("{} – {}", r.artist, r.title).into(),
+                quality: quality_label(&r.quality).into(),
+                unavailable: r.unavailable as i32,
+            })
+            .collect();
+        self.ui(move |w| {
+            w.global::<SettingsState>()
+                .set_party_requests(ModelRc::new(VecModel::from(rows)))
+        });
+    }
+
+    /// Sends a track to the host (right-click menu, ＋ on a search result).
+    pub fn party_suggest(&self, track_id: u64) {
+        let Some(g) = guest_handle() else {
+            self.notify(if hosting() {
+                "You are the host: add it to your own queue."
+            } else {
+                "Join a party first."
+            });
+            return;
+        };
+        if !lock(&GUEST).as_ref().is_some_and(|c| c.requests_on) {
+            self.notify("The host is not taking requests.");
+            return;
+        }
+        let this = self.clone();
+        self.rt.spawn(async move {
+            match g.suggest(track_id).await {
+                Ok(()) => this.notify("Sent to the host"),
+                Err(_) => this.notify("Could not reach the host."),
+            }
+        });
+    }
+
+    pub fn party_vote(&self) {
+        if let Some(g) = guest_handle() {
+            self.rt.spawn(async move {
+                let _ = g.vote_skip().await;
+            });
+        }
+    }
+
+    /// Plays the host's track from its position. A track this account cannot stream is
+    /// replaced by another version of the song when there is one, otherwise skipped locally
+    /// (the party carries on; the host is told how many guests could not play it).
     fn guest_play(&self, id: u64, position_ms: u64, playing: bool) {
         let this = self.clone();
         self.rt.spawn(async move {
@@ -357,19 +822,26 @@ impl Backend {
                 Ok(v) => serde_json::from_value::<Track>(v).ok(),
                 Err(_) => None,
             };
-            let Some(track) = track else {
-                this.notify("A track in the party is not available to you; skipping it.");
-                return;
+            let mut played = match &track {
+                Some(t) => this.guest_try(&ctl, t.clone()).await,
+                None => false,
             };
-            let outcome = ctl
-                .play_from_source(track.clone(), vec![track], None, false)
-                .await;
-            let failed = matches!(outcome, slate_core::controller::Outcome::Failed(_));
-            this.apply(outcome).await;
-            if failed {
-                this.notify(
-                    "That track is not available in your region; skipped until the next one.",
-                );
+            if !played {
+                if let Some(g) = guest_handle() {
+                    let _ = g.unavailable(id).await;
+                }
+                if let Some(alt) = this.guest_alternative(&state, id).await {
+                    if this.guest_try(&ctl, alt.clone()).await {
+                        this.notify(&format!(
+                            "Playing another version of {} for you",
+                            alt.title()
+                        ));
+                        played = true;
+                    }
+                }
+            }
+            if !played {
+                this.notify("A track in the party is not available to you; skipping it.");
                 return;
             }
             if position_ms > 1500 {
@@ -379,6 +851,29 @@ impl Backend {
                 this.guest_set_playing(false);
             }
         });
+    }
+
+    async fn guest_try(&self, ctl: &slate_core::controller::Controller, track: Track) -> bool {
+        let outcome = ctl
+            .play_from_source(track.clone(), vec![track], None, false)
+            .await;
+        let failed = matches!(outcome, slate_core::controller::Outcome::Failed(_));
+        self.apply(outcome).await;
+        !failed
+    }
+
+    /// The first other version of the song this account can load.
+    async fn guest_alternative(&self, state: &slate_core::AppState, id: u64) -> Option<Track> {
+        let items = versions::track_versions(state, id).await.ok()?;
+        for it in items.iter().take(3) {
+            let alt = it.get("id").and_then(serde_json::Value::as_u64)?;
+            if let Ok(v) = metadata::get_track(state, alt).await {
+                if let Ok(t) = serde_json::from_value::<Track>(v) {
+                    return Some(t);
+                }
+            }
+        }
+        None
     }
 
     fn guest_set_playing(&self, want: bool) {
@@ -397,18 +892,54 @@ impl Backend {
         }
     }
 
-    /// The next few tracks, loaded into the guest's queue so the player prefetches them.
-    fn guest_prefetch(&self, next: Vec<u64>) {
-        self.queue_track_ids_replace(next);
+    /// The next few tracks, loaded into the guest's queue so the player prefetches them. Tracks
+    /// this account cannot stream are left out of the local queue and reported to the host.
+    fn guest_prefetch(&self, next: Vec<u64>, by: Vec<String>) {
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let (Some(state), Some(ctl)) = (this.state(), this.controller()) else {
+                return;
+            };
+            let now = slate_core::now_secs() as i64;
+            let (mut tracks, mut lines) = (Vec::new(), Vec::new());
+            for (i, id) in next.iter().enumerate() {
+                let t = match metadata::get_track(&state, *id).await {
+                    Ok(v) => serde_json::from_value::<Track>(v).ok(),
+                    Err(e) if e.is_rate_limited() => break,
+                    Err(_) => None,
+                };
+                let Some(t) = t else { continue };
+                let who = by.get(i).filter(|n| !n.is_empty());
+                lines.push(match who {
+                    Some(n) => format!("{}  ·  suggested by {n}", track_label(&t)),
+                    None => track_label(&t),
+                });
+                if t.is_unavailable(now) {
+                    if let Some(g) = guest_handle() {
+                        let _ = g.unavailable(*id).await;
+                    }
+                } else {
+                    tracks.push(t);
+                }
+            }
+            ctl.clear_next_up().await;
+            for t in tracks {
+                ctl.add_to_queue(t, None).await;
+            }
+            this.refresh_queue_info().await;
+            this.ui(move |w| {
+                w.global::<SettingsState>()
+                    .set_party_upcoming(strings(lines))
+            });
+        });
     }
 
     pub fn party_end(&self) {
-        let role = ROLE.lock().ok().and_then(|mut r| r.take());
+        let role = lock(&ROLE).take();
+        *lock(&GUEST) = None;
         HOSTING.store(false, Ordering::Relaxed);
-        if let Ok(mut s) = SUGGESTIONS.lock() {
-            s.clear();
-        }
-        self.show_party_suggestions();
+        lock(&OWNERS).clear();
+        lock(&PENDING).clear();
         self.party_show("", String::new(), Vec::new());
         self.party_mirror(false, "", 0);
         let this = self.clone();
@@ -435,11 +966,62 @@ impl Backend {
     }
 }
 
+/// Runs `f` on the host, if this Slate is hosting.
+fn with_host<R>(f: impl FnOnce(&Host) -> R) -> Option<R> {
+    match lock(&ROLE).as_ref() {
+        Some(Role::Host(h)) => Some(f(h)),
+        _ => None,
+    }
+}
+
+fn guest_handle() -> Option<Arc<Guest>> {
+    match lock(&ROLE).as_ref() {
+        Some(Role::Guest(g)) => Some(Arc::clone(g)),
+        _ => None,
+    }
+}
+
+/// When the host was lost, while a guest is waiting for it to come back.
+struct LostSince(Mutex<Option<Instant>>);
+
+impl LostSince {
+    fn with_lock<R>(&self, f: impl FnOnce(&mut Option<Instant>) -> R) -> R {
+        f(&mut lock(&self.0))
+    }
+}
+
+static LOST_SINCE: LostSince = LostSince(Mutex::new(None));
+
 /// Settings → Party fields. UI thread.
 pub fn fill(w: &AppWindow) {
-    let prefs = crate::uiprefs::UiPrefs::load();
-    w.global::<SettingsState>()
-        .set_party_relay(prefs.party_relay.into());
+    let prefs = UiPrefs::load();
+    let s = w.global::<SettingsState>();
+    s.set_party_relay(prefs.party_relay.clone().into());
+    s.set_party_name(prefs.party_name.clone().into());
+    s.set_party_mode(
+        ["approval", "auto", "off"]
+            .iter()
+            .position(|m| *m == prefs.party_mode)
+            .unwrap_or(0) as i32,
+    );
+    s.set_party_placement(
+        ["next", "end", "fair"]
+            .iter()
+            .position(|m| *m == prefs.party_placement)
+            .unwrap_or(2) as i32,
+    );
+    s.set_party_cap_index(
+        CAPS.iter()
+            .position(|c| *c == policy_of(&prefs).cap)
+            .unwrap_or(2) as i32,
+    );
+    s.set_party_no_explicit(prefs.party_no_explicit);
+    s.set_party_vote_index(
+        VOTES
+            .iter()
+            .position(|v| *v == prefs.party_vote)
+            .unwrap_or(0) as i32,
+    );
 }
 
 #[cfg(test)]
@@ -449,7 +1031,34 @@ mod tests {
     #[test]
     fn nothing_is_hosting_by_default() {
         assert!(!hosting());
-        assert!(ROLE.lock().expect("lock").is_none());
-        assert!(SUGGESTIONS.lock().expect("lock").is_empty());
+        assert!(lock(&ROLE).is_none());
+        assert!(lock(&OWNERS).is_empty() && lock(&PENDING).is_empty());
+    }
+
+    #[test]
+    fn stored_party_choices_map_to_the_core_types() {
+        let mut p = UiPrefs::default();
+        assert_eq!(
+            policy_of(&p),
+            Policy::default(),
+            "defaults: approval, cap 3"
+        );
+        assert_eq!(vote_of(&p), None);
+        p.party_mode = "auto".into();
+        p.party_cap = 5;
+        p.party_no_explicit = true;
+        p.party_vote = 50;
+        let policy = policy_of(&p);
+        assert_eq!(policy.mode, RequestMode::Auto);
+        assert_eq!((policy.cap, policy.no_explicit), (5, true));
+        assert_eq!(vote_of(&p), Some(50));
+        assert_eq!(CAPS[2], requests::DEFAULT_PENDING_CAP);
+    }
+
+    #[test]
+    fn quality_labels_are_short() {
+        assert_eq!(quality_label("HI_RES_LOSSLESS"), "Hi-Res");
+        assert_eq!(quality_label("LOSSLESS"), "Lossless");
+        assert_eq!(quality_label(""), "");
     }
 }
