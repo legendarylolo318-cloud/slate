@@ -1,8 +1,6 @@
 //! Crossfade decisions and curves. Pure logic only: this module does not touch GStreamer.
-//!
-//! STATUS: the audio engine does not use this yet (see docs-assets/1.2-NOTES.md). It exists so
-//! the rules are fixed and tested before the pipeline work: when a fade may happen, how long it
-//! is, and the equal-power gain curves for the outgoing and incoming tracks.
+//! It fixes when a fade may happen, how long it is, and the equal-power gain curves for the
+//! outgoing and incoming tracks; `audio.rs` runs the fade with them.
 
 pub const MIN_SECS: u32 = 1;
 pub const MAX_SECS: u32 = 12;

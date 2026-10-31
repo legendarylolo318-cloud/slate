@@ -11,8 +11,9 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 > Licensed under **GPL-3.0-only**, same as the original. Slate is **not affiliated with
 > TIDAL**.
 
-> **Status: work in progress.** See [PORTING_PLAN.md](PORTING_PLAN.md) for what is done,
-> and [HANDOFF.md](HANDOFF.md) for known issues and what has not been tested.
+**What's new:** [CHANGELOG.md](CHANGELOG.md) · **For AI agents:** [docs-assets/MCP.md](docs-assets/MCP.md) ·
+**Downloads:** Linux AppImage and Windows installer on the
+[releases page](https://github.com/legendarylolo318-cloud/slate/releases).
 
 ![Album page](docs-assets/album.png)
 
@@ -28,25 +29,57 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 - Lazy, virtualised track lists (thousands of tracks stay smooth) and a bounded
   thumbnail cache.
 - Queue panel, shuffle (order restored when turned off), repeat, history, autoplay radio,
-  queue persisted across restarts.
+  queue persisted across restarts. Drag tracks onto sidebar playlists, reorder your own
+  playlists and the queue by dragging, and drag playlists into folders.
+- Playlist tools: remove duplicates, compare two playlists and merge them, smart playlists
+  (rules on loved tracks, artist, quality, year, date added…, kept on your computer),
+  suggested tracks under your own playlists, "Other versions…" (remaster, live, explicit /
+  clean, Dolby Atmos) with replace in place, export to CSV / M3U and import from them.
+- Ctrl+F filter and quality chips (Lossless / Hi-Res / Atmos) on playlist, album, Loved
+  Tracks and mix pages; Go to album / artist from any track.
 - Synced lyrics (click a line to seek), full-screen player, adaptive mini-player window,
   music-video playback (can shrink into the player bar).
-- Audio: GStreamer engine, ReplayGain normalisation, maximum-quality cap with automatic
+- Audio: GStreamer engine, gapless playback, optional crossfade (off by default),
+  ReplayGain normalisation, maximum-quality cap with automatic
   fallback, exclusive and bit-perfect output (ALSA with DAC detection on Linux, WASAPI exclusive
   on Windows), Signal Path
   panel with a PRISTINE / MODIFIED verdict.
 - Scrobbling to Last.fm, Libre.fm and ListenBrainz; TIDAL play reporting (toggleable);
-  Discord Rich Presence.
+  Discord Rich Presence with your own text templates and per-playlist hiding.
+- Listening party: listen together with friends, in sync (see below).
 - HTTP / HTTPS / SOCKS5 proxy with fail-closed behaviour.
-- MCP server (`127.0.0.1:5577`) and OBS overlay (`127.0.0.1:5578`), both off by default. The MCP server has queue, search, playlist and context tools, approvals and an activity log with undo for AI agents: see [docs-assets/MCP.md](docs-assets/MCP.md).
-- 15 theme presets, custom colours with a built-in picker, `theme.json` with live reload,
-  interface scale setting.
+- MCP server (`127.0.0.1:5577`) and OBS overlay (`127.0.0.1:5578`), both off by default. The
+  MCP server has queue, search, playlist and context tools, an optional access token,
+  read-only mode, in-app approval of destructive calls and an activity log with undo for AI
+  agents: see [docs-assets/MCP.md](docs-assets/MCP.md).
+- 15 theme presets plus your own themes (editor with contrast warnings, palette from the
+  album cover, `.slatetheme` import / export), `theme.json` with live reload, interface scale.
 - MPRIS and tray on Linux; media controls (SMTC), tray and sleep prevention on Windows.
-  Optional global shortcuts (Ctrl+Alt+Space / → / ←). Keyboard shortcuts: `Space` play/pause, `←/→` seek, `Ctrl+←/→`
-  previous/next, `M` mute, `S` shuffle, `R` repeat, `Q` queue, `L` lyrics, `F` full screen,
-  `/` search, `?` shortcut sheet.
+  Optional global shortcuts (Ctrl+Alt+Space / → / ←). Every shortcut can be rebound in
+  Settings → Shortcuts; defaults: `Space` play/pause, `←/→` seek, `Ctrl+←/→` previous/next,
+  `M` mute, `S` shuffle, `R` repeat, `Q` queue, `L` lyrics, `F` full screen, `/` search,
+  `Ctrl+F` filter, `?` shortcut sheet.
+- Settings search, keyboard focus rings and Tab navigation, tooltips on icon buttons.
+- Single instance with `tidal://` and `slate://` links, profile editing, a daily update check
+  against this repository's releases (can be turned off).
 
-- Gapless playback, single-instance with `tidal://` links, profile editing.
+## Listening party
+
+Settings → Party → Host gives you a `slate://party/…` link and a QR code. Friends open the
+link (or paste it under Join) and their Slate follows yours: track, play / pause, seek and
+the next few tracks. Guests can suggest tracks for you to approve.
+
+- **Everyone needs their own TIDAL subscription.** Only playback state is shared; each person
+  streams from their own account. A track not available in a guest's region is skipped for
+  that guest.
+- **No ports to open.** Peers connect directly and encrypted (QUIC via
+  [iroh](https://iroh.computer)), with hole punching and a relay fallback when a direct
+  connection is not possible.
+- **Custom relay:** set your own `iroh-relay` URL under Settings → Party if you prefer not to
+  use the public relays.
+- Up to 10 guests. Kicking a guest makes a new invite link. Nothing party-related runs until
+  a party starts, and ending it closes everything. Builds without the `party` Cargo feature
+  have no party at all.
 
 Security, performance and feature-parity review results are in [REVIEW.md](REVIEW.md).
 
@@ -93,8 +126,9 @@ sudo dnf install gcc gcc-c++ clang pkgconf-pkg-config gstreamer1-devel \
    `%GSTREAMER_1_0_ROOT_MSVC_X86_64%\lib\pkgconfig` to `PKG_CONFIG_PATH` (pkg-config is required).
 3. `cargo build --release`.
 
-> The Windows build has **not been verified** yet; ALSA-only options are hidden there and
-> media controls / tray are not implemented on Windows.
+Release builds for Windows come from CI (`.github/workflows/release.yml`) as an installer
+that also registers the `tidal://` and `slate://` links. ALSA-only options are hidden on
+Windows; exclusive output uses WASAPI.
 
 ## Run
 
@@ -110,8 +144,8 @@ controlled with `SLATE_LOG` (default `info`), e.g. `SLATE_LOG=slate=debug,info`.
 Slate tries Skia (Vulkan), then Skia (OpenGL), then FemtoVG, then the software renderer,
 relaunching itself with the next one if a renderer fails to start, and logs the one in use.
 Force one with Slint's variable, e.g. `SLINT_BACKEND=winit-femtovg` or
-`SLINT_BACKEND=winit-software`. Cargo features: `renderer-skia-vulkan` (default),
-`renderer-femtovg`, `renderer-software`.
+`SLINT_BACKEND=winit-software`. Cargo features: `renderer-skia-vulkan`, `renderer-femtovg`,
+`renderer-software` and `party` (all on by default).
 
 ## Development
 
