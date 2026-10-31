@@ -212,12 +212,13 @@ export component Sidebar inherits Rectangle {
             active: root.selected == item.id;
             clicked => { root.go(item.id); }
         }
-        HorizontalLayout {
+        Rectangle {
             height: 28px;
             DropArea {
                 can-drop(e) => { (Dnd.kind(e.data) == "pl" && !Dnd.cancelled) ? DragAction.move : DragAction.none }
                 dropped(e) => { Dnd.dropped(e.data, "root"); DragAction.move }
             }
+        HorizontalLayout {
             if !root.collapsed: Text {
                 text: "PLAYLISTS";
                 font-size: 11px;
@@ -230,6 +231,7 @@ export component Sidebar inherits Rectangle {
                 Text { text: "＋"; color: np.has-hover ? Theme.accent : Theme.text-muted; horizontal-alignment: center; vertical-alignment: bottom; }
                 np := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.new-playlist(); } }
             }
+        }
         }
         Rectangle {
             height: 52px;
@@ -248,6 +250,17 @@ export component Sidebar inherits Rectangle {
             }
             lt := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.go("loved"); } }
         }
+        if root.playlists-loading && !root.collapsed: Text { text: "Loading…"; color: Theme.text-muted; height: 28px; }
+        ListView {
+            vertical-stretch: 1;
+            for p in root.playlists: PlaylistItem {
+                entry: p;
+                collapsed: root.collapsed;
+                active: root.selected == p.uuid;
+                clicked => { root.open-playlist(p.uuid); }
+                action(a) => { root.entry-action(p.uuid, a); }
+            }
+        }
         HorizontalLayout {
             height: 28px;
             if !root.collapsed: Text { text: "SMART"; font-size: 11px; color: Theme.text-muted; vertical-alignment: bottom; horizontal-stretch: 1; }
@@ -263,17 +276,6 @@ export component Sidebar inherits Rectangle {
             active: root.selected == s.uuid;
             clicked => { root.open-playlist(s.uuid); }
             action(a) => { root.smart-action(s.uuid, a); }
-        }
-        if root.playlists-loading && !root.collapsed: Text { text: "Loading…"; color: Theme.text-muted; height: 28px; }
-        ListView {
-            vertical-stretch: 1;
-            for p in root.playlists: PlaylistItem {
-                entry: p;
-                collapsed: root.collapsed;
-                active: root.selected == p.uuid;
-                clicked => { root.open-playlist(p.uuid); }
-                action(a) => { root.entry-action(p.uuid, a); }
-            }
         }
         NavItem {
             icon: @image-url("icons/settings.svg");
@@ -560,23 +562,24 @@ export component TrackPage inherits Rectangle {
             spacing: 8px;
             alignment: start;
             Button { label: "▶  Play"; primary: true; clicked => { root.play-all(); } }
-            Button { label: "🔀  Shuffle"; clicked => { root.shuffle-all(); } }
+            Button { label: "Shuffle"; clicked => { root.shuffle-all(); } }
             if root.can-favorite: Button { label: root.page-favorite ? "♥  Saved" : "♡  Save"; clicked => { root.toggle-page-favorite(); } }
-            if root.can-export: export-button := Button {
-                label: "Export…";
-                clicked => { export-menu.show({ x: export-button.absolute-position.x, y: export-button.absolute-position.y + export-button.height }); }
-                export-menu := ContextMenuArea {
+            more-button := Button {
+                label: "⋯";
+                min-width: 44px;
+                clicked => { more-menu.show({ x: more-button.absolute-position.x, y: more-button.absolute-position.y + more-button.height }); }
+                more-menu := ContextMenuArea {
                     Menu {
-                        MenuItem { title: "Export as CSV…"; activated => { root.export-list("csv"); } }
-                        MenuItem { title: "Export as M3U playlist…"; activated => { root.export-list("m3u"); } }
+                        MenuItem { title: "Export as CSV…"; enabled: root.can-export; activated => { root.export-list("csv"); } }
+                        MenuItem { title: "Export as M3U playlist…"; enabled: root.can-export; activated => { root.export-list("m3u"); } }
+                        MenuItem { title: "Remove duplicates…"; enabled: root.can-dedupe; activated => { root.remove-duplicates(); } }
+                        MenuItem { title: "Save as TIDAL playlist"; enabled: root.can-save-smart; activated => { root.save-smart-snapshot(); } }
+                        MenuItem { title: "Other versions of this album"; enabled: root.kind-label == "ALBUM"; activated => { root.show-album-versions(); } }
+                        MenuItem { title: "Sort: " + root.sort-label; enabled: root.sort-visible; activated => { root.cycle-sort(); } }
+                        MenuItem { title: root.sort-desc ? "Reverse sort (now descending)" : "Reverse sort (now ascending)"; enabled: root.sort-visible; activated => { root.flip-sort(); } }
                     }
                 }
             }
-            if root.kind-label == "ALBUM": Button { label: "Other versions"; clicked => { root.show-album-versions(); } }
-            if root.can-save-smart: Button { label: "Save as TIDAL playlist"; clicked => { root.save-smart-snapshot(); } }
-            if root.can-dedupe: Button { label: "Remove duplicates…"; clicked => { root.remove-duplicates(); } }
-            if root.sort-visible: Button { label: "⇅  " + root.sort-label; clicked => { root.cycle-sort(); } }
-            if root.sort-visible: Button { label: root.sort-desc ? "↓" : "↑"; clicked => { root.flip-sort(); } }
             if root.loved-tabs: Segmented { options: ["Tracks", "Videos"]; index: root.loved-tab; picked(i) => { root.loved-tab-picked(i); } }
         }
         FocusScope {

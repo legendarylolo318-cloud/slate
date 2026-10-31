@@ -93,6 +93,10 @@
   now has one shared set of spacing, radius and text sizes (`Metrics`) for new work.
 
 ### Fixed
+- Track-page header: the extra buttons (export, remove duplicates, sort, save as TIDAL playlist,
+  other versions) no longer run off the edge of a narrow window; they are in a "⋯" menu next to
+  Play, Shuffle and Save.
+- The sidebar's "Smart" section sits below the playlists instead of mislabeling them.
 - "Add to playlist" (and Compare, Move to folder) showed gaps and overlapping text when you had
   folders: the lists now contain only what can be picked.
 - Suggested tracks show their cover art and have a Hide button.
