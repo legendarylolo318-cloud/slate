@@ -21,6 +21,7 @@ mod dedupe;
 mod deeplink;
 mod discord_ctx;
 mod dnd;
+mod eq_ui;
 mod export;
 mod favorites;
 mod filter;

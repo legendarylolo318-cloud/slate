@@ -130,3 +130,12 @@ export struct CreditLine {
     /// TIDAL artist id of the person ("" when TIDAL gives none).
     artist-id: string,
 }
+
+/// One equalizer band as text fields (Settings → Playback → Equalizer).
+export struct EqBand {
+    /// 0 Peak, 1 Low shelf, 2 High shelf.
+    kind: int,
+    freq: string,
+    gain: string,
+    q: string,
+}

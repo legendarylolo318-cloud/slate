@@ -1838,6 +1838,73 @@ fn direct_alsa_seek(
 
 // ── Audio command protocol ─────────────────────────────────────────────
 
+/// Name of the equalizer element in the pipeline, so a live edit can find it.
+const EQ_NAME: &str = "slate-eq";
+const EQ_PREAMP_NAME: &str = "slate-eq-preamp";
+
+/// The preamp and the `equalizer-nbands` for `s`, or None when this GStreamer lacks the
+/// plugin (the track then plays without it).
+fn build_eq_stage(s: &crate::eq::Settings) -> Option<(gst::Element, gst::Element)> {
+    let preamp = gst::ElementFactory::make("volume")
+        .name(EQ_PREAMP_NAME)
+        .property("volume", s.preamp_amplitude())
+        .build()
+        .ok()?;
+    let eq = match gst::ElementFactory::make("equalizer-nbands")
+        .name(EQ_NAME)
+        .property("num-bands", s.bands.len().max(1) as u32)
+        .build()
+    {
+        Ok(e) => e,
+        Err(e) => {
+            log::warn!("[audio] equalizer unavailable: {e}");
+            return None;
+        }
+    };
+    set_eq_bands(&eq, s, true);
+    Some((preamp, eq))
+}
+
+/// Writes the bands of `s` into `eq` (flat when `on` is false).
+fn set_eq_bands(eq: &gst::Element, s: &crate::eq::Settings, on: bool) {
+    use gst::prelude::*;
+    let Some(proxy) = eq.dynamic_cast_ref::<gst::ChildProxy>() else {
+        return;
+    };
+    let count = s.bands.len().max(1) as u32;
+    if eq.property::<u32>("num-bands") != count {
+        eq.set_property("num-bands", count);
+    }
+    for i in 0..count {
+        let Some(band) = proxy.child_by_index(i) else {
+            continue;
+        };
+        match s.bands.get(i as usize) {
+            Some(b) => {
+                band.set_property("freq", f64::from(b.freq));
+                band.set_property("bandwidth", f64::from(b.bandwidth_hz()));
+                band.set_property("gain", if on { f64::from(b.gain_db) } else { 0.0 });
+                band.set_property_from_str("type", b.kind.gst_nick());
+            }
+            // No bands (preamp only): one flat band.
+            None => band.set_property("gain", 0.0f64),
+        }
+    }
+}
+
+/// Applies `s` to a running pipeline's equalizer. Returns whether the pipeline has one that
+/// is acting (so the signal path can say so).
+fn apply_eq_live(pipeline: &gst::Pipeline, s: &crate::eq::Settings, on: bool) -> bool {
+    use gst::prelude::*;
+    let (Some(eq), Some(preamp)) = (pipeline.by_name(EQ_NAME), pipeline.by_name(EQ_PREAMP_NAME))
+    else {
+        return false;
+    };
+    set_eq_bands(&eq, s, on);
+    preamp.set_property("volume", if on { s.preamp_amplitude() } else { 1.0 });
+    on
+}
+
 enum AudioCommand {
     PlayUrl {
         uri: String,
@@ -1888,6 +1955,10 @@ enum AudioCommand {
     },
     SetBitPerfect {
         enabled: bool,
+        reply: Reply<Result<(), String>>,
+    },
+    SetEq {
+        settings: crate::eq::Settings,
         reply: Reply<Result<(), String>>,
     },
     SetProxySettings {
@@ -2147,6 +2218,9 @@ impl AudioPlayer {
             // no access to AppState). `cmd_tx_worker` is the self-sender the
             // Normal bus thread clones for gapless advance handling (2b-A3).
             let mut gapless_setting: bool = true;
+            // The equalizer's settings. The elements exist only in a pipeline built while
+            // `in_path` was true, so with the equalizer off nothing here runs.
+            let mut eq_setting = crate::eq::Settings::default();
             let cmd_tx_worker = cmd_tx_worker;
 
             // 2b-A2: the prerolled next bin. Shared between this worker (dedup /
@@ -2607,7 +2681,19 @@ impl AudioPlayer {
                                     audioconvert.set_property_from_str("dithering", "none");
                                     audioconvert.set_property_from_str("noise-shaping", "none");
                                 }
-                                let chain: Vec<&gst::Element> = if untouched {
+                                // Optional equalizer between the resampler and the volume
+                                // stages; None (and nothing added) unless it is on, so the
+                                // chain is otherwise the same as before it existed.
+                                let eq_stage =
+                                    if !untouched && eq_setting.in_path(exclusive, bit_perfect) {
+                                        build_eq_stage(&eq_setting)
+                                    } else {
+                                        None
+                                    };
+                                signal_path.set_equalizer(eq_stage.as_ref().map(|_| {
+                                    (eq_setting.bands.len() as u32, eq_setting.preamp_db)
+                                }));
+                                let mut chain: Vec<&gst::Element> = if untouched {
                                     vec![&concat, &audioconvert, &sink]
                                 } else {
                                     vec![
@@ -2619,6 +2705,9 @@ impl AudioPlayer {
                                         &sink,
                                     ]
                                 };
+                                if let Some((preamp, eq)) = &eq_stage {
+                                    chain.splice(3..3, [preamp, eq]);
+                                }
 
                                 pipe.add_many([&uridecodebin, &branch_queue])
                                     .map_err(|e| format!("Failed to add elements: {e}"))?;
@@ -3359,6 +3448,25 @@ impl AudioPlayer {
                         reply.send(Ok(())).ok();
                     }
 
+                    AudioCommand::SetEq { settings, reply } => {
+                        eq_setting = settings;
+                        // Band edits reach a running equalizer at once; switching it on or
+                        // off (a pipeline with or without the elements) applies from the
+                        // next track. A pipeline that has it and is now switched off is
+                        // flattened, which is the same as bypassing it.
+                        let live = match backend.as_ref() {
+                            Some(PlaybackBackend::Normal { pipeline, .. }) => {
+                                let on = eq_setting.in_path(exclusive, bit_perfect);
+                                apply_eq_live(pipeline, &eq_setting, on)
+                            }
+                            _ => false,
+                        };
+                        signal_path.set_equalizer(
+                            live.then_some((eq_setting.bands.len() as u32, eq_setting.preamp_db)),
+                        );
+                        let _ = reply.send(Ok(()));
+                    }
+
                     AudioCommand::SetBitPerfect { enabled, reply } => {
                         bit_perfect = enabled;
                         if enabled {
@@ -4016,6 +4124,13 @@ impl AudioPlayer {
         self.post_cmd(|reply| AudioCommand::SetExclusiveMode {
             enabled,
             device,
+            reply,
+        })
+    }
+    /// Equalizer bands, preamp and on/off (see `eq`).
+    pub fn set_eq(&self, settings: crate::eq::Settings) -> Result<(), String> {
+        self.post_cmd(|reply| AudioCommand::SetEq {
+            settings: settings.clamped(),
             reply,
         })
     }
@@ -5367,5 +5482,120 @@ mod proxy_source_tests {
                 Route::NoProxy
             );
         }
+    }
+
+    // ---- equalizer element ----
+
+    /// RMS of a 1 kHz tone after `preamp ! eq`, built the way the player builds them.
+    fn eq_rms(s: &crate::eq::Settings) -> Option<f64> {
+        use gst::prelude::*;
+        use gstreamer_app as gst_app;
+        gst::init().ok()?;
+        let (preamp, eq) = build_eq_stage(s)?;
+        let pipe = gst::Pipeline::new();
+        let src = gst::ElementFactory::make("audiotestsrc")
+            .property("num-buffers", 40i32)
+            .property("freq", 1000.0f64)
+            .property("volume", 0.25f64)
+            .build()
+            .ok()?;
+        let conv = gst::ElementFactory::make("audioconvert").build().ok()?;
+        let caps = gst::ElementFactory::make("capsfilter")
+            .property(
+                "caps",
+                gst::Caps::builder("audio/x-raw")
+                    .field("format", "F32LE")
+                    .field("rate", 44100i32)
+                    .field("channels", 2i32)
+                    .build(),
+            )
+            .build()
+            .ok()?;
+        let sink = gst_app::AppSink::builder().sync(false).build();
+        pipe.add_many([&src, &conv, &caps, &preamp, &eq, sink.upcast_ref()])
+            .ok()?;
+        gst::Element::link_many([&src, &conv, &caps, &preamp, &eq, sink.upcast_ref()]).ok()?;
+        pipe.set_state(gst::State::Playing).ok()?;
+        let (mut sum, mut n) = (0f64, 0usize);
+        let mut seen = 0;
+        while let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_seconds(5)) {
+            seen += 1;
+            // Skip the first buffers: the filter settles.
+            if seen <= 10 {
+                continue;
+            }
+            let buf = sample.buffer()?;
+            let map = buf.map_readable().ok()?;
+            for c in map.as_slice().as_chunks::<4>().0 {
+                let v = f64::from(f32::from_le_bytes(*c));
+                sum += v * v;
+                n += 1;
+            }
+        }
+        pipe.set_state(gst::State::Null).ok()?;
+        (n > 0).then(|| (sum / n as f64).sqrt())
+    }
+
+    fn eq_with(bands: Vec<crate::eq::Band>, preamp_db: f32) -> crate::eq::Settings {
+        crate::eq::Settings {
+            enabled: true,
+            preamp_db,
+            bands,
+        }
+    }
+
+    #[test]
+    fn the_equalizer_element_boosts_cuts_and_attenuates_as_set() {
+        let peak = |gain_db| crate::eq::Band {
+            kind: crate::eq::FilterKind::Peak,
+            freq: 1000.0,
+            gain_db,
+            q: 1.0,
+        };
+        let Some(flat) = eq_rms(&eq_with(vec![peak(0.0)], 0.0)) else {
+            // No GStreamer equalizer plugin here (the player plays without it then).
+            eprintln!("equalizer-nbands is not installed; skipped");
+            return;
+        };
+        let boosted = eq_rms(&eq_with(vec![peak(6.0)], 0.0)).expect("boost");
+        let cut = eq_rms(&eq_with(vec![peak(-6.0)], 0.0)).expect("cut");
+        let quieter = eq_rms(&eq_with(vec![peak(0.0)], -6.0)).expect("preamp");
+        let db = |a: f64, b: f64| 20.0 * (a / b).log10();
+        assert!(
+            (db(boosted, flat) - 6.0).abs() < 1.0,
+            "+6 dB at the centre: {}",
+            db(boosted, flat)
+        );
+        assert!(
+            (db(cut, flat) + 6.0).abs() < 1.0,
+            "-6 dB at the centre: {}",
+            db(cut, flat)
+        );
+        assert!(
+            (db(quieter, flat) + 6.0).abs() < 0.5,
+            "the preamp is -6 dB: {}",
+            db(quieter, flat)
+        );
+    }
+
+    #[test]
+    fn a_band_far_from_the_tone_leaves_it_alone() {
+        let far = crate::eq::Band {
+            kind: crate::eq::FilterKind::Peak,
+            freq: 100.0,
+            gain_db: 12.0,
+            q: 4.0,
+        };
+        let (Some(flat), Some(off_tone)) = (
+            eq_rms(&eq_with(vec![], 0.0)),
+            eq_rms(&eq_with(vec![far], 0.0)),
+        ) else {
+            return;
+        };
+        let d = 20.0 * (off_tone / flat).log10();
+        assert!(
+            d.abs() < 1.0,
+            "a narrow band at 100 Hz does not move 1 kHz: {d} dB"
+        );
     }
 }

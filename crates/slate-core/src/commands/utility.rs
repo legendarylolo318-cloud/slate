@@ -228,6 +228,26 @@ pub fn set_crossfade(state: &AppState, secs: u32, skip_same_album: bool) -> Resu
     state.save_settings(&settings)
 }
 
+pub fn get_eq(state: &AppState) -> crate::eq::Settings {
+    state.load_settings().unwrap_or_default().eq.clamped()
+}
+
+/// Equalizer bands, preamp and on/off. Band edits apply to the playing track; switching it
+/// on or off applies from the next track.
+pub fn set_eq(state: &AppState, eq: crate::eq::Settings) -> Result<(), SlateError> {
+    let eq = eq.clamped();
+    // Off and never configured: nothing to tell the audio thread.
+    if eq.enabled || state.load_settings().is_some_and(|s| s.eq.enabled) {
+        state
+            .audio_player
+            .set_eq(eq.clone())
+            .map_err(SlateError::Audio)?;
+    }
+    let mut settings = state.load_settings().unwrap_or_default();
+    settings.eq = eq;
+    state.save_settings(&settings)
+}
+
 pub fn get_max_quality(state: &AppState) -> String {
     state.max_quality.lock_safe().clone()
 }

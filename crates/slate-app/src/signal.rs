@@ -52,6 +52,8 @@ pub fn describe(sp: &SignalPath) -> (String, Vec<(String, String)>) {
             fmt(&sp.decoded_format),
             fmt(&sp.output_format)
         )
+    } else if v.equalizer {
+        format!("Equalizer applied ({} bands)", sp.eq_bands)
     } else if v.normalization_altered && v.user_volume_altered {
         "Volume and ReplayGain scaling applied".into()
     } else if v.normalization_altered {
@@ -100,6 +102,17 @@ pub fn describe(sp: &SignalPath) -> (String, Vec<(String, String)>) {
             ),
         ));
         rows.push(("DAC card".into(), d.card_name.clone()));
+    }
+    if sp.equalizer {
+        rows.push((
+            "Equalizer".into(),
+            format!(
+                "On · {} band{}, preamp {:+.1} dB",
+                sp.eq_bands,
+                if sp.eq_bands == 1 { "" } else { "s" },
+                sp.eq_preamp_db
+            ),
+        ));
     }
     rows.push(("Volume".into(), format!("{:.0}%", sp.user_volume * 100.0)));
     rows.push((
@@ -182,6 +195,30 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(describe(&sp).0, "Resampled 44.1 kHz → 48 kHz");
+    }
+
+    #[test]
+    fn the_equalizer_is_named_in_the_headline_and_a_row() {
+        let sp = SignalPath {
+            backend: Some("Normal".into()),
+            equalizer: true,
+            eq_bands: 10,
+            eq_preamp_db: -6.2,
+            user_volume: 1.0,
+            norm_gain_factor: 1.0,
+            ..Default::default()
+        };
+        let (h, rows) = describe(&sp);
+        assert_eq!(h, "Equalizer applied (10 bands)");
+        assert!(rows
+            .iter()
+            .any(|(k, v)| k == "Equalizer" && v == "On · 10 bands, preamp -6.2 dB"));
+        assert!(!slate_core::signal_path::verdict(&sp).pristine);
+        let off = SignalPath {
+            equalizer: false,
+            ..sp
+        };
+        assert!(!describe(&off).1.iter().any(|(k, _)| k == "Equalizer"));
     }
 
     #[test]

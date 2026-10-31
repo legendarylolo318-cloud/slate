@@ -34,6 +34,9 @@ pub async fn run_startup(app: &AppHandle) {
             state
                 .audio_player
                 .set_crossfade(s.crossfade_secs, s.crossfade_skip_same_album);
+            if s.eq.enabled {
+                let _ = state.audio_player.set_eq(s.eq.clone());
+            }
         }
     }
 

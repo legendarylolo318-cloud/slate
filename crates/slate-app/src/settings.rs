@@ -21,6 +21,7 @@ struct Snapshot {
     normalization: bool,
     gapless: bool,
     crossfade: slate_core::crossfade::Settings,
+    eq: slate_core::eq::Settings,
     gapless_supported: bool,
     quality_index: i32,
     exclusive: bool,
@@ -48,6 +49,7 @@ async fn snapshot(state: &Arc<AppState>) -> Snapshot {
         normalization: utility::get_volume_normalization(state),
         gapless: utility::get_gapless(state),
         crossfade: utility::get_crossfade(state),
+        eq: utility::get_eq(state),
         gapless_supported: utility::get_gapless_supported(),
         exclusive: utility::get_exclusive_mode(state),
         bit_perfect: utility::get_bit_perfect(state),
@@ -115,6 +117,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_show_alsa_options(cfg!(any(target_os = "linux", windows)));
     crate::custom_themes::sync(w);
     crate::party_ui::fill(w);
+    crate::eq_ui::fill(w, &s.eq, s.exclusive || s.bit_perfect);
     g.set_global_shortcuts(prefs.global_shortcuts);
     g.set_check_updates(prefs.check_updates);
     g.set_cover_colors(prefs.cover_colors);
@@ -198,6 +201,10 @@ impl Backend {
     }
 
     pub fn setting_bool(&self, key: &str, v: bool) {
+        if key == "eq" {
+            self.eq_set_enabled(v);
+            return;
+        }
         if key.starts_with("party-") {
             self.party_pref_bool(key, v);
             return;
@@ -337,6 +344,10 @@ impl Backend {
                 this.discord_template_edited(key.trim_start_matches("discord-"), &v);
                 return;
             }
+            if key.starts_with("eq-") {
+                this.eq_edited(&key, &v);
+                return;
+            }
             if key == "party-name" {
                 let mut p = UiPrefs::load();
                 p.party_name = slate_core::party::proto::clean_name(&v);
@@ -377,6 +388,7 @@ impl Backend {
                     this.reset_shortcut(Some(&n["shortcut-reset:".len()..]));
                 }
                 "discord-reset" => this.discord_reset_templates(),
+                n if n.starts_with("eq-") => this.eq_action(n),
                 "party-start" => this.party_start(),
                 "party-takeover" => this.party_takeover(),
                 "party-decline" => this.party_decline(),

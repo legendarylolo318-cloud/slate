@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { Toggle, Button, Segmented, TextField, ColorPicker } from "widgets.slint";
-import { PresetTile, ShortcutRow, RoleRow, PartyRequest, PartyGuest } from "types.slint";
+import { PresetTile, ShortcutRow, RoleRow, PartyRequest, PartyGuest, EqBand } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
 /// Everything the settings page shows. Rust fills it from the core and handles
@@ -104,6 +104,13 @@ export global SettingsState {
     callback edit-color(string, color);
     callback edit-hex(string, string);
     callback edit-name-changed(string);
+    // Equalizer (Settings → Playback)
+    in-out property <bool> eq-enabled;
+    // Exclusive or bit-perfect output is on, so the equalizer cannot act.
+    in-out property <bool> eq-blocked;
+    in-out property <string> eq-preamp;
+    in-out property <[EqBand]> eq-bands;
+    in-out property <string> eq-status;
     // Listening party
     in-out property <string> party-role;
     in-out property <string> party-link;
@@ -502,6 +509,43 @@ export component SettingsPage inherits Rectangle {
                         label: "Keep albums gapless";
                         hint: "Don't crossfade consecutive tracks from the same album.";
                         Toggle { checked: SettingsState.crossfade-same-album; toggled(v) => { SettingsState.crossfade-same-album = v; SettingsState.changed-bool("crossfade-same-album", v); } }
+                    }
+                    Row {
+                        label: "Equalizer";
+                        hint: SettingsState.eq-blocked ? "The equalizer is off while exclusive or bit-perfect output is on, which must not alter the sound." : "Up to 10 bands plus a preamp. Off by default; with it off, playback is exactly as it was. While it is on the signal path reads MODIFIED. Switching it on or off applies from the next track; band changes apply at once.";
+                        Toggle { checked: SettingsState.eq-enabled; toggled(v) => { SettingsState.eq-enabled = v; SettingsState.changed-bool("eq", v); } }
+                    }
+                    if SettingsState.eq-enabled: Row {
+                        label: "Equalizer preset";
+                        hint: "Import an AutoEq ParametricEQ.txt file for your headphones (autoeq.app). Slate ships no presets.";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { label: "Import AutoEq file…"; primary: true; clicked => { SettingsState.action("eq-import"); } }
+                            Button { label: "Add band"; enabled: SettingsState.eq-bands.length < 10; clicked => { SettingsState.action("eq-add"); } }
+                            Button { label: "Reset"; clicked => { SettingsState.action("eq-reset"); } }
+                        }
+                    }
+                    if SettingsState.eq-enabled: Row {
+                        label: "Preamp (dB)";
+                        hint: "Lower this if boosted bands make the sound distort. Press Enter to apply.";
+                        TextField { text <=> SettingsState.eq-preamp; placeholder: "0.0"; field-width: 100px; accepted(t) => { SettingsState.changed-str("eq-preamp", t); } }
+                    }
+                    if SettingsState.eq-enabled && SettingsState.eq-status != "": Text { text: SettingsState.eq-status; color: Theme.text-muted; wrap: word-wrap; font-size: 12px; }
+                    if SettingsState.eq-enabled: VerticalLayout {
+                        spacing: 6px;
+                        for b[i] in SettingsState.eq-bands: HorizontalLayout {
+                            spacing: 8px;
+                            Segmented {
+                                options: ["Peak", "Low shelf", "High shelf"];
+                                index: b.kind;
+                                picked(k) => { SettingsState.action("eq-kind:" + i + ":" + k); }
+                            }
+                            TextField { text: b.freq; placeholder: "Hz"; field-width: 84px; accepted(t) => { SettingsState.changed-str("eq-freq:" + i, t); } }
+                            TextField { text: b.gain; placeholder: "dB"; field-width: 72px; accepted(t) => { SettingsState.changed-str("eq-gain:" + i, t); } }
+                            TextField { text: b.q; placeholder: "Q"; field-width: 64px; accepted(t) => { SettingsState.changed-str("eq-q:" + i, t); } }
+                            Button { label: "✕"; min-width: 36px; danger: true; clicked => { SettingsState.action("eq-remove:" + i); } }
+                        }
+                        if SettingsState.eq-bands.length > 0: Text { text: "Frequency (Hz) · gain (dB) · Q. Press Enter in a field to apply."; color: Theme.text-muted; font-size: 11px; }
                     }
                     if SettingsState.show-alsa-options: Row {
                         label: "Exclusive mode";

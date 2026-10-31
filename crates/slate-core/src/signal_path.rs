@@ -63,6 +63,12 @@ pub struct SignalPath {
     /// Two tracks are being mixed for a crossfade: the path is MODIFIED while it lasts.
     pub crossfading: bool,
 
+    /// The parametric equalizer is in the audio path: the path is MODIFIED while it is.
+    pub equalizer: bool,
+    /// Bands of that equalizer and its preamp, for the Signal Path panel.
+    pub eq_bands: u32,
+    pub eq_preamp_db: f32,
+
     /// OS-mixer info (PulseAudio/PipeWire). None when probe failed or
     /// pactl is unavailable.
     pub os_mixer: Option<crate::pipeline_probe::OsMixerInfo>,
@@ -111,6 +117,10 @@ impl SignalPathTracker {
             s.format_fallback_from = None;
             s.format_fallback_to = None;
             s.norm_gain_factor = 1.0; // next track may have no RG; don't carry old gain
+                                      // The equalizer belongs to the pipeline: the next one says whether it has it.
+            s.equalizer = false;
+            s.eq_bands = 0;
+            s.eq_preamp_db = 0.0;
             s.clone()
         };
         self.emit(snap);
@@ -133,6 +143,25 @@ impl SignalPathTracker {
                 return;
             }
             s.crossfading = on;
+            s.clone()
+        };
+        self.emit(snap);
+    }
+
+    /// The equalizer element exists in the running pipeline (or no longer does).
+    pub fn set_equalizer(&self, bands: Option<(u32, f32)>) {
+        let snap = {
+            let mut s = self.state.lock_safe();
+            let (on, n, pre) = match bands {
+                Some((n, pre)) => (true, n, pre),
+                None => (false, 0, 0.0),
+            };
+            if s.equalizer == on && s.eq_bands == n && s.eq_preamp_db == pre {
+                return;
+            }
+            s.equalizer = on;
+            s.eq_bands = n;
+            s.eq_preamp_db = pre;
             s.clone()
         };
         self.emit(snap);
@@ -357,6 +386,7 @@ pub struct Verdict {
     pub normalization_altered: bool,
     pub lossy_format_change: bool,
     pub lossless_promotion: bool,
+    pub equalizer: bool,
 }
 
 /// "Pristine" means every sample the decoder produced reaches the DAC with all
@@ -395,6 +425,7 @@ pub fn verdict(sp: &SignalPath) -> Verdict {
         && !user_altered
         && !norm_altered
         && !sp.crossfading
+        && !sp.equalizer
         && !lossy
         && dac_matches;
 
@@ -405,6 +436,7 @@ pub fn verdict(sp: &SignalPath) -> Verdict {
         normalization_altered: norm_altered,
         lossy_format_change: lossy,
         lossless_promotion: format_changed && !lossy,
+        equalizer: sp.equalizer,
     }
 }
 
@@ -457,6 +489,16 @@ mod verdict_tests {
         sp.volume_normalization = true;
         sp.norm_gain_factor = 0.8;
         assert!(verdict(&sp).normalization_altered && !verdict(&sp).pristine);
+    }
+
+    #[test]
+    fn the_equalizer_makes_the_path_modified_and_is_cleared_per_track() {
+        let sp = pristine_path();
+        assert!(!sp.equalizer && verdict(&sp).pristine);
+        let mut sp = pristine_path();
+        sp.equalizer = true;
+        let v = verdict(&sp);
+        assert!(!v.pristine && v.equalizer);
     }
 
     #[test]

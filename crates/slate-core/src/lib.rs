@@ -41,6 +41,7 @@ pub mod discord_ipc {
 pub mod embedded_config;
 pub mod embedded_lastfm;
 pub mod embedded_librefm;
+pub mod eq;
 pub mod error;
 pub mod http_util;
 pub mod idle_inhibit;
@@ -222,6 +223,9 @@ pub struct Settings {
     /// Keep consecutive tracks of one album gapless.
     #[serde(default = "defaults::yes")]
     pub crossfade_skip_same_album: bool,
+    /// Parametric equalizer (off by default; see `eq`).
+    #[serde(default)]
+    pub eq: crate::eq::Settings,
     #[serde(default = "defaults::max_quality")]
     pub max_quality: String,
     #[serde(default)]
@@ -298,6 +302,7 @@ impl Default for Settings {
             gapless: true,
             crossfade_secs: 0,
             crossfade_skip_same_album: true,
+            eq: Default::default(),
             max_quality: "HI_RES_LOSSLESS".to_string(),
             scrobble: Default::default(),
             proxy: Default::default(),
