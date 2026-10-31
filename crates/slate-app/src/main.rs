@@ -49,6 +49,8 @@ mod smart;
 mod sort;
 mod suggest;
 mod themes;
+#[cfg(test)]
+mod ui_shots;
 mod uiprefs;
 mod updates;
 mod versions_ui;

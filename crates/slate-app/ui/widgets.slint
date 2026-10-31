@@ -142,14 +142,20 @@ export component Segmented inherits Rectangle {
         spacing: 2px;
         for opt[i] in root.options: Rectangle {
             border-radius: 14px;
-            min-width: 56px;
+            min-width: 44px;
             background: i == root.index ? Theme.surface-raised : (st.has-hover ? Theme.surface-raised.with-alpha(0.4) : transparent);
-            Text {
+            // Padding around the label gives each option at least its text's width, so options
+            // never overlap; a row that does not fit scrolls (tab bar) or wraps (Row).
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                Text {
                 text: opt;
                 color: i == root.index ? Theme.text : Theme.text-muted;
                 font-weight: i == root.index ? 700 : 400;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+                }
             }
             st := TouchArea {
                 mouse-cursor: MouseCursor.pointer;

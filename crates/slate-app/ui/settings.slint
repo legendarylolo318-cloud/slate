@@ -134,21 +134,31 @@ export global SettingsState {
 component Row inherits Rectangle {
     in property <string> label;
     in property <string> hint;
-    min-height: 52px;
-    HorizontalLayout {
-        padding-top: 8px;
-        padding-bottom: 8px;
-        spacing: 16px;
-        VerticalLayout {
-            horizontal-stretch: 1;
-            alignment: center;
-            Text { text: root.label; color: Theme.text; wrap: word-wrap; }
-            if root.hint != "": Text { text: root.hint; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; }
-        }
-        VerticalLayout {
-            alignment: center;
-            @children
-        }
+    // The control sits on the right; when the row is too narrow to keep at least 200px for
+    // the text beside it, it moves under the text. Placed by hand (not a layout) so the text
+    // knows its width up front and the row grows to fit wrapped descriptions.
+    property <length> ctl-w: min(ctl.preferred-width, root.width);
+    property <bool> stacked: root.width - root.ctl-w - 16px < 200px;
+    property <length> text-w: root.stacked ? root.width : root.width - root.ctl-w - 16px;
+    property <length> text-h: texts.preferred-height;
+    height: root.stacked
+        ? root.text-h + ctl.preferred-height + 24px
+        : max(52px, max(root.text-h, ctl.preferred-height) + 16px);
+    texts := VerticalLayout {
+        x: 0;
+        y: root.stacked ? 8px : (root.height - root.text-h) / 2;
+        width: root.text-w;
+        height: root.text-h;
+        Text { text: root.label; color: Theme.text; wrap: word-wrap; }
+        if root.hint != "": Text { text: root.hint; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; }
+    }
+    ctl := VerticalLayout {
+        x: root.stacked ? 0 : root.width - root.ctl-w;
+        y: root.stacked ? root.text-h + 16px : (root.height - self.height) / 2;
+        width: root.ctl-w;
+        height: self.preferred-height;
+        alignment: center;
+        @children
     }
     Rectangle { y: parent.height - 1px; height: 1px; background: Theme.surface-raised; }
 }
@@ -162,19 +172,27 @@ export component SettingsPage inherits Rectangle {
         padding: root.compact ? 12px : 24px;
         spacing: 12px;
         Text { text: "Settings"; font-size: 30px; font-weight: 800; color: Theme.text; }
-        ScrollView {
+        tabs-sv := ScrollView {
             height: 38px;
             content-height: 38px;
-            Segmented {
+            // Scrolls sideways when the tabs do not fit.
+            content-width: max(self.visible-width, tabs-seg.preferred-width);
+            tabs-seg := Segmented {
+                x: 0;
+                width: self.preferred-width;
                 options: root.tabs;
                 index <=> SettingsState.tab;
             }
         }
-        TextField {
-            text <=> SettingsState.query;
-            placeholder: "Search settings";
-            field-width: 320px;
-            edited(t) => { SettingsState.search-changed(t); }
+        // Wrapped so its fixed width does not cap the width of the whole page.
+        HorizontalLayout {
+            alignment: start;
+            TextField {
+                text <=> SettingsState.query;
+                placeholder: "Search settings";
+                field-width: 320px;
+                edited(t) => { SettingsState.search-changed(t); }
+            }
         }
         if SettingsState.query != "": VerticalLayout {
             spacing: 4px;
@@ -193,10 +211,13 @@ export component SettingsPage inherits Rectangle {
             background: Theme.surface-raised;
             Text { text: SettingsState.status; color: Theme.text; overflow: elide; horizontal-alignment: center; vertical-alignment: center; }
         }
-        ScrollView {
+        page := ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
-                max-width: 760px;
+                // Fills the page up to 760px; narrower windows get the visible width.
+                // Room on the right for the scroll bar, which floats over the content.
+                x: 0;
+                width: min(760px, page.visible-width - 14px);
                 alignment: start;
 
                 if SettingsState.tab == 0 && SettingsState.query == "": VerticalLayout {
