@@ -456,7 +456,8 @@ mod shortcut_overlay_tests {
     /// handler must not handle anything the keymap does not know.
     #[test]
     fn every_in_app_action_is_handled_in_app_slint() {
-        let app = include_str!("../ui/app.slint");
+        // Windows checkouts may have CRLF line endings.
+        let app = include_str!("../ui/app.slint").replace("\r\n", "\n");
         let start = app.find("key-pressed(e)").unwrap();
         let handler = &app[start..start + app[start..].find("reject\n        }").unwrap()];
         let mut handled = Vec::new();
