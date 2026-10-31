@@ -54,7 +54,8 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
   agents: see [docs-assets/MCP.md](docs-assets/MCP.md).
 - 15 theme presets plus your own themes (editor with contrast warnings, palette from the
   album cover, `.slatetheme` import / export), `theme.json` with live reload, interface scale.
-- MPRIS and tray on Linux; media controls (SMTC), tray and sleep prevention on Windows.
+- MPRIS and tray on Linux; media controls (SMTC), tray and sleep prevention on Windows (the
+  Windows parts are built and tested in CI but have not been used on a real Windows desktop yet).
   Optional global shortcuts (Ctrl+Alt+Space / → / ←). Every shortcut can be rebound in
   Settings → Shortcuts; defaults: `Space` play/pause, `←/→` seek, `Ctrl+←/→` previous/next,
   `M` mute, `S` shuffle, `R` repeat, `Q` queue, `L` lyrics, `F` full screen, `/` search,
@@ -84,7 +85,8 @@ the next few tracks. Guests can suggest tracks for you to approve.
 Security, performance and feature-parity review results are in [REVIEW.md](REVIEW.md).
 
 `slate --self-test --network` checks that GStreamer finds the plugins it needs and can
-stream over HTTPS, then exits (useful for packaged builds).
+stream over HTTPS, then exits (useful for packaged builds). `slate --self-test --party-relay`
+checks that the iroh relay a party would use (the default, or your custom one) is reachable.
 
 ## Build
 

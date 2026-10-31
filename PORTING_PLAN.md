@@ -103,8 +103,8 @@ Events the core emits (now through `EventSink`): `audio-error`, `audio-resampled
 | Feature | Plan | Status |
 |---|---|---|
 | Window, renderer fallback (Skia-Vulkan → Skia-GL → FemtoVG → software; `SLINT_BACKEND` override) | `bootstrap.rs`: select + startup-failure respawn with next renderer | done; Skia/Vulkan verified on this machine (Wayland), fallbacks untested |
-| MPRIS / SMTC | Linux: `mpris-server` (shuffle/loop/seek needed, souvlaki lacks them) in `platform/mpris.rs` — **done, registered on D-Bus, shuffle property round-trips**. Windows SMTC via `souvlaki`: todo |
-| Tray | Linux `ksni` in `platform/tray.rs` — **done** (registers; menu clicks not exercised). Close-to-tray via `on_close_requested`. Windows `tray-icon`: todo |
+| MPRIS / SMTC | Linux: `mpris-server` (shuffle/loop/seek needed, souvlaki lacks them) in `platform/mpris.rs` — **done, registered on D-Bus, shuffle property round-trips**. Windows SMTC via `souvlaki`: **done** in `platform/win_smtc.rs` (built and tested in CI, not used on a real Windows desktop) |
+| Tray | Linux `ksni` in `platform/tray.rs` — **done** (registers; menu clicks not exercised). Close-to-tray via `on_close_requested`. Windows tray: **done** in `platform/win_tray.rs` (same caveat) |
 | Deep links `tidal://`, single instance | .desktop MimeType + IPC forward | todo |
 | Linux audio: DAC detection `/proc/asound` | in core `audio.rs` | done |
 | Windows audio: `wasapi2sink exclusive=true`; hide ALSA-only options | todo |

@@ -102,6 +102,43 @@ async fn bind(relay: Option<&str>, accept: bool) -> Result<Endpoint, String> {
         .map_err(|e| format!("Could not start networking: {e}"))
 }
 
+/// What `slate --self-test --party-relay` found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayReport {
+    /// The relay this Slate would use ("default relays" or the configured URL).
+    pub which: String,
+    /// The relay our endpoint connected to.
+    pub home: String,
+    pub millis: u128,
+}
+
+/// Starts an endpoint (nothing else) and waits up to `wait` for it to reach its relay. Used by
+/// the self-test only; the endpoint is closed again before returning.
+pub async fn check_relay(relay: Option<&str>, wait: Duration) -> Result<RelayReport, String> {
+    let which = match relay.map(str::trim) {
+        Some("none") => return Err("Relays are disabled (\"none\"): nothing to check.".into()),
+        Some(u) if !u.is_empty() => u.to_string(),
+        _ => "default relays".to_string(),
+    };
+    let endpoint = bind(relay, false).await?;
+    let t0 = Instant::now();
+    let online = tokio::time::timeout(wait, endpoint.online()).await.is_ok();
+    let millis = t0.elapsed().as_millis();
+    let home = endpoint.addr().relay_urls().next().map(ToString::to_string);
+    endpoint.close().await;
+    match (online, home) {
+        (true, Some(home)) => Ok(RelayReport {
+            which,
+            home,
+            millis,
+        }),
+        _ => Err(format!(
+            "Could not reach the {which} within {} seconds. Check your network, firewall or proxy.",
+            wait.as_secs()
+        )),
+    }
+}
+
 async fn write_frame(w: &mut SendStream, bytes: &[u8]) -> Result<(), String> {
     let len = u16::try_from(bytes.len()).map_err(|_| "message too large".to_string())?;
     w.write_all(&len.to_be_bytes())
@@ -1013,6 +1050,22 @@ mod tests {
         assert!(decode_ticket("nope!").is_err());
         assert!(decode_ticket("AAAA").is_err());
         assert!(decode_ticket("").is_err());
+    }
+
+    #[tokio::test]
+    async fn the_relay_check_refuses_bad_urls_and_reports_an_unreachable_relay() {
+        let e = check_relay(Some("not a url"), Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(e.contains("not valid"), "{e}");
+        let e = check_relay(Some("none"), Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(e.contains("disabled"), "{e}");
+        let e = check_relay(Some("https://127.0.0.1:9"), Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        assert!(e.contains("Could not reach"), "{e}");
     }
 
     #[test]

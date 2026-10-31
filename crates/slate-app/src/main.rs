@@ -10,7 +10,6 @@ mod agent;
 mod backend;
 mod bootstrap;
 mod bulk;
-// Only Linux has OS media controls and a tray so far (SMTC/tray on Windows are tracked issues).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod compare;
 mod control;

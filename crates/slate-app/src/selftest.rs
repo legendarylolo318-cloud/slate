@@ -30,6 +30,9 @@ const PLATFORM: &[&str] = &["alsasink"];
 const PLATFORM: &[&str] = &[];
 
 pub fn run() -> i32 {
+    if std::env::args().any(|a| a == "--party-relay") {
+        return party_relay();
+    }
     let mut failed = 0;
     let mut report = |ok: bool, what: &str| {
         println!("{} {what}", if ok { "ok  " } else { "FAIL" });
@@ -69,6 +72,47 @@ pub fn run() -> i32 {
         );
     }
     i32::from(failed > 0)
+}
+
+/// `slate --self-test --party-relay`: can this machine reach the relay a party would use (the
+/// default iroh relays, or the one set under Settings → Party)? Prints one line, exits 0 / 1.
+#[cfg(feature = "party")]
+fn party_relay() -> i32 {
+    let relay = crate::uiprefs::UiPrefs::load().party_relay;
+    let relay = Some(relay.as_str()).filter(|r| !r.trim().is_empty());
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            println!("FAIL party relay: could not start: {e}");
+            return 1;
+        }
+    };
+    let result = rt.block_on(slate_core::party::net::check_relay(
+        relay,
+        std::time::Duration::from_secs(15),
+    ));
+    match result {
+        Ok(r) => {
+            println!(
+                "ok   party relay reachable: {} (connected to {} in {} ms)",
+                r.which, r.home, r.millis
+            );
+            0
+        }
+        Err(e) => {
+            println!("FAIL party relay: {e}");
+            1
+        }
+    }
+}
+
+#[cfg(not(feature = "party"))]
+fn party_relay() -> i32 {
+    println!("FAIL party relay: this build of Slate has no listening party");
+    1
 }
 
 fn https_fetch() -> Result<(), String> {
