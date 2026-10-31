@@ -75,6 +75,31 @@ pub fn already_in(track: &Track, existing: &std::collections::HashSet<TrackKey>)
     existing.contains(&key)
 }
 
+/// (playlist, track) drops being added right now.
+static IN_FLIGHT: std::sync::Mutex<Vec<(String, u64)>> = std::sync::Mutex::new(Vec::new());
+
+/// Marks one drop as in progress until dropped.
+struct InFlight((String, u64));
+
+impl InFlight {
+    fn take(key: (String, u64)) -> Option<Self> {
+        let mut v = IN_FLIGHT.lock().ok()?;
+        if v.contains(&key) {
+            return None;
+        }
+        v.push(key.clone());
+        Some(Self(key))
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        if let Ok(mut v) = IN_FLIGHT.lock() {
+            v.retain(|k| *k != self.0);
+        }
+    }
+}
+
 /// Installs the callbacks that make and read payloads. UI thread, once.
 pub fn install(window: &AppWindow, backend: &Backend) {
     let d = window.global::<Dnd>();
@@ -117,11 +142,29 @@ impl Backend {
         }
     }
 
-    /// Adds `track` to the playlist, asking first if it is already there.
+    /// Adds `track` to the playlist, asking first if it is already there. Playlists of other
+    /// users refuse the drop; a second drop of the same track while the first is still being
+    /// added is ignored.
     fn drop_track_on_playlist(&self, track: Track, uuid: String) {
+        if uuid.starts_with("smart:") {
+            return;
+        }
+        let key = (uuid.clone(), track.id);
+        let Some(_guard) = InFlight::take(key) else {
+            return;
+        };
         let this = self.clone();
         self.rt.spawn(async move {
+            let _guard = _guard;
             let Some(state) = this.state() else { return };
+            let owner = slate_core::commands::metadata::get_playlist_details(&state, uuid.clone())
+                .await
+                .ok()
+                .and_then(|d| d["creator"]["id"].as_u64());
+            if owner.is_none() || owner != this.user_id().await {
+                this.ui(|w| w.set_error("You can only add tracks to your own playlists.".into()));
+                return;
+            }
             let existing =
                 match lib_cmds::get_playlist_tracks(&state, this.app.clone(), uuid.clone()).await {
                     Ok(t) => slate_core::playlist_tools::keys_of(&t),
@@ -214,6 +257,16 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_second_drop_of_the_same_track_waits_for_the_first() {
+        let a = InFlight::take(("p".into(), 1));
+        assert!(a.is_some());
+        assert!(InFlight::take(("p".into(), 1)).is_none());
+        assert!(InFlight::take(("p".into(), 2)).is_some());
+        drop(a);
+        assert!(InFlight::take(("p".into(), 1)).is_some());
+    }
 
     #[test]
     fn payloads_parse() {

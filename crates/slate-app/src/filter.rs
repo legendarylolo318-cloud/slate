@@ -125,10 +125,21 @@ impl Backend {
                 .map(|c| view_for(&c, &text, qf))
                 .unwrap_or_default();
             let status = format!("{} of {total} tracks", view.len());
+            // A newer keystroke or another page wins; this answer is dropped.
+            let current = || {
+                this.lib.generation_now() == generation && LATEST.load(Ordering::SeqCst) == ticket
+            };
+            if !current() {
+                return;
+            }
             if let Ok(mut v) = this.lib.view.lock() {
                 *v = Some(view.clone());
             }
+            let lib = std::sync::Arc::clone(&this.lib);
             this.ui(move |w| {
+                if lib.generation_now() != generation || LATEST.load(Ordering::SeqCst) != ticket {
+                    return;
+                }
                 with_tracks(&w, |m| m.set_view(Some(view)));
                 w.set_filter_status(status.into());
             });
