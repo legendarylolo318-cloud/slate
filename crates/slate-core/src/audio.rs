@@ -1989,7 +1989,6 @@ struct FadeState {
     /// Bumped to end a fade early (skip, seek, stop) so its ramp thread quits.
     generation: AtomicU64,
     fading: AtomicBool,
-    paused: AtomicBool,
 }
 
 struct ArmedFade {
@@ -2017,7 +2016,6 @@ impl FadeState {
             outgoing: Mutex::new(None),
             generation: AtomicU64::new(0),
             fading: AtomicBool::new(false),
-            paused: AtomicBool::new(false),
         }
     }
 }
@@ -3957,19 +3955,13 @@ impl AudioPlayer {
         })
     }
     pub fn pause(&self) -> Result<(), String> {
-        self.fade.paused.store(true, Ordering::SeqCst);
-        if let Some(out) = self.outgoing_tx() {
-            let (reply, _rx) = mpsc::channel();
-            let _ = out.send(AudioCommand::Pause { reply });
-        }
-        self.send_cmd(|reply| AudioCommand::Pause { reply })
+        let result = self.send_cmd(|reply| AudioCommand::Pause { reply });
+        // Pausing mid-fade finishes it: the old track stops, the new one waits at full level,
+        // and no ramp thread is left waking while paused.
+        self.end_fade();
+        result
     }
     pub fn resume(&self) -> Result<(), String> {
-        self.fade.paused.store(false, Ordering::SeqCst);
-        if let Some(out) = self.outgoing_tx() {
-            let (reply, _rx) = mpsc::channel();
-            let _ = out.send(AudioCommand::Resume { reply });
-        }
         self.send_cmd(|reply| AudioCommand::Resume { reply })
     }
     pub fn stop(&self) -> Result<(), String> {
@@ -4218,7 +4210,6 @@ impl AudioPlayer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outgoing.clone());
         fade.fading.store(true, Ordering::SeqCst);
-        fade.paused.store(false, Ordering::SeqCst);
         fade.signal_path.set_crossfading(true);
         let generation = fade.generation.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -4239,10 +4230,7 @@ impl AudioPlayer {
                     factor: crate::crossfade::fade_in(t),
                 });
                 std::thread::sleep(FADE_STEP);
-                // Paused: the ramp waits where it is.
-                if !player.fade.paused.load(Ordering::SeqCst) {
-                    elapsed += FADE_STEP;
-                }
+                elapsed += FADE_STEP;
             }
             if player.fade.generation.load(Ordering::SeqCst) == generation {
                 player.end_fade();
