@@ -37,4 +37,10 @@ Notes for anyone working on Slate's code. What changed per release is in
   fails within 5 s of start-up the app relaunches itself with the next one
   (`SLATE_RENDERER_INDEX`).
 - The interface scale uses `SLINT_SCALE_FACTOR` at launch, so changing it needs a restart.
-- `slate --self-test --network` checks GStreamer plugins and HTTPS streaming, then exits.
+- `slate --self-test --network` checks GStreamer plugins and HTTPS streaming, then exits;
+  `slate --self-test --party-relay` checks that the party's iroh relay is reachable.
+- Party rules are pure and tested in `slate-core/src/party/requests.rs` (caps, duplicates, fair
+  queue, vote skip, handoff); `proto.rs` is the versioned wire format (protocol 2 since 1.3) and
+  `net.rs` the transport. `party_ui.rs` in the app only connects them to the queue and the UI.
+- The equalizer (`eq.rs`) adds its GStreamer elements to the pipeline only while it is on and
+  the output is not exclusive or bit-perfect; with it off the chain is unchanged.

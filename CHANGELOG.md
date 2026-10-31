@@ -1,5 +1,96 @@
 # Changelog
 
+## [1.3.0] - Unreleased
+
+### Added
+- Listening party, guest requests (Settings → Party). First, a fix: in 1.2 the host could approve
+  or deny suggestions but a guest had no way to send one. Now guests can use "Suggest to party" in
+  any track's right-click menu, or the ＋ on a search result, and see a read-only "Up next" list
+  that says who suggested each track.
+  - Host: a request tray with guest name, track and quality, Approve / Deny and Approve all /
+    Deny all. Approved requests go where you choose: Play next, Add to end, or Fair queue
+    (guests take turns, so one guest cannot flood the queue); the choice is remembered.
+  - Host modes: Approval required (default), Auto-approve, Requests off. Each guest can have 3
+    requests waiting (1 / 2 / 3 / 5 / 10 in settings). A track that is already waiting, already
+    queued or was just played is turned down with a message to the guest, and "No explicit
+    tracks" turns down explicit ones.
+  - A request shows "unavailable for N guests" when guests report they cannot play it (region).
+    A guest whose account cannot play a track tries another version of the song and otherwise
+    skips it for themselves only; the party carries on.
+  - Co-host: the host can promote a guest, who can then approve and deny requests, skip and
+    reorder. Vote skip: optional, the host picks the share of guests needed (25 / 50 / 75 %).
+  - Host handoff: a guest that loses the host keeps the party for 60 seconds and tries to
+    reconnect; after that the co-host (or the guest who joined first) is offered the party and
+    can take it over with a new invite link.
+  - A guest who joins late gets the current track, position and the next tracks straight away.
+  - Protocol version 2. A 1.2 guest joining a 1.3 host (or the reverse) is told which side is
+    newer instead of failing; messages from a future version are ignored.
+  - MCP: `get_party_requests`, `approve_request` (can be undone from the activity log) and
+    `deny_request` (needs `confirm: true` and the in-app Allow / Deny).
+- Queue panel "⋯" menu: "Save queue as playlist" (an unlisted TIDAL playlist, like the 1.2
+  tools) and "Queue snapshots…": save the queue under a name, restore it (replacing the queue
+  or adding to it), rename and delete. Snapshots are kept on your computer (50 at most, 1000
+  tracks each) and the list is read from disk only when the dialog opens.
+- Credits: people in the Credits panel are clickable. Producers, writers and engineers open their
+  artist page when TIDAL gives an artist id for them, otherwise a search for the name. There is
+  a "Credits" button on the full-screen player as well as in the track right-click menu.
+- Parametric equalizer (Settings → Playback → Equalizer, off by default): up to 10 bands (peak,
+  low shelf, high shelf with frequency, gain and Q) and a preamp, and import of an AutoEq
+  `ParametricEQ.txt` file. Slate ships no presets. The equalizer is added to the audio pipeline
+  only while it is on; with it off the pipeline is the same as in 1.2. While it is on the Signal
+  Path reads MODIFIED. It switches itself off while exclusive or bit-perfect output is on and the
+  page says why.
+- `slate --self-test --party-relay` checks that the default iroh relay (or your custom one) is
+  reachable, prints the result and exits.
+
+### Changed
+- Party settings moved into the Party page: request mode, placement, per-guest limit, explicit
+  filter and vote skip replace the single "Let guests suggest tracks" switch. Your guest name can
+  be set next to the Join field (it used to be "Guest").
+- Switching the equalizer on or off applies from the next track; changing a band applies to the
+  track that is playing.
+
+### Fixed
+- Guests could never send a track suggestion in 1.2 (the host side was finished, the guest side
+  was not reachable from the interface).
+- README, `main.rs` and `PORTING_PLAN.md` disagreed about Windows media controls and the tray;
+  they are implemented (not yet used on a real Windows desktop, see below), and the text now
+  says so.
+
+### Notes
+- Resource budget: every new feature is lazy. Nothing is allocated, spawned, loaded or fetched
+  until it is opened or switched on, and no new thread, timer or poll runs otherwise. The party
+  extras live behind the existing `party` feature. No new crates were added. Memory, GPU memory
+  and CPU were **not measured** against 1.2 for this release; the claim rests on the design
+  (see "Not tested before release").
+- Host handoff keeps the party alive and offers it, but the other guests are not moved
+  automatically: the new host shares a new link.
+- A guest's plan quality (a track above their subscription) is not detected separately: TIDAL
+  streams the best quality the plan allows, and a track that cannot be played at all is
+  reported as unavailable.
+- Queue snapshots stay on the computer when you sign out; they hold track details only.
+- The version number in `Cargo.toml` is still 1.2.0; the release commit changes it.
+
+### Not tested before release
+- Almost everything with a screen. The Equalizer section and the Party page were rendered
+  offscreen with sample data and looked right; nothing was clicked in a running app. The queue
+  "⋯" menu, the snapshot dialog, clickable credits, the full-screen Credits button, the ＋ on
+  search results and the "Suggest to party" menu item were compiled but never rendered.
+- A party with two real Slates on different networks (the loopback tests cover messages,
+  requests, caps, co-host and version refusal, but not hole punching, relays or a lost host
+  coming back); the host-handoff reconnect and "Take over" flow have unit tests for the rules,
+  not an end-to-end run.
+- Fair-queue placement and approve-then-play with real TIDAL tracks, and the region fallback to
+  another version.
+- The MCP tools `get_party_requests`, `approve_request` and `deny_request` against a real
+  agent.
+- The equalizer through the speakers: the GStreamer element is tested for the gain it applies,
+  but nobody has listened to it. It is untested with Dolby Atmos tracks and on Windows (the
+  `equalizer` plugin is in the Windows bundle; the AppImage bundle was not checked).
+- Importing AutoEq files from the wild beyond the common `PK` / `LSC` / `HSC` format.
+- Memory, GPU memory and CPU against 1.2 (the +10 MB / +10 MB / no-extra-CPU budget).
+- Windows (everything above), and Windows media controls and tray, which were already untested.
+
 ## [1.2.0] - 2026-10-30
 
 ### Added

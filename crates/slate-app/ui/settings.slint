@@ -543,7 +543,10 @@ export component SettingsPage inherits Rectangle {
                             TextField { text: b.freq; placeholder: "Hz"; field-width: 84px; accepted(t) => { SettingsState.changed-str("eq-freq:" + i, t); } }
                             TextField { text: b.gain; placeholder: "dB"; field-width: 72px; accepted(t) => { SettingsState.changed-str("eq-gain:" + i, t); } }
                             TextField { text: b.q; placeholder: "Q"; field-width: 64px; accepted(t) => { SettingsState.changed-str("eq-q:" + i, t); } }
-                            Button { label: "✕"; min-width: 36px; danger: true; clicked => { SettingsState.action("eq-remove:" + i); } }
+                            Rectangle {
+                                width: 44px;
+                                Button { label: "✕"; width: 44px; danger: true; clicked => { SettingsState.action("eq-remove:" + i); } }
+                            }
                         }
                         if SettingsState.eq-bands.length > 0: Text { text: "Frequency (Hz) · gain (dB) · Q. Press Enter in a field to apply."; color: Theme.text-muted; font-size: 11px; }
                     }
