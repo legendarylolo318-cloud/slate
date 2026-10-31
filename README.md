@@ -38,7 +38,7 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 - Scrobbling to Last.fm, Libre.fm and ListenBrainz; TIDAL play reporting (toggleable);
   Discord Rich Presence.
 - HTTP / HTTPS / SOCKS5 proxy with fail-closed behaviour.
-- MCP server (`127.0.0.1:5577`) and OBS overlay (`127.0.0.1:5578`), both off by default.
+- MCP server (`127.0.0.1:5577`) and OBS overlay (`127.0.0.1:5578`), both off by default. The MCP server has queue, search, playlist and context tools, approvals and an activity log with undo for AI agents: see [docs-assets/MCP.md](docs-assets/MCP.md).
 - 15 theme presets, custom colours with a built-in picker, `theme.json` with live reload,
   interface scale setting.
 - MPRIS and tray on Linux; media controls (SMTC), tray and sleep prevention on Windows.
