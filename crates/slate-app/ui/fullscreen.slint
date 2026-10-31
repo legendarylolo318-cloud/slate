@@ -29,6 +29,7 @@ export component FullscreenPlayer inherits Rectangle {
     callback close();
     callback go-album();
     callback go-artist();
+    callback show-credits();
     callback toggle-play();
     callback next();
     callback previous();
@@ -106,6 +107,11 @@ export component FullscreenPlayer inherits Rectangle {
                     IconButton { icon: root.repeat == 2 ? @image-url("icons/repeat-one.svg") : @image-url("icons/repeat.svg"); active: root.repeat != 0; clicked => { root.cycle-repeat(); } }
                     IconButton { icon: root.favorite ? @image-url("icons/heart-filled.svg") : @image-url("icons/heart.svg"); active: root.favorite; clicked => { root.toggle-favorite(); } }
                     IconButton { icon: @image-url("icons/lyrics.svg"); active: root.show-lyrics; clicked => { root.show-lyrics = !root.show-lyrics; } }
+                    Rectangle {
+                        width: 64px;
+                        Text { text: "Credits"; color: cr.has-hover ? Theme.accent : Theme.text-muted; vertical-alignment: center; horizontal-alignment: center; }
+                        cr := TouchArea { enabled: root.has-track; mouse-cursor: MouseCursor.pointer; clicked => { root.show-credits(); } }
+                    }
                 }
             }
         }

@@ -121,3 +121,12 @@ export global PartyState {
     /// A guest may send the host a track.
     in-out property <bool> can-suggest;
 }
+
+/// One line of the credits panel: a group heading, or a person in a role.
+export struct CreditLine {
+    heading: bool,
+    role: string,
+    name: string,
+    /// TIDAL artist id of the person ("" when TIDAL gives none).
+    artist-id: string,
+}

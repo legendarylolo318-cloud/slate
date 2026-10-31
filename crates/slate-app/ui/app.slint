@@ -12,8 +12,8 @@ import { IconButton, TextField, Button, Segmented } from "widgets.slint";
 import { ShortcutOverlay, Shortcut, Shortcuts } from "shortcuts.slint";
 import { ListView } from "std-widgets.slint";
 import { Dnd } from "dnd.slint";
-import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyState, PartyRequest, PartyGuest } from "types.slint";
-export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyRequest, PartyGuest, Shortcut, Shortcuts, Dnd, SettingsState, PartyState, ProfileState, Theme }
+import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyState, PartyRequest, PartyGuest, CreditLine } from "types.slint";
+export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyRequest, PartyGuest, CreditLine, Shortcut, Shortcuts, Dnd, SettingsState, PartyState, ProfileState, Theme }
 
 export enum Screen { loading, login, main }
 
@@ -128,7 +128,9 @@ export component AppWindow inherits Window {
     in-out property <bool> credits-open: false;
     in property <string> credits-title;
     in property <string> credits-status;
-    in property <[KeyValue]> credits-rows;
+    in property <[CreditLine]> credits-rows;
+    // A person in the credits was clicked: their artist id ("" if none) and name.
+    callback credit-clicked(string, string);
     in-out property <int> picker-target: -1;
     in-out property <string> picker-name;
     in-out property <string> folder-name;
@@ -591,6 +593,7 @@ export component AppWindow inherits Window {
             close => { root.fullscreen = false; }
             go-album => { root.fullscreen = false; root.go-current("album"); }
             go-artist => { root.fullscreen = false; root.go-current("artist"); }
+            show-credits => { root.go-current("credits"); }
             toggle-play => { root.toggle-play(); }
             next => { root.next(); }
             previous => { root.previous(); }
@@ -697,18 +700,25 @@ export component AppWindow inherits Window {
                     ListView {
                         vertical-stretch: 1;
                         for c in root.credits-rows: Rectangle {
-                            height: c.value == "" ? 32px : 28px;
-                            if c.value == "": Text {
-                                text: c.key;
+                            height: c.heading ? 32px : 28px;
+                            if c.heading: Text {
+                                text: c.role;
                                 font-size: 11px;
                                 font-weight: 700;
                                 color: Theme.text-muted;
                                 vertical-alignment: bottom;
                             }
-                            if c.value != "": HorizontalLayout {
+                            if !c.heading: HorizontalLayout {
                                 spacing: 12px;
-                                Text { width: 150px; text: c.key; color: Theme.text-muted; vertical-alignment: center; overflow: elide; }
-                                Text { text: c.value; color: Theme.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                Text { width: 150px; text: c.role; color: Theme.text-muted; vertical-alignment: center; overflow: elide; }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    Text { text: c.name; color: cn.has-hover ? Theme.accent : Theme.text; vertical-alignment: center; overflow: elide; }
+                                    cn := TouchArea {
+                                        mouse-cursor: MouseCursor.pointer;
+                                        clicked => { root.credits-open = false; root.fullscreen = false; root.credit-clicked(c.artist-id, c.name); }
+                                    }
+                                }
                             }
                         }
                     }

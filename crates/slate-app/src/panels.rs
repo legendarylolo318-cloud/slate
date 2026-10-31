@@ -280,6 +280,7 @@ impl Backend {
         match kind {
             "album" => self.go_album(track),
             "artist" => self.go_artist(track),
+            "credits" => self.show_credits(track),
             _ => {}
         }
     }

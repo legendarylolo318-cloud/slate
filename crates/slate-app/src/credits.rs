@@ -8,7 +8,8 @@ use slate_core::queue::Track;
 use slate_core::tidal_api::TidalCredit;
 
 use crate::backend::Backend;
-use crate::bootstrap::KeyValue;
+use crate::bootstrap::CreditLine;
+use crate::pages::Route;
 
 /// Bumped for every request, so a slow answer for a track the user has moved
 /// on from is dropped.
@@ -62,20 +63,27 @@ fn group_of(role: &str) -> Group {
     }
 }
 
-/// Rows for the panel: a heading row (empty value) per group, then one row per
-/// role with its people. Roles listed twice are merged; names are not repeated.
-pub fn credit_rows(credits: &[TidalCredit]) -> Vec<(String, String)> {
-    let mut roles: Vec<(Group, String, Vec<String>)> = Vec::new();
+/// One line of the panel: a group heading, or one person in one role.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Line {
+    pub heading: bool,
+    pub role: String,
+    pub name: String,
+    /// TIDAL artist id of the person, when TIDAL gives one.
+    pub artist_id: Option<u64>,
+}
+
+/// Lines for the panel: a heading per group, then one line per person per role. Roles listed
+/// twice are merged; a person is not repeated within a role, and keeps the first artist id
+/// TIDAL gave for them.
+pub fn credit_lines(credits: &[TidalCredit]) -> Vec<Line> {
+    type Person = (String, Option<u64>);
+    let mut roles: Vec<(Group, String, Vec<Person>)> = Vec::new();
     for credit in credits {
         let role = credit.credit_type.trim();
         if role.is_empty() {
             continue;
         }
-        let names = credit
-            .contributors
-            .iter()
-            .map(|c| c.name.trim())
-            .filter(|n| !n.is_empty());
         let slot = match roles
             .iter()
             .position(|(_, r, _)| r.eq_ignore_ascii_case(role))
@@ -86,27 +94,69 @@ pub fn credit_rows(credits: &[TidalCredit]) -> Vec<(String, String)> {
                 roles.len() - 1
             }
         };
-        for name in names {
-            if !roles[slot].2.iter().any(|n| n == name) {
-                roles[slot].2.push(name.to_string());
+        for c in &credit.contributors {
+            let name = c.name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            match roles[slot].2.iter_mut().find(|(n, _)| n == name) {
+                Some(existing) => {
+                    if existing.1.is_none() {
+                        existing.1 = c.id;
+                    }
+                }
+                None => roles[slot].2.push((name.to_string(), c.id)),
             }
         }
     }
-    roles.retain(|(_, _, names)| !names.is_empty());
+    roles.retain(|(_, _, people)| !people.is_empty());
     roles.sort_by_key(|a| (a.0, a.1.to_lowercase()));
-    let mut rows = Vec::new();
+    let mut lines = Vec::new();
     let mut current = None;
-    for (group, role, names) in roles {
+    for (group, role, people) in roles {
         if current != Some(group) {
             current = Some(group);
-            rows.push((group.heading().to_string(), String::new()));
+            lines.push(Line {
+                heading: true,
+                role: group.heading().to_string(),
+                name: String::new(),
+                artist_id: None,
+            });
         }
-        rows.push((role, names.join(", ")));
+        for (i, (name, artist_id)) in people.into_iter().enumerate() {
+            lines.push(Line {
+                heading: false,
+                // The role is written once, beside its first person.
+                role: if i == 0 { role.clone() } else { String::new() },
+                name,
+                artist_id,
+            });
+        }
     }
-    rows
+    lines
+}
+
+/// Where clicking a credited person goes: their artist page when TIDAL gives an id (their
+/// own releases are listed there), otherwise a search for the name.
+pub fn credit_route(artist_id: &str, name: &str) -> Option<Route> {
+    if let Ok(id) = artist_id.parse::<u64>() {
+        if id != 0 {
+            return Some(Route::Artist(id));
+        }
+    }
+    let name = name.trim();
+    (!name.is_empty()).then(|| Route::Search(name.to_string()))
 }
 
 impl Backend {
+    /// A person in the credits panel was clicked.
+    pub fn credit_clicked(&self, artist_id: &str, name: &str) {
+        match credit_route(artist_id, name) {
+            Some(r) => self.navigate(r),
+            None => self.notify("No page for this credit"),
+        }
+    }
+
     /// Row action "Credits": opens the panel for `track`.
     pub(crate) fn show_credits(&self, track: &Track) {
         let request = REQUEST.fetch_add(1, Ordering::SeqCst) + 1;
@@ -121,7 +171,7 @@ impl Backend {
             }
             let (status, rows) = match metadata::get_track_credits(&state, id).await {
                 Ok(credits) => {
-                    let rows = credit_rows(&credits);
+                    let rows = credit_lines(&credits);
                     if rows.is_empty() {
                         ("TIDAL has no credits for this track.".to_string(), rows)
                     } else {
@@ -143,18 +193,24 @@ impl Backend {
         open: bool,
         title: String,
         status: String,
-        rows: Vec<(String, String)>,
+        rows: Vec<Line>,
     ) {
         self.ui(move |w| {
             // A late answer must not reopen a panel the user has closed.
             if REQUEST.load(Ordering::SeqCst) != request || !(open || w.get_credits_open()) {
                 return;
             }
-            let model: Vec<KeyValue> = rows
+            let model: Vec<CreditLine> = rows
                 .into_iter()
-                .map(|(key, value)| KeyValue {
-                    key: key.into(),
-                    value: value.into(),
+                .map(|l| CreditLine {
+                    heading: l.heading,
+                    role: l.role.into(),
+                    name: l.name.into(),
+                    artist_id: l
+                        .artist_id
+                        .map(|i| i.to_string())
+                        .unwrap_or_default()
+                        .into(),
                 })
                 .collect();
             w.set_credits_title(title.into());
@@ -183,16 +239,23 @@ mod tests {
         }
     }
 
+    fn people(lines: &[Line]) -> Vec<(String, String)> {
+        lines
+            .iter()
+            .map(|l| (l.role.clone(), l.name.clone()))
+            .collect()
+    }
+
     #[test]
     fn roles_are_grouped_in_a_fixed_order() {
-        let rows = credit_rows(&[
+        let lines = credit_lines(&[
             credit("Guitar", &["Ann"]),
             credit("Mastering Engineer", &["Bo"]),
             credit("Lyricist", &["Cy"]),
             credit("Producer", &["Di"]),
             credit("Mixer", &["Ed"]),
         ]);
-        let keys: Vec<&str> = rows.iter().map(|(k, _)| k.as_str()).collect();
+        let keys: Vec<&str> = lines.iter().map(|l| l.role.as_str()).collect();
         assert_eq!(
             keys,
             vec![
@@ -207,21 +270,43 @@ mod tests {
                 "Guitar"
             ]
         );
+        assert!(lines[0].heading && !lines[1].heading);
     }
 
     #[test]
-    fn repeated_roles_merge_and_names_are_not_repeated() {
-        let rows = credit_rows(&[
-            credit("Producer", &["Ann", "Bo"]),
-            credit("producer", &["Bo", "Cy"]),
-        ]);
-        assert_eq!(rows[1], ("Producer".to_string(), "Ann, Bo, Cy".to_string()));
+    fn repeated_roles_merge_each_person_gets_a_line_and_ids_are_kept() {
+        let mut a = credit("Producer", &["Ann", "Bo"]);
+        a.contributors[0].id = None;
+        let mut b = credit("producer", &["Ann", "Cy"]);
+        b.contributors[0].id = Some(7);
+        let lines = credit_lines(&[a, b]);
+        assert_eq!(
+            people(&lines[1..]),
+            vec![
+                ("Producer".to_string(), "Ann".to_string()),
+                (String::new(), "Bo".to_string()),
+                (String::new(), "Cy".to_string()),
+            ]
+        );
+        assert_eq!(
+            lines[1].artist_id,
+            Some(7),
+            "the id TIDAL gave later is kept"
+        );
     }
 
     #[test]
     fn roles_without_people_and_blank_names_are_dropped() {
-        assert!(credit_rows(&[credit("Vocals", &[]), credit("Drums", &["  "])]).is_empty());
-        assert!(credit_rows(&[]).is_empty());
-        assert!(credit_rows(&[credit("", &["X"])]).is_empty());
+        assert!(credit_lines(&[credit("Vocals", &[]), credit("Drums", &["  "])]).is_empty());
+        assert!(credit_lines(&[]).is_empty());
+        assert!(credit_lines(&[credit("", &["X"])]).is_empty());
+    }
+
+    #[test]
+    fn a_credited_person_opens_their_artist_page_or_a_search() {
+        assert!(matches!(credit_route("42", "Ann"), Some(Route::Artist(42))));
+        assert!(matches!(credit_route("", " Ann B "), Some(Route::Search(q)) if q == "Ann B"));
+        assert!(matches!(credit_route("0", "Ann"), Some(Route::Search(_))));
+        assert!(credit_route("", "  ").is_none());
     }
 }
