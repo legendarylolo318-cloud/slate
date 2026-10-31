@@ -9,7 +9,9 @@ publish.workspace = true
 build = "build.rs"
 
 [features]
-default = ["renderer-skia-vulkan", "renderer-femtovg", "renderer-software"]
+default = ["renderer-skia-vulkan", "renderer-femtovg", "renderer-software", "party"]
+# Listening party (QUIC via iroh). Off: the Party page says so and no party code is built.
+party = ["slate-core/party"]
 renderer-skia = ["slint/renderer-skia"]
 # Skia's Vulkan path is switched on for Linux only (target section below).
 # Windows uses Skia's Direct3D path, and rust-skia publishes no prebuilt
@@ -19,7 +21,7 @@ renderer-femtovg = ["slint/renderer-femtovg"]
 renderer-software = ["slint/renderer-software"]
 
 [dependencies]
-slate-core = { path = "../slate-core" }
+slate-core = { path = "../slate-core", default-features = false }
 slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "accessibility", "unstable-winit-030"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"

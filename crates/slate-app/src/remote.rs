@@ -170,11 +170,13 @@ impl Backend {
     }
 
     /// Adds tracks (by id) to the end of the queue.
+    #[cfg(feature = "party")]
     pub(crate) fn queue_track_ids(&self, ids: Vec<u64>) {
         self.mcp_play_tracks(ids, "queue".into());
     }
 
     /// Replaces the "next up" list with these tracks (a guest following a party's queue).
+    #[cfg(feature = "party")]
     pub(crate) fn queue_track_ids_replace(&self, ids: Vec<u64>) {
         let this = self.clone();
         self.rt.spawn(async move {
