@@ -780,7 +780,9 @@ fn the_player_publishes_to_mcp_only_while_it_runs() {
         env!("CARGO_MANIFEST_DIR"),
         "/../slate-app/src/remote.rs"
     ))
-    .expect("remote.rs");
+    .expect("remote.rs")
+    // Windows checkouts may have CRLF line endings.
+    .replace("\r\n", "\n");
     let publish = remote
         .split("pub(crate) async fn publish_queue_to_mcp")
         .nth(1)
