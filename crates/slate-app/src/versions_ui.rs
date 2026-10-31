@@ -16,8 +16,9 @@ use crate::pages::Route;
 
 /// What the open dialog is about.
 struct Ctx {
-    /// Row of the open playlist the track sits in, when the page is an owned playlist.
-    playlist_row: Option<(String, usize)>,
+    /// Playlist uuid, the track's index in it and its id, when the page is an owned playlist
+    /// shown in its own order (so the index is the one TIDAL uses).
+    playlist_row: Option<(String, usize, u64)>,
     /// Position in the queue, when asked from the queue panel.
     queue_index: Option<usize>,
     album: bool,
@@ -56,7 +57,16 @@ impl Backend {
         queue_index: Option<usize>,
     ) {
         let playlist_row = match (self.lib.active_kind_pub(), playlist_row) {
-            (Some(SourceKind::Playlist(u)), Some(i)) => Some((u, i)),
+            (Some(SourceKind::Playlist(u)), Some(i))
+                if self.reorderable()
+                    && self
+                        .lib
+                        .owned_open
+                        .lock()
+                        .is_ok_and(|o| o.as_deref() == Some(u.as_str())) =>
+            {
+                Some((u, self.real_index(i), track.id))
+            }
             _ => None,
         };
         let this = self.clone();
@@ -221,10 +231,10 @@ impl Backend {
                     this.notify("Replaced in the queue");
                 }
                 "replace-playlist" => {
-                    let Some((playlist, row)) = playlist_row else {
+                    let Some((playlist, at, old_id)) = playlist_row else {
                         return;
                     };
-                    this.replace_in_playlist(&state, &playlist, this.real_index(row), track.id)
+                    this.replace_in_playlist(&state, &playlist, at, old_id, track.id)
                         .await;
                 }
                 _ => {}
@@ -233,34 +243,76 @@ impl Backend {
     }
 
     /// Puts `new_id` where the track at `at` is, then removes the old one. The playlist is
-    /// edited through the paced client: add, move into place, remove.
+    /// read fresh first and every step checks it is still as expected, so a playlist edited
+    /// elsewhere meanwhile is left alone: add, move into place, remove.
     async fn replace_in_playlist(
         &self,
         state: &slate_core::AppState,
         uuid: &str,
         at: usize,
+        old_id: u64,
         new_id: u64,
     ) {
+        let Some(job) = self.begin_bulk() else {
+            return;
+        };
         let result = async {
-            let before = lib_cmds::get_playlist_tracks(state, self.app.clone(), uuid.to_string())
-                .await
-                .map_err(|e| e.log_safe())?
-                .len();
+            // `n` entries from `offset`, fresh, in the playlist's own order, and the length.
+            let window = |offset: usize, n: u32| async move {
+                state
+                    .tidal_client
+                    .lock()
+                    .await
+                    .get_playlist_tracks_page(
+                        uuid,
+                        u32::try_from(offset).unwrap_or(u32::MAX),
+                        n,
+                        Some("INDEX"),
+                        Some("ASC"),
+                    )
+                    .await
+                    .map(|p| {
+                        let ids: Vec<u64> = p.items.iter().map(|t| t.id).collect();
+                        (ids, p.total_number_of_items as usize)
+                    })
+                    .map_err(|e| e.log_safe())
+            };
+            let changed = "The playlist changed meanwhile; nothing was replaced.".to_string();
+            let (here, end) = window(at, 1).await?;
+            if here.first() != Some(&old_id) {
+                return Err(changed);
+            }
             lib_cmds::add_track_to_playlist(state, uuid.to_string(), new_id)
                 .await
                 .map_err(|e| e.log_safe())?;
-            // The new track is at index `before`; bring it in front of the old one, then drop
-            // the old one (which has moved down by one).
-            if before != at {
-                lib_cmds::move_playlist_item(state, uuid.to_string(), before as u32, at as u32)
+            // TIDAL appends, or skips a track the playlist already has.
+            let (last, len) = window(end, 1).await?;
+            if len != end + 1 || last.first() != Some(&new_id) {
+                return Err("That version is already in the playlist.".to_string());
+            }
+            // Bring the new track in front of the old one, then drop the old one (which has
+            // moved down by one).
+            if end != at {
+                if !job.step(1).await {
+                    return Err("Cancelled after adding the new version.".into());
+                }
+                lib_cmds::move_playlist_item(state, uuid.to_string(), end as u32, at as u32)
                     .await
                     .map_err(|e| e.log_safe())?;
+            }
+            if !job.step(2).await {
+                return Err("Cancelled before removing the old version.".into());
+            }
+            let (pair, _) = window(at, 2).await?;
+            if pair != [new_id, old_id] {
+                return Err(changed);
             }
             lib_cmds::remove_track_from_playlist(state, uuid.to_string(), at as u32 + 1)
                 .await
                 .map_err(|e| e.log_safe())
         }
         .await;
+        drop(job);
         match result {
             Ok(()) => {
                 self.notify("Replaced in the playlist");

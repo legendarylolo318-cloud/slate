@@ -93,6 +93,8 @@ pub struct LibState {
     artist: Mutex<Option<u64>>,
     /// The sortable list on screen, if any.
     sort_list: Mutex<Option<crate::sort::List>>,
+    /// Uuid of the open playlist when it is the user's own (known once its header loaded).
+    pub(crate) owned_open: Mutex<Option<String>>,
 }
 
 pub(crate) fn to_track(t: &TidalTrack) -> Option<Track> {
@@ -535,6 +537,9 @@ impl Backend {
                             Some(me) => v["creator"]["id"].as_u64() == Some(me),
                             None => false,
                         };
+                        if let Ok(mut o) = self.lib.owned_open.lock() {
+                            *o = owned.then(|| uuid.to_string());
+                        }
                         self.suggest_page_opened(uuid, owned);
                         let can = owned && self.reorderable();
                         self.ui(move |w| w.set_can_reorder(can));

@@ -87,7 +87,36 @@ fn noisy(segment: &str) -> bool {
 fn noisy_suffix(segment: &str) -> bool {
     fold(segment)
         .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        // "with" and "from" also start ordinary titles ("Song - With You").
+        .filter(|w| !matches!(*w, "with" | "from"))
         .any(|w| NOISE.contains(&w) || w.starts_with("remaster") || w.starts_with("live"))
+}
+
+/// The names in an artist credit: "Beyoncé, Jay-Z" and "Beyoncé & Jay-Z" → beyonce, jay-z.
+fn credited(s: &str) -> Vec<String> {
+    let mut f = format!(" {} ", fold(s));
+    for sep in [
+        " feat. ",
+        " feat ",
+        " ft. ",
+        " featuring ",
+        " with ",
+        " x ",
+        " and ",
+    ] {
+        f = f.replace(sep, ",");
+    }
+    f.split([',', '&', ';', '/'])
+        .map(|n| n.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
+/// Whether two artist credits share an artist ("Beyoncé" and "Beyoncé, Jay-Z"; not "Ann" and
+/// "Annie" or "Ann Peebles"). An empty credit matches nothing.
+fn same_artist(a: &str, b: &str) -> bool {
+    let theirs = credited(b);
+    credited(a).iter().any(|n| theirs.contains(n))
 }
 
 /// "Halo (Remastered 2011) - Live (feat. X)" → "halo": the folded title of the song itself.
@@ -189,15 +218,14 @@ pub struct Candidate {
 /// best first: same artist, base title equal; ordered by year then label.
 pub fn others(title: &str, artist: &str, exclude_id: u64, hits: Vec<Candidate>) -> Vec<Candidate> {
     let base = base_title(title);
-    let artist = fold(artist);
+    if base.is_empty() {
+        return Vec::new();
+    }
     let mut v: Vec<Candidate> = hits
         .into_iter()
         .filter(|c| c.id != exclude_id)
         .filter(|c| base_title(&c.title) == base)
-        .filter(|c| {
-            let a = fold(&c.artist);
-            a == artist || a.contains(&artist) || artist.contains(&a)
-        })
+        .filter(|c| same_artist(&c.artist, artist))
         .collect();
     v.sort_by_key(|c| (c.year.unwrap_or(i32::MAX), c.duration_secs, c.id));
     let mut seen = std::collections::HashSet::new();
@@ -292,6 +320,25 @@ mod tests {
             .map(|c| c.id)
             .collect();
         assert_eq!(ids, vec![2, 3]);
+    }
+
+    #[test]
+    fn unrelated_artists_and_titles_do_not_match() {
+        let hits = vec![
+            cand(1, "Halo", "", 2008),
+            cand(2, "Halo", "Annie", 2008),
+            cand(3, "Halo - With You", "Ann", 2008),
+            cand(4, "Halo", "Ann Peebles", 2008),
+        ];
+        assert!(same_artist("Beyoncé & Jay-Z", "beyonce"));
+        assert!(same_artist("X feat. Beyoncé", "Beyoncé"));
+        let ids: Vec<u64> = others("Halo", "Ann", 9, hits)
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        assert!(ids.is_empty(), "{ids:?}");
+        assert!(others("(Live)", "Ann", 9, vec![cand(5, "[Live]", "Ann", 1)]).is_empty());
+        assert_eq!(base_title("Halo - With You"), "halo - with you");
     }
 
     #[test]
