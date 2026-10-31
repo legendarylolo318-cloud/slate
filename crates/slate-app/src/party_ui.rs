@@ -285,6 +285,14 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             while let Some(e) = rx.recv().await {
+                // After leaving (or once another party took its place) nothing from this
+                // connection is applied any more.
+                let current = ROLE.lock().is_ok_and(
+                    |r| matches!(r.as_ref(), Some(Role::Guest(g)) if Arc::ptr_eq(g, &guest)),
+                );
+                if !current {
+                    return;
+                }
                 match e {
                     Event::Host(m) => this.guest_apply(&guest, m),
                     Event::Closed(reason) => {
@@ -407,12 +415,9 @@ impl Backend {
         self.rt.spawn(async move {
             match role {
                 Some(Role::Host(h)) => h.end().await,
-                Some(Role::Guest(g)) => {
-                    // The reader task holds a clone; leaving closes the endpoint for both.
-                    if let Ok(g) = Arc::try_unwrap(g) {
-                        g.leave().await;
-                    }
-                }
+                // The event pump holds another reference; leaving closes the connection for
+                // both, and the pump ends when the reader stops.
+                Some(Role::Guest(g)) => g.leave().await,
                 None => {}
             }
             this.party_status("Left the party.");

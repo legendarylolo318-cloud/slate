@@ -86,9 +86,20 @@ async fn a_guest_joins_follows_the_host_and_can_suggest() {
         }
     );
 
+    let old_link = host.link();
     assert!(host.kick("Ann"));
     let closed = until(&mut grx, |e| matches!(e, Event::Closed(_))).await;
     assert!(matches!(closed, Event::Closed(r) if r.contains("removed")));
+    drop(guest);
+    // The kicked guest's link no longer works; the new one does.
+    assert_ne!(host.link(), old_link);
+    let (gtx2, _g2) = mpsc::unbounded_channel();
+    assert!(Guest::join(&old_link, "Ann", Some("none"), gtx2.clone())
+        .await
+        .is_err());
+    assert!(Guest::join(&host.link(), "Bob", Some("none"), gtx2)
+        .await
+        .is_ok());
     host.end().await;
 }
 

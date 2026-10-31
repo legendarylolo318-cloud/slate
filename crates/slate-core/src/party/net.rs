@@ -124,7 +124,8 @@ struct HostState {
 }
 
 struct HostInner {
-    secret: String,
+    /// The invite's secret. A kick replaces it, so the kicked guest's link stops working.
+    secret: Mutex<String>,
     started: Instant,
     host_name: String,
     allow_suggest: bool,
@@ -138,6 +139,12 @@ impl HostInner {
         self.started.elapsed().as_millis() as u64
     }
 
+    fn secret(&self) -> std::sync::MutexGuard<'_, String> {
+        self.secret
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, HostState> {
         self.state
             .lock()
@@ -149,7 +156,14 @@ pub struct Host {
     endpoint: Endpoint,
     inner: Arc<HostInner>,
     cancel: CancellationToken,
-    ticket: String,
+}
+
+fn new_secret() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 impl Host {
@@ -164,18 +178,15 @@ impl Host {
         if relay.map(str::trim) != Some("none") {
             let _ = tokio::time::timeout(ONLINE_WAIT, endpoint.online()).await;
         }
-        let secret = format!(
-            "{}{}",
-            uuid::Uuid::new_v4().simple(),
-            uuid::Uuid::new_v4().simple()
-        );
-        let ticket = encode_ticket(&Ticket {
+        let secret = new_secret();
+        // Checked once here, so `link` cannot fail later.
+        encode_ticket(&Ticket {
             a: endpoint.addr(),
             s: secret.clone(),
         })?;
         let (tx, _) = broadcast::channel(64);
         let inner = Arc::new(HostInner {
-            secret,
+            secret: Mutex::new(secret),
             started: Instant::now(),
             host_name: proto::clean_name(host_name),
             allow_suggest,
@@ -200,13 +211,17 @@ impl Host {
             endpoint,
             inner,
             cancel,
-            ticket,
         })
     }
 
-    /// The invite: `slate://party/<ticket>`.
+    /// The invite: `slate://party/<ticket>`. It changes after a kick.
     pub fn link(&self) -> String {
-        proto::ticket_link(&self.ticket)
+        let ticket = encode_ticket(&Ticket {
+            a: self.endpoint.addr(),
+            s: self.inner.secret().clone(),
+        })
+        .unwrap_or_default();
+        proto::ticket_link(&ticket)
     }
 
     pub fn guest_names(&self) -> Vec<String> {
@@ -265,6 +280,9 @@ impl Host {
         let token = id.and_then(|id| self.inner.lock().kicks.get(&id).cloned());
         match token {
             Some(t) => {
+                // A new invite: the kicked guest's link (and anyone they passed it to) is dead.
+                // Guests still in the party stay connected.
+                *self.inner.secret() = new_secret();
                 t.cancel();
                 true
             }
@@ -344,7 +362,8 @@ async fn serve_guest(
         linger(&mut send, &conn).await;
         return Err("version mismatch".into());
     }
-    if !secret_matches(&secret, &inner.secret) {
+    let current = inner.secret().clone();
+    if !secret_matches(&secret, &current) {
         let _ = write_frame(
             &mut send,
             &proto::encode(&reject("This invite is not valid."))?,
@@ -578,7 +597,9 @@ impl Guest {
         write_frame(&mut *self.send.lock().await, &bytes).await
     }
 
-    pub async fn leave(self) {
+    /// Tells the host and closes the connection. Takes `&self` so it works while the event
+    /// reader still holds the guest.
+    pub async fn leave(&self) {
         if let Ok(b) = proto::encode(&GuestMsg::Leave) {
             let _ = write_frame(&mut *self.send.lock().await, &b).await;
         }
