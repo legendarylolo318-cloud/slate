@@ -2050,6 +2050,9 @@ struct FadeState {
     proxy: Mutex<crate::ProxySettings>,
     gapless: AtomicBool,
     volume: Mutex<f32>,
+    /// The equalizer as last set; an incoming worker gets it only when it is on (with it off a
+    /// worker never hears about it, as before the equalizer existed).
+    eq: Mutex<crate::eq::Settings>,
     /// Settings: fade length in seconds (0 = off) and whether same-album neighbours stay gapless.
     secs: AtomicU32,
     skip_same_album: AtomicBool,
@@ -2081,6 +2084,7 @@ impl FadeState {
             proxy: Mutex::new(proxy),
             gapless: AtomicBool::new(true),
             volume: Mutex::new(1.0),
+            eq: Mutex::new(crate::eq::Settings::default()),
             secs: AtomicU32::new(0),
             skip_same_album: AtomicBool::new(true),
             armed: Mutex::new(None),
@@ -3425,6 +3429,16 @@ impl AudioPlayer {
                         if let Ok(mut cell) = exclusive_device_thread.lock() {
                             *cell = if enabled { device.clone() } else { None };
                         }
+                        // Exclusive or bit-perfect output must not be altered: an equalizer in
+                        // the running pipeline goes flat at once (the next pipeline has none).
+                        if enabled && eq_setting.enabled {
+                            if let Some(PlaybackBackend::Normal { pipeline, .. }) = backend.as_ref()
+                            {
+                                apply_eq_live(pipeline, &eq_setting, false);
+                            }
+                            signal_path.set_equalizer(None);
+                        }
+
                         // 2b-A3 (detach matrix): enabling exclusive invalidates any
                         // Normal-pipeline next bin. Detach it (gated on !next_active).
                         if enabled && !next_active.load(Ordering::Acquire) {
@@ -3472,6 +3486,16 @@ impl AudioPlayer {
                         if enabled {
                             exclusive = true;
                         }
+                        // Exclusive or bit-perfect output must not be altered: an equalizer in
+                        // the running pipeline goes flat at once (the next pipeline has none).
+                        if enabled && eq_setting.enabled {
+                            if let Some(PlaybackBackend::Normal { pipeline, .. }) = backend.as_ref()
+                            {
+                                apply_eq_live(pipeline, &eq_setting, false);
+                            }
+                            signal_path.set_equalizer(None);
+                        }
+
                         // 2b-A3 (detach matrix): enabling bit-perfect invalidates any
                         // Normal-pipeline next bin. Detach it (gated on !next_active).
                         if enabled && !next_active.load(Ordering::Acquire) {
@@ -4129,10 +4153,20 @@ impl AudioPlayer {
     }
     /// Equalizer bands, preamp and on/off (see `eq`).
     pub fn set_eq(&self, settings: crate::eq::Settings) -> Result<(), String> {
-        self.post_cmd(|reply| AudioCommand::SetEq {
-            settings: settings.clamped(),
-            reply,
-        })
+        let settings = settings.clamped();
+        *self
+            .fade
+            .eq
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = settings.clone();
+        if let Some(out) = self.outgoing_tx() {
+            let (reply, _rx) = mpsc::channel();
+            let _ = out.send(AudioCommand::SetEq {
+                settings: settings.clone(),
+                reply,
+            });
+        }
+        self.post_cmd(|reply| AudioCommand::SetEq { settings, reply })
     }
     pub fn set_bit_perfect(&self, enabled: bool) -> Result<(), String> {
         self.post_cmd(|reply| AudioCommand::SetBitPerfect { enabled, reply })
@@ -4299,6 +4333,19 @@ impl AudioPlayer {
             })?;
             if let Some(gain) = armed.gain {
                 ask(&|reply| AudioCommand::SetNormalizationGain { gain, reply })?;
+            }
+            // Without this the incoming worker (which plays every track after the fade) would
+            // start with the equalizer off.
+            let eq = fade
+                .eq
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            if eq.enabled {
+                ask(&|reply| AudioCommand::SetEq {
+                    settings: eq.clone(),
+                    reply,
+                })?;
             }
             ask(&|reply| AudioCommand::PlayUrl {
                 uri: uri.to_string(),

@@ -15,6 +15,8 @@ pub const MAX_PENDING_TOTAL: usize = 30;
 pub const RECENT_HISTORY: usize = 20;
 /// How long a party survives without its host before the session is offered to a guest.
 pub const HANDOFF_GRACE: Duration = Duration::from_secs(60);
+/// Tracks the host keeps "cannot play" reports for; a report beyond this is dropped.
+pub const MAX_UNAVAILABLE_TRACKS: usize = 64;
 /// Default share of guests that must vote for a skip to pass.
 pub const DEFAULT_VOTE_PERCENT: u8 = 50;
 
@@ -249,11 +251,30 @@ impl RequestBook {
         }
     }
 
-    pub fn mark_unavailable(&mut self, track_id: u64, guest_id: u64) {
+    /// Records that a guest cannot play `track_id`. Returns whether anything changed. At most
+    /// [`MAX_UNAVAILABLE_TRACKS`] tracks are tracked, so a peer cannot grow this without bound.
+    pub fn mark_unavailable(&mut self, track_id: u64, guest_id: u64) -> bool {
+        if !self.unavailable.contains_key(&track_id)
+            && self.unavailable.len() >= MAX_UNAVAILABLE_TRACKS
+        {
+            return false;
+        }
         self.unavailable
             .entry(track_id)
             .or_default()
-            .insert(guest_id);
+            .insert(guest_id)
+    }
+
+    /// Whether `track_id` is waiting for a decision.
+    pub fn is_pending(&self, track_id: u64) -> bool {
+        self.pending.iter().any(|r| r.track.id == track_id)
+    }
+
+    /// Drops reports for tracks that are no longer waiting, playing or queued.
+    pub fn retain_unavailable(&mut self, keep: impl Fn(u64) -> bool) {
+        let pending: HashSet<u64> = self.pending.iter().map(|r| r.track.id).collect();
+        self.unavailable
+            .retain(|t, _| pending.contains(t) || keep(*t));
     }
 
     /// How many guests said they cannot play `track_id`.
@@ -297,7 +318,12 @@ pub fn insert_index(placement: Placement, owners: &[Option<u64>], guest_id: u64)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Vote {
     Passed,
-    Waiting { have: usize, need: usize },
+    /// This guest had already voted for this track: nothing changed.
+    Again,
+    Waiting {
+        have: usize,
+        need: usize,
+    },
 }
 
 /// Votes to skip the current track.
@@ -324,7 +350,9 @@ impl VoteSkip {
 
     pub fn vote(&mut self, guest_id: u64, guests: usize) -> Option<Vote> {
         let percent = self.percent?;
-        self.voters.insert(guest_id);
+        if !self.voters.insert(guest_id) {
+            return Some(Vote::Again);
+        }
         let need = Self::need(percent, guests);
         if self.voters.len() >= need {
             self.voters.clear();
@@ -531,9 +559,9 @@ mod tests {
         let mut b = RequestBook::new(Policy::default());
         b.submit(1, "A", track(1), view(&[], &[])).unwrap();
         b.submit(2, "B", track(2), view(&[], &[])).unwrap();
-        b.mark_unavailable(2, 1);
-        b.mark_unavailable(2, 3);
-        b.mark_unavailable(2, 3);
+        assert!(b.mark_unavailable(2, 1));
+        assert!(b.mark_unavailable(2, 3));
+        assert!(!b.mark_unavailable(2, 3), "a repeat changes nothing");
         assert_eq!(b.unavailable_for(2), 2);
         b.forget_guest(1);
         assert_eq!(b.pending().len(), 1);
@@ -542,16 +570,30 @@ mod tests {
     }
 
     #[test]
+    fn unavailability_reports_are_bounded_and_pruned() {
+        let mut b = RequestBook::new(Policy::default());
+        b.submit(1, "A", track(5), view(&[], &[])).unwrap();
+        for t in 0..10_000u64 {
+            b.mark_unavailable(1_000 + t, 1);
+        }
+        assert_eq!(b.unavailable.len(), MAX_UNAVAILABLE_TRACKS);
+        // A report for a waiting request is never lost to pruning.
+        b.unavailable.clear();
+        assert!(b.mark_unavailable(5, 2));
+        assert!(b.mark_unavailable(9, 2));
+        b.retain_unavailable(|_| false);
+        assert_eq!(b.unavailable_for(5), 1);
+        assert_eq!(b.unavailable_for(9), 0);
+        assert!(b.is_pending(5) && !b.is_pending(9));
+    }
+
+    #[test]
     fn vote_skip_needs_the_hosts_share_of_guests() {
         let mut v = VoteSkip::default();
         assert_eq!(v.vote(1, 4), None, "off by default");
         v.percent = Some(50);
         assert_eq!(v.vote(1, 4), Some(Vote::Waiting { have: 1, need: 2 }));
-        assert_eq!(
-            v.vote(1, 4),
-            Some(Vote::Waiting { have: 1, need: 2 }),
-            "one vote each"
-        );
+        assert_eq!(v.vote(1, 4), Some(Vote::Again), "one vote each");
         assert_eq!(v.vote(2, 4), Some(Vote::Passed));
         assert_eq!(
             v.vote(3, 3),

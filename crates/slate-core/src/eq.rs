@@ -188,7 +188,8 @@ pub fn parse_autoeq(text: &str) -> Result<Imported, String> {
             let tokens: Vec<&str> = rest.split_whitespace().collect();
             if let Some(v) = tokens
                 .first()
-                .and_then(|t| t.trim_end_matches("db").parse().ok())
+                .and_then(|t| t.trim_end_matches("db").parse::<f32>().ok())
+                .filter(|v| v.is_finite())
             {
                 preamp_db = v;
             }
@@ -256,6 +257,63 @@ pub fn parse_autoeq(text: &str) -> Result<Imported, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    fn sane(b: &Band) -> bool {
+        (MIN_FREQ..=MAX_FREQ).contains(&b.freq)
+            && (MIN_GAIN_DB..=MAX_GAIN_DB).contains(&b.gain_db)
+            && (MIN_Q..=MAX_Q).contains(&b.q)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+
+        /// Any text: no panic, and whatever is accepted is inside the element's ranges.
+        #[test]
+        fn the_autoeq_parser_survives_any_text(text in "\\PC{0,400}") {
+            if let Ok(i) = parse_autoeq(&text) {
+                prop_assert!(i.bands.len() <= MAX_BANDS && !i.bands.is_empty());
+                prop_assert!(i.bands.iter().all(sane));
+                prop_assert!(i.preamp_db.is_finite());
+            }
+        }
+
+        /// Filter-shaped lines with hostile numbers.
+        #[test]
+        fn the_autoeq_parser_survives_hostile_filter_lines(
+            pre in prop::sample::select(vec!["-6.2", "nan", "inf", "-inf", "1e40", "", "dB", "--1"]),
+            lines in prop::collection::vec(
+                (
+                    prop::sample::select(vec!["ON", "OFF", "on", "", "ONX"]),
+                    prop::sample::select(vec!["PK", "LSC", "HSC", "LP", "PEQ", "", "NO"]),
+                    prop::sample::select(vec!["31", "0", "-5", "nan", "inf", "1e30", "x", ""]),
+                    prop::sample::select(vec!["6.4", "nan", "-1e9", "inf", "", "dB"]),
+                    prop::sample::select(vec!["1.41", "0", "-1", "nan", "inf", ""]),
+                ),
+                0..30,
+            ),
+        ) {
+            let mut text = format!("Preamp: {pre} dB\n");
+            for (i, (on, kind, fc, gain, q)) in lines.iter().enumerate() {
+                text.push_str(&format!("Filter {i}: {on} {kind} Fc {fc} Hz Gain {gain} dB Q {q}\n"));
+            }
+            if let Ok(imp) = parse_autoeq(&text) {
+                prop_assert!(imp.bands.len() <= MAX_BANDS);
+                prop_assert!(imp.bands.iter().all(sane));
+                prop_assert!(imp.preamp_db.is_finite());
+                // The result survives the settings file.
+                let s = Settings { enabled: true, preamp_db: imp.preamp_db, bands: imp.bands };
+                let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+                prop_assert_eq!(back, s);
+            }
+        }
+    }
+
+    #[test]
+    fn a_nan_preamp_is_ignored() {
+        let i = parse_autoeq("Preamp: NaN dB\nFilter 1: ON PK Fc 100 Hz Gain 1 dB Q 1").unwrap();
+        assert_eq!(i.preamp_db, 0.0);
+    }
 
     const SAMPLE: &str = "Preamp: -6.2 dB\r\n\
 Filter 1: ON PK Fc 31 Hz Gain 6.4 dB Q 1.41\r\n\

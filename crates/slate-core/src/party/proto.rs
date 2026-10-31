@@ -442,6 +442,43 @@ impl RateLimit {
     }
 }
 
+/// Messages one peer may send in [`FLOOD_WINDOW_MS`]; a peer that sends more is disconnected.
+/// A well-behaved guest sends a handful a minute (requests are limited separately).
+pub const FLOOD_MESSAGES: u32 = 60;
+pub const FLOOD_WINDOW_MS: u64 = 10_000;
+
+/// Counts one peer's messages in fixed windows (no allocation, one per connection).
+#[derive(Debug, Default)]
+pub struct Flood {
+    window_start: u64,
+    count: u32,
+}
+
+impl Flood {
+    /// Records a message at `now_ms`; false once the peer is over the limit.
+    pub fn allow(&mut self, now_ms: u64) -> bool {
+        if now_ms.saturating_sub(self.window_start) >= FLOOD_WINDOW_MS {
+            self.window_start = now_ms;
+            self.count = 0;
+        }
+        self.count += 1;
+        self.count <= FLOOD_MESSAGES
+    }
+}
+
+/// A Slate 1.2 host refuses a newer guest with "protocol version 2 is not supported (need 1)".
+/// This turns that (and any other refusal) into what a guest should read.
+pub fn rejection_text(reason: &str) -> String {
+    let need = reason
+        .strip_prefix("protocol version ")
+        .and_then(|r| r.split_once("(need "))
+        .and_then(|(_, n)| n.trim_end_matches(')').trim().parse::<u32>().ok());
+    match need {
+        Some(v) => host_version_gap(v),
+        None => clip(reason, 200),
+    }
+}
+
 /// The next tracks to announce: the upcoming ids, at most [`PREFETCH_TRACKS`].
 pub fn prefetch_list(upcoming: &[u64]) -> Vec<u64> {
     upcoming.iter().copied().take(PREFETCH_TRACKS).collect()
@@ -612,6 +649,27 @@ mod tests {
         assert!(l.allow(1, 70_000));
         l.forget(1);
         assert!(l.allow(1, 70_001));
+    }
+
+    #[test]
+    fn a_flooding_peer_is_cut_off_and_a_normal_one_is_not() {
+        let mut f = Flood::default();
+        for i in 0..FLOOD_MESSAGES {
+            assert!(f.allow(u64::from(i)));
+        }
+        assert!(!f.allow(100), "one over the limit in the window");
+        assert!(f.allow(FLOOD_WINDOW_MS + 200), "a new window starts over");
+    }
+
+    #[test]
+    fn a_slate_1_2_hosts_refusal_says_which_side_is_older() {
+        let t = rejection_text("protocol version 2 is not supported (need 1)");
+        assert!(t.contains("older version"), "{t}");
+        assert_eq!(
+            rejection_text("The party is full (10 guests)."),
+            "The party is full (10 guests)."
+        );
+        assert_eq!(rejection_text(&"x".repeat(500)).len(), 200);
     }
 
     #[test]

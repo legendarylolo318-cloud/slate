@@ -16,8 +16,8 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::proto::{
-    self, GuestMsg, HostMsg, PingSample, PlayState, RateLimit, ReqView, Roster, MAX_MESSAGE_BYTES,
-    MAX_REQUEST_VIEWS, PROTOCOL_VERSION,
+    self, Flood, GuestMsg, HostMsg, PingSample, PlayState, RateLimit, ReqView, Roster,
+    MAX_MESSAGE_BYTES, MAX_REQUEST_VIEWS, PROTOCOL_VERSION,
 };
 use super::requests::{
     Policy, Reject, Request, RequestBook, RequestMode, RequestTrack, Submitted, Vote, VoteSkip,
@@ -27,6 +27,10 @@ use super::requests::{
 const ALPN: &[u8] = b"slate/party/1";
 const HANDSHAKE: Duration = Duration::from_secs(10);
 const ONLINE_WAIT: Duration = Duration::from_secs(12);
+/// Connections that may be in the handshake at once (before the invite secret is checked).
+const MAX_HANDSHAKES: usize = 8;
+/// Messages a guest reads while waiting for its pongs at join; a host sending more is broken.
+const MAX_HANDSHAKE_MESSAGES: usize = 64;
 
 /// What the app is told.
 #[derive(Debug, Clone, PartialEq)]
@@ -355,6 +359,13 @@ impl Host {
                 s.recent.drain(..extra);
             }
             s.vote.reset();
+            let HostState {
+                book,
+                upcoming,
+                recent,
+                ..
+            } = &mut *s;
+            book.retain_unavailable(|t| t == id || upcoming.contains(&t) || recent.contains(&t));
             s.play = PlayState {
                 track: Some(id),
                 position_ms,
@@ -433,12 +444,14 @@ impl Host {
             let Some(name) = known else {
                 return Err(Reject::Off);
             };
-            let (upcoming, recent) = (s.upcoming.clone(), s.recent.clone());
-            let view = super::requests::QueueView {
-                upcoming: &upcoming,
-                recent: &recent,
-            };
-            (s.book.submit(guest_id, &name, track, view), true)
+            let HostState {
+                book,
+                upcoming,
+                recent,
+                ..
+            } = &mut *s;
+            let view = super::requests::QueueView { upcoming, recent };
+            (book.submit(guest_id, &name, track, view), true)
         };
         let _ = guest_known;
         let (ok, reason) = match &result {
@@ -603,6 +616,14 @@ impl Host {
     }
 }
 
+impl Drop for Host {
+    /// A host dropped without [`Host::end`] still stops its accept and heartbeat tasks, so the
+    /// endpoint they hold is released.
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
 async fn heartbeat_loop(inner: Arc<HostInner>, cancel: CancellationToken) {
     let mut tick = tokio::time::interval(Duration::from_secs(proto::HEARTBEAT_SECS));
     tick.tick().await;
@@ -623,16 +644,22 @@ async fn heartbeat_loop(inner: Arc<HostInner>, cancel: CancellationToken) {
 }
 
 async fn accept_loop(endpoint: Endpoint, inner: Arc<HostInner>, cancel: CancellationToken) {
+    let handshakes = Arc::new(tokio::sync::Semaphore::new(MAX_HANDSHAKES));
     loop {
         let incoming = tokio::select! {
             () = cancel.cancelled() => return,
             i = endpoint.accept() => i,
         };
         let Some(incoming) = incoming else { return };
+        // Someone holding an old link could open connections without end; only a few may be
+        // in the handshake at a time, the rest are dropped.
+        let Ok(permit) = Arc::clone(&handshakes).try_acquire_owned() else {
+            continue;
+        };
         let (inner, cancel) = (Arc::clone(&inner), cancel.clone());
         tokio::spawn(async move {
             let Ok(conn) = incoming.await else { return };
-            if let Err(e) = serve_guest(conn, inner, cancel).await {
+            if let Err(e) = serve_guest(conn, inner, cancel, permit).await {
                 log::debug!("party: guest connection ended: {e}");
             }
         });
@@ -643,6 +670,7 @@ async fn serve_guest(
     conn: iroh::endpoint::Connection,
     inner: Arc<HostInner>,
     cancel: CancellationToken,
+    handshake: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<(), String> {
     let (mut send, mut recv) = tokio::time::timeout(HANDSHAKE, conn.accept_bi())
         .await
@@ -727,10 +755,12 @@ async fn serve_guest(
         };
         write_frame(&mut send, &proto::encode(&q)?).await?;
     }
+    drop(handshake);
     let _ = inner.events.send(Event::GuestJoined(name.clone()));
     inner.push_guests();
 
     let mut rx = inner.tx.subscribe();
+    let mut flood = Flood::default();
     let result: Result<(), String> = async {
         loop {
             tokio::select! {
@@ -756,6 +786,9 @@ async fn serve_guest(
                 },
                 frame = read_frame(&mut recv) => {
                     let m: GuestMsg = proto::decode(&frame?)?;
+                    if !flood.allow(inner.now_ms()) {
+                        return Err("too many messages".into());
+                    }
                     proto::validate_guest(&m)?;
                     match m {
                         GuestMsg::Ping { token } => {
@@ -777,8 +810,18 @@ async fn serve_guest(
                             }
                         }
                         GuestMsg::Unavailable { track_id } => {
-                            inner.lock().book.mark_unavailable(track_id, id);
-                            inner.push_requests();
+                            // Only the tracks the party is dealing with count; anything else
+                            // (or a repeat) changes nothing and is not passed on.
+                            let changed = {
+                                let mut s = inner.lock();
+                                let relevant = s.play.track == Some(track_id)
+                                    || s.upcoming.contains(&track_id)
+                                    || s.book.is_pending(track_id);
+                                relevant && s.book.mark_unavailable(track_id, id)
+                            };
+                            if changed {
+                                inner.push_requests();
+                            }
                         }
                         GuestMsg::VoteSkip => {
                             let outcome = {
@@ -795,6 +838,7 @@ async fn serve_guest(
                                     Audience::All,
                                     HostMsg::Notice { text: format!("{name} voted to skip ({have} of {need})") },
                                 ),
+                                Some(Vote::Again) => {}
                                 None => inner.send(Audience::Guest(id), HostMsg::Notice { text: "Vote skip is off.".into() }),
                             }
                         }
@@ -901,7 +945,7 @@ impl Guest {
             .map_err(|_| "The host did not answer.".to_string())??;
         let welcome: HostMsg = proto::decode(&first)?;
         if let HostMsg::Rejected { reason } = &welcome {
-            return Err(reason.clone());
+            return Err(proto::rejection_text(reason));
         }
         proto::validate_host(&welcome)?;
         let HostMsg::Welcome { host, you, .. } = &welcome else {
@@ -912,10 +956,14 @@ impl Guest {
         // Clock offset: three pings now, then none until the party ends.
         let started = Instant::now();
         let mut samples = Vec::new();
+        let mut budget = MAX_HANDSHAKE_MESSAGES;
         for token in 0..3u64 {
             let sent = started.elapsed().as_millis() as u64;
             write_frame(&mut send, &proto::encode(&GuestMsg::Ping { token })?).await?;
             loop {
+                budget = budget
+                    .checked_sub(1)
+                    .ok_or("The host sent too many messages.")?;
                 let m: HostMsg = proto::decode(
                     &tokio::time::timeout(HANDSHAKE, read_frame(&mut recv))
                         .await
@@ -930,7 +978,7 @@ impl Guest {
                         });
                         break;
                     }
-                } else {
+                } else if proto::validate_host(&m).is_ok() && m != HostMsg::Unknown {
                     // Updates that arrive during the handshake are not lost.
                     let _ = events.send(Event::Host(m));
                 }
@@ -1038,6 +1086,13 @@ impl Guest {
         }
         self.cancel.cancel();
         self.endpoint.close().await;
+    }
+}
+
+impl Drop for Guest {
+    /// The reader task stops with the guest, even when `leave` was never called.
+    fn drop(&mut self) {
+        self.cancel.cancel();
     }
 }
 

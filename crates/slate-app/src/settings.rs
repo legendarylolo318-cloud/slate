@@ -201,17 +201,18 @@ impl Backend {
     }
 
     pub fn setting_bool(&self, key: &str, v: bool) {
-        if key == "eq" {
-            self.eq_set_enabled(v);
-            return;
-        }
-        if key.starts_with("party-") {
-            self.party_pref_bool(key, v);
-            return;
-        }
         let key = key.to_string();
         let this = self.clone();
         self.rt.spawn(async move {
+            // These read and write settings files: never on the UI thread.
+            if key == "eq" {
+                this.eq_set_enabled(v);
+                return;
+            }
+            if key.starts_with("party-") {
+                this.party_pref_bool(&key, v);
+                return;
+            }
             let Some(state) = this.state() else { return };
             let result: Result<(), String> = match key.as_str() {
                 "minimize-to-tray" => {
@@ -271,13 +272,13 @@ impl Backend {
     }
 
     pub fn setting_int(&self, key: &str, i: i32) {
-        if key.starts_with("party-") {
-            self.party_pref_int(key, i);
-            return;
-        }
         let key = key.to_string();
         let this = self.clone();
         self.rt.spawn(async move {
+            if key.starts_with("party-") {
+                this.party_pref_int(&key, i);
+                return;
+            }
             let Some(state) = this.state() else { return };
             let usize_i = usize::try_from(i).unwrap_or(0);
             let result: Result<(), String> = match key.as_str() {

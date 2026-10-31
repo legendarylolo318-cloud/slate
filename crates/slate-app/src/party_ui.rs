@@ -2,7 +2,7 @@
 //! playback in step with the host, and the Settings → Party page. Nothing here exists until a
 //! party is started or joined; ending one drops the network endpoint and every task with it.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -13,7 +13,9 @@ use slate_core::party::requests::{
     self, Handoff, Placement, Policy, RequestMode, RequestTrack, Submitted, HANDOFF_GRACE,
 };
 use slate_core::queue::Track;
-use slint::{ComponentHandle, Image, ModelRc, SharedString, VecModel};
+use slint::{
+    ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
+};
 use tokio::sync::mpsc;
 
 use crate::backend::Backend;
@@ -35,6 +37,20 @@ static OWNERS: Mutex<Vec<(u64, u64, String)>> = Mutex::new(Vec::new());
 static PENDING: Mutex<Vec<Track>> = Mutex::new(Vec::new());
 /// Guest: what we know about the party we are in (also while reconnecting).
 static GUEST: Mutex<Option<GuestCtx>> = Mutex::new(None);
+/// A party is being started or joined (the network setup takes seconds); a second click waits.
+static CONNECTING: AtomicBool = AtomicBool::new(false);
+/// Bumped by `party_end`, so a start or join still in flight ends itself when it completes.
+static SESSION: AtomicU64 = AtomicU64::new(0);
+/// Guest: bumped per host track / queue message, so an older lookup that finishes late does
+/// not overwrite a newer one.
+static PLAY_GEN: AtomicU64 = AtomicU64::new(0);
+static PREFETCH_GEN: AtomicU64 = AtomicU64::new(0);
+/// Guest: tracks already reported as unavailable to this host (each is sent once).
+static REPORTED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+/// The QR code of the current invite link; it changes only after a kick.
+static QR: Mutex<Option<(String, SharedPixelBuffer<Rgba8Pixel>)>> = Mutex::new(None);
+/// Most request owners remembered (oldest are forgotten first).
+const MAX_OWNERS: usize = 500;
 
 #[derive(Clone, Default)]
 struct GuestCtx {
@@ -122,9 +138,18 @@ impl Backend {
 
     fn party_show(&self, role: &'static str, link: String, guests: Vec<(String, bool)>) {
         let qr = if link.is_empty() {
+            *lock(&QR) = None;
             None
         } else {
-            crate::images::qr(&link)
+            let mut cache = lock(&QR);
+            match cache.as_ref() {
+                Some((l, img)) if *l == link => Some(img.clone()),
+                _ => {
+                    let img = crate::images::qr(&link);
+                    *cache = img.clone().map(|i| (link.clone(), i));
+                    img
+                }
+            }
         };
         let can_suggest = role == "guest" && lock(&GUEST).as_ref().is_some_and(|g| g.requests_on);
         let cohost = role == "guest" && lock(&GUEST).as_ref().is_some_and(|g| g.cohost);
@@ -190,13 +215,21 @@ impl Backend {
             self.party_status("A party is already running.");
             return;
         }
+        if CONNECTING.swap(true, Ordering::AcqRel) {
+            return;
+        }
         self.party_status("Starting the party…");
         let prefs = UiPrefs::load();
         let (policy, vote) = (policy_of(&prefs), vote_of(&prefs));
         let (tx, rx) = mpsc::unbounded_channel();
+        let session = SESSION.load(Ordering::Acquire);
         let this = self.clone();
         self.rt.spawn(async move {
-            match Host::start(relay_pref().as_deref(), "Host", policy, vote, tx).await {
+            let started = Host::start(relay_pref().as_deref(), "Host", policy, vote, tx).await;
+            CONNECTING.store(false, Ordering::Release);
+            match started {
+                // Ended (or left) while the endpoint was coming up.
+                Ok(host) if SESSION.load(Ordering::Acquire) != session => host.end().await,
                 Ok(host) => {
                     let link = host.link();
                     *lock(&ROLE) = Some(Role::Host(host));
@@ -216,7 +249,17 @@ impl Backend {
     fn pump_host_events(&self, mut rx: mpsc::UnboundedReceiver<Event>) {
         let this = self.clone();
         self.rt.spawn(async move {
+            enum Kind {
+                Roster,
+                Requests,
+                Other,
+            }
             while let Some(e) = rx.recv().await {
+                let e_kind = match &e {
+                    Event::GuestJoined(_) | Event::GuestLeft(_) => Kind::Roster,
+                    Event::RequestsChanged => Kind::Requests,
+                    _ => Kind::Other,
+                };
                 match e {
                     Event::GuestJoined(n) => this.party_status(format!("{n} joined")),
                     Event::GuestLeft(n) => this.party_status(format!("{n} left")),
@@ -240,11 +283,18 @@ impl Backend {
                     Event::RequestsChanged => {}
                     Event::Closed(_) | Event::Lost(_) | Event::Host(_) => {}
                 }
-                let guests = with_host(Host::guests_detail).unwrap_or_default();
-                let (link, n) = (this.current_party_link(), guests.len());
-                this.party_show("host", link, guests);
-                this.show_requests();
-                this.party_mirror(true, "host", n);
+                // Only what the event changed is rebuilt: the guest list on joins and leaves,
+                // the request tray when requests changed.
+                let roster = matches!(e_kind, Kind::Roster);
+                if roster {
+                    let guests = with_host(Host::guests_detail).unwrap_or_default();
+                    this.party_show("host", this.current_party_link(), guests);
+                }
+                if !matches!(e_kind, Kind::Other) {
+                    this.show_requests();
+                    let n = with_host(|h| h.guest_names().len()).unwrap_or(0);
+                    this.party_mirror(true, "host", n);
+                }
             }
         });
     }
@@ -286,7 +336,10 @@ impl Backend {
     /// The tray under Settings → Party (host, and co-hosts see their own copy).
     fn show_requests(&self) {
         let rows: Vec<PartyRequest> = with_host(|h| {
-            h.pending()
+            let pending = h.pending();
+            // Requests that went away without a decision (the guest left) drop their track.
+            lock(&PENDING).retain(|t| pending.iter().any(|(r, _)| r.track.id == t.id));
+            pending
                 .into_iter()
                 .map(|(r, unavailable)| PartyRequest {
                     id: r.id.to_string().into(),
@@ -377,7 +430,12 @@ impl Backend {
                 })
                 .await;
             let at = requests::insert_index(placement, &owners, guest_id);
-            lock(&OWNERS).push((id, guest_id, guest.clone()));
+            {
+                let mut own = lock(&OWNERS);
+                own.push((id, guest_id, guest.clone()));
+                let extra = own.len().saturating_sub(MAX_OWNERS);
+                own.drain(..extra);
+            }
             ctl.insert_in_queue(at, track.clone()).await;
             this.refresh_queue_info().await;
             this.save().await;
@@ -503,6 +561,9 @@ impl Backend {
             self.party_status("That is not a Slate party link.");
             return;
         };
+        if CONNECTING.swap(true, Ordering::AcqRel) {
+            return;
+        }
         self.party_status("Joining…");
         let name = UiPrefs::load().party_name;
         self.guest_connect(ticket, name);
@@ -510,9 +571,13 @@ impl Backend {
 
     fn guest_connect(&self, ticket: String, name: String) {
         let (tx, rx) = mpsc::unbounded_channel();
+        let session = SESSION.load(Ordering::Acquire);
         let this = self.clone();
         self.rt.spawn(async move {
-            match Guest::join(&ticket, &name, relay_pref().as_deref(), tx).await {
+            let joined = Guest::join(&ticket, &name, relay_pref().as_deref(), tx).await;
+            CONNECTING.store(false, Ordering::Release);
+            match joined {
+                Ok((guest, _)) if SESSION.load(Ordering::Acquire) != session => guest.leave().await,
                 Ok((guest, welcome)) => this.guest_joined(guest, welcome, ticket, name, rx),
                 Err(e) => this.party_status(e),
             }
@@ -547,6 +612,7 @@ impl Backend {
             guests: guests.iter().map(|g| (g.clone(), false)).collect(),
         });
         let _ = name;
+        lock(&REPORTED).clear();
         *lock(&ROLE) = Some(Role::Guest(Arc::clone(&guest)));
         self.party_show(
             "guest",
@@ -598,6 +664,8 @@ impl Backend {
                     }
                     Event::Lost(reason) => {
                         *lock(&ROLE) = None;
+                        // The dead connection's endpoint is closed; reconnecting makes a new one.
+                        guest.leave().await;
                         this.guest_lost(reason);
                         return;
                     }
@@ -653,10 +721,15 @@ impl Backend {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     let name = UiPrefs::load().party_name;
                     let (tx, rx) = mpsc::unbounded_channel();
+                    let session = SESSION.load(Ordering::Acquire);
                     if let Ok((guest, welcome)) =
                         Guest::join(&ctx.ticket, &name, relay_pref().as_deref(), tx).await
                     {
                         LOST_SINCE.with_lock(|l| *l = None);
+                        if SESSION.load(Ordering::Acquire) != session || lock(&GUEST).is_none() {
+                            guest.leave().await;
+                            return;
+                        }
                         self.guest_joined(guest, welcome, ctx.ticket.clone(), name, rx);
                         return;
                     }
@@ -813,6 +886,7 @@ impl Backend {
     /// replaced by another version of the song when there is one, otherwise skipped locally
     /// (the party carries on; the host is told how many guests could not play it).
     fn guest_play(&self, id: u64, position_ms: u64, playing: bool) {
+        let gen = PLAY_GEN.fetch_add(1, Ordering::AcqRel) + 1;
         let this = self.clone();
         self.rt.spawn(async move {
             let (Some(state), Some(ctl)) = (this.state(), this.controller()) else {
@@ -822,13 +896,18 @@ impl Backend {
                 Ok(v) => serde_json::from_value::<Track>(v).ok(),
                 Err(_) => None,
             };
+            // The host moved on while this track was looked up.
+            if PLAY_GEN.load(Ordering::Acquire) != gen {
+                return;
+            }
             let mut played = match &track {
                 Some(t) => this.guest_try(&ctl, t.clone()).await,
                 None => false,
             };
             if !played {
-                if let Some(g) = guest_handle() {
-                    let _ = g.unavailable(id).await;
+                report_unavailable(id).await;
+                if PLAY_GEN.load(Ordering::Acquire) != gen {
+                    return;
                 }
                 if let Some(alt) = this.guest_alternative(&state, id).await {
                     if this.guest_try(&ctl, alt.clone()).await {
@@ -895,6 +974,7 @@ impl Backend {
     /// The next few tracks, loaded into the guest's queue so the player prefetches them. Tracks
     /// this account cannot stream are left out of the local queue and reported to the host.
     fn guest_prefetch(&self, next: Vec<u64>, by: Vec<String>) {
+        let gen = PREFETCH_GEN.fetch_add(1, Ordering::AcqRel) + 1;
         let this = self.clone();
         self.rt.spawn(async move {
             let (Some(state), Some(ctl)) = (this.state(), this.controller()) else {
@@ -915,12 +995,14 @@ impl Backend {
                     None => track_label(&t),
                 });
                 if t.is_unavailable(now) {
-                    if let Some(g) = guest_handle() {
-                        let _ = g.unavailable(*id).await;
-                    }
+                    report_unavailable(*id).await;
                 } else {
                     tracks.push(t);
                 }
+            }
+            // A newer queue arrived while these were looked up: it fills the queue instead.
+            if PREFETCH_GEN.load(Ordering::Acquire) != gen {
+                return;
             }
             ctl.clear_next_up().await;
             for t in tracks {
@@ -935,8 +1017,10 @@ impl Backend {
     }
 
     pub fn party_end(&self) {
+        SESSION.fetch_add(1, Ordering::AcqRel);
         let role = lock(&ROLE).take();
         *lock(&GUEST) = None;
+        lock(&REPORTED).clear();
         HOSTING.store(false, Ordering::Relaxed);
         lock(&OWNERS).clear();
         lock(&PENDING).clear();
@@ -971,6 +1055,23 @@ fn with_host<R>(f: impl FnOnce(&Host) -> R) -> Option<R> {
     match lock(&ROLE).as_ref() {
         Some(Role::Host(h)) => Some(f(h)),
         _ => None,
+    }
+}
+
+/// Tells the host (once per track) that this guest cannot play `id`.
+async fn report_unavailable(id: u64) {
+    {
+        let mut r = lock(&REPORTED);
+        if r.contains(&id) {
+            return;
+        }
+        if r.len() >= requests::MAX_UNAVAILABLE_TRACKS {
+            r.remove(0);
+        }
+        r.push(id);
+    }
+    if let Some(g) = guest_handle() {
+        let _ = g.unavailable(id).await;
     }
 }
 

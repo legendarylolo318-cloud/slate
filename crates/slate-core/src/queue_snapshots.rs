@@ -102,10 +102,9 @@ impl Store {
         self.dir.join(format!("{id}.tracks.json"))
     }
 
+    /// Atomic and owner-only, like the other files in the profile.
     fn write(path: &Path, data: &[u8]) -> io::Result<()> {
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, data)?;
-        std::fs::rename(&tmp, path)
+        crate::write_atomic(path, data)
     }
 
     /// Saves `tracks` (at most [`MAX_TRACKS`]) under `name`.
@@ -125,7 +124,9 @@ impl Store {
             name: clean_name(name),
             saved_at: now,
             count: tracks.len(),
-            duration_secs: tracks.iter().map(|t| t.duration_secs() as u32).sum(),
+            duration_secs: tracks
+                .iter()
+                .fold(0u32, |a, t| a.saturating_add(t.duration_secs() as u32)),
         };
         let body = serde_json::to_vec(tracks).map_err(|e| e.to_string())?;
         // Tracks first: a header without tracks would list a snapshot that cannot be restored.
@@ -160,7 +161,11 @@ impl Store {
             return Err("No such snapshot.".into());
         }
         let b = std::fs::read(self.tracks_path(id)).map_err(|_| "No such snapshot.".to_string())?;
-        serde_json::from_slice(&b).map_err(|_| "That snapshot is damaged.".to_string())
+        let mut tracks: Vec<Track> =
+            serde_json::from_slice(&b).map_err(|_| "That snapshot is damaged.".to_string())?;
+        // A file edited by hand is held to the same limit as one Slate wrote.
+        tracks.truncate(MAX_TRACKS);
+        Ok(tracks)
     }
 
     pub fn rename(&self, id: &str, name: &str) -> Result<(), String> {
@@ -294,6 +299,27 @@ mod tests {
         let m = s.save("big", &q, 1).expect("save");
         assert_eq!(m.count, MAX_TRACKS);
         assert_eq!(s.load(&m.id).expect("load").len(), MAX_TRACKS);
+    }
+
+    #[test]
+    fn snapshot_files_are_owner_only_and_hand_edited_ones_are_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let m = store
+            .save("x", &[track(1, u32::MAX), track(2, u32::MAX)], 1)
+            .unwrap();
+        assert_eq!(m.duration_secs, u32::MAX, "the length saturates");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for p in [store.meta_path(&m.id), store.tracks_path(&m.id)] {
+                let mode = std::fs::metadata(&p).unwrap().permissions().mode();
+                assert_eq!(mode & 0o777, 0o600, "{}", p.display());
+            }
+        }
+        let many: Vec<Track> = (1..=MAX_TRACKS as u64 + 50).map(|i| track(i, 1)).collect();
+        std::fs::write(store.tracks_path(&m.id), serde_json::to_vec(&many).unwrap()).unwrap();
+        assert_eq!(store.load(&m.id).unwrap().len(), MAX_TRACKS);
     }
 
     #[test]

@@ -315,3 +315,35 @@ async fn a_1_2_guest_is_refused_with_a_clear_message() {
         .is_ok());
     host.end().await;
 }
+
+#[tokio::test]
+async fn a_flooding_guest_is_cut_off_and_stray_reports_are_not_kept() {
+    let (htx, mut hrx) = mpsc::unbounded_channel();
+    let host = Host::start(Some("none"), "Lolo", Policy::default(), None, htx)
+        .await
+        .expect("host");
+    let (gtx, _grx) = mpsc::unbounded_channel();
+    let (guest, _) = Guest::join(&host.link(), "Ann", Some("none"), gtx)
+        .await
+        .expect("join");
+    until(&mut hrx, |e| matches!(e, Event::GuestJoined(_))).await;
+    // Reports for tracks the party is not dealing with are dropped without a word.
+    for t in 1..=30u64 {
+        guest.unavailable(10_000 + t).await.expect("send");
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(host.unavailable_for(10_001), 0);
+    while let Ok(e) = hrx.try_recv() {
+        assert_ne!(e, Event::RequestsChanged, "stray reports are not passed on");
+    }
+    // Past the flood limit the host drops the connection.
+    for t in 1..=80u64 {
+        if guest.unavailable(20_000 + t).await.is_err() {
+            break;
+        }
+    }
+    let left = until(&mut hrx, |e| matches!(e, Event::GuestLeft(_))).await;
+    assert_eq!(left, Event::GuestLeft("Ann".into()));
+    assert!(host.guest_names().is_empty());
+    host.end().await;
+}

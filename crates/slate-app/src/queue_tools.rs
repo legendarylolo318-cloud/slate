@@ -118,11 +118,21 @@ impl Backend {
                         text
                     };
                     let now = slate_core::now_secs();
+                    let total = tracks.len();
                     tokio::task::spawn_blocking(move || {
                         store()
                             .ok_or_else(|| "No place to keep snapshots.".to_string())?
                             .save(&name, &tracks, now)
-                            .map(|m| format!("Saved “{}” ({} tracks)", m.name, m.count))
+                            .map(|m| {
+                                if m.count < total {
+                                    format!(
+                                        "Saved “{}” (the first {} of {total} tracks)",
+                                        m.name, m.count
+                                    )
+                                } else {
+                                    format!("Saved “{}” ({} tracks)", m.name, m.count)
+                                }
+                            })
                     })
                     .await
                     .unwrap_or_else(|e| Err(e.to_string()))
