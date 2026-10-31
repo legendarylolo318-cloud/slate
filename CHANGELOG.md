@@ -94,14 +94,56 @@
   reported as unavailable.
 - Queue snapshots stay on the computer when you sign out; they hold track details only.
 
+### Performance (measured)
+Release builds of 1.2.0 and 1.3.0 from the same btrfs disk, 12 s warm-up then a 60 s window,
+two runs each, optional subsystems (MCP, party, crossfade, suggestions, equalizer) off as they
+are by default. Login screen: empty profile. Playing: a copy of a signed-in profile resuming a
+lossless track through PipeWire.
+
+| | 1.2.0 | 1.3.0 |
+|---|---|---|
+| Login screen: wakeups/s (all threads) | 6, 6 | 2, 2 |
+| Login screen: CPU ticks in 60 s | 1, 1 | 0, 0 |
+| Login screen: anonymous PSS | 29.8, 29.8 MB | 29.8, 29.7 MB |
+| Login screen: PSS | 95.4, 96.0 MB | 97.5, 97.5 MB |
+| Login screen: GPU memory (VRAM) | 52.4, 52.4 MB | 52.4, 52.4 MB |
+| Playing: wakeups/s | 269, 259 | 181, 198 |
+| Playing: CPU ticks in 60 s | 80, 85 | 73, 74 |
+| Playing: anonymous PSS | 118.5, 124.3 MB | 120.8, 129.9 MB |
+| Playing: GPU memory (VRAM) | 154.6, 154.6 MB | 155.9, 154.6 MB |
+| Threads (login / playing) | 45 / 75 | 45 / 74 |
+| Network sockets at the login screen | none | none |
+| Time until the window is mapped | 295–313 ms | 295–299 ms |
+| Binary | 71.4 MB | 73.0 MB |
+
+Idle wakeups: 4 a second came from the theme watcher's debouncer tick; the remaining 2 are in
+zbus (accessibility / D-Bus). While playing, the sound-server thread went from ~100 to ~25
+wakeups a second. Anonymous PSS while playing varies by about 6 MB between runs of the same
+build (buffered audio), so the two versions are within noise of each other, inside the
++10 MB budget. Some login-screen runs were disturbed by other activity on the desktop
+(1.2.0: 23 and 16 wakeups/s, 1.3.0: 9 and 13) and are not in the table.
+
+The cost of the new features when used, not on by default:
+- Listening party, host with one guest over loopback, measured in a separate process that runs
+  both ends: +7–8 MB anonymous memory and no extra threads while running. After ending, the
+  memory goes back to the allocator; about 3–5 MB stays mapped (one-time TLS/QUIC setup and
+  allocator fragmentation), and three parties in a row did not grow it further.
+- Equalizer on (10 bands, while playing, two runs): anonymous PSS 120.9, 120.9 MB (no
+  change), VRAM unchanged, 222 wakeups/s and 114, 149 CPU ticks a minute against 73, 74 with it
+  off, i.e. about 1 % of one core for the filtering. With it off the pipeline has no EQ
+  elements at all.
+- Credits panel, queue snapshots: not measured (a list model of a few dozen rows; snapshots are
+  read from disk only while the dialog is open).
+
 ### Not tested before release
 - Almost everything with a screen. The Equalizer section and the Party page were rendered
   offscreen with sample data and looked right; nothing was clicked in a running app. The queue
   "⋯" menu, the snapshot dialog, clickable credits, the full-screen Credits button, the ＋ on
   search results and the "Suggest to party" menu item were compiled but never rendered.
-- A party with two real Slates on different networks (the loopback tests cover messages,
-  requests, caps, co-host and version refusal, but not hole punching, relays or a lost host
-  coming back); the host-handoff reconnect and "Take over" flow have unit tests for the rules,
+- A party with two real Slates, on one machine or on different networks. The loopback tests
+  cover messages, requests, caps, co-host, version refusal and the flood limit, but not hole
+  punching, relays or a lost host coming back; a real 1.2 ↔ 1.3 pair was not tried (the 1.2
+  host's refusal text is matched in a unit test); the host-handoff reconnect and "Take over" flow have unit tests for the rules,
   not an end-to-end run.
 - Fair-queue placement and approve-then-play with real TIDAL tracks, and the region fallback to
   another version.
@@ -111,7 +153,14 @@
   but nobody has listened to it. It is untested with Dolby Atmos tracks and on Windows (the
   `equalizer` plugin is in the Windows bundle; the AppImage bundle was not checked).
 - Importing AutoEq files from the wild beyond the common `PK` / `LSC` / `HSC` format.
-- Memory, GPU memory and CPU against 1.2 (the +10 MB / +10 MB / no-extra-CPU budget).
+- The cost of a running party, the credits panel and queue snapshots inside the running app:
+  this session had no way to click, so the party was measured in a separate process (see
+  "Performance") and credits and snapshots not at all. Track-list scrolling, page navigation
+  and the thumbnail cache were not profiled for the same reason (nothing in them changed).
+- The 40 ms sound-server segments by ear (wakeups and CPU were measured while a track played;
+  nobody listened for glitches), and with PulseAudio proper rather than PipeWire's.
+- The equalizer surviving a crossfade in a running app (the fix is in the worker hand-over;
+  there is no test that plays two tracks).
 - Windows (everything above), and Windows media controls and tray, which were already untested.
 
 ## [1.2.0] - 2026-10-30
