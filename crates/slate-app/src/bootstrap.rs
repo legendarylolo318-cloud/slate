@@ -470,6 +470,7 @@ fn wire(window: &AppWindow, backend: &Backend) {
         .version_action(usize::try_from(i).unwrap_or(usize::MAX), &a));
     bind!(on_versions_close, |b| b.versions_close());
     bind!(on_show_album_versions, |b| b.show_album_versions());
+    bind!(on_chip_picked, |b, i| b.search_chip(i));
     bind!(on_start_login, |b| b.start_login());
     bind!(on_open_login_url, |b| b.open_login_url());
     bind!(on_open_update, |b| b.open_update());

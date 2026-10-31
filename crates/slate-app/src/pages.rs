@@ -234,6 +234,50 @@ fn track_card(t: &Track) -> CardData {
     }
 }
 
+/// The last search, kept so a quality chip can re-filter without asking TIDAL again.
+static SEARCH: std::sync::Mutex<Option<(String, slate_core::tidal_api::TidalSearchResults)>> =
+    std::sync::Mutex::new(None);
+
+/// Search results as card sections; the Tracks section honours the quality chip.
+fn search_sections(
+    r: &slate_core::tidal_api::TidalSearchResults,
+    quality: i32,
+) -> Vec<SectionData> {
+    let filter = slate_core::list_filter::QualityFilter::from_index(quality);
+    let tracks: Vec<CardData> = r
+        .tracks
+        .iter()
+        .filter_map(Track::from_serialized)
+        .filter(|t| {
+            let b = crate::quality::track_badges(t);
+            filter.accepts(b.tier, b.atmos)
+        })
+        .map(|t| track_card(&t))
+        .collect();
+    let mut sections = Vec::new();
+    let mut push = |title: &str, cards: Vec<CardData>| {
+        if !cards.is_empty() {
+            sections.push(SectionData {
+                title: title.into(),
+                wrap: false,
+                cards,
+            });
+        }
+    };
+    push("Tracks", tracks);
+    push(
+        "Artists",
+        r.artists
+            .iter()
+            .map(|a| artist_card(a.id, &a.name, &a.picture, &a.selected_album_cover_fallback))
+            .collect(),
+    );
+    push("Videos", r.videos.iter().map(video_card).collect());
+    push("Albums", r.albums.iter().map(album_card).collect());
+    push("Playlists", r.playlists.iter().map(playlist_card).collect());
+    sections
+}
+
 /// Best-effort card from an untyped home-feed item. Unknown shapes are skipped.
 /// Sections of an editorial page as card rows. A section with more behind it
 /// ends in a "See all" card that opens its own page.
@@ -747,6 +791,7 @@ impl Backend {
         self.show_loved_tabs(None);
         let title = title.to_string();
         self.ui(move |w| {
+            w.set_chips_visible(false);
             w.set_cards_title(title.into());
             w.set_cards_subtitle("".into());
             w.set_cards_loading(true);
@@ -1070,46 +1115,52 @@ impl Backend {
             let Some(state) = this.state() else { return };
             match search::search_tidal(&state, query.clone(), 30).await {
                 Ok(r) => {
-                    let mut sections = Vec::new();
-                    let tracks: Vec<CardData> = r
-                        .tracks
-                        .iter()
-                        .filter_map(Track::from_serialized)
-                        .map(|t| track_card(&t))
-                        .collect();
-                    let mut push = |title: &str, cards: Vec<CardData>| {
-                        if !cards.is_empty() {
-                            sections.push(SectionData {
-                                title: title.into(),
-                                wrap: false,
-                                cards,
-                            });
-                        }
-                    };
-                    push("Tracks", tracks);
-                    push(
-                        "Artists",
-                        r.artists
-                            .iter()
-                            .map(|a| {
-                                artist_card(
-                                    a.id,
-                                    &a.name,
-                                    &a.picture,
-                                    &a.selected_album_cover_fallback,
-                                )
-                            })
-                            .collect(),
-                    );
-                    push("Videos", r.videos.iter().map(video_card).collect());
-                    push("Albums", r.albums.iter().map(album_card).collect());
-                    push("Playlists", r.playlists.iter().map(playlist_card).collect());
+                    let quality = this.saved_search_quality();
+                    if let Ok(mut s) = SEARCH.lock() {
+                        *s = Some((query.clone(), r.clone()));
+                    }
+                    let sections = search_sections(&r, quality);
                     if this.lib.cards_generation() == generation {
                         this.show_cards(format!("Search: {query}"), String::new(), sections, None);
+                        this.ui(move |w| {
+                            w.set_chips_visible(true);
+                            w.set_chip_index(quality);
+                        });
                     }
                 }
                 Err(e) => this.fail_cards(format!("Search failed: {}", e.log_safe())),
             }
+        });
+    }
+
+    fn saved_search_quality(&self) -> i32 {
+        crate::uiprefs::UiPrefs::load()
+            .quality_filters
+            .get("search")
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// A quality chip on the search page: re-shows the stored results with the tracks filtered.
+    pub fn search_chip(&self, quality: i32) {
+        let mut prefs = crate::uiprefs::UiPrefs::load();
+        if quality == 0 {
+            prefs.quality_filters.remove("search");
+        } else {
+            prefs.quality_filters.insert("search".into(), quality);
+        }
+        let _ = prefs.save();
+        let stored = SEARCH.lock().ok().and_then(|s| s.clone());
+        let Some((query, r)) = stored else { return };
+        self.show_cards(
+            format!("Search: {query}"),
+            String::new(),
+            search_sections(&r, quality),
+            None,
+        );
+        self.ui(move |w| {
+            w.set_chips_visible(true);
+            w.set_chip_index(quality);
         });
     }
 

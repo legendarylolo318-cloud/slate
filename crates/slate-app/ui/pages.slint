@@ -79,6 +79,10 @@ export component CardsPage inherits Rectangle {
     in property <bool> loved-tabs;
     in property <int> loved-tab;
     callback loved-tab-picked(int);
+    /// Quality chips for the Tracks of a search.
+    in property <bool> chips-visible;
+    in property <int> chip-index;
+    callback chip-picked(int);
     // Grid columns that fit; the model regroups its rows when this changes.
     callback cols-changed(int);
     property <length> pad: root.compact ? 12px : 24px;
@@ -129,6 +133,11 @@ export component CardsPage inherits Rectangle {
                     padding-top: 8px;
                     alignment: start;
                     if root.loved-tabs: Segmented { options: ["Tracks", "Videos"]; index: root.loved-tab; picked(i) => { root.loved-tab-picked(i); } }
+                }
+                if root.chips-visible: HorizontalLayout {
+                    padding-top: 8px;
+                    alignment: start;
+                    Segmented { options: ["All", "Lossless", "Hi-Res", "Atmos"]; index: root.chip-index; picked(i) => { root.chip-picked(i); } }
                 }
                 if root.sort-visible: HorizontalLayout {
                     padding-top: 8px;

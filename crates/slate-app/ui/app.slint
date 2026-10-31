@@ -82,6 +82,9 @@ export component AppWindow inherits Window {
     callback compare-tab(int);
     callback compare-action(string);
     callback compare-close();
+    in-out property <bool> chips-visible: false;
+    in-out property <int> chip-index: 0;
+    callback chip-picked(int);
     in-out property <bool> filter-open: false;
     in-out property <string> filter-text;
     in-out property <int> filter-quality: 0;
@@ -465,6 +468,9 @@ export component AppWindow inherits Window {
                         loved-tabs: root.loved-tabs;
                         loved-tab: root.loved-tab;
                         loved-tab-picked(i) => { root.loved-tab-picked(i); }
+                        chips-visible: root.chips-visible;
+                        chip-index: root.chip-index;
+                        chip-picked(i) => { root.chip-picked(i); }
                         sort-visible: root.sort-visible;
                         sort-label: root.sort-label;
                         sort-desc: root.sort-desc;

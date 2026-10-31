@@ -18,7 +18,8 @@
   fully loaded Slate says "Loading N more tracks to search…" and fetches the rest. Playing a
   track from a filtered list plays the filtered tracks.
 - A chip row (All / Lossless / Hi-Res / Atmos) on the same pages narrows the list by quality,
-  combines with the filter, and is remembered per kind of page.
+  combines with the filter, and is remembered per kind of page. Search results have the same
+  chips for their Tracks section.
 - Settings → Appearance → Your themes: make your own themes. "New theme" opens an editor for
   every colour role (accent, background, surfaces, text, error…) with the colour picker and
   a live preview in the real app; text pairs below a 4.5:1 contrast ratio get a warning that
