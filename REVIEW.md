@@ -1,6 +1,6 @@
 # Review log
 
-Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); Windows checks run on GitHub's `windows-latest` (MSVC, GStreamer 1.24.13).
+Last updated 2026-10-31. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); Windows checks run on GitHub's `windows-latest` (MSVC, GStreamer 1.24.13).
 
 ## Build and test status
 | Check | Linux | Windows |
@@ -74,6 +74,18 @@ Last updated 2026-10-29. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | 58 | High | The OBS overlay was never sent the playing track (`overlay_publish_state` had no caller), so it stayed empty | Published on track change, play/pause, seek and quality; live-tested in a Chromium page (track, cover, quality, pause state) |
 | 60 | High | New playlist, Import and renaming a private playlist failed with HTTP 400 (`INVALID_REQUEST_BODY` at `/data/attributes/accessType`): the app sent `PRIVATE`; the API takes `PUBLIC` or `UNLISTED` | Callers send `UNLISTED`; `playlist_access_type` in the core maps anything but `PUBLIC` to `UNLISTED`. Test; live create/add/delete check and your import succeeded |
 | 59 | — | New: Import from file (CSV/M3U → new playlist) | `import.rs`; 10 parser tests incl. round trips of Slate's own exports |
+| 61 | High | 1.3 party: a guest could send "cannot play" reports for any track id without limit; each grew a host map and re-sent the request list to co-hosts and the tray (memory and CPU amplification) | Reports count only for the playing, queued or waiting tracks, at most 64 tracks, pruned per track, repeats change nothing and are not passed on. Tests: `unavailability_reports_are_bounded_and_pruned`, loopback `a_flooding_guest_is_cut_off_and_stray_reports_are_not_kept` |
+| 62 | Medium | 1.3 party: no per-connection message limit; repeated skip votes re-broadcast a notice to every guest each time | 60 messages per 10 s per guest, then disconnect (`proto::Flood`); a repeated vote is `Vote::Again` and silent. Tests |
+| 63 | Medium | 1.3 party: unlimited connections could sit in the 10 s handshake before the invite secret is checked (an old link is enough) | At most 8 handshakes at once; the rest are dropped |
+| 64 | Medium | 1.3 party (app): two quick clicks on Start or Join made two endpoints, the first never ended (its accept and heartbeat tasks ran on); Leave during a start, join or reconnect was undone when it finished | One start/join at a time; a session counter ends a start/join/reconnect that finishes after Leave; `Host`/`Guest` cancel their tasks on drop |
+| 65 | Medium | 1.3 party (guest): track and queue lookups ran as independent tasks, so a slow lookup could finish after a newer one and play or queue the old track | Generation counters drop stale results |
+| 66 | Low | 1.3 party (host): every event (including each "cannot play" report) re-encoded the invite QR code and rebuilt the guest list; request tracks of guests who left stayed in memory | QR cached per link; only the guest list or the tray is rebuilt, as the event requires; pending tracks pruned, owners capped at 500 |
+| 67 | Low | 1.3 party: a 1.3 guest joining a 1.2 host showed "protocol version 2 is not supported (need 1)" | Mapped to "The host is on an older version of Slate. Ask them to update." Test |
+| 68 | High | 1.3 EQ: the crossfade's incoming player (which plays every later track) was never given the equalizer, so the EQ silently switched off after the first crossfade | `FadeState` keeps the EQ and hands it to the incoming worker when it is on; edits reach the outgoing worker during a fade |
+| 69 | Medium | 1.3 EQ: switching exclusive or bit-perfect on mid-track left a live equalizer altering the sound until the next track | Flattened at once (passthrough) and the Signal Path stops listing it |
+| 70 | Low | 1.3 EQ: an AutoEq file with `Preamp: NaN dB` was accepted as NaN | Non-finite preamp ignored; proptest fuzzing of the parser (2000 random texts, 2000 hostile filter files) checks ranges and that the result survives the settings file |
+| 71 | Low | 1.3: the EQ switch and the party choices read and wrote the encrypted settings / ui.json on the UI thread | Moved into the runtime like the other settings |
+| 72 | Low | 1.3 snapshots: files were written with the default umask (0644) unlike the rest of the profile; a hand-edited snapshot could hold any number of tracks; a queue over 1000 tracks was cut silently | `write_atomic` (0600); load capped at 1000; the message says "the first 1000 of N". Test |
 | 54 | Medium | The new `[tidal-req]` debug line (and two existing 401 logs) printed `/users/<account id>/…` paths | `loggable_path` replaces the id and drops the query. Test |
 
 ## Security verification

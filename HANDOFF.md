@@ -42,5 +42,13 @@ Notes for anyone working on Slate's code. What changed per release is in
 - Party rules are pure and tested in `slate-core/src/party/requests.rs` (caps, duplicates, fair
   queue, vote skip, handoff); `proto.rs` is the versioned wire format (protocol 2 since 1.3) and
   `net.rs` the transport. `party_ui.rs` in the app only connects them to the queue and the UI.
+  Everything a peer can grow is bounded: 4 KiB messages, 60 messages per 10 s per guest
+  (`proto::Flood`), 8 pre-auth handshakes, 30 waiting requests, 64 tracks of "cannot play"
+  reports; a guest bounds what it reads during the handshake the same way.
 - The equalizer (`eq.rs`) adds its GStreamer elements to the pipeline only while it is on and
-  the output is not exclusive or bit-perfect; with it off the chain is unchanged.
+  the output is not exclusive or bit-perfect; with it off the chain is unchanged. A crossfade's
+  incoming worker is handed the EQ (`FadeState::eq`), or it would play on without it.
+- The shared-mode sink runs with 40 ms `latency-time` (GStreamer's default is 10 ms) to cut
+  sound-server wakeups; `buffer-time` is GStreamer's 200 ms.
+- The theme.json watcher is a plain inotify watcher plus a thread that waits in `recv()`; do
+  not bring back a ticking debouncer (it cost 4 idle wakeups a second).

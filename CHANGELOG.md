@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.3.0] - Unreleased
+## [1.3.0] - 2026-10-31
 
 ### Added
 - Listening party, guest requests (Settings → Party). First, a fix: in 1.2 the host could approve
@@ -49,27 +49,50 @@
   be set next to the Join field (it used to be "Guest").
 - Switching the equalizer on or off applies from the next track; changing a band applies to the
   track that is playing.
+- Lighter while idle and while playing (numbers under "Performance"): the theme-file watcher no
+  longer wakes 4 times a second to check for changes (it waits for the file system to report
+  one), and the sound server is fed in 40 ms instead of 10 ms segments, a quarter of the
+  wakeups, with the same 200 ms buffer. One dependency (`notify-debouncer-full`) is gone.
 
 ### Fixed
 - Guests could never send a track suggestion in 1.2 (the host side was finished, the guest side
   was not reachable from the interface).
+- Found in review before release (details in REVIEW.md, #61–72):
+  - Party: a guest could send "cannot play" reports for any track without limit, growing the
+    host's memory and re-sending the request list each time; repeated skip votes re-announced
+    themselves to everyone; any number of connections could wait in the handshake. Reports now
+    count only for tracks the party is playing, queuing or deciding on (64 at most), a guest
+    sending more than 60 messages in 10 seconds is disconnected, and at most 8 handshakes run
+    at once.
+  - Party: two quick clicks on Start or Join started two parties (the first kept running in
+    the background); Leave while a start, join or reconnect was still under way was undone when
+    it finished; a guest could end up playing an older track when two arrived close together.
+  - Party: a 1.3 guest joining a 1.2 host now reads "The host is on an older version of Slate"
+    instead of "protocol version 2 is not supported (need 1)".
+  - Equalizer: it switched itself off for every track after the first crossfade; switching
+    exclusive or bit-perfect output on mid-track left it acting on the sound until the next
+    track (it is now flat at once); an AutoEq file with `Preamp: NaN` was accepted.
+  - The equalizer switch and the party choices no longer read and write settings files on the
+    UI thread.
+  - Queue snapshots are written owner-only like the rest of the profile, and saving a queue of
+    more than 1000 tracks says that only the first 1000 were kept.
 - README, `main.rs` and `PORTING_PLAN.md` disagreed about Windows media controls and the tray;
   they are implemented (not yet used on a real Windows desktop, see below), and the text now
   says so.
 
 ### Notes
 - Resource budget: every new feature is lazy. Nothing is allocated, spawned, loaded or fetched
-  until it is opened or switched on, and no new thread, timer or poll runs otherwise. The party
-  extras live behind the existing `party` feature. No new crates were added. Memory, GPU memory
-  and CPU were **not measured** against 1.2 for this release; the claim rests on the design
-  (see "Not tested before release").
+  until it is opened or switched on, and no new thread, timer or poll runs otherwise (the
+  thread count is the same as 1.2's at the login screen and while playing; the only renamed
+  thread is the theme watcher's). The
+  party extras live behind the existing `party` feature. No crates were added; one was removed.
+  Measured against 1.2 below.
 - Host handoff keeps the party alive and offers it, but the other guests are not moved
   automatically: the new host shares a new link.
 - A guest's plan quality (a track above their subscription) is not detected separately: TIDAL
   streams the best quality the plan allows, and a track that cannot be played at all is
   reported as unavailable.
 - Queue snapshots stay on the computer when you sign out; they hold track details only.
-- The version number in `Cargo.toml` is still 1.2.0; the release commit changes it.
 
 ### Not tested before release
 - Almost everything with a screen. The Equalizer section and the Party page were rendered
