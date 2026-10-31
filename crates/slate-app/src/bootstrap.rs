@@ -498,6 +498,8 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_queue_remove, |b, i| b
         .queue_remove(usize::try_from(i).unwrap_or(0)));
     bind!(on_queue_clear, |b| b.queue_clear());
+    bind!(on_queue_action, |b, a| b.queue_action(&a));
+    bind!(on_snapshot_action, |b, k, i, t| b.snapshot_action(&k, &i, &t));
     bind!(on_lyric_seek, |b, i| b
         .lyric_seek(usize::try_from(i).unwrap_or(0)));
     bind!(on_toggle_favorite, |b| b.toggle_current_favorite());

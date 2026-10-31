@@ -198,6 +198,7 @@ export component QueuePanel inherits Rectangle {
     callback go(int, string);
     callback clear();
     callback close();
+    callback menu(string);
     background: Theme.surface;
     VerticalLayout {
         padding: 12px;
@@ -205,6 +206,18 @@ export component QueuePanel inherits Rectangle {
         HorizontalLayout {
             Text { text: "Queue"; font-size: 20px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; }
             Button { label: "Clear"; min-width: 60px; height: 28px; clicked => { root.clear(); } }
+            qmore := Button {
+                label: "⋯";
+                min-width: 36px;
+                height: 28px;
+                clicked => { qmenu.show({ x: qmore.absolute-position.x, y: qmore.absolute-position.y + qmore.height }); }
+                qmenu := ContextMenuArea {
+                    Menu {
+                        MenuItem { title: "Save queue as playlist"; activated => { root.menu("save-playlist"); } }
+                        MenuItem { title: "Queue snapshots…"; activated => { root.menu("snapshots"); } }
+                    }
+                }
+            }
             IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close(); } }
         }
         Text { text: "NOW PLAYING"; font-size: 11px; color: Theme.text-muted; }

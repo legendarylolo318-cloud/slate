@@ -230,6 +230,8 @@ export component AppWindow inherits Window {
     in property <[Choice]> dialog-choices;
     callback queue-remove(int);
     callback queue-clear();
+    callback queue-action(string);
+    callback snapshot-action(string, string, string);
     callback lyric-seek(int);
 
     // ---- playback ----
@@ -504,6 +506,7 @@ export component AppWindow inherits Window {
                     remove(i) => { root.queue-remove(i); }
                     go(i, k) => { root.queue-go(i, k); }
                     clear => { root.queue-clear(); }
+                    menu(a) => { root.queue-action(a); }
                     close => { root.panel = ""; }
                 }
                 if root.panel == "lyrics" && !root.compact: LyricsPanel {
@@ -900,7 +903,7 @@ export component AppWindow inherits Window {
             TouchArea { clicked => { root.dialog-open = false; } }
             Rectangle {
                 width: min(400px, parent.width - 32px);
-                height: root.dialog-kind == "move" ? min(420px, parent.height - 48px) : root.dialog-kind == "dedupe" || root.dialog-kind == "artists" || root.dialog-kind == "compare" ? min(420px, parent.height - 48px) : 190px;
+                height: root.dialog-kind == "snapshots" ? min(460px, parent.height - 48px) : root.dialog-kind == "move" ? min(420px, parent.height - 48px) : root.dialog-kind == "dedupe" || root.dialog-kind == "artists" || root.dialog-kind == "compare" ? min(420px, parent.height - 48px) : 190px;
                 border-radius: 12px;
                 background: Theme.surface;
                 TouchArea { }
@@ -908,7 +911,7 @@ export component AppWindow inherits Window {
                     padding: 16px;
                     spacing: 10px;
                     Text {
-                        text: root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : root.dialog-kind == "compare" ? "Compare with…" : root.dialog-kind == "dup" ? "Already in playlist" : "Move to folder";
+                        text: root.dialog-kind == "snapshots" ? "Queue snapshots" : root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : root.dialog-kind == "compare" ? "Compare with…" : root.dialog-kind == "dup" ? "Already in playlist" : "Move to folder";
                         font-size: 18px; font-weight: 700; color: Theme.text;
                     }
                     if root.dialog-kind == "delete": Text {
@@ -952,6 +955,32 @@ export component AppWindow inherits Window {
                         placeholder: "New name";
                         field-width: 340px;
                         accepted(t) => { root.dialog-accepted("rename", root.dialog-target, t); root.dialog-open = false; }
+                    }
+                    if root.dialog-kind == "snapshots": HorizontalLayout {
+                        spacing: 8px;
+                        TextField { text <=> root.dialog-text; placeholder: "Name (optional)"; field-width: 220px; accepted(t) => { root.snapshot-action("save", "", t); } }
+                        Button { label: "Save queue"; primary: true; clicked => { root.snapshot-action("save", "", root.dialog-text); } }
+                        Button { label: "Rename"; enabled: root.dialog-target != "" && root.dialog-text != ""; clicked => { root.snapshot-action("rename", root.dialog-target, root.dialog-text); } }
+                    }
+                    if root.dialog-kind == "snapshots" && root.dialog-choices.length == 0: Text { text: "No snapshots yet. Save the queue to keep it."; color: Theme.text-muted; wrap: word-wrap; }
+                    if root.dialog-kind == "snapshots": Flickable {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            for c in root.dialog-choices: Rectangle {
+                                height: 44px;
+                                border-radius: 6px;
+                                background: c.id == root.dialog-target ? Theme.surface-raised : transparent;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    spacing: 4px;
+                                    Text { text: c.title; color: Theme.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                    Button { label: "Replace"; height: 28px; clicked => { root.snapshot-action("replace", c.id, ""); } }
+                                    Button { label: "Add"; height: 28px; clicked => { root.snapshot-action("append", c.id, ""); } }
+                                    Button { label: "✎"; height: 28px; min-width: 32px; clicked => { root.dialog-target = c.id; } }
+                                    Button { label: "✕"; height: 28px; min-width: 32px; danger: true; clicked => { root.snapshot-action("delete", c.id, ""); } }
+                                }
+                            }
+                        }
                     }
                     if root.dialog-kind == "move": Flickable {
                         vertical-stretch: 1;

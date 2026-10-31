@@ -54,6 +54,7 @@ pub mod pipeline_probe;
 pub mod playlist_tools;
 pub mod proxy;
 pub mod proxy_http;
+pub mod queue_snapshots;
 pub mod rate_gate;
 pub mod scrobble;
 pub mod signal_path;

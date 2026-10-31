@@ -538,6 +538,19 @@ impl Controller {
             .play_next_in_queue(track, source.as_ref());
     }
 
+    /// Makes `tracks` the upcoming queue (a restored snapshot), leaving what plays now alone.
+    pub async fn replace_upcoming(&self, tracks: Vec<Track>) {
+        self.queue.lock().await.set_tracks(tracks, None, false);
+    }
+
+    /// Adds `tracks` after everything in "next up" (a restored snapshot, appended).
+    pub async fn append_upcoming(&self, tracks: Vec<Track>) {
+        let mut q = self.queue.lock().await;
+        for t in tracks {
+            q.add_to_queue(t, None);
+        }
+    }
+
     /// Inserts into the "next up" list at `index`.
     pub async fn insert_in_queue(&self, index: usize, track: Track) {
         self.queue.lock().await.insert_manual(index, track, None);
