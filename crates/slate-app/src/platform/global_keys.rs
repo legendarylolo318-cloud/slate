@@ -149,7 +149,7 @@ pub mod hotkeys {
                     continue;
                 };
                 match manager.register(hotkey) {
-                    Ok(()) => ids.push((hotkey.id(), *id)),
+                    Ok(()) => ids.push((hotkey.id(), id)),
                     Err(e) => tracing::warn!("shortcut {id} not registered: {e}"),
                 }
             }
