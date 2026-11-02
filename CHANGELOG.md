@@ -1,5 +1,63 @@
 # Changelog
 
+## [1.4.1] - 2026-11-02
+
+Maintenance release: bug fixes and resource reductions only. No new features, no setting or
+default changed, no crate added, audio path unchanged (bit-perfect and exclusive output, buffers
+and the 6 MiB hi-res stream buffer as in 1.4.0). Details in REVIEW.md #95–104.
+
+### Fixed
+- DJ: an error reply from the model's endpoint with non-ASCII text could crash Slate (the text was
+  cut in the middle of a character).
+- DJ: the "seconds to wait for the model" setting was waited out twice when the endpoint did not
+  answer; a refused request (an HTTP error) is still retried without the JSON schema as before.
+- Party handoff: a guest joining at the same moment another left could leave the handoff key with
+  a guest who was no longer next in line, so the other guests looked for a party nobody hosted.
+- Lyrics timing: two quick −100 / +100 ms nudges could lose one of them.
+- "Add to new playlist" held up every other TIDAL request (the next track's stream included) for
+  up to 4.6 s while it waited for TIDAL to know the new playlist.
+- If the Slate core could not start (e.g. a keyring error) with "Start minimized to tray" on,
+  Slate ran with no window and no tray; it also checked for the core 10 times a second forever.
+  The window now opens with the error.
+- Closing a music video while it was still loading let it play on, heard but not seen.
+- The last music-video frame (up to ~3.7 MB and its texture) stayed in memory after the video
+  closed.
+- The DJ API key and TIDAL tokens can no longer reach a log line through debug printing.
+- Windows: starting the media controls no longer ties up a runtime thread for up to 5 s.
+
+### Changed (resources)
+- The async runtime uses at most 4 worker threads instead of one per CPU core.
+
+### Performance (measured)
+Release builds of 1.4.0 and 1.4.1 on the same machine, 12 s warm-up then a 60 s window (1.4.0 two
+runs, 1.4.1 one). Playing: a copy of a signed-in profile, TOTO "Africa" (hi-res, S24LE 2ch 192 kHz
+at the PipeWire sink in both).
+
+| | 1.4.0 | 1.4.1 |
+|---|---|---|
+| Threads (login / playing) | 38 / 64, 65 | 18 / 45 |
+| Login screen: wakeups/s, CPU ticks in 60 s | 0.7, 0 | 0.7, 0 |
+| Login screen: anonymous PSS | 29.7, 29.3 MB | 29.3 MB |
+| Login screen: GPU memory (VRAM) | 54.2 MB | 54.3 MB |
+| Playing: wakeups/s | 286.2, 252.9 | 251.8 |
+| Playing: CPU ticks in 60 s | 84, 82 | 78 |
+| Playing: anonymous PSS | 126.6, 133.8 MB | 130.1 MB |
+| Playing: GPU memory (VRAM) | 93.4 MB | 93.4 MB |
+| Time until the window is mapped | 293–298 ms | 290–306 ms |
+
+Wakeups, CPU and memory while playing are within run-to-run noise; nearly all wakeups are
+GStreamer's streaming threads. VRAM was sampled every second and never moved, so the one-off
+167.6 MB reading in 1.4.0's notes was not reproduced (a re-tiling test was cut short).
+
+Considered, not done:
+- A larger first read size for the HTTP source (64 KiB): no measurable change, so it was taken out.
+- Releasing the renderer's GPU memory while hidden: Slint already drops the window surface on hide
+  and has no public call to free more.
+- Skipping progress updates while hidden: at most 2 wakeups/s; the mini player reads the same values.
+- Sending audio to PipeWire directly instead of through its PulseAudio layer (~50 wakeups/s), a
+  smaller decoded buffer, or dropping fallback renderers: each changes the audio path, buffering or
+  start-up on some machines.
+
 ## [1.4.0] - 2026-11-01
 
 ### Added

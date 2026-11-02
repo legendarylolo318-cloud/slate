@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::sync::LockExt;
 
 /// LLM DJ settings. All optional; `DJ_*` env vars override blanks at call time.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct DjSettings {
     /// Master switch. Default: off.
@@ -32,6 +32,24 @@ pub struct DjSettings {
     /// can be slow — loading an 8B VLM into VRAM plus generating can take well
     /// over a minute, so the default is generous (clamped to 1..=3600).
     pub timeout_secs: u64,
+}
+
+/// The API key never reaches a log line, whatever prints these settings.
+impl std::fmt::Debug for DjSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DjSettings")
+            .field("enabled", &self.enabled)
+            .field("base_url", &self.base_url)
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() { "" } else { "<set>" },
+            )
+            .field("model", &self.model)
+            .field("speak", &self.speak)
+            .field("block_size", &self.block_size)
+            .field("timeout_secs", &self.timeout_secs)
+            .finish()
+    }
 }
 
 impl DjSettings {
@@ -424,16 +442,25 @@ impl Dj {
                 },
             },
         });
-        if let Ok(raw) = self.post(&url, &body).await {
-            self.note_raw(&raw);
-            if let Some(m) = parse_move(&raw) {
-                return Some(m);
+        match self.post_inner(&url, &body).await {
+            Ok(raw) => {
+                self.note_raw(&raw);
+                if let Some(m) = parse_move(&raw) {
+                    return Some(m);
+                }
+                self.note_diag(format!(
+                    "The endpoint answered, but the reply was not a usable move: {}",
+                    raw.chars().take(200).collect::<String>()
+                ));
+                return None;
             }
-            self.note_diag(format!(
-                "The endpoint answered, but the reply was not a usable move: {}",
-                raw.chars().take(200).collect::<String>()
-            ));
-            return None;
+            // No answer at all: asking again without the schema would only wait out
+            // the timeout a second time (the setting is the wait for the model).
+            Err(PostError::Unreached(e)) => {
+                self.note_diag(&e);
+                return None;
+            }
+            Err(PostError::Refused(_)) => {}
         }
         // 2) retry plain, then parse whatever came back.
         match self.post(&url, &base).await {
@@ -513,7 +540,16 @@ impl Dj {
     }
 
     async fn post(&self, url: &str, body: &serde_json::Value) -> Result<String, String> {
-        let client = self.http.client().map_err(|e| e.cause)?;
+        self.post_inner(url, body).await.map_err(|e| match e {
+            PostError::Unreached(e) | PostError::Refused(e) => e,
+        })
+    }
+
+    async fn post_inner(&self, url: &str, body: &serde_json::Value) -> Result<String, PostError> {
+        let client = self
+            .http
+            .client()
+            .map_err(|e| PostError::Unreached(e.cause))?;
         let mut req = client
             .post(url)
             .json(body)
@@ -524,23 +560,46 @@ impl Dj {
         if !self.cfg.api_key.trim().is_empty() {
             req = req.bearer_auth(self.cfg.api_key.trim());
         }
-        let resp = req.send().await.map_err(|e| self.send_error(e))?;
+        let resp = req.send().await.map_err(|e| {
+            let unreached = e.is_timeout() || e.is_connect();
+            let msg = self.send_error(e);
+            if unreached {
+                PostError::Unreached(msg)
+            } else {
+                PostError::Refused(msg)
+            }
+        })?;
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| e.to_string())?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| PostError::Refused(e.to_string()))?;
         if !status.is_success() {
-            return Err(format!(
+            // By characters: the body is the endpoint's, and a byte cut can split one.
+            return Err(PostError::Refused(format!(
                 "HTTP {}: {}",
                 status.as_u16(),
-                &text[..text.len().min(200)]
-            ));
+                text.chars().take(200).collect::<String>()
+            )));
         }
-        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        let v: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| PostError::Refused(e.to_string()))?;
         let content = v
             .pointer("/choices/0/message/content")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| "no choices[0].message.content in response".to_string())?;
+            .ok_or_else(|| {
+                PostError::Refused("no choices[0].message.content in response".to_string())
+            })?;
         Ok(content.to_string())
     }
+}
+
+/// Why a request to the endpoint failed.
+enum PostError {
+    /// Nothing answered (connect failure, timeout, proxy blocked).
+    Unreached(String),
+    /// It answered, but not with a usable completion.
+    Refused(String),
 }
 
 #[cfg(test)]
@@ -888,6 +947,90 @@ mod tests {
         assert!(raw.contains("slower and deeper"), "raw: {raw}");
         let diag = dj.last_diag().expect("a diagnosis must be left behind");
         assert!(diag.contains("not a usable move"), "diag: {diag}");
+    }
+
+    /// A first request that times out is not sent again without the schema: that would
+    /// wait the whole timeout twice before the radio takes over.
+    #[tokio::test]
+    async fn decide_waits_out_a_silent_endpoint_once() {
+        use std::time::Duration;
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(chat_response("{}").set_delay(Duration::from_millis(2500)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dj = Dj::new(
+            DjSettings {
+                base_url: server.uri(),
+                model: "test-model".into(),
+                timeout_secs: 1,
+                ..Default::default()
+            },
+            direct_http(),
+        );
+        assert!(dj.decide(&DjContext::default()).await.is_none());
+        let diag = dj.last_diag().expect("diagnosis");
+        assert!(diag.contains("within 1 s"), "diag: {diag}");
+    }
+
+    /// An endpoint that refuses the schema (HTTP 400) is still asked again plainly.
+    #[tokio::test]
+    async fn decide_retries_without_the_schema_when_it_is_refused() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::body_string_contains("response_format"))
+            .respond_with(wiremock::ResponseTemplate::new(400).set_body_string("no schema"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(chat_response(r#"{"query":"dub","reason":"x"}"#))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dj = Dj::new(
+            DjSettings {
+                base_url: server.uri(),
+                model: "test-model".into(),
+                ..Default::default()
+            },
+            direct_http(),
+        );
+        let m = dj.decide(&DjContext::default()).await.expect("plain retry");
+        assert_eq!(m.query, "dub");
+    }
+
+    /// The error body is the endpoint's: cutting it must not split a character (a panic).
+    #[tokio::test]
+    async fn an_error_body_with_wide_characters_is_cut_safely() {
+        let server = wiremock::MockServer::start().await;
+        let body = format!("{}é€ and more", "a".repeat(199));
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(500).set_body_string(body))
+            .mount(&server)
+            .await;
+        let dj = Dj::new(
+            DjSettings {
+                base_url: server.uri(),
+                model: "test-model".into(),
+                ..Default::default()
+            },
+            direct_http(),
+        );
+        let err = dj.ping().await.expect_err("HTTP 500");
+        assert!(err.starts_with("HTTP 500: ") && err.ends_with('é'), "{err}");
+    }
+
+    #[test]
+    fn the_api_key_is_never_printed() {
+        let s = DjSettings {
+            api_key: "sk-secret-123".into(),
+            ..Default::default()
+        };
+        let out = format!("{s:?} {:?}", s.resolved());
+        assert!(!out.contains("sk-secret"), "{out}");
+        assert!(out.contains("<set>"), "{out}");
     }
 
     #[tokio::test]

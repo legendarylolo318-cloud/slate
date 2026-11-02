@@ -254,6 +254,26 @@ struct HostState {
     by: Vec<String>,
     /// Recently played ids, oldest first.
     recent: Vec<u64>,
+    /// Handed to the successor, who hosts under it after this host is gone, and the
+    /// guest it was handed to. A new successor gets a new key, so a guest who stopped
+    /// being the successor (kicked, left, a co-host was named) cannot host the party.
+    /// Kept beside the roster: the successor and its key are decided under one lock,
+    /// or a join racing a leave could hand the key to a guest who is no longer next.
+    heir: (iroh::SecretKey, Option<u64>),
+}
+
+impl HostState {
+    /// The successor, the key it hosts under and whether that key is new (the successor
+    /// changed). None while there are no guests.
+    fn assign_heir(&mut self) -> Option<(iroh::SecretKey, u64, bool)> {
+        let successor = super::requests::successor(&self.roster.successor_input())?;
+        let rotated = self.heir.1.is_some_and(|g| g != successor);
+        if rotated {
+            self.heir.0 = iroh::SecretKey::generate();
+        }
+        self.heir.1 = Some(successor);
+        Some((self.heir.0.clone(), successor, rotated))
+    }
 }
 
 /// Who a broadcast is for.
@@ -265,10 +285,6 @@ enum Audience {
 }
 
 struct HostInner {
-    /// Handed to the successor, who hosts under it after this host is gone, and the
-    /// guest it was handed to. A new successor gets a new key, so a guest who stopped
-    /// being the successor (kicked, left, a co-host was named) cannot host the party.
-    heir: Mutex<(iroh::SecretKey, Option<u64>)>,
     /// The invite's secret. A kick replaces it, so the kicked guest's link stops working.
     secret: Mutex<String>,
     started: Instant,
@@ -326,22 +342,11 @@ impl HostInner {
     /// `only`: just that guest (a joiner, whose connection subscribes after the roster
     /// broadcast); `None`: everyone.
     fn push_heir(&self, only: Option<u64>) {
-        let successor = {
-            let s = self.lock();
-            super::requests::successor(&s.roster.successor_input())
-        };
-        let Some(successor) = successor else { return };
-        let (key, rotated) = {
-            let mut heir = self
-                .heir
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let rotated = heir.1.is_some_and(|g| g != successor);
-            if rotated {
-                heir.0 = iroh::SecretKey::generate();
-            }
-            heir.1 = Some(successor);
-            (heir.0.clone(), rotated)
+        // The broadcasts go out under the state lock too, so two pushes racing each
+        // other reach the guests in the order their keys were decided.
+        let mut s = self.lock();
+        let Some((key, successor, rotated)) = s.assign_heir() else {
+            return;
         };
         // A new key moves the party's next home: everyone hears it, not only `only`.
         let only = if rotated { None } else { only };
@@ -361,6 +366,7 @@ impl HostInner {
                 },
             );
         }
+        drop(s);
     }
 
     fn secret(&self) -> std::sync::MutexGuard<'_, String> {
@@ -431,7 +437,6 @@ impl Host {
         let (tx, _) = broadcast::channel(64);
         let inner = Arc::new(HostInner {
             secret: Mutex::new(secret),
-            heir: Mutex::new((heir_key, None)),
             started: Instant::now(),
             host_name: proto::clean_name(host_name),
             tx,
@@ -447,6 +452,7 @@ impl Host {
                 upcoming: Vec::new(),
                 by: Vec::new(),
                 recent: Vec::new(),
+                heir: (heir_key, None),
             }),
             events,
         });
@@ -1306,6 +1312,46 @@ mod tests {
             .await
             .unwrap_err();
         assert!(e.contains("Could not reach"), "{e}");
+    }
+
+    fn host_state() -> HostState {
+        HostState {
+            play: PlayState::default(),
+            queue: Vec::new(),
+            roster: Roster::default(),
+            limit: RateLimit::default(),
+            kicks: HashMap::new(),
+            book: RequestBook::new(Policy::default()),
+            vote: VoteSkip::new(None),
+            reactions: Reactions::default(),
+            upcoming: Vec::new(),
+            by: Vec::new(),
+            recent: Vec::new(),
+            heir: (iroh::SecretKey::generate(), None),
+        }
+    }
+
+    #[test]
+    fn the_heir_key_follows_the_successor_and_changes_with_it() {
+        let mut s = host_state();
+        assert!(s.assign_heir().is_none(), "no guests, no successor");
+        let a = s.roster.join("a").unwrap();
+        let b = s.roster.join("b").unwrap();
+        let (k1, who, rotated) = s.assign_heir().unwrap();
+        assert_eq!((who, rotated), (a, false));
+        let (k1b, _, rotated) = s.assign_heir().unwrap();
+        assert!(
+            !rotated && k1b.public() == k1.public(),
+            "same successor keeps its key"
+        );
+        s.roster.leave(a);
+        let (k2, who, rotated) = s.assign_heir().unwrap();
+        assert_eq!((who, rotated), (b, true));
+        assert!(
+            k2.public() != k1.public(),
+            "the guest who left cannot host under the new key"
+        );
+        assert_eq!(s.heir.1, Some(b));
     }
 
     #[test]

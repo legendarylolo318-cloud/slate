@@ -213,20 +213,12 @@ impl Backend {
             return;
         };
         let this = self.clone();
-        self.rt.spawn(async move {
-            let ms = tokio::task::spawn_blocking(move || {
-                let mut all = lyrics_offset::load(&path);
-                let ms = all.nudge(id, delta_ms);
-                if let Err(e) = lyrics_offset::save(&path, &all) {
-                    tracing::warn!("could not save the lyrics offset: {e}");
+        self.rt.spawn_blocking(move || {
+            lyrics_offset::nudge_saved(&path, id, delta_ms, |ms| {
+                if this.current_track_id() == Some(id) {
+                    this.set_lyric_offset(ms);
                 }
-                ms
-            })
-            .await
-            .unwrap_or(0);
-            if this.current_track_id() == Some(id) {
-                this.set_lyric_offset(ms);
-            }
+            });
         });
     }
 

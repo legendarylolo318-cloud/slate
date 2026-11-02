@@ -57,7 +57,7 @@ const TIDAL_API_V2_URL: &str = "https://api.tidal.com/v2";
 const TIDAL_OPENAPI_URL: &str = "https://openapi.tidal.com/v2";
 const TIDAL_CLIENT_VERSION: &str = "2026.9.15";
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct AuthTokens {
     pub access_token: String,
     pub refresh_token: String,
@@ -65,6 +65,19 @@ pub struct AuthTokens {
     pub token_type: String,
     #[serde(default)]
     pub user_id: Option<u64>,
+}
+
+/// The tokens never reach a log line, whatever prints them (or the settings holding them).
+impl std::fmt::Debug for AuthTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthTokens")
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &"<redacted>")
+            .field("expires_in", &self.expires_in)
+            .field("token_type", &self.token_type)
+            .field("user_id", &self.user_id)
+            .finish()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1326,6 +1339,31 @@ pub fn is_duplicate_error(e: &SlateError) -> bool {
 }
 
 /// Statuses a just-created playlist can answer while the two hosts catch up.
+/// Runs `attempt` until it succeeds or fails for good, waiting each of `delays` before
+/// another try after a [`retry_after_create`] error. Holds nothing across the waits:
+/// `attempt` takes whatever lock it needs, so other requests are not held up meanwhile.
+pub async fn retry_new_playlist<F, Fut>(
+    delays: &[std::time::Duration],
+    mut attempt: F,
+) -> Result<(), SlateError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), SlateError>>,
+{
+    let mut last = None;
+    for i in 0..=delays.len() {
+        if let Some(d) = i.checked_sub(1).and_then(|p| delays.get(p)) {
+            tokio::time::sleep(*d).await;
+        }
+        match attempt().await {
+            Ok(()) => return Ok(()),
+            Err(e) if retry_after_create(&e) => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or(SlateError::NotAuthenticated))
+}
+
 pub fn retry_after_create(e: &SlateError) -> bool {
     matches!(e, SlateError::Api { status, .. } if matches!(*status, 404 | 409 | 412 | 500..=599))
 }
@@ -4100,18 +4138,20 @@ impl TidalClient {
         track_ids: &[u64],
         delays: &[std::time::Duration],
     ) -> Result<(), SlateError> {
-        let mut last = None;
-        for attempt in 0..=delays.len() {
-            if attempt > 0 {
-                tokio::time::sleep(delays[attempt - 1]).await;
-            }
-            match self.add_tracks_once(playlist_id, track_ids, true).await {
-                Ok(()) => return Ok(()),
-                Err(e) if retry_after_create(&e) => last = Some(e),
-                Err(e) => return Err(e),
-            }
-        }
-        Err(last.unwrap_or(SlateError::NotAuthenticated))
+        retry_new_playlist(delays, || {
+            self.add_tracks_to_new_playlist_once(playlist_id, track_ids)
+        })
+        .await
+    }
+
+    /// One attempt of [`Self::add_tracks_to_new_playlist`], for a caller that drops its
+    /// lock on the client between attempts (see [`retry_new_playlist`]).
+    pub async fn add_tracks_to_new_playlist_once(
+        &self,
+        playlist_id: &str,
+        track_ids: &[u64],
+    ) -> Result<(), SlateError> {
+        self.add_tracks_once(playlist_id, track_ids, true).await
     }
 
     async fn add_tracks_once(
@@ -6840,6 +6880,72 @@ fn parse_public_playlists(body: &str) -> Result<Vec<ProfilePlaylist>, SlateError
 mod home_tab_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn tokens_are_never_printed() {
+        let t = AuthTokens {
+            access_token: "acc-secret".into(),
+            refresh_token: "ref-secret".into(),
+            expires_in: 1,
+            token_type: "Bearer".into(),
+            user_id: Some(5),
+        };
+        let out = format!("{t:?}");
+        assert!(!out.contains("secret"), "{out}");
+    }
+
+    /// The waits between attempts hold no lock: another request gets the client
+    /// while a just-created playlist is being waited for.
+    #[tokio::test]
+    async fn new_playlist_retries_release_the_client_between_attempts() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        let client = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let tries = AtomicUsize::new(0);
+        let other = {
+            let client = client.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let started = std::time::Instant::now();
+                let _g = client.lock().await;
+                started.elapsed()
+            })
+        };
+        let result = retry_new_playlist(&[Duration::from_millis(300); 2], || async {
+            let _g = client.lock().await;
+            if tries.fetch_add(1, Ordering::SeqCst) < 2 {
+                Err(SlateError::Api {
+                    status: 404,
+                    body: String::new(),
+                })
+            } else {
+                Ok(())
+            }
+        })
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(tries.load(Ordering::SeqCst), 3);
+        let waited = other.await.unwrap();
+        assert!(
+            waited < Duration::from_millis(100),
+            "held across a wait: {waited:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_playlist_retries_stop_on_a_lasting_error() {
+        let tries = std::sync::atomic::AtomicUsize::new(0);
+        let r = retry_new_playlist(&[std::time::Duration::from_millis(1); 3], || async {
+            tries.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(SlateError::Api {
+                status: 429,
+                body: String::new(),
+            })
+        })
+        .await;
+        assert!(matches!(r, Err(SlateError::Api { status: 429, .. })));
+        assert_eq!(tries.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn search_parses_video_section() {

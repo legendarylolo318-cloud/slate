@@ -26,6 +26,16 @@ impl Offsets {
     pub fn parse(text: &str) -> Self {
         let mut o: Self = serde_json::from_str(text).unwrap_or_default();
         o.entries.retain(|(_, ms)| *ms != 0 && ms.abs() <= MAX_MS);
+        // A hand-edited file can name a track twice; the later (newer) entry wins.
+        let mut seen = std::collections::HashSet::new();
+        let mut keep: Vec<(u64, i32)> = Vec::with_capacity(o.entries.len());
+        for e in o.entries.into_iter().rev() {
+            if seen.insert(e.0) {
+                keep.push(e);
+            }
+        }
+        keep.reverse();
+        o.entries = keep;
         let excess = o.entries.len().saturating_sub(MAX_ENTRIES);
         o.entries.drain(..excess);
         o
@@ -34,7 +44,7 @@ impl Offsets {
     pub fn get(&self, track_id: u64) -> i32 {
         self.entries
             .iter()
-            .find(|(id, _)| *id == track_id)
+            .rfind(|(id, _)| *id == track_id)
             .map_or(0, |(_, ms)| *ms)
     }
 
@@ -69,6 +79,23 @@ pub fn load(path: &Path) -> Offsets {
 
 pub fn save(path: &Path, offsets: &Offsets) -> io::Result<()> {
     crate::write_atomic(path, offsets.to_json().as_bytes())
+}
+
+/// Nudges the saved offset of `track_id` and hands the new value to `then`, all under
+/// one process-wide lock: two quick nudges each read, change and write the file, and
+/// unserialised the second could read before the first wrote (a lost nudge) or report
+/// its value after the first's newer one. Blocking file I/O: call off the UI thread.
+pub fn nudge_saved(path: &Path, track_id: u64, delta_ms: i32, then: impl FnOnce(i32)) {
+    static FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _held = FILE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut all = load(path);
+    let ms = all.nudge(track_id, delta_ms);
+    if let Err(e) = save(path, &all) {
+        log::warn!("could not save the lyrics offset: {e}");
+    }
+    then(ms);
 }
 
 /// The position to look the current line up at: lyrics shifted later by `offset_ms`
@@ -134,6 +161,37 @@ mod tests {
         o.nudge(42, -300);
         save(&p, &o).expect("save");
         assert_eq!(load(&p).get(42), -300);
+    }
+
+    #[test]
+    fn a_track_named_twice_keeps_its_newer_entry_once() {
+        let o = Offsets::parse(r#"{"entries":[[1,100],[2,300],[1,-200]]}"#);
+        assert_eq!(o.get(1), -200);
+        assert_eq!(o.entries, vec![(2, 300), (1, -200)]);
+    }
+
+    #[test]
+    fn concurrent_nudges_are_never_lost() {
+        let d = tempfile::tempdir().expect("tempdir");
+        let p = std::sync::Arc::new(path_in(d.path()));
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let threads: Vec<_> = (0..16)
+            .map(|_| {
+                let (p, seen) = (p.clone(), seen.clone());
+                std::thread::spawn(move || {
+                    nudge_saved(&p, 9, STEP_MS, |ms| seen.lock().unwrap().push(ms))
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(load(&p).get(9), 16 * STEP_MS);
+        let seen = seen.lock().unwrap();
+        assert!(
+            seen.windows(2).all(|w| w[0] < w[1]),
+            "reported in order: {seen:?}"
+        );
     }
 
     #[test]

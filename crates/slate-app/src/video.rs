@@ -30,7 +30,7 @@ impl Drop for VideoSession {
     }
 }
 
-fn build(uri: &str, backend: &Backend) -> Result<gst::Element, String> {
+fn build(uri: &str, backend: &Backend, id: u64) -> Result<gst::Element, String> {
     gst::init().map_err(|e| e.to_string())?;
     let sink_bin = gst::parse::bin_from_description(
         &format!(
@@ -49,6 +49,7 @@ fn build(uri: &str, backend: &Backend) -> Result<gst::Element, String> {
 
     let pending = Arc::new(AtomicBool::new(false));
     let ui = backend.ui.clone();
+    let shared = Arc::clone(&backend.shared);
     appsink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
             .new_sample(move |sink| {
@@ -74,9 +75,14 @@ fn build(uri: &str, backend: &Backend) -> Result<gst::Element, String> {
                 let n = dst.len().min(map.len());
                 dst[..n].copy_from_slice(&map[..n]);
                 let flag = Arc::clone(&pending);
+                let shared = Arc::clone(&shared);
                 let queued = ui.upgrade_in_event_loop(move |win| {
-                    win.set_video_frame(Image::from_rgba8(px));
-                    win.set_video_status("".into());
+                    // A frame that was on its way when the video closed is not shown
+                    // (it would keep its pixels and texture alive until the next video).
+                    if shared.video_id.load(Ordering::SeqCst) == id {
+                        win.set_video_frame(Image::from_rgba8(px));
+                        win.set_video_status("".into());
+                    }
                     flag.store(false, Ordering::Release);
                 });
                 if queued.is_err() {
@@ -137,7 +143,7 @@ impl Backend {
             });
             let backend = this.clone();
             let built = tokio::task::spawn_blocking(move || {
-                let pipeline = build(&url, &backend)?;
+                let pipeline = build(&url, &backend, id)?;
                 pipeline
                     .set_state(gst::State::Playing)
                     .map_err(|e| e.to_string())?;
@@ -146,8 +152,16 @@ impl Backend {
             .await;
             match built {
                 Ok(Ok(pipeline)) => {
-                    if let Ok(mut s) = this.video.lock() {
-                        *s = Some(VideoSession { pipeline });
+                    let session = VideoSession { pipeline };
+                    // Closed (or another video opened) while this one was loading: it
+                    // must not play on unseen. Dropping it waits on its threads.
+                    let current = this.shared.video_id.load(Ordering::SeqCst) == id;
+                    match this.video.lock() {
+                        Ok(mut s) if current => *s = Some(session),
+                        _ => {
+                            this.rt.spawn_blocking(move || drop(session));
+                            return;
+                        }
                     }
                     this.spawn_video_ticker();
                 }
@@ -300,6 +314,8 @@ impl Backend {
         if let Some(session) = session {
             self.rt.spawn_blocking(move || drop(session));
         }
+        // The last frame is up to 1280×720 RGBA plus its texture: let it go.
+        self.ui(|w| w.set_video_frame(Image::default()));
     }
 }
 

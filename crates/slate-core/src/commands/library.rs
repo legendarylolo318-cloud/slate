@@ -1660,11 +1660,15 @@ pub async fn add_tracks_to_new_playlist(
     playlist_id: &str,
     ids: Vec<u64>,
 ) -> Result<(), SlateError> {
-    let client = state.tidal_client.lock().await;
-    let result = client
-        .add_tracks_to_new_playlist(playlist_id, &ids, &NEW_PLAYLIST_RETRY)
-        .await;
-    drop(client);
+    // The client is locked per attempt, not across the waits: every other request
+    // (the next track's stream URL among them) would otherwise queue behind them.
+    let result = crate::tidal_api::retry_new_playlist(&NEW_PLAYLIST_RETRY, || async {
+        let client = state.tidal_client.lock().await;
+        client
+            .add_tracks_to_new_playlist_once(playlist_id, &ids)
+            .await
+    })
+    .await;
     state
         .disk_cache
         .invalidate_tag(&format!("playlist:{playlist_id}"))

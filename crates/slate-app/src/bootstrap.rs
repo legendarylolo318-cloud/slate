@@ -288,6 +288,9 @@ fn vulkan_usable() -> bool {
     }
 }
 
+/// Async worker threads at most (fewer on a machine with fewer cores).
+const RUNTIME_WORKERS: usize = 4;
+
 fn launch(
     forced: Option<&str>,
     index: usize,
@@ -317,6 +320,14 @@ fn launch(
     };
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
+        // One worker per core (24 on a big desktop) sat idle: the async side waits on
+        // the network and parses a little JSON, and decoding, disk and GStreamer
+        // teardown run on the blocking pool. Four keep a slow request from holding
+        // up the rest.
+        .worker_threads(
+            RUNTIME_WORKERS
+                .min(std::thread::available_parallelism().map_or(RUNTIME_WORKERS, |n| n.get())),
+        )
         .enable_all()
         .thread_name("slate-rt")
         .build()

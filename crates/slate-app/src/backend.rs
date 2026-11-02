@@ -225,7 +225,6 @@ impl Backend {
             .set(Box::new(move |v| themed.theme_file_changed(v)));
         backend.init();
         backend.spawn_ticker();
-        backend.install_platform(&backend.rt);
         backend
     }
 
@@ -255,18 +254,12 @@ impl Backend {
                 Ok(Ok(s)) => Arc::new(s),
                 Ok(Err(e)) => {
                     tracing::error!("core initialisation failed: {}", e.log_safe());
-                    this.ui(|w| {
-                        w.set_login_status("Could not start the Slate core. See the log.".into());
-                        w.set_screen(Screen::Login);
-                    });
+                    this.core_failed();
                     return;
                 }
                 Err(e) => {
                     tracing::error!("core initialisation failed: {e}");
-                    this.ui(|w| {
-                        w.set_login_status("Could not start the Slate core. See the log.".into());
-                        w.set_screen(Screen::Login);
-                    });
+                    this.core_failed();
                     return;
                 }
             };
@@ -274,6 +267,7 @@ impl Backend {
                 tracing::error!("AppState installed twice");
                 return;
             }
+            this.install_platform(Arc::clone(&state));
 
             let volume = state.load_settings().map(|s| s.volume).unwrap_or(1.0);
             this.ui(move |w| w.set_volume(volume));
@@ -1099,19 +1093,21 @@ impl Backend {
         self.shared.shuffle.load(Ordering::Relaxed)
     }
 
-    /// Wires the OS integrations once the core is up.
-    pub fn install_platform(&self, rt: &tokio::runtime::Handle) {
+    /// The core could not start: say so on the login screen. The window is shown even
+    /// when "Start minimized to tray" is on, since the tray is only set up once the core
+    /// runs and the message would otherwise reach no one.
+    fn core_failed(&self) {
+        self.ui(|w| {
+            w.set_login_status("Could not start the Slate core. See the log.".into());
+            w.set_screen(Screen::Login);
+            let _ = w.show();
+        });
+    }
+
+    /// Wires the OS integrations (they need the media hub); called once the core is up.
+    fn install_platform(&self, state: Arc<AppState>) {
         let this = self.clone();
-        let rt = rt.clone();
         self.rt.spawn(async move {
-            // Wait for AppState; the integrations need the media hub.
-            let state = loop {
-                if let Some(s) = this.state() {
-                    break s;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            };
-            let _ = &rt;
             if crate::uiprefs::UiPrefs::load().global_shortcuts {
                 this.set_global_shortcuts(true);
             }
@@ -1135,7 +1131,12 @@ impl Backend {
             #[cfg(windows)]
             {
                 // SMTC needs the window handle; `bootstrap` records it on show.
-                if let Some(sink) = crate::platform::win_smtc::start(this.control_fn()) {
+                // `start` waits up to 5 s for the controls' thread: not on a runtime worker.
+                let ctl = this.control_fn();
+                let started =
+                    tokio::task::spawn_blocking(move || crate::platform::win_smtc::start(ctl))
+                        .await;
+                if let Ok(Some(sink)) = started {
                     state.media.set_sink(sink);
                 }
             }
