@@ -470,6 +470,8 @@ enum WriterCommand {
     Shutdown,
 }
 
+// Exclusive (ALSA) output only, which is Linux-only.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const WRITER_SEND_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Hands a chunk to the writer, waiting while it is busy but giving up once
@@ -477,6 +479,7 @@ const WRITER_SEND_POLL: std::time::Duration = std::time::Duration::from_millis(5
 /// pipeline's state change forever behind a writer that is not reading (#233).
 /// Keyed on teardown, not the generation: a seek bumps the generation while
 /// the pipeline keeps running, and giving up there pauses the stream.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn send_chunk(
     tx: &crossbeam_channel::Sender<WriterCommand>,
     chunk: AudioChunk,

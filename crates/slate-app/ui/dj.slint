@@ -160,7 +160,7 @@ export component DjPage inherits Rectangle {
                         }
                         Button { label: "Send"; enabled: DjState.direction != ""; clicked => { DjState.action("go"); } }
                     }
-                    Text { text: "Used for the DJ's next pick."; color: Theme.text-muted; font-size: 12px; }
+                    Text { text: "The DJ picks a new block this way; it plays after the current track."; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; }
                 }
                 if DjState.status != "": Text { text: DjState.status; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; horizontal-alignment: center; }
             }

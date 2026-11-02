@@ -853,6 +853,13 @@ impl Queue {
         Some(first)
     }
 
+    /// Puts `track` back at the head of an installed autoplay block, so the block plays
+    /// after the current track instead of interrupting it (a DJ steered mid-song).
+    pub fn unshift_autoplay(&mut self, track: Track) {
+        self.autoplay_ids.insert(0, track.id);
+        self.queue.insert(0, track.restamped());
+    }
+
     /// Decide what "previous" does at `position_secs` into the current track.
     pub fn previous(&mut self, position_secs: f32) -> Previous {
         if position_secs > RESTART_THRESHOLD_SECS {
@@ -1146,6 +1153,25 @@ mod tests {
             kind: kind.into(),
             ..src("S", tracks)
         }
+    }
+
+    #[test]
+    fn a_steered_block_plays_after_the_current_track() {
+        let mut q = Queue::new();
+        q.set_tracks(vec![t(1), t(2)], None, false);
+        assert_eq!(play(&mut q, true), Some(1));
+        q.add_to_queue(t(9), None);
+        let first = q
+            .install_autoplay(vec![t(5), t(6)], |_| None)
+            .expect("block");
+        q.unshift_autoplay(first);
+        assert_eq!(
+            play(&mut q, false),
+            Some(9),
+            "the manual queue still comes first"
+        );
+        assert_eq!(play(&mut q, false), Some(5));
+        assert_eq!(play(&mut q, false), Some(6));
     }
 
     #[test]

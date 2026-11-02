@@ -47,6 +47,8 @@
     the model's spoken transition line, whether this machine can read it aloud (it says so when
     `espeak-ng` / `say` is missing), a few facts about the genre from a small built-in list, the
     direction box, "DJ up a block", on/off, "Change endpoint" and the live queue beside it.
+    "Send" on a direction picks a new block that way at once; it replaces the DJ's queued tracks
+    (your own "play next" queue stays) and starts after the current track.
   - Nothing on it is built, read or fetched until it is opened.
 
 ### Changed

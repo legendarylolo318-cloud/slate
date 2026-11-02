@@ -207,6 +207,8 @@ impl Backend {
         });
     }
 
+    /// "Send": the DJ picks a block in that direction now; it replaces what is up next
+    /// and plays when the current track ends.
     fn dj_send_direction(&self) {
         let this = self.clone();
         self.rt.spawn(async move {
@@ -217,12 +219,23 @@ impl Backend {
             if text.is_empty() {
                 return;
             }
-            this.dj_direction(text);
-            this.ui(|w| {
+            let Some(ctl) = this.controller() else { return };
+            let asking = format!("Steering the DJ: “{text}”…");
+            this.ui(move |w| {
                 let g = w.global::<DjState>();
                 g.set_direction("".into());
-                g.set_status("Direction noted for the DJ's next pick.".into());
+                g.set_status(asking.into());
             });
+            let outcome = ctl.dj_steer(text).await;
+            let picked = ctl.dj_status().unwrap_or_default();
+            let queued = matches!(outcome, Outcome::Nothing) && picked.starts_with("DJ is up");
+            this.apply(outcome).await;
+            let status = if queued {
+                format!("{picked} Up next after this track.")
+            } else {
+                picked
+            };
+            this.ui(move |w| w.global::<DjState>().set_status(status.into()));
         });
     }
 

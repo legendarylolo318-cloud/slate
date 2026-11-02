@@ -803,6 +803,32 @@ impl Controller {
         }
     }
 
+    /// The listener steered the DJ ("deeper into house"): a block in that direction
+    /// replaces what is up next (the manual queue stays) and plays when the current
+    /// track ends; with nothing playing it starts now. The model is asked unlocked.
+    pub async fn dj_steer(&self, direction: String) -> Outcome {
+        self.dj_set_direction(direction);
+        let ctx = {
+            let q = self.lock_queue().await;
+            self.dj_context(&q)
+        };
+        let Some(pick) = self.dj_fetch(ctx, true).await else {
+            return Outcome::Nothing;
+        };
+        let mut q = self.lock_queue().await;
+        let Some(first) = self.dj_install(&mut q, pick) else {
+            return Outcome::Nothing;
+        };
+        if q.current.is_some() {
+            q.unshift_autoplay(first);
+            return Outcome::Nothing;
+        }
+        match self.start(&mut q, first.clone(), true).await {
+            Ok(()) => Outcome::Playing(first),
+            Err(f) => Outcome::Failed(f),
+        }
+    }
+
     pub async fn previous(&self) -> Outcome {
         let mut q = self.lock_queue().await;
         let pos = playback::get_playback_position(&self.state)
