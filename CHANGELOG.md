@@ -78,6 +78,11 @@
 - DJ speech: the speech program was never found (PATH was split on `/`), the model's text could be
   read as an option by `say`, and `espeak-ng` was called with a `--text` option it does not have (it
   printed its usage and said nothing); the line now goes to `espeak-ng --stdin`.
+- DJ blocks were full of unrelated tracks ("UK Bass Channel", "Bass Solo (Live)"): the DJ searched TIDAL
+  for its style phrase, which matches song titles, and it was told never to name an artist, so "play
+  King Von" could not work. The model now also names 3–6 artists for the block (one you ask for
+  first); Slate searches for them and keeps only tracks they are on, and an artist you asked for
+  fills about half the block. The style phrase is the fallback when artists give too few tracks.
 - Playlist suggestions: "Hide" at the bottom of a playlist brought the suggestions straight back
   (hiding shrank the section, which counted as reaching the bottom again). Hidden now stays hidden
   until "Show suggestions" or the playlist is opened again.

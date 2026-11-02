@@ -69,9 +69,33 @@ impl DjSettings {
 #[derive(Debug, Clone, Serialize)]
 pub struct DjMove {
     pub query: String,
+    /// Artists for the block, the listener's own request first. TIDAL is searched by
+    /// these (a style phrase alone matches song titles, not styles); at most 6.
+    pub artists: Vec<String>,
     pub reason: String,
     pub speaks: bool,
     pub line: Option<String>,
+}
+
+/// The artist names in a reply: strings only, trimmed, at most 6 of at most 60 characters.
+fn parse_artists(v: &serde_json::Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for a in v
+        .get("artists")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+    {
+        let a: String = a.trim().chars().take(60).collect();
+        if !a.is_empty() && !out.iter().any(|o| o.eq_ignore_ascii_case(&a)) {
+            out.push(a);
+        }
+        if out.len() == 6 {
+            break;
+        }
+    }
+    out
 }
 
 /// Parse the model's reply into a [`DjMove`]. Accepts plain JSON or JSON wrapped
@@ -95,6 +119,7 @@ pub fn parse_move(raw: &str) -> Option<DjMove> {
     }
     Some(DjMove {
         query,
+        artists: parse_artists(&v),
         reason: v
             .get("reason")
             .and_then(serde_json::Value::as_str)
@@ -131,9 +156,9 @@ pub const SYSTEM_PROMPT: &str = "You are the DJ for a continuous music session. 
 Rules:
 - Keep the momentum: usually stay near the current genre; drift to adjacent styles, similar energy, or a smooth deliberate contrast.
 - Vary the set: do not repeat the same query twice in a row and do not just ping-pong between two styles.
-- If the listener gave a direction this turn, follow it; it outranks your own flow.
-- Respond with ONLY this JSON: {\"query\": \"<2-6 word genre/style search phrase for the next block>\", \"reason\": \"<short clause: why it follows>\", \"speaks\": <true|false>, \"line\": \"<one short sentence to say to the listener; only when speaks is true and it helps>\"}.
-- \"query\" must be a generic genre/style phrase (like \"deep house 124 bpm\" or \"late night soul\"), never a specific song or artist.";
+- If the listener gave a direction this turn, follow it; it outranks your own flow. When they name an artist (\"play King Von\"), that artist comes first in \"artists\" and the rest are close in sound.
+- Respond with ONLY this JSON: {\"query\": \"<2-6 word genre/style phrase for the block>\", \"artists\": [\"<3 to 6 real artists who fit the block>\"], \"reason\": \"<short clause: why it follows>\", \"speaks\": <true|false>, \"line\": \"<one short sentence to say to the listener; only when speaks is true and it helps>\"}.
+- \"query\" is a generic genre/style phrase (like \"deep house 124 bpm\" or \"late night soul\"). \"artists\" are real, well-known artists of that style; the music is found by searching for them.";
 
 pub fn build_user_prompt(ctx: &DjContext) -> String {
     let mut out = String::new();
@@ -390,6 +415,7 @@ impl Dj {
                     "type": "object",
                     "properties": {
                         "query":  { "type": "string" },
+                        "artists": { "type": "array", "items": { "type": "string" } },
                         "reason": { "type": "string" },
                         "speaks": { "type": "boolean" },
                         "line":   { "type": "string" },
@@ -520,6 +546,18 @@ impl Dj {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artists_are_read_trimmed_deduplicated_and_bounded() {
+        let m = parse_move(
+            r#"{"query":"chicago drill","artists":[" King Von ","Lil Durk","king von",7,"","A","B","C","D","E"],"reason":"asked"}"#,
+        )
+        .expect("move");
+        assert_eq!(m.artists, vec!["King Von", "Lil Durk", "A", "B", "C", "D"]);
+        let old =
+            parse_move(r#"{"query":"deep house"}"#).expect("a reply without artists still works");
+        assert!(old.artists.is_empty());
+    }
 
     #[test]
     fn model_lists_parse_sorted_and_bounded() {

@@ -136,6 +136,62 @@ fn dj_key(q: &Queue) -> DjKey {
     (q.epoch, q.current.as_ref().map(|t| t.id))
 }
 
+/// Whether `name` is one of the track's artists, ignoring case ("Von" alone does not
+/// match "King Von"; "Tyler, The Creator" stays one name).
+fn by_artist(t: &Track, name: &str) -> bool {
+    let name = name.trim().to_lowercase();
+    if name.is_empty() {
+        return false;
+    }
+    let listed = t
+        .extra
+        .get("artists")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|a| a.get("name").and_then(serde_json::Value::as_str));
+    listed
+        .chain(std::iter::once(t.artist_name()))
+        .any(|a| a.trim().to_lowercase() == name)
+}
+
+/// A DJ block of `size` from per-artist track lists, no track twice. With `lead` (the
+/// listener asked for the first artist) that artist fills about half the block,
+/// alternating with the others; otherwise the artists take turns.
+fn mix_block(groups: Vec<Vec<Track>>, size: usize, lead: bool) -> Vec<Track> {
+    let mut seen = std::collections::HashSet::new();
+    let mut groups: Vec<std::collections::VecDeque<Track>> = groups
+        .into_iter()
+        .map(|g| g.into_iter().filter(|t| seen.insert(t.id)).collect())
+        .collect();
+    let mut out = Vec::with_capacity(size);
+    let mut turn = 0usize;
+    while out.len() < size && groups.iter().any(|g| !g.is_empty()) {
+        let pick = if lead && out.len() % 2 == 0 && !groups[0].is_empty() {
+            0
+        } else {
+            // Round robin over the others (all of them when there is no lead).
+            let start = usize::from(lead && groups.len() > 1);
+            let others = groups.len() - start;
+            let mut chosen = None;
+            for k in 0..others {
+                let i = start + (turn + k) % others;
+                if !groups[i].is_empty() {
+                    chosen = Some(i);
+                    turn = turn + k + 1;
+                    break;
+                }
+            }
+            chosen.unwrap_or_default()
+        };
+        match groups[pick].pop_front() {
+            Some(t) => out.push(t),
+            None => break,
+        }
+    }
+    out
+}
+
 fn now_secs() -> i64 {
     i64::try_from(crate::now_secs()).unwrap_or(i64::MAX)
 }
@@ -641,6 +697,7 @@ impl Controller {
             return None;
         }
         let dj = crate::dj::Dj::new(settings.dj, self.state.proxied_http.clone());
+        let ctx_had_direction = ctx.direction.is_some();
         let move_ = match dj.decide(&ctx).await {
             Some(m) => m,
             None => {
@@ -651,24 +708,34 @@ impl Controller {
             }
         };
 
-        let mut client = self.state.tidal_client.lock().await;
-        let results = match client.search(&move_.query, dj.block_size()).await {
-            Ok(r) => r,
-            Err(e) => {
-                drop(client);
-                self.dj_note(format!(
-                    "TIDAL did not return results for the DJ's query '{}': {e}",
-                    move_.query
-                ));
-                return None;
-            }
-        };
-        drop(client);
-        let tracks: Vec<Track> = results
-            .tracks
-            .iter()
-            .filter_map(Track::from_serialized)
-            .collect();
+        let size = dj.block_size() as usize;
+        let lead = ctx_had_direction;
+        let mut tracks = self.dj_tracks_by_artist(&move_.artists, size, lead).await;
+        if tracks.len() < size.min(3) {
+            // Too few by artist (or no artists): the style phrase, as before.
+            let mut client = self.state.tidal_client.lock().await;
+            let results = match client.search(&move_.query, dj.block_size()).await {
+                Ok(r) => r,
+                Err(e) => {
+                    drop(client);
+                    self.dj_note(format!(
+                        "TIDAL did not return results for the DJ's query '{}': {e}",
+                        move_.query
+                    ));
+                    return None;
+                }
+            };
+            drop(client);
+            let seen: std::collections::HashSet<u64> = tracks.iter().map(|t| t.id).collect();
+            tracks.extend(
+                results
+                    .tracks
+                    .iter()
+                    .filter_map(Track::from_serialized)
+                    .filter(|t| !seen.contains(&t.id))
+                    .take(size.saturating_sub(seen.len())),
+            );
+        }
         if tracks.is_empty() {
             self.dj_note(format!(
                 "TIDAL matched the DJ's query '{}' but nothing of it could be loaded as a track.",
@@ -677,6 +744,35 @@ impl Controller {
             return None;
         }
         Some(DjPick { move_, tracks })
+    }
+
+    /// Tracks by the DJ's artists: one TIDAL search per artist, keeping only tracks that
+    /// artist is on (a name search also matches titles), mixed into a block of `size`.
+    async fn dj_tracks_by_artist(&self, artists: &[String], size: usize, lead: bool) -> Vec<Track> {
+        if artists.is_empty() || size == 0 {
+            return Vec::new();
+        }
+        let per = u32::try_from(size.div_ceil(artists.len()) + 4).unwrap_or(10);
+        let mut groups = Vec::with_capacity(artists.len());
+        for name in artists {
+            let mut client = self.state.tidal_client.lock().await;
+            let found = client.search(name, per).await;
+            drop(client);
+            let tracks: Vec<Track> = match found {
+                Ok(r) => r
+                    .tracks
+                    .iter()
+                    .filter_map(Track::from_serialized)
+                    .filter(|t| by_artist(t, name))
+                    .collect(),
+                Err(e) => {
+                    log::debug!("[dj] artist search failed: {}", e.log_safe());
+                    Vec::new()
+                }
+            };
+            groups.push(tracks);
+        }
+        mix_block(groups, size, lead)
     }
 
     /// Installs a fetched block as the autoplay queue and announces it.
@@ -1125,6 +1221,54 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn track(id: u64, artists: &[&str]) -> Track {
+        let mut t = Track::new(id);
+        t.extra.insert(
+            "artists".into(),
+            serde_json::Value::Array(
+                artists
+                    .iter()
+                    .map(|a| serde_json::json!({ "name": a }))
+                    .collect(),
+            ),
+        );
+        t
+    }
+
+    #[test]
+    fn a_track_is_by_an_artist_only_when_listed() {
+        assert!(by_artist(&track(1, &["King Von", "Lil Durk"]), "king von"));
+        assert!(!by_artist(&track(2, &["King Von"]), "Von"));
+        assert!(by_artist(
+            &track(3, &["Tyler, The Creator"]),
+            "Tyler, The Creator"
+        ));
+        assert!(!by_artist(&track(4, &["UK Bass Channel"]), "King Von"));
+    }
+
+    #[test]
+    fn a_requested_artist_fills_half_the_block_alternating() {
+        let a: Vec<Track> = (1..=10).map(|i| track(i, &["A"])).collect();
+        let b: Vec<Track> = (11..=12).map(|i| track(i, &["B"])).collect();
+        let c: Vec<Track> = (21..=22).map(|i| track(i, &["C"])).collect();
+        let ids: Vec<u64> = mix_block(vec![a, b, c], 8, true)
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, vec![1, 11, 2, 21, 3, 12, 4, 22]);
+    }
+
+    #[test]
+    fn without_a_request_artists_take_turns_and_nothing_repeats() {
+        let a = vec![track(1, &["A"]), track(2, &["A"])];
+        let b = vec![track(1, &["A", "B"]), track(3, &["B"])];
+        let ids: Vec<u64> = mix_block(vec![a, b], 10, false)
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, vec![1, 3, 2]);
+    }
 
     #[test]
     fn classifies_errors() {
