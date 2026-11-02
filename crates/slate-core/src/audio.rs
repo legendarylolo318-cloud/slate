@@ -2035,6 +2035,16 @@ const EQ_PREAMP_NAME: &str = "slate-eq-preamp";
 /// The preamp and the `equalizer-nbands` for `s`, or None when this GStreamer lacks the
 /// plugin (the track then plays without it).
 fn build_eq_stage(s: &crate::eq::Settings) -> Option<(gst::Element, gst::Element)> {
+    // The plugin registers its band type lazily and not thread-safely: two equalizers
+    // made for the first time on two threads at once (the pipeline and a crossfade
+    // worker, or parallel tests) corrupt the type system and can crash. Make the
+    // first one here, once, before any other.
+    static BAND_TYPE: std::sync::Once = std::sync::Once::new();
+    BAND_TYPE.call_once(|| {
+        let _ = gst::ElementFactory::make("equalizer-nbands")
+            .property("num-bands", 1u32)
+            .build();
+    });
     let preamp = gst::ElementFactory::make("volume")
         .name(EQ_PREAMP_NAME)
         .property("volume", s.preamp_amplitude())

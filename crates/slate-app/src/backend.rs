@@ -39,6 +39,7 @@ pub(crate) struct Shared {
     on_finished: OnceLock<Box<dyn Fn() + Send + Sync>>,
     on_theme_file: OnceLock<Box<dyn Fn(serde_json::Value) + Send + Sync>>,
     on_advanced: OnceLock<Box<dyn Fn(serde_json::Value) + Send + Sync>>,
+    on_dj_branch: OnceLock<Box<dyn Fn(serde_json::Value) + Send + Sync>>,
     /// MCP playback tools (`mcp:*` events).
     on_mcp: OnceLock<McpHandler>,
     /// The playing track, for the MCP server and the OBS overlay.
@@ -87,6 +88,11 @@ struct UiSink {
 impl EventSink for UiSink {
     fn emit(&self, event: &str, payload: serde_json::Value) {
         match event {
+            "dj-branch" => {
+                if let Some(cb) = self.shared.on_dj_branch.get() {
+                    cb(payload);
+                }
+            }
             "audio-error" => {
                 let kind = payload
                     .get("kind")
@@ -207,6 +213,11 @@ impl Backend {
             .shared
             .on_mcp
             .set(Box::new(move |e, v| remote.mcp_event(e, v)));
+        let dj = backend.clone();
+        let _ = backend
+            .shared
+            .on_dj_branch
+            .set(Box::new(move |v| dj.dj_branch(&v)));
         let themed = backend.clone();
         let _ = backend
             .shared

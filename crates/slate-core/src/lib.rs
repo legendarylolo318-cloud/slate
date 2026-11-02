@@ -16,6 +16,7 @@
 
 pub mod audio;
 pub mod dj;
+pub mod dj_trivia;
 pub mod events;
 pub mod lyrics;
 pub mod lyrics_offset;

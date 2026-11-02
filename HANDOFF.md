@@ -70,5 +70,10 @@ Notes for anyone working on Slate's code. What changed per release is in
 - Party handoff key: `HostInner::heir` is regenerated whenever the successor changes; a kick sends no
   heir/secret message itself (the roster change after the kicked guest leaves does), and the guest loop's
   `select!` is `biased` so the kick branch wins.
+- DJ page: `dj_ui.rs` (state in the `DjState` global, `dj.slint`), genre facts in `slate_core::dj_trivia`,
+  endpoint presets / `Dj::models` / `detect_local` in `dj.rs`. The page reuses the queue panel (shown
+  beside it while `view == "dj"`). It reads nothing until opened.
+- `build_eq_stage` makes the first equalizer under a `Once`: GStreamer registers the band type without a
+  lock (a parallel first creation crashed the tests).
 - `blocking` is pinned to 1.6.2 in Cargo.lock: 1.7.0's idle pool thread never exits and woke 2/s for the
   whole session (AccessKit's AT-SPI connect starts it). Check before letting `cargo update` move it.

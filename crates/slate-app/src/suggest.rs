@@ -28,6 +28,49 @@ struct State {
     next_offset: u32,
     exhausted: bool,
     loading: bool,
+    /// "Hide" was pressed: reaching the bottom of the list no longer loads suggestions
+    /// (hiding shrinks the section, which lands the list at its bottom again); only
+    /// the "Show suggestions" button does.
+    hidden: bool,
+}
+
+/// What a `suggest_load` mode does with the section's state.
+#[derive(Debug, PartialEq, Eq)]
+enum Step {
+    Nothing,
+    Hidden,
+    Fetch { offset: u32, want: usize },
+}
+
+/// `first`: scrolled to the bottom; `show`: the button; `refresh` / `more` / `top-up` /
+/// `hide`: the other buttons and adding a suggestion.
+fn step(st: &mut State, mode: &str, count: usize) -> Step {
+    if st.loading || (st.exhausted && mode == "more") {
+        return Step::Nothing;
+    }
+    let (offset, want) = match mode {
+        "refresh" => (if st.exhausted { 0 } else { st.next_offset }, count),
+        "more" => (st.next_offset, count),
+        "top-up" => (st.next_offset, count.saturating_sub(st.shown.len())),
+        "hide" => {
+            st.shown.clear();
+            st.next_offset = 0;
+            st.exhausted = false;
+            st.hidden = true;
+            return Step::Hidden;
+        }
+        "first" if st.hidden => return Step::Nothing,
+        // First load: only when nothing has been fetched yet.
+        _ if st.next_offset == 0 && st.shown.is_empty() => {
+            st.hidden = false;
+            (0, count)
+        }
+        _ => return Step::Nothing,
+    };
+    if want == 0 {
+        return Step::Nothing;
+    }
+    Step::Fetch { offset, want }
 }
 
 /// Only exists while an eligible playlist page is open.
@@ -81,31 +124,15 @@ impl Backend {
         let (playlist, offset, want, existing) = {
             let Ok(mut guard) = STATE.lock() else { return };
             let Some(st) = guard.as_mut() else { return };
-            if st.loading || (st.exhausted && mode == "more") {
-                return;
-            }
-            let count = self.suggest_count();
-            let (offset, want) = match mode {
-                "refresh" => (if st.exhausted { 0 } else { st.next_offset }, count),
-                "more" => (st.next_offset, count),
-                "top-up" => (st.next_offset, count.saturating_sub(st.shown.len())),
-                "hide" => {
-                    st.shown.clear();
-                    st.next_offset = 0;
-                    st.exhausted = false;
+            let (offset, want) = match step(st, mode, self.suggest_count()) {
+                Step::Nothing => return,
+                Step::Hidden => {
                     drop(guard);
-                    self.show_suggestions(
-                        "Scroll down or press the button for suggested tracks.".into(),
-                    );
+                    self.show_suggestions("Suggestions hidden.".into());
                     return;
                 }
-                // First load: only when nothing has been fetched yet.
-                _ if st.next_offset == 0 && st.shown.is_empty() => (0, count),
-                _ => return,
+                Step::Fetch { offset, want } => (offset, want),
             };
-            if want == 0 {
-                return;
-            }
             st.loading = true;
             (st.playlist.clone(), offset, want, st.shown.clone())
         };
@@ -331,6 +358,26 @@ mod tests {
         assert_eq!(count_for(3), 20);
         assert_eq!(count_for(99), 10);
         assert_eq!(count_for(DEFAULT_INDEX), 10);
+    }
+
+    #[test]
+    fn hide_stays_hidden_at_the_bottom_until_the_button_is_pressed() {
+        let mut st = State::default();
+        assert_eq!(
+            step(&mut st, "first", 5),
+            Step::Fetch { offset: 0, want: 5 }
+        );
+        st.next_offset = 5; // a batch came back
+        assert_eq!(step(&mut st, "first", 5), Step::Nothing, "loaded once only");
+        assert_eq!(step(&mut st, "hide", 5), Step::Hidden);
+        // Hiding shrinks the section and the list lands at its bottom again.
+        assert_eq!(step(&mut st, "first", 5), Step::Nothing);
+        assert_eq!(step(&mut st, "show", 5), Step::Fetch { offset: 0, want: 5 });
+        assert!(!st.hidden);
+        assert_eq!(
+            step(&mut st, "first", 5),
+            Step::Fetch { offset: 0, want: 5 }
+        );
     }
 
     #[test]

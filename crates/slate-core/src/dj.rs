@@ -179,8 +179,7 @@ pub fn speak(line: Option<&str>) {
     let Some(line) = line.and_then(speakable) else {
         return;
     };
-    let Some(bin) = std::env::var_os("PATH").and_then(|p| find_in_path(&["espeak-ng", "say"], &p))
-    else {
+    let Some(bin) = speech_program() else {
         log::info!("[dj] would say: {line}");
         return;
     };
@@ -188,11 +187,86 @@ pub fn speak(line: Option<&str>) {
         if bin == "say" {
             let _ = std::process::Command::new(bin).arg(&line).output();
         } else {
-            let _ = std::process::Command::new(bin)
-                .args(["--text", line.as_str()])
-                .output();
+            // espeak-ng has no `--text`; the line goes in on stdin, never as an argument.
+            use std::io::Write;
+            let child = std::process::Command::new(bin)
+                .arg("--stdin")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            if let Ok(mut child) = child {
+                if let Some(mut input) = child.stdin.take() {
+                    let _ = input.write_all(line.as_bytes());
+                }
+                let _ = child.wait();
+            }
         }
     });
+}
+
+/// Whether the DJ has what it needs to ask a model: an endpoint and a model name
+/// (from the settings or the `DJ_*` variables). The API key is optional.
+pub fn is_configured(settings: &DjSettings) -> bool {
+    let r = settings.resolved();
+    !r.base_url.trim().is_empty() && !r.model.trim().is_empty()
+}
+
+/// The speech program `speak` would use (`espeak-ng` or `say`), if one is on PATH.
+pub fn speech_program() -> Option<&'static str> {
+    std::env::var_os("PATH").and_then(|p| find_in_path(&["espeak-ng", "say"], &p))
+}
+
+/// Endpoints the DJ page offers in one click: name, base URL, whether it needs a key.
+pub const PRESETS: [(&str, &str, bool); 4] = [
+    ("Ollama", "http://127.0.0.1:11434/v1", false),
+    ("LM Studio", "http://127.0.0.1:1234/v1", false),
+    ("OpenAI", "https://api.openai.com/v1", true),
+    ("OpenRouter", "https://openrouter.ai/api/v1", true),
+];
+
+/// Model ids from an OpenAI-compatible `/models` answer (`{"data":[{"id":…}]}`).
+pub fn parse_models(text: &str) -> Result<Vec<String>, String> {
+    let v: serde_json::Value = serde_json::from_str(text)
+        .map_err(|_| "The endpoint's model list was not JSON.".to_string())?;
+    let mut ids: Vec<String> = v
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "The endpoint did not return a model list.".to_string())?
+        .iter()
+        .filter_map(|m| m.get("id").and_then(serde_json::Value::as_str))
+        .map(|id| id.chars().take(120).collect())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids.truncate(200);
+    Ok(ids)
+}
+
+/// Looks for a chat server on this computer (the local presets), each given a short
+/// timeout. Returns the first that lists models: its preset name, base URL and models.
+pub async fn detect_local(
+    http: &crate::proxy_http::ProxiedHttp,
+) -> Option<(&'static str, &'static str, Vec<String>)> {
+    for (name, base, needs_key) in PRESETS {
+        if needs_key {
+            continue;
+        }
+        let dj = Dj::new(
+            DjSettings {
+                base_url: base.to_string(),
+                ..DjSettings::default()
+            },
+            http.clone(),
+        );
+        let found = tokio::time::timeout(std::time::Duration::from_millis(1500), dj.models()).await;
+        if let Ok(Ok(models)) = found {
+            if !models.is_empty() {
+                return Some((name, base, models));
+            }
+        }
+    }
+    None
 }
 
 /// Client for one OpenAI-compatible chat endpoint. Never builds its own
@@ -385,6 +459,33 @@ impl Dj {
         ))
     }
 
+    /// The models the endpoint offers (`GET {base}/models`, the OpenAI-compatible list
+    /// that Ollama, LM Studio, OpenAI and OpenRouter all serve), sorted, at most 200.
+    pub async fn models(&self) -> Result<Vec<String>, String> {
+        let base_url = self.cfg.base_url.trim().trim_end_matches('/');
+        if base_url.is_empty() {
+            return Err("Fill in the endpoint first.".into());
+        }
+        let client = self.http.client().map_err(|e| e.cause)?;
+        let mut req = client
+            .get(format!("{base_url}/models"))
+            .timeout(std::time::Duration::from_secs(15));
+        if !self.cfg.api_key.trim().is_empty() {
+            req = req.bearer_auth(self.cfg.api_key.trim());
+        }
+        let resp = req.send().await.map_err(|e| self.send_error(e))?;
+        let status = resp.status();
+        let text = resp.text().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            return Err(format!(
+                "HTTP {}: {}",
+                status.as_u16(),
+                text.chars().take(200).collect::<String>()
+            ));
+        }
+        parse_models(&text)
+    }
+
     async fn post(&self, url: &str, body: &serde_json::Value) -> Result<String, String> {
         let client = self.http.client().map_err(|e| e.cause)?;
         let mut req = client
@@ -419,6 +520,50 @@ impl Dj {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_lists_parse_sorted_and_bounded() {
+        let ids =
+            parse_models(r#"{"object":"list","data":[{"id":"b"},{"id":"a"},{"id":"a"},{"x":1}]}"#)
+                .expect("list");
+        assert_eq!(ids, vec!["a", "b"]);
+        assert!(parse_models("not json").is_err());
+        assert!(parse_models(r#"{"models":[]}"#).is_err());
+        let many = format!(
+            r#"{{"data":[{}]}}"#,
+            (0..300)
+                .map(|i| format!(r#"{{"id":"m{i:03}"}}"#))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        assert_eq!(parse_models(&many).expect("list").len(), 200);
+    }
+
+    #[tokio::test]
+    async fn models_come_from_the_endpoint_list() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/v1/models"))
+            .and(wiremock::matchers::header("authorization", "Bearer k"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_string(r#"{"data":[{"id":"gemma4:e4b"},{"id":"llama3"}]}"#),
+            )
+            .mount(&server)
+            .await;
+        let dj = Dj::new(
+            DjSettings {
+                base_url: format!("{}/v1/", server.uri()),
+                api_key: "k".into(),
+                ..DjSettings::default()
+            },
+            direct_http(),
+        );
+        assert_eq!(
+            dj.models().await.expect("models"),
+            vec!["gemma4:e4b", "llama3"]
+        );
+    }
 
     #[test]
     fn spoken_lines_are_cleaned_and_cannot_be_options() {

@@ -572,6 +572,11 @@ fn wire(window: &AppWindow, backend: &Backend) {
     let b = backend.clone();
     p.on_remove_picture(move || b.remove_profile_picture());
 
+    let b = backend.clone();
+    window
+        .global::<DjState>()
+        .on_action(move |a| b.dj_page_action(&a));
+
     let g = window.global::<SettingsState>();
     let b = backend.clone();
     g.on_theme_preset(move |i| b.theme_preset(usize::try_from(i).unwrap_or(0)));

@@ -8,12 +8,13 @@ import { MiniPlayerWindow } from "mini.slint";
 import { VideoView } from "video.slint";
 import { SettingsPage, SettingsState } from "settings.slint";
 import { ProfilePage, ProfileState } from "profile.slint";
+import { DjPage, DjState } from "dj.slint";
 import { IconButton, TextField, Button, Segmented } from "widgets.slint";
 import { ShortcutOverlay, Shortcut, Shortcuts } from "shortcuts.slint";
 import { ListView } from "std-widgets.slint";
 import { Dnd } from "dnd.slint";
 import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyState, PartyRequest, PartyGuest, CreditLine, EqBand } from "types.slint";
-export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyRequest, PartyGuest, CreditLine, EqBand, Shortcut, Shortcuts, Dnd, SettingsState, PartyState, ProfileState, Theme }
+export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyRequest, PartyGuest, CreditLine, EqBand, Shortcut, Shortcuts, Dnd, SettingsState, PartyState, ProfileState, DjState, Theme }
 
 export enum Screen { loading, login, main }
 
@@ -148,7 +149,7 @@ export component AppWindow inherits Window {
     callback open-login-url();
 
     // ---- navigation ----
-    in property <string> view: "tracks";   // tracks | cards | settings
+    in property <string> view: "tracks";   // tracks | cards | settings | profile | dj
     in property <string> selected-source;
     in property <bool> can-back;
     in property <bool> can-forward;
@@ -513,6 +514,10 @@ export component AppWindow inherits Window {
                         cycle-sort => { root.cycle-sort(); }
                         flip-sort => { root.flip-sort(); }
                     }
+                    if root.view == "dj": DjPage {
+                        vertical-stretch: 1;
+                        compact: root.compact;
+                    }
                     if root.view == "profile": ProfilePage {
                         vertical-stretch: 1;
                         compact: root.compact;
@@ -522,7 +527,8 @@ export component AppWindow inherits Window {
                         compact: root.compact;
                     }
                 }
-                if root.panel == "queue" && !root.compact: QueuePanel {
+                // The DJ page shows the live queue beside it.
+                if (root.panel == "queue" || root.view == "dj") && !root.compact: QueuePanel {
                     width: 320px;
                     rows: root.queue-rows;
                     now-title: root.track-title;

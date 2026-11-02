@@ -30,13 +30,24 @@
 - Lyrics timing: −100 ms / +100 ms in the lyrics panel and two rebindable shortcuts (unbound by
   default) shift synced lyrics for the playing track. The offset is saved per track in
   `lyrics-offsets.json` (500 tracks at most) and read only when lyrics are on screen.
-- DJ mixer (Settings → Playback, off by default), the work of a friend of the project in the
-  slate-dj fork, ported to this version: when the queue runs
-  out, a chat model you configure (any OpenAI-compatible endpoint, e.g. Ollama) picks the next genre,
-  Slate searches TIDAL for a block of tracks and queues them; any failure falls back to the radio.
+- DJ mixer (Settings → Playback, off by default), written by Hsky17 in the
+  [slate-dj fork](https://github.com/Hsky17/slate-dj/tree/feat/dj-mixer) and ported to this version:
+  when the queue runs out, a chat model you configure (any OpenAI-compatible endpoint, e.g. Ollama)
+  picks the next genre, Slate searches TIDAL for a block of tracks and queues them; any failure falls back to the radio.
   Direction box, "DJ up a block" button, endpoint test, readable failures, request timeout, optional
   spoken line through `espeak-ng` / `say`. The titles and artists of the last 20 tracks go to the
   endpoint you set; nothing is sent until the DJ is on.
+- DJ page (the next step in Hsky17's handoff), a "DJ" item in the sidebar:
+  - Connect a model there: one-click Ollama, LM Studio, OpenAI and OpenRouter presets, "Detect
+    local" (looks for Ollama or LM Studio on this computer), "Find models" (lists what the endpoint
+    offers to pick from), an API key field, and "Connect", which asks the model to answer exactly
+    as the DJ will and saves and switches the DJ on only when it does. The page says what a hosted
+    endpoint is sent.
+  - Once connected, opening the page turns the DJ on. It shows the genre the DJ is mixing and why,
+    the model's spoken transition line, whether this machine can read it aloud (it says so when
+    `espeak-ng` / `say` is missing), a few facts about the genre from a small built-in list, the
+    direction box, "DJ up a block", on/off, "Change endpoint" and the live queue beside it.
+  - Nothing on it is built, read or fetched until it is opened.
 
 ### Changed
 - Clicking a track, playing a single track and playing an artist no longer discard what you queued
@@ -62,12 +73,19 @@
   playlist before your queued tracks.
 - Exclusive-output (ALSA) hangs: the audio thread could block forever on a writer that stopped reading
   or was being torn down (sone 0.23.0 fixes, table below).
-- DJ speech: the speech program was never found (PATH was split on `/`), and the model's text could be
-  read as an option by `say`.
+- DJ speech: the speech program was never found (PATH was split on `/`), the model's text could be
+  read as an option by `say`, and `espeak-ng` was called with a `--text` option it does not have (it
+  printed its usage and said nothing); the line now goes to `espeak-ng --stdin`.
+- Playlist suggestions: "Hide" at the bottom of a playlist brought the suggestions straight back
+  (hiding shrank the section, which counted as reaching the bottom again). Hidden now stays hidden
+  until "Show suggestions" or the playlist is opened again.
 - One fewer thread and 2 fewer wakeups a second at idle: a thread pool that a dependency starts for
   the accessibility bus kept waking every 500 ms forever (an older version of it is used, which
   lets the idle thread exit).
-- Found in review before release (details in REVIEW.md, #83–89):
+- A crash that could hit when two equalizers were created for the first time at the same moment
+  (GStreamer's equalizer registers a type without locking); seen in the test suite, possible in the
+  app with the equalizer and crossfade both on. The first one is now created once, before any other.
+- Found in review before release (details in REVIEW.md, #83–92):
   - Party: kicking a guest could hand that guest the new invite link's secret, and a guest who
     had been next in line to host (then kicked, gone, or replaced by a co-host) kept the key to
     take the party over after the host left. The key now changes with the successor, and the new
@@ -91,7 +109,7 @@
   an MCP feature: Slate calls your model, nothing calls Slate, and it adds no MCP tools. Its intent is
   kept as written (genre blocks, direction, radio fallback, readable failures, generous timeout);
   the review changed only the speech lookup, the speech text and when the queue is locked. Thanks to
-  the slate-dj author for the work.
+  Hsky17 for the work.
 - Handoff needs both guests and the new host to reach iroh's address lookup; with a custom relay or
   relays off ("none") a guest may not find the new host, and the old "share a new link" text appears.
 
@@ -121,43 +139,48 @@ port was re-checked against upstream line by line (same stop checks, fault repor
 ### Performance (measured)
 Release builds of 1.3.0 and 1.4.0 from the same disk, 12 s warm-up then a 60 s window, two runs each,
 optional subsystems off as they are by default. Login screen: empty profile. Playing: a copy of a
-signed-in profile, Play pressed over MPRIS, a 16/44.1 lossless track through PipeWire (s16le 2ch).
-This machine's setup differs from the 1.3.0 measurements (another profile and track, GStreamer 1.28),
-so both versions were measured again side by side; compare the columns, not this table with 1.3.0's.
+signed-in profile, Play pressed over MPRIS, a lossless track through PipeWire (s16le 2ch 44.1 kHz at
+the sink). This machine's setup differs from the 1.3.0 measurements (another profile and track,
+GStreamer 1.28), so both versions were measured again side by side; compare the columns, not this
+table with 1.3.0's. The 1.4.0 column is the released build (DJ page included).
 
 | | 1.3.0 | 1.4.0 |
 |---|---|---|
-| Login screen: wakeups/s (all threads) | 2.7, 2.7 | 0.7 |
-| Login screen: CPU ticks in 60 s | 0, 0 | 0 |
-| Login screen: anonymous PSS | 30.5, 30.5 MB | 30.4, 30.4, 30.5 MB |
-| Login screen: PSS | 81.9, 82.3 MB | 82.3, 81.6, 81.6 MB |
-| Login screen: GPU memory (VRAM) | 52.4, 52.4 MB | 52.4, 52.4, 53.7 MB |
-| Playing: wakeups/s | 150.5, 137.2 | 139.0, 134.7 |
-| Playing: CPU ticks in 60 s | 51, 53 | 54, 49 |
-| Playing: anonymous PSS | 97.4, 91.9 MB | 94.2, 93.6 MB |
-| Playing: PSS | 175.8, 170.4 MB | 173.9, 172.2 MB |
-| Playing: GPU memory (VRAM) | 91.5, 91.5 MB | 91.5, 91.5 MB |
-| Threads (login / playing) | 45 / 73, 68 | 44 / 71, 70 |
+| Login screen: wakeups/s (all threads) | 2.7, 2.7 | 0.7, 0.7 |
+| Login screen: CPU ticks in 60 s | 0, 0 | 0, 0 |
+| Login screen: anonymous PSS | 30.5, 30.5 MB | 30.5, 30.5 MB |
+| Login screen: GPU memory (VRAM) | 52.4, 52.4 MB | 52.4, 52.4 MB |
+| Playing: wakeups/s | 149.7, 139.7 | 141.5, 138.5 |
+| Playing: CPU ticks in 60 s | 55, 57 | 60, 56 |
+| Playing: anonymous PSS | 96.5, 98.5 MB | 99.9, 96.0 MB |
+| Playing: GPU memory (VRAM) | 92.9, 91.5 MB | 167.6 (see below), 91.5 MB |
+| Threads (login / playing) | 45 / 70, 72 | 44 / 74, 73 |
 | Network sockets at the login screen | none | none |
-| Time until the window is mapped | 309–386 ms | 290–319 ms |
-| Binary | 73.0 MB | 74.3 MB |
+| Time until the window is mapped | 297–431 ms | 303–368 ms |
+| Binary | 73.0 MB | 75.3 MB |
 
-The 1.4.0 login wakeups and the one thread fewer are the `blocking` fix (the two 1.4.0 runs before it
-read 2.7, 2.7 wakeups/s and 45 threads; the third PSS/VRAM value is the run after it). The idle
-remainder, 0.7 a second, is on the UI thread in both versions. While playing, the playing-thread
-count varies by a few between runs of the same build (GStreamer's streaming threads), and the
-wakeups are GStreamer's: libpulse's mainloop ~48/s, the decoded queue ~23/s, two multiqueues ~11/s
-each, the UI thread ~10.5/s (two progress updates a second and their redraws). Everything is inside
-the budget (+10 MB RAM, +10 MB VRAM, CPU and threads unchanged); nothing was cut.
+The 1.4.0 login wakeups and the one thread fewer are the `blocking` fix (before it, 1.4.0 read the same
+2.7 wakeups/s and 45 threads as 1.3.0). The idle remainder, 0.7 a second, is on the UI thread in both
+versions. One 1.4.0 playing run read 167.6 MB VRAM against 91.5 MB in every other playing run of both
+versions (six in all); it was not reproduced and is reported as measured. Total PSS is left out: a
+stray 1.3.0 test window ran during part of the last series and shared library pages with it, which
+lowers PSS for the runs it overlapped; anonymous PSS is not affected. While playing, the playing-thread
+count varies by a few between runs of the same build (GStreamer's streaming threads), and the wakeups
+are GStreamer's: libpulse's mainloop ~48/s, the decoded queue ~23/s, two multiqueues ~11/s each, the UI
+thread ~10.5/s (two progress updates a second and their redraws). Everything is inside the budget
+(+10 MB RAM, +10 MB VRAM, CPU and threads unchanged); nothing was cut.
 
 Measured separately:
 - Playing with the window hidden ("Start minimized to tray", 1.4.0): 23 CPU ticks a minute, anonymous
   PSS 61.3 MB, VRAM 32.4 MB, 63 threads, the UI thread 2 wakeups/s. Skipping the progress updates
   while hidden would save at most those 2 of ~129 wakeups a second, so it was not done.
+- Tried and not kept: a byte cap on the 15 s decoded queue, which only matters for hi-res. Runs with a
+  Hi-Res track reached PipeWire as 16/44.1 and the decoded rate could not be confirmed, so the saving
+  was not measured and the change was taken out.
 - Not measured: a running party with reactions (the reaction state is six counters and at most five
-  timestamps per guest; the party's own cost was measured for 1.3.0), the DJ with a real model (no
-  thread or timer while on; one HTTP request when the queue runs out) and the larger stream buffer at
-  hi-res (the profile used streams 16/44.1, which the change does not affect; its bound is +8 MiB).
+  timestamps per guest; the party's own cost was measured for 1.3.0), the DJ with a model (no thread
+  or timer while on; one HTTP request when the queue runs out; the DJ page builds nothing until opened)
+  and the larger stream buffer at hi-res (its bound is +8 MiB).
 
 ### Not tested before release
 - The playlist-creation fix against a live account. It is built from reading the code and a
@@ -173,8 +196,10 @@ Measured separately:
   was not checked.
 - Multi-select, lyrics nudge, smarter shuffle and the new settings rows: compiled and their logic
   unit-tested; the screens themselves were not looked at.
-- DJ mixer: its tests use a mock endpoint; not run against a real model. The new unlocked fetch is
-  covered by a queue test, not by a run with a slow model.
+- DJ mixer and DJ page: the model's reply was checked against a local Ollama model (gemma4:e4b, ~7 s,
+  usable JSON) and the sidebar item was seen on screen; the page was opened by hand only by the
+  maintainer before release, and speech was not heard (no `espeak-ng` on the development machine).
+  The unlocked fetch is covered by a queue test, not by a run with a slow model.
 - The larger stream buffer with a hi-res track, and the cost of a running party and of the DJ (see
   "Performance").
 - Windows: the new code was compiled, linted and tested in CI only; nothing was run on a Windows

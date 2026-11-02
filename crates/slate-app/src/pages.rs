@@ -47,6 +47,7 @@ pub enum Route {
     Folder(String),
     Profile,
     Settings,
+    Dj,
 }
 
 impl Route {
@@ -62,6 +63,7 @@ impl Route {
             "explore" => Self::Page("pages/explore".into(), "Explore".into()),
             "settings" => Self::Settings,
             "profile" => Self::Profile,
+            "dj" => Self::Dj,
             _ => return None,
         })
     }
@@ -78,6 +80,7 @@ impl Route {
             Self::Smart(id) => format!("smart:{id}"),
             Self::Settings => "settings".into(),
             Self::Profile => "profile".into(),
+            Self::Dj => "dj".into(),
             _ => String::new(),
         }
     }
@@ -512,6 +515,7 @@ impl Backend {
                 self.load_profile();
                 self.ui(|w| w.set_view("profile".into()));
             }
+            Route::Dj => self.show_dj(),
             Route::Settings => {
                 self.load_settings_ui();
                 self.ui(|w| w.set_view("settings".into()));

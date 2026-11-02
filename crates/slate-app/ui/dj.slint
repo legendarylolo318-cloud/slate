@@ -1,0 +1,169 @@
+import { Theme } from "theme.slint";
+import { Button, TextField } from "widgets.slint";
+import { ScrollView } from "std-widgets.slint";
+
+/// The DJ page. Filled when the page opens and when the DJ installs a block; empty
+/// (and costing nothing) otherwise.
+export global DjState {
+    in-out property <bool> on;
+    in-out property <bool> configured;
+    /// The DJ's current block: its search query, the model's reason and spoken line.
+    in-out property <string> genre;
+    in-out property <string> reason;
+    in-out property <string> line;
+    /// Whether the line is read aloud here, in words.
+    in-out property <string> speech;
+    /// Facts about the genre (the built-in list), and the genre's name for the heading.
+    in-out property <string> facts-title;
+    in-out property <[string]> facts;
+    /// The last attempt in words ("TIDAL had no results for …").
+    in-out property <string> status;
+    in-out property <string> direction;
+    /// The connection form: shown until an endpoint works, or after "Change endpoint".
+    in-out property <bool> editing;
+    in-out property <string> endpoint;
+    in-out property <string> api-key;
+    in-out property <string> model;
+    /// What `/models` returned, to pick from.
+    in-out property <[string]> models;
+    in-out property <bool> busy;
+    in-out property <string> connect-status;
+    /// "go", "now", "settings", "toggle", "edit", "preset:N", "find-models", "detect",
+    /// "model:NAME", "connect".
+    callback action(string);
+}
+
+component Section inherits VerticalLayout {
+    in property <string> title;
+    spacing: 6px;
+    Text { text: root.title; font-size: 13px; font-weight: 700; color: Theme.text-muted; }
+    @children
+}
+
+component Connect inherits VerticalLayout {
+    spacing: 10px;
+    Text { text: "CONNECT A CHAT MODEL"; font-size: 13px; font-weight: 700; color: Theme.text-muted; }
+    Text {
+        text: "Any OpenAI-compatible endpoint works. A local server (Ollama, LM Studio) needs no key and keeps your listening on this computer; with a hosted one, the titles and artists of your last 20 tracks are sent to it.";
+        color: Theme.text-muted;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        spacing: 6px;
+        alignment: start;
+        for p[i] in ["Ollama", "LM Studio", "OpenAI", "OpenRouter"]: Button { label: p; enabled: !DjState.busy; clicked => { DjState.action("preset:" + i); } }
+        Button { label: "Detect local"; enabled: !DjState.busy; clicked => { DjState.action("detect"); } }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        Text { text: "Endpoint"; color: Theme.text-muted; width: 80px; vertical-alignment: center; }
+        TextField { text <=> DjState.endpoint; placeholder: "http://127.0.0.1:11434/v1"; field-width: 340px; }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        Text { text: "API key"; color: Theme.text-muted; width: 80px; vertical-alignment: center; }
+        TextField { text <=> DjState.api-key; secret: true; placeholder: "not needed for a local server"; field-width: 340px; }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        Text { text: "Model"; color: Theme.text-muted; width: 80px; vertical-alignment: center; }
+        TextField { text <=> DjState.model; placeholder: "pick one below or type its name"; field-width: 260px; }
+        Button { label: "Find models"; enabled: !DjState.busy && DjState.endpoint != ""; clicked => { DjState.action("find-models"); } }
+    }
+    if DjState.models.length > 0: Rectangle {
+        height: min(180px, DjState.models.length * 30px + 8px);
+        border-radius: 6px;
+        background: Theme.surface;
+        ScrollView {
+            VerticalLayout {
+                padding: 4px;
+                for m in DjState.models: Rectangle {
+                    height: 30px;
+                    border-radius: 4px;
+                    background: m == DjState.model ? Theme.accent.with-alpha(0.25) : (mt.has-hover ? Theme.surface-raised : transparent);
+                    Text { x: 8px; text: m; color: Theme.text; vertical-alignment: center; overflow: elide; width: parent.width - 16px; }
+                    mt := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { DjState.action("model:" + m); } }
+                }
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        Button { label: DjState.busy ? "Working…" : "Connect"; primary: true; enabled: !DjState.busy && DjState.endpoint != "" && DjState.model != ""; clicked => { DjState.action("connect"); } }
+        if DjState.configured: Button { label: "Cancel"; enabled: !DjState.busy; clicked => { DjState.editing = false; } }
+    }
+    if DjState.connect-status != "": Text { text: DjState.connect-status; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; }
+}
+
+export component DjPage inherits Rectangle {
+    in property <bool> compact: false;
+    background: Theme.background;
+    ScrollView {
+        HorizontalLayout {
+            alignment: center;
+            VerticalLayout {
+                padding: root.compact ? 12px : 24px;
+                spacing: 18px;
+                max-width: 640px;
+                min-width: min(640px, root.width - 24px);
+                Text { text: "DJ"; font-size: 30px; font-weight: 800; color: Theme.text; horizontal-alignment: center; }
+                Text {
+                    text: !DjState.configured
+                        ? "The DJ keeps the music going when your queue runs out: a chat model picks the next genre and Slate fills a block of tracks from TIDAL."
+                        : DjState.on
+                            ? "The DJ is on. When the queue runs out it picks the next genre and fills a block from TIDAL."
+                            : "The DJ is off.";
+                    color: Theme.text-muted;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+                if DjState.configured && !DjState.editing: HorizontalLayout {
+                    alignment: center;
+                    spacing: 8px;
+                    Button { label: "DJ up a block"; primary: true; enabled: DjState.on; clicked => { DjState.action("now"); } }
+                    Button { label: DjState.on ? "Turn off" : "Turn on"; clicked => { DjState.action("toggle"); } }
+                    Button { label: "Change endpoint"; clicked => { DjState.action("edit"); } }
+                    Button { label: "More settings"; clicked => { DjState.action("settings"); } }
+                }
+                if !DjState.configured || DjState.editing: Connect {}
+                if DjState.configured && DjState.on && !DjState.editing: Section {
+                    title: "NOW MIXING";
+                    Text {
+                        text: DjState.genre == "" ? "Nothing yet: the DJ picks a block when the queue runs out, or press “DJ up a block”." : DjState.genre;
+                        font-size: DjState.genre == "" ? 14px : 22px;
+                        font-weight: DjState.genre == "" ? 400 : 700;
+                        color: DjState.genre == "" ? Theme.text-muted : Theme.text;
+                        wrap: word-wrap;
+                    }
+                    if DjState.reason != "": Text { text: DjState.reason; color: Theme.text-muted; wrap: word-wrap; }
+                }
+                if DjState.configured && DjState.on && !DjState.editing && DjState.line != "": Section {
+                    title: "TRANSITION";
+                    Text { text: "“" + DjState.line + "”"; color: Theme.text; font-italic: true; wrap: word-wrap; }
+                }
+                if DjState.configured && DjState.on && !DjState.editing: Text { text: DjState.speech; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; }
+                if DjState.configured && DjState.on && !DjState.editing && DjState.facts.length > 0: Section {
+                    title: DjState.facts-title;
+                    for f in DjState.facts: Text { text: "• " + f; color: Theme.text; wrap: word-wrap; }
+                }
+                if DjState.configured && DjState.on && !DjState.editing: Section {
+                    title: "DIRECTION";
+                    HorizontalLayout {
+                        spacing: 8px;
+                        TextField {
+                            text <=> DjState.direction;
+                            placeholder: "deeper into house";
+                            field-width: 280px;
+                            accepted(t) => { DjState.action("go"); }
+                        }
+                        Button { label: "Send"; enabled: DjState.direction != ""; clicked => { DjState.action("go"); } }
+                    }
+                    Text { text: "Used for the DJ's next pick."; color: Theme.text-muted; font-size: 12px; }
+                }
+                if DjState.status != "": Text { text: DjState.status; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; horizontal-alignment: center; }
+            }
+        }
+    }
+}
