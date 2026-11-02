@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 
 use slate_core::commands::metadata;
 use slate_core::lyrics::{self, Line};
+use slate_core::lyrics_offset;
 use slate_core::queue::Track;
 use slint::{Model, ModelRc, VecModel};
 
@@ -43,9 +44,12 @@ impl Backend {
                     title: title.into(),
                     artist: artist.into(),
                     manual,
+                    selected: false,
                 })
                 .collect();
             w.set_queue_rows(ModelRc::new(VecModel::from(model)));
+            // The queue changed under the selection: keep what still fits.
+            crate::selection_ui::refresh_queue_selection(&w, |s, len| s.prune(len));
         });
     }
 
@@ -101,7 +105,9 @@ impl Backend {
             l.clear();
         }
         self.lyric_index.store(-1, Ordering::Relaxed);
+        self.lyric_offset_ms.store(0, Ordering::Relaxed);
         self.ui(|w| {
+            w.set_lyric_offset(0);
             w.set_lyric_lines(ModelRc::new(VecModel::<LyricLine>::default()));
             w.set_lyric_current(-1);
             w.set_lyrics_status("Loading lyrics…".into());
@@ -147,11 +153,86 @@ impl Backend {
                 w.set_lyrics_synced(synced);
                 w.set_lyrics_status(status.into());
             });
+            if synced && this.lyrics_visible.load(Ordering::Relaxed) {
+                this.read_lyric_offset(track_id).await;
+            }
+        });
+    }
+
+    /// The lyrics view opened or closed (panel or full screen). Opening reads the
+    /// saved offset of the playing track; the file is not touched before that.
+    pub fn lyrics_visible(&self, visible: bool) {
+        self.lyrics_visible.store(visible, Ordering::Relaxed);
+        if !visible {
+            return;
+        }
+        let Some(id) = self.current_track_id() else {
+            return;
+        };
+        let synced = self.lyrics.lock().is_ok_and(|l| !l.is_empty());
+        if synced {
+            let this = self.clone();
+            self.rt
+                .spawn(async move { this.read_lyric_offset(id).await });
+        }
+    }
+
+    fn offsets_path() -> Option<std::path::PathBuf> {
+        slate_core::config_dir_for_env().map(|d| lyrics_offset::path_in(&d))
+    }
+
+    async fn read_lyric_offset(&self, track_id: u64) {
+        let Some(path) = Self::offsets_path() else {
+            return;
+        };
+        let ms = tokio::task::spawn_blocking(move || lyrics_offset::load(&path).get(track_id))
+            .await
+            .unwrap_or(0);
+        if self.current_track_id() == Some(track_id) {
+            self.set_lyric_offset(ms);
+        }
+    }
+
+    fn set_lyric_offset(&self, ms: i32) {
+        self.lyric_offset_ms.store(ms, Ordering::Relaxed);
+        self.ui(move |w| w.set_lyric_offset(ms));
+        // Re-pick the highlighted line right away, not on the next tick.
+        let pos = f32::from_bits(self.shared.position.load(Ordering::Relaxed));
+        self.update_lyric_position(pos);
+    }
+
+    /// "−100 ms" / "+100 ms" on the lyrics, saved for this track.
+    pub fn lyrics_nudge(&self, delta_ms: i32) {
+        let Some(id) = self.current_track_id() else {
+            return;
+        };
+        if !self.lyrics.lock().is_ok_and(|l| !l.is_empty()) {
+            return; // plain lyrics have no timing
+        }
+        let Some(path) = Self::offsets_path() else {
+            return;
+        };
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let ms = tokio::task::spawn_blocking(move || {
+                let mut all = lyrics_offset::load(&path);
+                let ms = all.nudge(id, delta_ms);
+                if let Err(e) = lyrics_offset::save(&path, &all) {
+                    tracing::warn!("could not save the lyrics offset: {e}");
+                }
+                ms
+            })
+            .await
+            .unwrap_or(0);
+            if this.current_track_id() == Some(id) {
+                this.set_lyric_offset(ms);
+            }
         });
     }
 
     /// Called every tick with the playback position: highlights the current line.
     pub fn update_lyric_position(&self, pos: f32) {
+        let pos = lyrics_offset::lookup_position(pos, self.lyric_offset_ms.load(Ordering::Relaxed));
         let Some(idx) = self
             .lyrics
             .lock()
@@ -203,13 +284,19 @@ impl Backend {
             .ok()
             .and_then(|l| l.get(index).map(|x| x.time));
         if let Some(t) = t {
-            self.seek_to_secs(t);
+            // The line is shown `offset` later (or earlier) than its stamp says.
+            let offset = self.lyric_offset_ms.load(Ordering::Relaxed) as f32 / 1000.0;
+            self.seek_to_secs((t + offset).max(0.0));
         }
     }
 
     // ---------- row actions ----------
 
     pub fn row_action(&self, index: usize, action: &str) {
+        if action.starts_with("sel-") {
+            self.selection_action(action);
+            return;
+        }
         let Some(track) = self.cached_track(index) else {
             return;
         };

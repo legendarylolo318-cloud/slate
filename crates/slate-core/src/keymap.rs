@@ -53,9 +53,14 @@ pub const ACTIONS: &[Action] = &[
     app("search", "Search", "/"),
     app("shortcuts", "Show the shortcut sheet", "?"),
     app("filter", "Filter this page", "Ctrl+F"),
+    app("select-all", "Select all tracks in the list", "Ctrl+A"),
     global("g-play-pause", "Play / pause (global)", "Ctrl+Alt+Space"),
     global("g-next", "Next track (global)", "Ctrl+Alt+Right"),
     global("g-previous", "Previous track (global)", "Ctrl+Alt+Left"),
+    // Unbound until the user picks a key (an empty default).
+    global("g-like", "Like current track (global)", ""),
+    app("lyrics-earlier", "Lyrics 100 ms earlier", ""),
+    app("lyrics-later", "Lyrics 100 ms later", ""),
 ];
 
 pub fn action(id: &str) -> Option<&'static Action> {
@@ -336,10 +341,24 @@ mod tests {
     #[test]
     fn every_default_parses_and_is_unique_in_its_scope() {
         let km = Keymap::new();
-        for a in ACTIONS {
+        for a in ACTIONS.iter().filter(|a| !a.default.is_empty()) {
             let combo = km.combo(a.id).expect(a.id);
             assert_eq!(km.find(a.scope, &combo).map(|x| x.id), Some(a.id));
         }
+    }
+
+    #[test]
+    fn some_actions_start_unbound_and_can_be_bound_and_reset() {
+        let mut km = Keymap::new();
+        assert_eq!(km.combo("g-like"), None);
+        assert!(!km.is_custom("g-like"));
+        km.set("g-like", &c("Ctrl+Alt+L")).expect("free");
+        assert_eq!(km.combo("g-like"), Some(c("Ctrl+Alt+L")));
+        assert!(km.is_custom("g-like"));
+        km.reset("g-like");
+        assert_eq!(km.combo("g-like"), None);
+        // An unbound action is not resolvable and never conflicts.
+        assert_eq!(km.resolve(&c("Ctrl+Alt+L")), None);
     }
 
     #[test]

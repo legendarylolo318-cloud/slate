@@ -48,6 +48,9 @@ pub struct UiPrefs {
     /// System-wide media shortcuts (off by default).
     #[serde(default)]
     pub global_shortcuts: bool,
+    /// Open hidden in the tray (off by default; the window shows if there is no tray).
+    #[serde(default)]
+    pub start_minimized: bool,
     /// Tint the player bar and full-screen player with the cover's colour.
     #[serde(default)]
     pub cover_colors: bool,
@@ -113,6 +116,7 @@ impl Default for UiPrefs {
             lyrics_size: DEFAULT_SIZE,
             global_shortcuts: false,
             cover_colors: false,
+            start_minimized: false,
             check_updates: true,
             last_update_check: 0,
             known_update: None,

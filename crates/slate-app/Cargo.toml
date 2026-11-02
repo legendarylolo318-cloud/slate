@@ -51,6 +51,9 @@ ksni = "0.3"
 dirs = "5"
 # XDG GlobalShortcuts portal (platform/global_keys.rs); already in the tree via rfd.
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+# Not used directly: pins zbus's thread pool. From 1.7.0 its idle thread never exits and wakes
+# twice a second for the whole session (AccessKit's AT-SPI connection starts it).
+blocking = "=1.6.2"
 
 [build-dependencies]
 slint-build = "1.18"

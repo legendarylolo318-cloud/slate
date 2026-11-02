@@ -73,6 +73,11 @@ pub fn parse_folder_items(v: &Value) -> FolderItems {
     out
 }
 
+/// `picker-target` meaning "the multi-selection" (-1 new playlist page, -2 the playing track).
+const SELECTION_TARGET: i32 = -3;
+/// ... and -4 the queue panel's selection.
+const QUEUE_SELECTION_TARGET: i32 = -4;
+
 impl Backend {
     pub fn load_favorites(&self) {
         let this = self.clone();
@@ -287,6 +292,10 @@ impl Backend {
     }
 
     pub fn add_to_playlist(&self, target: i32, uuid: &str) {
+        if target == SELECTION_TARGET || target == QUEUE_SELECTION_TARGET {
+            self.add_selection_to_playlist(uuid.to_string(), target == QUEUE_SELECTION_TARGET);
+            return;
+        }
         let Some(track) = self.picker_track(target) else {
             return;
         };
@@ -294,10 +303,20 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
-            match lib_cmds::add_track_to_playlist(&state, uuid, track.id).await {
+            match lib_cmds::add_track_to_playlist(&state, uuid.clone(), track.id).await {
                 Ok(()) => {
                     this.notify("Added to playlist");
                     this.load_library();
+                }
+                Err(e) if slate_core::tidal_api::is_duplicate_error(&e) => {
+                    // Ask instead of failing: "Add anyway" appends a copy.
+                    let (id, name) = (track.id.to_string(), track.title().to_string());
+                    this.ui(move |w| {
+                        w.set_dialog_kind("dup".into());
+                        w.set_dialog_target(format!("{uuid}|{id}").into());
+                        w.set_dialog_text(format!("“{name}” is already in this playlist.").into());
+                        w.set_dialog_open(true);
+                    });
                 }
                 Err(e) => {
                     let msg = format!("Could not add to playlist: {}", e.log_safe());
@@ -307,24 +326,91 @@ impl Backend {
         });
     }
 
+    /// "New playlist" from the multi-selection.
+    fn create_playlist_from_selection(&self, name: String, queue: bool) {
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let picked = if queue {
+                this.queue_selected_tracks().await
+            } else {
+                this.selected_tracks().await
+            };
+            let Some(state) = this.state() else { return };
+            let ids: Vec<u64> = picked.iter().map(|(_, t)| t.id).collect();
+            if ids.is_empty() {
+                return;
+            }
+            let Some(job) = this.begin_bulk() else { return };
+            let title: String = name.chars().take(100).collect();
+            let msg = match lib_cmds::create_playlist_with_tracks_until(
+                &state,
+                title.clone(),
+                "UNLISTED",
+                &ids,
+                &|| job.cancelled(),
+            )
+            .await
+            {
+                Ok((p, n)) => {
+                    this.note_created(&p.uuid, &p.title);
+                    slate_core::playlist_tools::created_message(
+                        &title,
+                        n,
+                        slate_core::playlist_tools::unique_ids(&ids).len(),
+                        job.cancelled(),
+                    )
+                }
+                Err(e) => format!("Could not create playlist: {}", e.log_safe()),
+            };
+            drop(job);
+            this.load_library();
+            this.notify(&msg);
+            this.select_clear();
+        });
+    }
+
     pub fn create_playlist(&self, target: i32, name: &str) {
         let name = name.trim().to_string();
         if name.is_empty() {
+            return;
+        }
+        if target == SELECTION_TARGET || target == QUEUE_SELECTION_TARGET {
+            self.create_playlist_from_selection(name, target == QUEUE_SELECTION_TARGET);
             return;
         }
         let track = self.picker_track(target);
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
-            match lib_cmds::create_playlist(&state, name, String::new(), "UNLISTED".into()).await {
+            match lib_cmds::create_playlist(&state, name.clone(), String::new(), "UNLISTED".into())
+                .await
+            {
                 Ok(p) => {
-                    if let Some(t) = track {
-                        if let Err(e) = lib_cmds::add_track_to_playlist(&state, p.uuid, t.id).await
-                        {
-                            tracing::warn!("new playlist created but add failed: {}", e.log_safe());
+                    this.note_created(&p.uuid, &p.title);
+                    let msg = match track {
+                        None if target != -1 => {
+                            format!("Created “{name}” but the track to add was no longer on screen")
                         }
-                    }
-                    this.notify("Playlist created");
+                        None => "Playlist created".to_string(),
+                        Some(t) => {
+                            match lib_cmds::add_tracks_to_new_playlist(&state, &p.uuid, vec![t.id])
+                                .await
+                            {
+                                Ok(()) => "Playlist created".to_string(),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "new playlist created but add failed: {}",
+                                        e.log_safe()
+                                    );
+                                    format!(
+                                        "Created “{name}” but could not add the track: {}",
+                                        e.log_safe()
+                                    )
+                                }
+                            }
+                        }
+                    };
+                    this.notify(&msg);
                     this.load_library();
                 }
                 Err(e) => {
@@ -377,7 +463,7 @@ impl Backend {
                     // target is "<playlist uuid>|<track id>": "Add anyway".
                     if let Some((uuid, id)) = target.split_once('|') {
                         if let Ok(id) = id.parse() {
-                            this.add_dropped(uuid, id).await;
+                            this.add_dropped(uuid, id, true).await;
                         }
                     }
                     return;

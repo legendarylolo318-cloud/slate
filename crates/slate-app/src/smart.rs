@@ -389,10 +389,15 @@ impl Backend {
             )
             .await
             {
-                Ok((_, n)) if job.cancelled() => {
-                    format!("Stopped: saved “{title}” with {n} tracks")
+                Ok((p, n)) => {
+                    this.note_created(&p.uuid, &p.title);
+                    slate_core::playlist_tools::created_message(
+                        &title,
+                        n,
+                        slate_core::playlist_tools::unique_ids(&ids).len(),
+                        job.cancelled(),
+                    )
                 }
-                Ok((_, n)) => format!("Saved “{title}” as a TIDAL playlist with {n} tracks"),
                 Err(e) => format!("Could not save the playlist: {}", e.log_safe()),
             };
             drop(job);

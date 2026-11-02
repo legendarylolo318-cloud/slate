@@ -387,6 +387,16 @@ pub fn successor(guests: &[(u64, String, bool)]) -> Option<u64> {
         .map(|(id, _, _)| *id)
 }
 
+/// How long a guest that is not the successor keeps trying to reach the new host after
+/// the grace period, before it falls back to asking for a new link.
+pub const MIGRATE_WINDOW: Duration = Duration::from_secs(120);
+
+/// Whether a guest still follows the party to its new host, `since_offer` after the
+/// grace period ended.
+pub fn keep_following(since_offer: Duration) -> bool {
+    since_offer < MIGRATE_WINDOW
+}
+
 /// A guest's view of a host that went quiet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Handoff {
@@ -619,6 +629,18 @@ mod tests {
             Some(1)
         );
         assert_eq!(successor(&[]), None);
+    }
+
+    #[test]
+    fn guests_follow_the_new_host_for_a_while_and_then_give_up() {
+        assert!(keep_following(Duration::ZERO));
+        assert!(keep_following(MIGRATE_WINDOW - Duration::from_secs(1)));
+        assert!(!keep_following(MIGRATE_WINDOW));
+        assert_eq!(
+            HANDOFF_GRACE,
+            Duration::from_secs(60),
+            "the grace period is unchanged"
+        );
     }
 
     #[test]

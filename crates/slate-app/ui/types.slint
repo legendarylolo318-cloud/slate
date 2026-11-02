@@ -11,6 +11,8 @@ export struct TrackRow {
     quality: int,
     atmos: bool,
     cover: image,
+    /// Part of the multi-selection.
+    selected: bool,
 }
 
 export struct PlaylistEntry {
@@ -81,6 +83,8 @@ export struct QueueRow {
     title: string,
     artist: string,
     manual: bool,
+    /// Part of the multi-selection.
+    selected: bool,
 }
 
 export struct LyricLine {
@@ -120,6 +124,10 @@ export global PartyState {
     in-out property <string> role;
     /// A guest may send the host a track.
     in-out property <bool> can-suggest;
+    /// "Ann 🔥": the latest reaction, shown for a few seconds.
+    in-out property <string> reaction-flash;
+    /// The host's counts for the playing track: "🔥 3  👍 1".
+    in-out property <string> reaction-tally;
 }
 
 /// One line of the credits panel: a group heading, or a person in a role.

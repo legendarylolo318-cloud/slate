@@ -45,6 +45,8 @@ impl Backend {
 
     pub fn party_vote(&self) {}
 
+    pub fn party_react(&self, _index: i32) {}
+
     pub fn party_pref_int(&self, _key: &str, _value: i32) {}
 
     pub fn party_pref_bool(&self, _key: &str, _on: bool) {}

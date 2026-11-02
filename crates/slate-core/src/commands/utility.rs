@@ -189,6 +189,18 @@ pub fn get_gapless(state: &AppState) -> bool {
     state.gapless.load(Ordering::Relaxed)
 }
 
+pub fn get_smart_shuffle(state: &AppState) -> bool {
+    state.smart_shuffle.load(Ordering::Relaxed)
+}
+
+pub fn set_smart_shuffle(state: &AppState, enabled: bool) -> Result<(), SlateError> {
+    state.smart_shuffle.store(enabled, Ordering::Relaxed);
+    let mut settings = state.load_settings().unwrap_or_default();
+    settings.smart_shuffle = enabled;
+    state.save_settings(&settings)?;
+    Ok(())
+}
+
 pub fn get_gapless_supported() -> bool {
     crate::audio::gapless_supported()
 }
@@ -318,6 +330,32 @@ pub fn set_discord_rpc(state: &AppState, enabled: bool) -> Result<(), SlateError
     settings.discord_rpc = enabled;
     state.save_settings(&settings)?;
     Ok(())
+}
+
+/// DJ mixer settings (enabled, endpoint, model, key) — stored on `Settings::dj`.
+pub fn get_dj(state: &AppState) -> crate::dj::DjSettings {
+    state.load_settings().map(|s| s.dj).unwrap_or_default()
+}
+
+pub fn set_dj(state: &AppState, dj: crate::dj::DjSettings) -> Result<(), SlateError> {
+    let mut settings = state.load_settings().unwrap_or_default();
+    state.dj_enabled.store(dj.enabled, Ordering::Relaxed);
+    settings.dj = dj;
+    state.save_settings(&settings)?;
+    Ok(())
+}
+
+/// The "Test endpoint" button for the DJ section. Verifies the exact
+/// settings the user is editing, through exactly the path the live DJ uses
+/// (same client, same request, same response handling) — so what it reports
+/// is what the DJ will experience.
+pub async fn dj_test_endpoint(
+    dj: crate::dj::DjSettings,
+    state: &AppState,
+) -> Result<String, String> {
+    crate::dj::Dj::new(dj, state.proxied_http.clone())
+        .ping()
+        .await
 }
 
 pub fn get_report_plays(state: &AppState) -> bool {

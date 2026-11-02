@@ -199,6 +199,12 @@ export component QueuePanel inherits Rectangle {
     callback clear();
     callback close();
     callback menu(string);
+    /// Ctrl / Shift click on a row, and a bulk action ("sel-…") on the selection.
+    callback select(int, bool, bool);
+    callback sel-action(string);
+    in property <int> selection-size: 0;
+    property <bool> m-ctrl: false;
+    property <bool> m-shift: false;
     background: Theme.surface;
     VerticalLayout {
         padding: 12px;
@@ -228,7 +234,7 @@ export component QueuePanel inherits Rectangle {
             for r[i] in root.rows: Rectangle {
                 height: 44px;
                 border-radius: 6px;
-                background: qa.has-hover ? Theme.surface-raised : transparent;
+                background: r.selected ? Theme.accent.with-alpha(0.22) : (qa.has-hover ? Theme.surface-raised : transparent);
                 HorizontalLayout {
                     padding-left: 8px;
                     spacing: 6px;
@@ -244,7 +250,15 @@ export component QueuePanel inherits Rectangle {
                     data: Dnd.make("queue:" + i);
                     allow-move: true;
                     changed dragging => { if (self.dragging) { Dnd.cancelled = false; } }
-                    qa := TouchArea { mouse-cursor: MouseCursor.pointer; z: -1; double-clicked => { root.play(i); } }
+                    qa := TouchArea {
+                        mouse-cursor: MouseCursor.pointer;
+                        z: -1;
+                        pointer-event(e) => {
+                            if (e.kind == PointerEventKind.down) { root.m-ctrl = e.modifiers.control; root.m-shift = e.modifiers.shift; }
+                        }
+                        clicked => { if (root.m-ctrl || root.m-shift) { root.select(i, root.m-ctrl, root.m-shift); } }
+                        double-clicked => { root.play(i); }
+                    }
                 }
                 DropArea {
                     can-drop(e) => { (Dnd.kind(e.data) == "queue" && !Dnd.cancelled) ? DragAction.move : DragAction.none }
@@ -253,11 +267,16 @@ export component QueuePanel inherits Rectangle {
                 }
                 ContextMenuArea {
                     Menu {
-                        MenuItem { title: "Play"; activated => { root.play(i); } }
-                        MenuItem { title: "Other versions…"; activated => { root.go(i, "versions"); } }
-                        MenuItem { title: "Go to album"; activated => { root.go(i, "album"); } }
-                        MenuItem { title: "Go to artist"; activated => { root.go(i, "artist"); } }
-                        MenuItem { title: "Remove from queue"; activated => { root.remove(i); } }
+                        if r.selected && root.selection-size > 1: MenuItem { title: "Remove " + root.selection-size + " tracks from the queue"; activated => { root.sel-action("sel-remove"); } }
+                        if r.selected && root.selection-size > 1: MenuItem { title: "Play " + root.selection-size + " tracks next"; activated => { root.sel-action("sel-next"); } }
+                        if r.selected && root.selection-size > 1: MenuItem { title: "Add " + root.selection-size + " tracks to playlist…"; activated => { root.sel-action("sel-playlist"); } }
+                        if r.selected && root.selection-size > 1 && PartyState.can-suggest: MenuItem { title: "Suggest to party"; activated => { root.sel-action("sel-suggest"); } }
+                        if r.selected && root.selection-size > 1: MenuItem { title: "Clear selection"; activated => { root.sel-action("sel-clear"); } }
+                        if !(r.selected && root.selection-size > 1): MenuItem { title: "Play"; activated => { root.play(i); } }
+                        if !(r.selected && root.selection-size > 1): MenuItem { title: "Other versions…"; activated => { root.go(i, "versions"); } }
+                        if !(r.selected && root.selection-size > 1): MenuItem { title: "Go to album"; activated => { root.go(i, "album"); } }
+                        if !(r.selected && root.selection-size > 1): MenuItem { title: "Go to artist"; activated => { root.go(i, "artist"); } }
+                        if !(r.selected && root.selection-size > 1): MenuItem { title: "Remove from queue"; activated => { root.remove(i); } }
                     }
                 }
             }
@@ -272,7 +291,10 @@ export component LyricsPanel inherits Rectangle {
     in property <string> status;
     in property <bool> synced;
     in property <int> current;
+    /// Timing offset of this track's lyrics in ms (saved per track).
+    in property <int> offset-ms;
     callback seek(int);
+    callback nudge(int);
     callback close();
     background: Theme.surface;
     VerticalLayout {
@@ -281,6 +303,18 @@ export component LyricsPanel inherits Rectangle {
         HorizontalLayout {
             Text { text: "Lyrics"; font-size: 20px * root.scale; font-weight: 700; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; }
             IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close(); } }
+        }
+        if root.synced: HorizontalLayout {
+            spacing: 8px;
+            Button { label: "−100 ms"; clicked => { root.nudge(-100); } }
+            Text {
+                horizontal-stretch: 1;
+                text: root.offset-ms == 0 ? "In sync" : (root.offset-ms > 0 ? "+" : "") + root.offset-ms + " ms";
+                color: Theme.text-muted;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            Button { label: "+100 ms"; clicked => { root.nudge(100); } }
         }
         if root.status != "": Text { text: root.status; color: Theme.text-muted; wrap: word-wrap; }
         lv := ListView {

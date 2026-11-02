@@ -1150,7 +1150,7 @@ impl SlateMcpServer {
             .map_err(ierr)?;
         ok(json!({
             "playlist_uuid": pl.uuid, "name": pl.title, "track_count": added,
-            "total_duration_seconds": total, "unmatched": unmatched,
+            "requested": ids.len(), "total_duration_seconds": total, "unmatched": unmatched,
         }))
     }
 

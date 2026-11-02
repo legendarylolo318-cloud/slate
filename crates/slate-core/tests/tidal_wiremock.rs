@@ -548,3 +548,95 @@ async fn signing_out_during_a_refresh_does_not_bring_the_tokens_back() {
     assert!(matches!(err, SlateError::NotAuthenticated), "{err:?}");
     assert!(cell.lock().await.tokens.is_none());
 }
+
+/// Regression for "Add to new playlist" creating an empty playlist: the edit host
+/// answers 404 for a playlist created a moment ago, the old add sent its POST with
+/// `If-None-Match: *`, failed, and the failure was only logged.
+#[tokio::test]
+async fn adding_to_a_just_created_playlist_waits_for_the_edit_host() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/playlists/new-1"))
+        .respond_with(ResponseTemplate::new(404))
+        .up_to_n_times(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/playlists/new-1"))
+        .respond_with(ResponseTemplate::new(200).insert_header("etag", "\"7\""))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/playlists/new-1/items"))
+        .and(header("if-none-match", "\"7\""))
+        .and(body_string_contains("trackIds=11"))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut c = client(&server);
+    c.set_tokens(Some(tokens("access-1")));
+    c.add_tracks_to_new_playlist("new-1", &[11], &[Duration::from_millis(5); 3])
+        .await
+        .expect("added after the playlist became visible");
+}
+
+#[tokio::test]
+async fn a_playlist_that_never_appears_reports_the_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/playlists/gone"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let mut c = client(&server);
+    c.set_tokens(Some(tokens("access-1")));
+    let err = c
+        .add_tracks_to_new_playlist("gone", &[1], &[Duration::from_millis(1); 2])
+        .await
+        .expect_err("still 404");
+    assert!(
+        matches!(err, SlateError::Api { status: 404, .. }),
+        "{err:?}"
+    );
+    let sent = server.received_requests().await.unwrap_or_default();
+    assert_eq!(sent.len(), 3, "one try plus two retries, no POST");
+}
+
+/// "Add anyway" must really add: it used to go through the FAIL path and always
+/// ended in the 409 it was offered to get around.
+#[tokio::test]
+async fn add_anyway_sends_on_dupes_add_and_a_plain_add_sends_fail() {
+    use slate_core::tidal_api::{is_duplicate_error, OnDupes};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/playlists/p"))
+        .respond_with(ResponseTemplate::new(200).insert_header("etag", "\"1\""))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/playlists/p/items"))
+        .and(body_string_contains("onDupes=ADD"))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/playlists/p/items"))
+        .and(body_string_contains("onDupes=FAIL"))
+        .respond_with(ResponseTemplate::new(409))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut c = client(&server);
+    c.set_tokens(Some(tokens("access-1")));
+    let err = c
+        .add_track_to_playlist("p", 5)
+        .await
+        .expect_err("duplicate");
+    assert!(is_duplicate_error(&err), "{err:?}");
+    c.add_track_to_playlist_with("p", 5, OnDupes::Add)
+        .await
+        .expect("added anyway");
+}

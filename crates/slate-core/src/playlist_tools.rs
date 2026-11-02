@@ -332,3 +332,56 @@ mod tests {
         assert_eq!(moves_to_order(&[2, 1], &[1, 2, 9]), vec![(1, 0)]);
     }
 }
+
+/// What to tell the user after a playlist was created and filled.
+/// `wanted` is the number of distinct tracks asked for, `added` how many landed.
+pub fn created_message(title: &str, added: usize, wanted: usize, stopped: bool) -> String {
+    if stopped {
+        format!("Stopped: saved “{title}” with {added} tracks")
+    } else if wanted > 0 && added == 0 {
+        format!(
+            "Created “{title}” but TIDAL would not take its tracks. It is empty; try adding them again"
+        )
+    } else if added < wanted {
+        format!(
+            "Created “{title}” with {added} of {wanted} tracks (TIDAL refused or limited the rest)"
+        )
+    } else {
+        format!("Saved “{title}” as a TIDAL playlist with {added} tracks")
+    }
+}
+
+#[cfg(test)]
+mod created_message_tests {
+    use super::created_message;
+
+    #[test]
+    fn a_complete_save_says_so() {
+        assert_eq!(
+            created_message("Mix", 3, 3, false),
+            "Saved “Mix” as a TIDAL playlist with 3 tracks"
+        );
+    }
+
+    #[test]
+    fn an_empty_result_is_not_called_a_success() {
+        let m = created_message("Mix", 0, 5, false);
+        assert!(m.contains("empty"), "{m}");
+        assert!(!m.starts_with("Saved"), "{m}");
+    }
+
+    #[test]
+    fn a_partial_result_gives_both_numbers() {
+        assert!(created_message("Mix", 2, 5, false).contains("2 of 5"));
+    }
+
+    #[test]
+    fn an_empty_wish_is_a_plain_save() {
+        assert!(created_message("Mix", 0, 0, false).starts_with("Saved"));
+    }
+
+    #[test]
+    fn stopping_wins() {
+        assert!(created_message("Mix", 1, 5, true).starts_with("Stopped"));
+    }
+}

@@ -225,6 +225,21 @@ export component AppWindow inherits Window {
     in property <[LyricLine]> lyric-lines;
     in property <string> lyrics-status;
     in property <bool> lyrics-synced;
+    /// Synced-lyrics timing offset of the playing track, ms.
+    in property <int> lyric-offset;
+    callback lyrics-nudge(int);
+    in-out property <int> selection-count: 0;
+    in-out property <int> queue-selection: 0;
+    callback queue-select(int, bool, bool);
+    callback queue-sel-action(string);
+    callback select-row(int, bool, bool);
+    callback select-all();
+    callback select-clear();
+    callback party-react(int);
+    callback lyrics-visible(bool);
+    // True while any lyrics view is open; the saved offset is read only then.
+    property <bool> lyrics-shown: (root.panel == "lyrics" && !root.compact) || root.fullscreen;
+    changed lyrics-shown => { root.lyrics-visible(root.lyrics-shown); }
     in property <int> lyric-current: -1;
     callback queue-play(int);
     callback queue-go(int, string);
@@ -286,6 +301,8 @@ export component AppWindow inherits Window {
             // Esc during a drag: every drop target refuses until the next drag starts.
             if (e.text == Key.Escape) { Dnd.cancelled = true; }
             if (e.text == Key.Escape && root.shortcuts-open) { root.shortcuts-open = false; return accept; }
+            if (e.text == Key.Escape && root.selection-count > 0) { root.select-clear(); return accept; }
+            if (e.text == Key.Escape && root.queue-selection > 0 && root.panel == "queue") { root.queue-sel-action("sel-clear"); return accept; }
             if (e.text == Key.Escape && root.fullscreen) { root.fullscreen = false; return accept; }
             if (SettingsState.capturing != "") { return reject; }
             let a = root.resolve-key(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta);
@@ -301,6 +318,9 @@ export component AppWindow inherits Window {
             if (a == "repeat") { root.cycle-repeat(); return accept; }
             if (a == "queue") { root.panel = root.panel == "queue" ? "" : "queue"; return accept; }
             if (a == "lyrics") { root.panel = root.panel == "lyrics" ? "" : "lyrics"; return accept; }
+            if (a == "lyrics-earlier") { root.lyrics-nudge(-100); return accept; }
+            if (a == "lyrics-later") { root.lyrics-nudge(100); return accept; }
+            if (a == "select-all" && root.view == "tracks") { root.select-all(); return accept; }
             if (a == "search") { root.focus-tick += 1; return accept; }
             if (a == "filter") { root.filter-tick += 1; return accept; }
             reject
@@ -446,8 +466,11 @@ export component AppWindow inherits Window {
                         remove-duplicates => { root.remove-duplicates(); }
                         page-favorite: root.page-favorite;
                         toggle-page-favorite => { root.toggle-page-favorite(); }
+                        selection-count: root.selection-count;
+                        select-row(i, c, s) => { root.select-row(i, c, s); }
                         row-action(i, a) => {
                             if (a == "add-to-playlist") { root.picker-target = i; root.picker-open = true; }
+                            else if (a == "sel-playlist") { root.picker-target = -3; root.picker-open = true; }
                             else { root.row-action(i, a); }
                         }
                         play-all => { root.play-all(); }
@@ -505,6 +528,12 @@ export component AppWindow inherits Window {
                     now-title: root.track-title;
                     now-artist: root.track-artist;
                     play(i) => { root.queue-play(i); }
+                    selection-size: root.queue-selection;
+                    select(i, c, s) => { root.queue-select(i, c, s); }
+                    sel-action(a) => {
+                        if (a == "sel-playlist") { root.picker-target = -4; root.picker-open = true; }
+                        else { root.queue-sel-action(a); }
+                    }
                     remove(i) => { root.queue-remove(i); }
                     go(i, k) => { root.queue-go(i, k); }
                     clear => { root.queue-clear(); }
@@ -518,8 +547,37 @@ export component AppWindow inherits Window {
                     status: root.lyrics-status;
                     synced: root.lyrics-synced;
                     current: root.lyric-current;
+                    offset-ms: root.lyric-offset;
                     seek(i) => { root.lyric-seek(i); }
+                    nudge(d) => { root.lyrics-nudge(d); }
                     close => { root.panel = ""; }
+                }
+            }
+            // Emoji reactions: only while a party runs.
+            if PartyState.role != "" && !root.compact: Rectangle {
+                height: 30px;
+                background: Theme.surface;
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 4px;
+                    alignment: end;
+                    Text {
+                        text: PartyState.reaction-flash != "" ? PartyState.reaction-flash : PartyState.reaction-tally;
+                        color: PartyState.reaction-flash != "" ? Theme.accent : Theme.text-muted;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        horizontal-alignment: right;
+                        overflow: elide;
+                    }
+                    for e[i] in ["👍", "❤️", "🔥", "😂", "🎉", "👏"]: Rectangle {
+                        width: 30px;
+                        border-radius: 6px;
+                        background: ta.has-hover ? Theme.surface-raised : transparent;
+                        ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.party-react(i); } }
+                        Text { text: e; font-size: 16px; horizontal-alignment: center; vertical-alignment: center; }
+                    }
                 }
             }
             PlayerBar {

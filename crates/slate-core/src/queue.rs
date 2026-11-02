@@ -315,6 +315,8 @@ pub struct Queue {
     /// Pre-shuffle order of `queue`; `Some` only while shuffle is on.
     pub original: Option<Vec<Track>>,
     pub shuffle: bool,
+    /// Smarter shuffle (Settings → Playback): spread artists and albums.
+    pub spread: bool,
     pub repeat: Repeat,
     pub autoplay: bool,
     pub playback_source: Option<Source>,
@@ -340,12 +342,13 @@ impl Queue {
 
     // ---------- building ----------
 
-    /// Replace the context queue with `tracks` (in order).
+    /// Replace the context queue with `tracks` (in order). The manual ("play next")
+    /// queue survives, as in TIDAL; collections that replace everything call
+    /// [`Queue::clear_manual`] too (see [`Queue::play_all`]).
     pub fn set_tracks(&mut self, tracks: Vec<Track>, source: Option<Source>, album_mode: bool) {
         self.epoch += 1;
         self.use_track_gain = !album_mode;
         self.original = None;
-        self.manual.clear();
         self.context_source = None;
         self.playback_source = source.map(|s| Source {
             tracks: stamp_all(s.tracks),
@@ -366,7 +369,22 @@ impl Queue {
         self.set_tracks(tracks, source, album_mode);
         let ordered = self.queue.clone();
         self.original = self.shuffle.then(|| ordered.clone());
-        self.queue.shuffle(rng);
+        self.shuffle_queue(rng);
+    }
+
+    /// Empties the manual queue.
+    pub fn clear_manual(&mut self) {
+        if !self.manual.is_empty() {
+            self.manual.clear();
+            self.epoch += 1;
+        }
+    }
+
+    /// Whether "Play" / "Shuffle" on this source keeps what the user queued by hand.
+    /// An artist page is a loose mix of tracks, not a collection; albums, playlists,
+    /// mixes and Loved Tracks replace everything.
+    pub fn keeps_manual(source: Option<&Source>) -> bool {
+        source.is_some_and(|s| matches!(s.kind.as_str(), "artist" | "artist-tracks"))
     }
 
     /// "Play this track from a list": queue the rest, rotated to start after it.
@@ -444,6 +462,9 @@ impl Queue {
         if all.is_empty() {
             return None;
         }
+        if !Self::keeps_manual(source.as_ref()) {
+            self.clear_manual();
+        }
         if shuffle || self.shuffle {
             let mut all = all;
             let first = all.remove(rng_index(rng, all.len()));
@@ -491,7 +512,7 @@ impl Queue {
             orig.extend(fresh.iter().cloned());
         }
         if shuffle {
-            fresh.shuffle(rng);
+            self.shuffle_vec(&mut fresh, self.queue.last(), rng);
         }
         self.queue.extend(fresh);
     }
@@ -562,10 +583,26 @@ impl Queue {
 
     // ---------- shuffle / repeat ----------
 
+    /// Shuffles `v` (plain, or spread when the setting is on); `prev` is the track
+    /// that comes before it.
+    fn shuffle_vec(&self, v: &mut Vec<Track>, prev: Option<&Track>, rng: &mut impl rand::Rng) {
+        if self.spread {
+            crate::shuffle::spread_shuffle(v, prev, rng);
+        } else {
+            v.shuffle(rng);
+        }
+    }
+
+    fn shuffle_queue(&mut self, rng: &mut impl rand::Rng) {
+        let mut q = std::mem::take(&mut self.queue);
+        self.shuffle_vec(&mut q, self.current.as_ref(), rng);
+        self.queue = q;
+    }
+
     pub fn toggle_shuffle(&mut self, rng: &mut impl rand::Rng) {
         if !self.shuffle {
             self.original = Some(self.queue.clone());
-            self.queue.shuffle(rng);
+            self.shuffle_queue(rng);
             self.shuffle = true;
         } else {
             if let Some(orig) = self.original.take() {
@@ -612,8 +649,32 @@ impl Queue {
 
     /// A start attempt failed for a transient reason: put the track back where
     /// it came from so a retry plays it instead of skipping it.
+    ///
+    /// It goes to the head of the manual queue: with the manual queue now surviving
+    /// a click, the context head would be played after everything queued by hand
+    /// and the track the user picked (or was about to hear) would be skipped.
     pub fn requeue_head(&mut self, track: Track) {
-        self.queue.insert(0, track);
+        let mut track = track;
+        track.extra.remove("_source");
+        self.manual.insert(0, track.stamped());
+    }
+
+    /// For a clicked track that turned out dead: takes the manual queue out of the
+    /// way so the next track comes from the track's own album or playlist. Returns
+    /// it (empty when the context has nothing `playable`, so the manual queue
+    /// plays as before). Give it back with [`Queue::release_manual`].
+    pub fn hold_manual_for_context(&mut self, playable: impl Fn(&Track) -> bool) -> Vec<Track> {
+        if self.queue.iter().any(playable) {
+            std::mem::take(&mut self.manual)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Puts tracks held by [`Queue::hold_manual_for_context`] back behind anything
+    /// that was queued to play next in the meantime (a rate-limited retry).
+    pub fn release_manual(&mut self, held: Vec<Track>) {
+        self.manual.extend(held);
     }
 
     // ---------- advancing ----------
@@ -710,6 +771,19 @@ impl Queue {
         (Next::Stop, dropped)
     }
 
+    /// Whether [`Queue::next`] would ask for autoplay now, judged without taking
+    /// anything off the queue (tracks a filter would skip are not looked at, so an
+    /// all-blocked queue answers `false` and is found out by `next` itself).
+    pub fn would_autoplay(&self, explicit: bool) -> bool {
+        let replays = self.repeat == Repeat::One && !explicit;
+        self.autoplay
+            && self.current.is_some()
+            && !replays
+            && self.repeat != Repeat::All
+            && self.manual.is_empty()
+            && self.queue.is_empty()
+    }
+
     fn rebuild_for_repeat_all(
         &mut self,
         rng: &mut impl rand::Rng,
@@ -736,7 +810,7 @@ impl Queue {
             return None;
         }
         if self.shuffle {
-            all.shuffle(rng);
+            self.shuffle_vec(&mut all, self.current.as_ref(), rng);
         }
         let first = all.remove(0);
         self.original = self.shuffle.then(|| {
@@ -1065,6 +1139,87 @@ mod tests {
         assert_eq!(play(&mut q, true), Some(1));
         assert_eq!(play(&mut q, true), Some(2));
         assert_eq!(play(&mut q, true), None);
+    }
+
+    fn kind_src(kind: &str, tracks: Vec<Track>) -> Source {
+        Source {
+            kind: kind.into(),
+            ..src("S", tracks)
+        }
+    }
+
+    #[test]
+    fn would_autoplay_matches_next() {
+        let mut q = Queue::new();
+        q.autoplay = true;
+        q.set_tracks(vec![t(1)], None, false);
+        assert_eq!(play(&mut q, true), Some(1));
+        assert!(q.would_autoplay(false));
+        q.add_to_queue(t(2), None);
+        assert!(!q.would_autoplay(false));
+        assert_eq!(play(&mut q, true), Some(2));
+        assert!(q.would_autoplay(true));
+        assert_eq!(q.next(true, &mut rng(), |_| None).0, Next::NeedAutoplay);
+        q.repeat = Repeat::One;
+        assert!(!q.would_autoplay(false));
+        assert!(q.would_autoplay(true));
+        q.autoplay = false;
+        assert!(!q.would_autoplay(true));
+    }
+
+    #[test]
+    fn a_clicked_track_or_single_play_keeps_the_manual_queue() {
+        let mut q = Queue::new();
+        q.add_to_queue(t(9), None);
+        q.play_from_source(t(2), vec![t(1), t(2), t(3)], None, false, &mut rng());
+        assert_eq!(ids(&q.manual), vec![9]);
+        q.set_tracks(Vec::new(), None, false); // play_single
+        assert_eq!(ids(&q.manual), vec![9]);
+    }
+
+    #[test]
+    fn play_all_clears_the_manual_queue_except_for_an_artist() {
+        for (kind, kept) in [("album", false), ("playlist", false), ("artist", true)] {
+            let mut q = Queue::new();
+            q.add_to_queue(t(9), None);
+            let s = kind_src(kind, vec![t(1), t(2)]);
+            q.play_all(vec![t(1), t(2)], Some(s), false, false, &mut rng());
+            assert_eq!(!q.manual.is_empty(), kept, "{kind}");
+        }
+        let mut q = Queue::new();
+        q.add_to_queue(t(9), None);
+        q.play_all(vec![t(1)], None, false, true, &mut rng());
+        assert!(q.manual.is_empty(), "no source clears it");
+    }
+
+    #[test]
+    fn a_dead_clicked_track_moves_within_its_collection_not_to_the_manual_queue() {
+        let mut q = Queue::new();
+        q.add_to_queue(t(9), None);
+        q.set_tracks(vec![t(2), t(3)], None, false);
+        let held = q.hold_manual_for_context(|_| true);
+        assert_eq!(ids(&held), vec![9]);
+        assert_eq!(play(&mut q, true), Some(2));
+        q.release_manual(held);
+        assert_eq!(ids(&q.manual), vec![9]);
+    }
+
+    #[test]
+    fn with_nothing_playable_left_in_the_collection_the_manual_queue_plays() {
+        let mut q = Queue::new();
+        q.add_to_queue(t(9), None);
+        q.set_tracks(vec![t(2)], None, false);
+        assert!(q.hold_manual_for_context(|_| false).is_empty());
+        assert_eq!(play(&mut q, true), Some(9));
+    }
+
+    #[test]
+    fn a_requeued_track_plays_before_the_manual_queue() {
+        let mut q = Queue::new();
+        q.add_to_queue(t(9), None);
+        q.requeue_head(t(4));
+        assert_eq!(play(&mut q, true), Some(4));
+        assert_eq!(play(&mut q, true), Some(9));
     }
 
     #[test]

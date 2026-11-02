@@ -1,5 +1,185 @@
 # Changelog
 
+## [1.4.0] - 2026-11-01
+
+### Added
+- Multi-select in track lists (album, playlist, Loved Tracks, mixes, smart playlists, and the queue
+  panel): Ctrl-click toggles a row, Shift-click selects a range, Ctrl+A selects the list (rebindable),
+  Esc clears. A plain click still plays. Right-click on a selection: Add to queue, Play next, Add to
+  playlist… (tracks already in it are left out and counted), Suggest to party (guests; the host takes
+  3 requests a minute, so 3 are sent), Remove (from your own playlist, or the queue). Search results
+  are a card strip, not a list, so they have no multi-select.
+- Smarter shuffle (Settings → Playback, off by default): shuffle avoids the same artist, then the
+  same album, twice in a row when it can. One pass when the queue is shuffled; nothing runs while
+  playing.
+- Like current track: a global shortcut (Settings → Shortcuts, unbound by default; on Linux your
+  desktop's shortcut settings can bind it), and "Like / Unlike Current Track" in the tray menu. A toast
+  says what happened. MPRIS has no "like" action, so it is not there.
+- Tray: "Start minimized to tray" (the window opens normally if there is no tray); middle-click the icon
+  toggles play / pause (Linux and Windows); the mouse wheel over the icon changes the volume (Linux:
+  Windows sends no wheel messages to notification-area icons). The wheel over the in-app volume slider
+  changes the volume on both.
+- Party reactions: while a party runs, guests and the host can send 👍 ❤️ 🔥 😂 🎉 👏 on the current
+  track. The latest shows next to the player for 4 seconds, and the host sees the counts for the track.
+  5 reactions per person per 10 seconds. Protocol version stays 2: Slate 1.3 peers ignore the new
+  messages.
+- Party handoff moves the guests: the host tells everyone where the party continues (the successor's
+  public id and the invite secret) and gives the successor, privately, the key to host under. When the
+  successor takes over, the other guests keep trying to join it for 2 minutes after the 60 second grace
+  period, with no new link. If they cannot reach it, they are told to ask for a new link as before.
+- Lyrics timing: −100 ms / +100 ms in the lyrics panel and two rebindable shortcuts (unbound by
+  default) shift synced lyrics for the playing track. The offset is saved per track in
+  `lyrics-offsets.json` (500 tracks at most) and read only when lyrics are on screen.
+- DJ mixer (Settings → Playback, off by default), the work of a friend of the project in the
+  slate-dj fork, ported to this version: when the queue runs
+  out, a chat model you configure (any OpenAI-compatible endpoint, e.g. Ollama) picks the next genre,
+  Slate searches TIDAL for a block of tracks and queues them; any failure falls back to the radio.
+  Direction box, "DJ up a block" button, endpoint test, readable failures, request timeout, optional
+  spoken line through `espeak-ng` / `say`. The titles and artists of the last 20 tracks go to the
+  endpoint you set; nothing is sent until the DJ is on.
+
+### Changed
+- Clicking a track, playing a single track and playing an artist no longer discard what you queued
+  with "Play next" / "Add to queue" (as in TIDAL). Albums, playlists, Loved Tracks and mixes still
+  replace everything.
+- Hi-res streams buffer up to 6 MiB per track instead of GStreamer's hidden 2 MB, which cut their
+  15 s buffer to 3–5 s, so a weak connection rides out dropouts longer (at most +8 MiB while the
+  next track is prerolled). CD-quality streams were never limited by it and are unchanged.
+- "Add to playlist…" on a track already in the playlist opens the "already in this playlist / Add
+  anyway" dialog instead of an error.
+- A quality filter (All / Lossless / Hi-Res / Atmos, remembered per page type) already exists on track
+  lists and in search since 1.2; it needed no change.
+
+### Fixed
+- Playlist creation (details in REVIEW.md #73–75): "Add to new playlist" could leave an empty playlist
+  behind a success message because TIDAL's edit host does not know a playlist for a moment after it is
+  created; the add now waits for it and says when it still failed. New playlists show in the sidebar
+  at once even when TIDAL's list lags, and saving a queue or a smart/merged playlist reports "N of M
+  tracks" instead of failing or claiming success.
+- "Add anyway" for a duplicate track really adds it now.
+- A click that hit a rate limit left the old track playing while the player showed it paused; it now
+  stops, and the clicked track plays next. A dead clicked track moves on within its own album or
+  playlist before your queued tracks.
+- Exclusive-output (ALSA) hangs: the audio thread could block forever on a writer that stopped reading
+  or was being torn down (sone 0.23.0 fixes, table below).
+- DJ speech: the speech program was never found (PATH was split on `/`), and the model's text could be
+  read as an option by `say`.
+- One fewer thread and 2 fewer wakeups a second at idle: a thread pool that a dependency starts for
+  the accessibility bus kept waking every 500 ms forever (an older version of it is used, which
+  lets the idle thread exit).
+- Found in review before release (details in REVIEW.md, #83–89):
+  - Party: kicking a guest could hand that guest the new invite link's secret, and a guest who
+    had been next in line to host (then kicked, gone, or replaced by a co-host) kept the key to
+    take the party over after the host left. The key now changes with the successor, and the new
+    secret reaches only the guests who stay.
+  - DJ: while the model was thinking (up to 5 minutes with the default timeout), clicks, Next and
+    queue edits waited for it. The model is now asked without holding the queue; a track you play
+    meanwhile wins.
+  - "Start minimized to tray" could leave Slate with no window and no tray icon when the tray
+    failed quickly at start.
+
+### Notes
+- Resource budget: every new feature is lazy (nothing allocated, spawned, loaded or fetched until it is
+  opened or switched on). No new threads, timers or polls; no crates added. The only always-on additions
+  are one atomic read in the queue lock (smart shuffle), one in autoplay (DJ), and the reaction/handoff
+  fields of a running party. The larger stream buffer is the one deliberate RAM change (above).
+- Discord "Join party" button: not built. A Rich Presence button needs a public URL; putting the party
+  invite (which contains the join secret) in your presence would let anyone who sees your profile join
+  and would defeat "a kick makes a new link". The Discord join-secret / ask-to-join flow needs a
+  Discord application review and a new crate, so the item was skipped.
+- The DJ keeps its own switch (the original design); it is not behind the MCP setting because it is not
+  an MCP feature: Slate calls your model, nothing calls Slate, and it adds no MCP tools. Its intent is
+  kept as written (genre blocks, direction, radio fallback, readable failures, generous timeout);
+  the review changed only the speech lookup, the speech text and when the queue is locked. Thanks to
+  the slate-dj author for the work.
+- Handoff needs both guests and the new host to reach iroh's address lookup; with a custom relay or
+  relays off ("none") a guest may not find the new host, and the old "share a new link" text appears.
+
+#### sone 0.23.0 fixes
+| Commit | Subject | Result |
+|---|---|---|
+| 1d83331 | auth: sign-in window camera prompt under Flatpak | Not applicable: Slate signs in with a device code or the system browser, there is no embedded web view |
+| 5edf7ee, c3abdaf | playlists: prompt instead of silently skipping duplicate adds; "Add anyway" | Applied: the 1.2 dialog existed for drag-and-drop only and "Add anyway" used `onDupes=FAIL`, so it could never add. Now `OnDupes::{Fail,Skip,Add}`, the track menu opens the dialog, and a multi-select add counts what it left out |
+| 5988a82 | audio: exclusive sink blocking on a writer being torn down | Applied (`send_chunk`) |
+| afea702 | audio: never hang waiting on an exclusive writer | Applied (`shutdown_writer`, stop flag, `lingering_writers`) |
+| 2a15fa1 | audio: let a stopping writer leave its retry loops | Applied (`retry_resume`, `write_silence` with the stop flag) |
+| c7c59c9 | audio: give a lingering writer time to release the device | Applied (`reap_lingering_writers`) |
+| 583b1e5 | audio: give up only when the pipeline closes | Applied (`sink_closing`) |
+| 90bc6b9 | audio: no fault reports from a stopping writer | Applied (`report_fault`) |
+| 576f73d | audio: exit the writer when a flush drains its shutdown | Applied |
+| ce68fc4 | playback: hidden 2 MB stream buffer cap | Applied with a bound: 6 MiB (`STREAM_BUFFER_SIZE_BYTES`), not sone's 40 MiB and 30 s, to stay inside the RAM budget; 24/96 now fills its 15 s window, 24/192 holds ~8 s; 16/44.1 (~18 s per 2 MB) was never byte-bound |
+| 426dd72, 3edc437 | queue: stop / clear / new play cancel a pending rate-limit retry | Not applicable: Slate has no timer-driven retry. A rate limit stops playback and queues the track; nothing runs later that could need cancelling |
+| f2bf30a | queue: retry the clicked track after a rate limit | Applied in Slate's form: the clicked track is put at the head of the queue and the old track is stopped (no automatic timer, see above) |
+| 13cba72 | queue: skip a dead clicked track within its collection | Applied (needed once the manual queue survives a click) |
+| f6e61ae | queue: keep queued tracks on a single track or artist | Applied |
+| undici / smol-toml bump | JS dependencies | Not applicable |
+| AppStream metainfo | refresh | `data/…metainfo.xml` has a 1.4.0 release entry |
+
+All 20 upstream commits after Slate's porting baseline (`a34fd6f`) are in this table; the exclusive-writer
+port was re-checked against upstream line by line (same stop checks, fault reports and timeouts).
+
+### Performance (measured)
+Release builds of 1.3.0 and 1.4.0 from the same disk, 12 s warm-up then a 60 s window, two runs each,
+optional subsystems off as they are by default. Login screen: empty profile. Playing: a copy of a
+signed-in profile, Play pressed over MPRIS, a 16/44.1 lossless track through PipeWire (s16le 2ch).
+This machine's setup differs from the 1.3.0 measurements (another profile and track, GStreamer 1.28),
+so both versions were measured again side by side; compare the columns, not this table with 1.3.0's.
+
+| | 1.3.0 | 1.4.0 |
+|---|---|---|
+| Login screen: wakeups/s (all threads) | 2.7, 2.7 | 0.7 |
+| Login screen: CPU ticks in 60 s | 0, 0 | 0 |
+| Login screen: anonymous PSS | 30.5, 30.5 MB | 30.4, 30.4, 30.5 MB |
+| Login screen: PSS | 81.9, 82.3 MB | 82.3, 81.6, 81.6 MB |
+| Login screen: GPU memory (VRAM) | 52.4, 52.4 MB | 52.4, 52.4, 53.7 MB |
+| Playing: wakeups/s | 150.5, 137.2 | 139.0, 134.7 |
+| Playing: CPU ticks in 60 s | 51, 53 | 54, 49 |
+| Playing: anonymous PSS | 97.4, 91.9 MB | 94.2, 93.6 MB |
+| Playing: PSS | 175.8, 170.4 MB | 173.9, 172.2 MB |
+| Playing: GPU memory (VRAM) | 91.5, 91.5 MB | 91.5, 91.5 MB |
+| Threads (login / playing) | 45 / 73, 68 | 44 / 71, 70 |
+| Network sockets at the login screen | none | none |
+| Time until the window is mapped | 309–386 ms | 290–319 ms |
+| Binary | 73.0 MB | 74.3 MB |
+
+The 1.4.0 login wakeups and the one thread fewer are the `blocking` fix (the two 1.4.0 runs before it
+read 2.7, 2.7 wakeups/s and 45 threads; the third PSS/VRAM value is the run after it). The idle
+remainder, 0.7 a second, is on the UI thread in both versions. While playing, the playing-thread
+count varies by a few between runs of the same build (GStreamer's streaming threads), and the
+wakeups are GStreamer's: libpulse's mainloop ~48/s, the decoded queue ~23/s, two multiqueues ~11/s
+each, the UI thread ~10.5/s (two progress updates a second and their redraws). Everything is inside
+the budget (+10 MB RAM, +10 MB VRAM, CPU and threads unchanged); nothing was cut.
+
+Measured separately:
+- Playing with the window hidden ("Start minimized to tray", 1.4.0): 23 CPU ticks a minute, anonymous
+  PSS 61.3 MB, VRAM 32.4 MB, 63 threads, the UI thread 2 wakeups/s. Skipping the progress updates
+  while hidden would save at most those 2 of ~129 wakeups a second, so it was not done.
+- Not measured: a running party with reactions (the reaction state is six counters and at most five
+  timestamps per guest; the party's own cost was measured for 1.3.0), the DJ with a real model (no
+  thread or timer while on; one HTTP request when the queue runs out) and the larger stream buffer at
+  hi-res (the profile used streams 16/44.1, which the change does not affect; its bound is +8 MiB).
+
+### Not tested before release
+- The playlist-creation fix against a live account. It is built from reading the code and a
+  mock-server test of the 404-then-200 sequence (1.3.0's call fails that same sequence); the real
+  failure was never reproduced, so the bug the reporter saw may be another one.
+- Exclusive-output fixes: unit tests, source guards and a line-by-line comparison with upstream; not
+  heard on a DAC, and the hang itself was never reproduced.
+- Party reactions, handoff and the two review fixes (#83, #84): tested over loopback only; not with two
+  machines, a relay, or iroh's address lookup (guests finding a new host by its id alone). Emoji
+  drawing in the player strip was not looked at on screen.
+- Tray: middle click and the wheel (Linux), the Windows tray and "Start minimized" were not clicked on
+  a real desktop (the hidden start was measured, not used); Slint's wheel direction on the volume bar
+  was not checked.
+- Multi-select, lyrics nudge, smarter shuffle and the new settings rows: compiled and their logic
+  unit-tested; the screens themselves were not looked at.
+- DJ mixer: its tests use a mock endpoint; not run against a real model. The new unlocked fetch is
+  covered by a queue test, not by a run with a slow model.
+- The larger stream buffer with a hi-res track, and the cost of a running party and of the DJ (see
+  "Performance").
+- Windows: the new code was compiled, linted and tested in CI only; nothing was run on a Windows
+  desktop.
+
 ## [1.3.0] - 2026-10-31
 
 ### Added

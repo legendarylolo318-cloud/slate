@@ -645,6 +645,25 @@ pub async fn add_track_to_playlist(
     Ok(())
 }
 
+/// "Add anyway": appends a copy of a track that is already in the playlist.
+pub async fn add_track_to_playlist_anyway(
+    state: &AppState,
+    playlist_id: String,
+    track_id: u64,
+) -> Result<(), SlateError> {
+    let client = state.tidal_client.lock().await;
+    client
+        .add_track_to_playlist_with(&playlist_id, track_id, crate::tidal_api::OnDupes::Add)
+        .await?;
+    drop(client);
+    state
+        .disk_cache
+        .invalidate_tag(&format!("playlist:{playlist_id}"))
+        .await;
+    state.disk_cache.invalidate_tag("folders").await;
+    Ok(())
+}
+
 pub async fn remove_track_from_playlist(
     state: &AppState,
     playlist_id: String,
@@ -1626,6 +1645,34 @@ pub async fn add_tracks_paced_until(
     Ok(added)
 }
 
+/// Waits before each retry of the first add to a playlist created a moment ago.
+pub const NEW_PLAYLIST_RETRY: [std::time::Duration; 3] = [
+    std::time::Duration::from_millis(400),
+    std::time::Duration::from_millis(1200),
+    std::time::Duration::from_millis(3000),
+];
+
+/// Adds `ids` to a playlist that was just created, riding out the short window in
+/// which TIDAL's edit host does not know it yet (see
+/// [`crate::tidal_api::TidalClient::add_tracks_to_new_playlist`]).
+pub async fn add_tracks_to_new_playlist(
+    state: &AppState,
+    playlist_id: &str,
+    ids: Vec<u64>,
+) -> Result<(), SlateError> {
+    let client = state.tidal_client.lock().await;
+    let result = client
+        .add_tracks_to_new_playlist(playlist_id, &ids, &NEW_PLAYLIST_RETRY)
+        .await;
+    drop(client);
+    state
+        .disk_cache
+        .invalidate_tag(&format!("playlist:{playlist_id}"))
+        .await;
+    state.disk_cache.invalidate_tag("folders").await;
+    result
+}
+
 /// A new playlist (`access_type` "UNLISTED" or "PUBLIC") holding `ids`, repeats removed.
 pub async fn create_playlist_with_tracks(
     state: &AppState,
@@ -1637,6 +1684,11 @@ pub async fn create_playlist_with_tracks(
 }
 
 /// [`create_playlist_with_tracks`] whose adding stops once `stop` says so.
+///
+/// Once the playlist exists this never returns `Err`: a failure while filling it
+/// (rate limit, a refused batch) ends the adding and the count of tracks that did
+/// land is returned, so the caller can say "saved with N of M" instead of
+/// reporting a playlist that is in the library as "could not create".
 pub async fn create_playlist_with_tracks_until(
     state: &AppState,
     title: String,
@@ -1646,6 +1698,42 @@ pub async fn create_playlist_with_tracks_until(
 ) -> Result<(TidalPlaylist, usize), SlateError> {
     let ids = crate::playlist_tools::unique_ids(ids);
     let playlist = create_playlist(state, title, String::new(), access_type.into()).await?;
-    let added = add_tracks_paced_until(state, &playlist.uuid, &ids, stop).await?;
+    let Some(first) = ids.chunks(ADD_BATCH).next() else {
+        return Ok((playlist, 0));
+    };
+    let mut added = 0usize;
+    match add_tracks_to_new_playlist(state, &playlist.uuid, first.to_vec()).await {
+        Ok(()) => added += first.len(),
+        Err(e) => {
+            log::warn!(
+                "new playlist {}: first add failed: {}",
+                playlist.uuid,
+                e.log_safe()
+            );
+            // A batch with one unavailable track fails whole: go one by one.
+            for id in first {
+                if stop() {
+                    break;
+                }
+                tokio::time::sleep(ADD_PAUSE).await;
+                match add_tracks_to_playlist(state, playlist.uuid.clone(), vec![*id]).await {
+                    Ok(()) => added += 1,
+                    Err(e) if e.is_rate_limited() => return Ok((playlist, added)),
+                    Err(_) => {}
+                }
+            }
+        }
+    }
+    if ids.len() > first.len() && !stop() {
+        tokio::time::sleep(ADD_PAUSE).await;
+        match add_tracks_paced_until(state, &playlist.uuid, &ids[first.len()..], stop).await {
+            Ok(n) => added += n,
+            Err(e) => log::warn!(
+                "new playlist {}: adding stopped: {}",
+                playlist.uuid,
+                e.log_safe()
+            ),
+        }
+    }
     Ok((playlist, added))
 }

@@ -15,8 +15,10 @@
 )]
 
 pub mod audio;
+pub mod dj;
 pub mod events;
 pub mod lyrics;
+pub mod lyrics_offset;
 pub mod media;
 pub mod queue;
 pub mod startup;
@@ -58,6 +60,8 @@ pub mod proxy_http;
 pub mod queue_snapshots;
 pub mod rate_gate;
 pub mod scrobble;
+pub mod selection;
+pub mod shuffle;
 pub mod signal_path;
 pub mod smart;
 pub mod theme_config;
@@ -217,6 +221,9 @@ pub struct Settings {
     pub bit_perfect: bool,
     #[serde(default = "defaults::yes")]
     pub gapless: bool,
+    /// Smarter shuffle: avoid the same artist, then album, back to back. Off by default.
+    #[serde(default)]
+    pub smart_shuffle: bool,
     /// Crossfade length in seconds; 0 (the default) is off.
     #[serde(default)]
     pub crossfade_secs: u32,
@@ -281,6 +288,9 @@ pub struct Settings {
     /// Settings → Scrobbling.
     #[serde(default = "defaults::yes")]
     pub report_plays: bool,
+    /// DJ: LLM-driven genre continuity (off by default).
+    #[serde(default)]
+    pub dj: crate::dj::DjSettings,
 }
 
 impl Default for Settings {
@@ -300,6 +310,7 @@ impl Default for Settings {
             exclusive_device: None,
             bit_perfect: false,
             gapless: true,
+            smart_shuffle: false,
             crossfade_secs: 0,
             crossfade_skip_same_album: true,
             eq: Default::default(),
@@ -324,6 +335,7 @@ impl Default for Settings {
             overlay_port: 5578,
             overlay_host: "127.0.0.1".to_string(),
             report_plays: true,
+            dj: crate::dj::DjSettings::default(),
         }
     }
 }
@@ -354,6 +366,9 @@ pub struct AppState {
     pub exclusive_mode: AtomicBool,
     pub bit_perfect: AtomicBool,
     pub gapless: AtomicBool,
+    pub smart_shuffle: AtomicBool,
+    /// Mirror of `Settings::dj.enabled`: the autoplay path checks this, not the file.
+    pub dj_enabled: AtomicBool,
     pub max_quality: std::sync::Mutex<String>,
     pub exclusive_device: std::sync::Mutex<Option<String>>,
     pub cached_audio_devices: std::sync::Mutex<Option<Vec<AudioDevice>>>,
@@ -535,6 +550,8 @@ impl AppState {
         let exclusive_mode = saved.as_ref().map(|s| s.exclusive_mode).unwrap_or(false);
         let bit_perfect = saved.as_ref().map(|s| s.bit_perfect).unwrap_or(false);
         let gapless = saved.as_ref().map(|s| s.gapless).unwrap_or(true);
+        let smart_shuffle = saved.as_ref().map(|s| s.smart_shuffle).unwrap_or(false);
+        let dj_enabled = saved.as_ref().is_some_and(|s| s.dj.enabled);
         let exclusive_device = saved.as_ref().and_then(|s| s.exclusive_device.clone());
         let max_quality = saved
             .as_ref()
@@ -645,6 +662,8 @@ impl AppState {
             exclusive_mode: AtomicBool::new(exclusive_mode),
             bit_perfect: AtomicBool::new(bit_perfect),
             gapless: AtomicBool::new(gapless),
+            smart_shuffle: AtomicBool::new(smart_shuffle),
+            dj_enabled: AtomicBool::new(dj_enabled),
             max_quality: std::sync::Mutex::new(max_quality),
             exclusive_device: std::sync::Mutex::new(exclusive_device),
             cached_audio_devices: std::sync::Mutex::new(None),

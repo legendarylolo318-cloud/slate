@@ -12,7 +12,7 @@ use futures_util::stream::{self, StreamExt};
 use slate_core::commands::{auth, library as lib_cmds, pages};
 use slate_core::queue::{Source, Track};
 use slate_core::tidal_api::TidalTrack;
-use slint::{Image, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, Image, Model, ModelRc, VecModel};
 
 use crate::backend::Backend;
 use crate::bootstrap::{AppWindow, PlaylistEntry};
@@ -81,6 +81,9 @@ pub struct LibState {
     user_id: Mutex<Option<u64>>,
     /// (uuid, title) of the sidebar's playlists, for smart-playlist rules that name one.
     pub(crate) playlist_titles: Mutex<Vec<(String, String)>>,
+    /// Playlists created this session that TIDAL's list may not return yet:
+    /// (uuid, title, when). Merged into the sidebar until the list shows them.
+    just_created: Mutex<Vec<(String, String, std::time::Instant)>>,
     /// Playlist uuid → TIDAL image id, for the page header.
     playlist_images: Mutex<HashMap<String, Option<String>>>,
     /// Mix items arrive in one response; paging serves slices of it.
@@ -95,6 +98,20 @@ pub struct LibState {
     sort_list: Mutex<Option<crate::sort::List>>,
     /// Uuid of the open playlist when it is the user's own (known once its header loaded).
     pub(crate) owned_open: Mutex<Option<String>>,
+}
+
+type SidebarRow = (String, String, String, Option<String>);
+
+/// See [`Backend::merge_just_created`].
+fn merge_pending(
+    pending: &mut Vec<(String, String, std::time::Instant)>,
+    data: &mut Vec<SidebarRow>,
+    max_age: std::time::Duration,
+) {
+    pending.retain(|(u, _, at)| at.elapsed() < max_age && !data.iter().any(|(d, ..)| d == u));
+    for (uuid, title, _) in pending.iter() {
+        data.insert(0, (uuid.clone(), title.clone(), String::new(), None));
+    }
 }
 
 pub(crate) fn to_track(t: &TidalTrack) -> Option<Track> {
@@ -270,6 +287,7 @@ impl Backend {
                     }
                 }
             }
+            this.merge_just_created(&mut data);
             if let Ok(mut t) = this.lib.playlist_titles.lock() {
                 *t = data
                     .iter()
@@ -326,6 +344,24 @@ impl Backend {
             });
             this.load_playlist_covers(ids).await;
         });
+    }
+
+    /// Remembers a playlist made this session, so the sidebar shows it even when
+    /// TIDAL's list does not return it for a while.
+    pub(crate) fn note_created(&self, uuid: &str, title: &str) {
+        if let Ok(mut j) = self.lib.just_created.lock() {
+            j.retain(|(u, ..)| u != uuid);
+            j.push((uuid.into(), title.into(), std::time::Instant::now()));
+        }
+    }
+
+    /// Adds playlists from [`Self::note_created`] that `data` lacks (newest first) and
+    /// forgets those the list now has, or that are over ten minutes old.
+    fn merge_just_created(&self, data: &mut Vec<(String, String, String, Option<String>)>) {
+        let Ok(mut j) = self.lib.just_created.lock() else {
+            return;
+        };
+        merge_pending(&mut j, data, std::time::Duration::from_secs(600));
     }
 
     /// Fetches the sidebar thumbnails again (after a scale-factor change).
@@ -410,12 +446,19 @@ impl Backend {
         self.ui(move |w| {
             let for_fetch = this.clone();
             let for_covers = this.clone();
+            let weak = w.as_weak();
             let model = LazyTracks::new(Box::new(move |page| {
                 for_fetch.request_page(generation, page)
             }))
             .with_cover_refetch(Box::new(move |page| {
                 for_covers.refetch_covers(generation, page)
+            }))
+            .with_selection_hook(Box::new(move |n| {
+                if let Some(w) = weak.upgrade() {
+                    w.set_selection_count(n as i32);
+                }
             }));
+            w.set_selection_count(0);
             w.set_tracks(ModelRc::from(Rc::new(model)));
             w.set_view("tracks".into());
             w.set_has_page(true);
@@ -1083,5 +1126,44 @@ mod item_count_tests {
         assert_eq!(super::item_count(1, 0), "1 track");
         assert_eq!(super::item_count(12, 3), "3 videos · 12 tracks");
         assert_eq!(super::item_count(0, 1), "1 video · 0 tracks");
+    }
+}
+
+#[cfg(test)]
+mod just_created_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn row(u: &str) -> SidebarRow {
+        (u.into(), format!("title {u}"), "1 track".into(), None)
+    }
+
+    // Regression for "created but not shown until restart": a playlist TIDAL's list
+    // does not return yet stays in the sidebar, and is dropped once the list has it.
+    #[test]
+    fn a_playlist_missing_from_the_list_is_kept_at_the_top() {
+        let mut pending = vec![("new".to_string(), "New".to_string(), Instant::now())];
+        let mut data = vec![row("a"), row("b")];
+        merge_pending(&mut pending, &mut data, Duration::from_secs(600));
+        assert_eq!(data[0].0, "new");
+        assert_eq!(data.len(), 3);
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn a_playlist_the_list_returns_is_not_doubled_and_is_forgotten() {
+        let mut pending = vec![("a".to_string(), "A".to_string(), Instant::now())];
+        let mut data = vec![row("a")];
+        merge_pending(&mut pending, &mut data, Duration::from_secs(600));
+        assert_eq!(data.len(), 1);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn an_old_entry_expires() {
+        let mut pending = vec![("x".to_string(), "X".to_string(), Instant::now())];
+        let mut data = vec![];
+        merge_pending(&mut pending, &mut data, Duration::ZERO);
+        assert!(data.is_empty() && pending.is_empty());
     }
 }

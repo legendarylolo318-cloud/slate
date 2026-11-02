@@ -35,6 +35,7 @@ pub fn start(control: ControlFn) {
     let play = MenuItem::new("Play / Pause", true, None);
     let next = MenuItem::new("Next", true, None);
     let previous = MenuItem::new("Previous", true, None);
+    let like = MenuItem::new("Like / Unlike Current Track", true, None);
     let show = MenuItem::new("Show Slate", true, None);
     let quit = MenuItem::new("Quit", true, None);
     let menu = Menu::new();
@@ -44,6 +45,7 @@ pub fn start(control: ControlFn) {
         &play,
         &previous,
         &next,
+        &like,
         &PredefinedMenuItem::separator(),
         &quit,
     ]);
@@ -55,6 +57,7 @@ pub fn start(control: ControlFn) {
         (play.id().clone(), Control::PlayPause),
         (next.id().clone(), Control::Next),
         (previous.id().clone(), Control::Previous),
+        (like.id().clone(), Control::Like),
         (show.id().clone(), Control::Raise),
         (quit.id().clone(), Control::Quit),
     ];
@@ -64,14 +67,20 @@ pub fn start(control: ControlFn) {
             on_menu(c.clone());
         }
     }));
+    // Windows delivers no mouse-wheel messages for notification-area icons, so the
+    // tray has no scroll-to-change-volume here (it has on Linux).
     TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
         if let TrayIconEvent::Click {
-            button: MouseButton::Left,
+            button,
             button_state: MouseButtonState::Up,
             ..
         } = event
         {
-            control(Control::Raise);
+            match button {
+                MouseButton::Left => control(Control::Raise),
+                MouseButton::Middle => control(Control::PlayPause),
+                _ => {}
+            }
         }
     }));
     match TrayIconBuilder::new()

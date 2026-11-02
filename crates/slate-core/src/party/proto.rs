@@ -94,6 +94,23 @@ pub enum HostMsg {
         playing: bool,
         at_ms: u64,
     },
+    /// To the successor only: the key the party will continue under if the host goes
+    /// away. Peers on an older 1.x ignore it (and so cannot follow a handoff).
+    Heir {
+        key: Redacted,
+    },
+    /// To everyone: where the party continues if the host goes away (the successor's
+    /// public id and the invite secret to use there).
+    Successor {
+        id: String,
+        secret: String,
+    },
+    /// Someone reacted to the current track. Peers on an older 1.x ignore it.
+    Reaction {
+        from: String,
+        /// Index into `reactions::EMOJI`.
+        e: u8,
+    },
     Kicked,
     Ended,
     Rejected {
@@ -102,6 +119,17 @@ pub enum HostMsg {
     /// A message from a newer Slate this one does not know; ignored.
     #[serde(other)]
     Unknown,
+}
+
+/// A string that never appears in logs or `{:?}` output.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Redacted(pub String);
+
+impl std::fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Redacted(..)")
+    }
 }
 
 /// A waiting request as shown to the host's helpers.
@@ -135,6 +163,10 @@ pub enum GuestMsg {
         track_id: u64,
     },
     VoteSkip,
+    /// An emoji reaction to the current track (index into `reactions::EMOJI`).
+    React {
+        e: u8,
+    },
     /// Co-host only.
     Decide {
         request_id: u64,
@@ -245,6 +277,10 @@ pub fn validate_host(m: &HostMsg) -> Result<(), String> {
         }
         HostMsg::Requests { pending, .. } if pending.len() > MAX_REQUEST_VIEWS => {
             Err("too many requests".into())
+        }
+        HostMsg::Heir { key } if key.0.len() > 64 => Err("bad key".into()),
+        HostMsg::Successor { id, secret } if id.len() > 128 || secret.len() > 128 => {
+            Err("bad successor".into())
         }
         HostMsg::Welcome { guests, .. } | HostMsg::Guests { guests, .. }
             if guests.len() > MAX_GUESTS + 1 =>
@@ -757,6 +793,31 @@ mod tests {
         assert_eq!(
             super::super::requests::successor(&r.successor_input()),
             Some(b)
+        );
+    }
+
+    #[test]
+    fn reaction_messages_round_trip_and_older_peers_ignore_them() {
+        let m = GuestMsg::React { e: 2 };
+        let bytes = encode(&m).expect("encode");
+        assert_eq!(decode::<GuestMsg>(&bytes), Ok(m));
+        let h = HostMsg::Reaction {
+            from: "Ann".into(),
+            e: 2,
+        };
+        assert_eq!(decode::<HostMsg>(&encode(&h).expect("encode")), Ok(h));
+        // What a 1.3 peer, which has neither variant, reads: the catch-all.
+        assert_eq!(
+            decode::<GuestMsg>(br#"{"t":"react_v9","e":1}"#),
+            Ok(GuestMsg::Unknown)
+        );
+        assert_eq!(
+            decode::<HostMsg>(br#"{"t":"reaction_v9","from":"x","e":1}"#),
+            Ok(HostMsg::Unknown)
+        );
+        assert_eq!(
+            PROTOCOL_VERSION, 2,
+            "reactions need no new protocol version"
         );
     }
 }

@@ -15,6 +15,11 @@ pub enum Control {
     SeekRelative(f64),
     SetPosition(f64),
     SetVolume(f64),
+    /// Tray scroll wheel: one notch up (+1) or down (-1) in volume.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    VolumeStep(i32),
+    /// Like / unlike the playing track (global shortcut, tray menu).
+    Like,
     /// Only MPRIS (Linux) sets shuffle directly.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     SetShuffle(bool),

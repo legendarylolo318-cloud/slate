@@ -34,6 +34,8 @@ export global SettingsState {
     // Playback
     in-out property <bool> normalization;
     in-out property <bool> gapless;
+    in-out property <bool> smart-shuffle;
+    in-out property <bool> start-minimized;
     in-out property <bool> gapless-supported: true;
     in-out property <int> crossfade-index: 0;
     in-out property <bool> crossfade-same-album: true;
@@ -51,6 +53,14 @@ export global SettingsState {
     in-out property <string> global-shortcuts-hint;
     in-out property <[string]> devices;
     in-out property <int> device-index;
+    // DJ mixer
+    in-out property <bool> dj-enabled;
+    in-out property <string> dj-base-url;
+    in-out property <string> dj-model;
+    in-out property <string> dj-api-key;
+    in-out property <int> dj-timeout-index: 2;
+    in-out property <string> dj-direction;
+    in-out property <string> dj-status;
     // Scrobbling
     in-out property <bool> report-plays;
     in-out property <bool> lb-connected;
@@ -300,6 +310,11 @@ export component SettingsPage inherits Rectangle {
                         Toggle { checked: SettingsState.minimize-to-tray; toggled(v) => { SettingsState.minimize-to-tray = v; SettingsState.changed-bool("minimize-to-tray", v); } }
                     }
                     Row {
+                        label: "Start minimized to tray";
+                        hint: "Open hidden in the system tray. The window opens normally if there is no tray.";
+                        Toggle { checked: SettingsState.start-minimized; toggled(v) => { SettingsState.start-minimized = v; SettingsState.changed-bool("start-minimized", v); } }
+                    }
+                    Row {
                         label: "Global shortcuts";
                         hint: "Work while another app has focus: " + SettingsState.global-shortcuts-hint + ". On Linux your desktop may ask you to confirm or change them (needs Slate installed with its desktop file).";
                         Toggle { checked: SettingsState.global-shortcuts; toggled(v) => { SettingsState.global-shortcuts = v; SettingsState.changed-bool("global-shortcuts", v); } }
@@ -497,6 +512,11 @@ export component SettingsPage inherits Rectangle {
                         Toggle { enabled: SettingsState.gapless-supported; checked: SettingsState.gapless; toggled(v) => { SettingsState.gapless = v; SettingsState.changed-bool("gapless", v); } }
                     }
                     Row {
+                        label: "Smarter shuffle";
+                        hint: "Shuffle avoids the same artist, then the same album, twice in a row when it can. Off keeps the plain random shuffle.";
+                        Toggle { checked: SettingsState.smart-shuffle; toggled(v) => { SettingsState.smart-shuffle = v; SettingsState.changed-bool("smart-shuffle", v); } }
+                    }
+                    Row {
                         label: "Crossfade";
                         hint: SettingsState.crossfade-blocked ? "Crossfade is off while exclusive or bit-perfect output is on." : "Blend the end of a track into the next one. While two tracks mix, the signal path reads MODIFIED. Off keeps playback exactly as it was.";
                         Segmented {
@@ -567,6 +587,52 @@ export component SettingsPage inherits Rectangle {
                             index: SettingsState.device-index;
                             picked(i) => { SettingsState.device-index = i; SettingsState.changed-int("device", i); }
                         }
+                    }
+                    Row {
+                        label: "DJ mixer";
+                        hint: "When the queue runs dry, a model picks the next genre, finds tracks on TIDAL and keeps the music going. Point it at any OpenAI-compatible chat endpoint.";
+                        Toggle { checked: SettingsState.dj-enabled; toggled(v) => { SettingsState.dj-enabled = v; SettingsState.changed-bool("dj-enabled", v); } }
+                    }
+                    if SettingsState.dj-enabled: Row {
+                        label: "DJ endpoint";
+                        hint: "OpenAI-compatible base URL.";
+                        TextField { text: SettingsState.dj-base-url; placeholder: "https://api.openai.com/v1"; field-width: 260px; accepted(t) => { SettingsState.dj-base-url = t; SettingsState.changed-str("dj-base-url", t); } }
+                    }
+                    if SettingsState.dj-enabled: Row {
+                        label: "DJ model";
+                        hint: "Name of the chat model to ask.";
+                        TextField { text: SettingsState.dj-model; placeholder: "gpt-4o-mini"; field-width: 220px; accepted(t) => { SettingsState.dj-model = t; SettingsState.changed-str("dj-model", t); } }
+                    }
+                    if SettingsState.dj-enabled: Row {
+                        label: "DJ API key";
+                        hint: "Leave blank if your endpoint needs no auth — but some endpoints reject requests without any Authorization header, in which case type any filler key.";
+                        TextField { text: SettingsState.dj-api-key; placeholder: "sk-… (or a filler key)"; field-width: 280px; accepted(t) => { SettingsState.dj-api-key = t; SettingsState.changed-str("dj-api-key", t); } }
+                    }
+                    if SettingsState.dj-enabled: Row {
+                        label: "DJ timeout";
+                        hint: "How long to wait for the model's answer. A local model can be slow, especially while it loads — pick something comfortable and the test button will wait that long.";
+                        Segmented {
+                            options: ["1 min", "2 min", "5 min", "10 min", "15 min"];
+                            index: SettingsState.dj-timeout-index;
+                            picked(i) => { SettingsState.dj-timeout-index = i; SettingsState.changed-int("dj-timeout", i); }
+                        }
+                    }
+                    Row {
+                        label: "DJ direction";
+                        hint: "Tell the DJ where to take it — “deeper into house” or “back to what I was hearing”. Applies to its next block.";
+                        TextField { text <=> SettingsState.dj-direction; placeholder: "deeper into house"; field-width: 260px; }
+                        Button { label: "Send"; clicked => { SettingsState.action("dj-go"); } }
+                    }
+                    if SettingsState.dj-enabled: Row {
+                        label: "Now";
+                        hint: "Force a new genre block immediately, without waiting for the queue to run dry.";
+                        Button { label: "DJ up a block"; primary: true; clicked => { SettingsState.action("dj-now"); } }
+                    }
+                    if SettingsState.dj-enabled: Row {
+                        label: "Connection";
+                        hint: "Tests the endpoint the same way the DJ talks to it, with one tiny request.";
+                        Text { text: SettingsState.dj-status == "" ? "Not tested yet" : SettingsState.dj-status; }
+                        Button { label: "Test endpoint"; clicked => { SettingsState.action("dj-test"); } }
                     }
                 }
 

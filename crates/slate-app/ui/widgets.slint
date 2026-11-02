@@ -214,6 +214,8 @@ export component Bar inherits Rectangle {
     in property <float> fraction: 0;
     in property <bool> live: false;
     in property <length> thickness: 4px;
+    /// Mouse wheel moves the bar by this fraction per notch; 0 leaves the wheel alone.
+    in property <float> scroll-step: 0;
     callback picked(float);
     callback changed(float);
     property <bool> dragging: false;
@@ -261,6 +263,11 @@ export component Bar inherits Rectangle {
                 root.drag-fraction = clamp(self.mouse-x / self.width, 0, 1);
                 if (root.live) { root.changed(root.drag-fraction); }
             }
+        }
+        scroll-event(e) => {
+            if (root.scroll-step <= 0 || e.delta-y == 0) { return EventResult.reject; }
+            root.picked(clamp(root.fraction + (e.delta-y > 0 ? root.scroll-step : -root.scroll-step), 0, 1));
+            EventResult.accept
         }
     }
 }

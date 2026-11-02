@@ -184,14 +184,20 @@ impl Backend {
                 });
                 return;
             }
-            this.add_dropped(&uuid, track.id).await;
+            this.add_dropped(&uuid, track.id, false).await;
         });
     }
 
-    /// Adds one track to a playlist; shared by the drop and by "Add anyway".
-    pub(crate) async fn add_dropped(&self, uuid: &str, track_id: u64) {
+    /// Adds one track to a playlist; shared by the drop and by "Add anyway"
+    /// (`anyway`: append a copy even if the track is already there).
+    pub(crate) async fn add_dropped(&self, uuid: &str, track_id: u64, anyway: bool) {
         let Some(state) = self.state() else { return };
-        match lib_cmds::add_track_to_playlist(&state, uuid.to_string(), track_id).await {
+        let added = if anyway {
+            lib_cmds::add_track_to_playlist_anyway(&state, uuid.to_string(), track_id).await
+        } else {
+            lib_cmds::add_track_to_playlist(&state, uuid.to_string(), track_id).await
+        };
+        match added {
             Ok(()) => {
                 self.notify("Added to playlist");
                 self.load_library();

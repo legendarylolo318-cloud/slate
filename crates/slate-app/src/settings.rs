@@ -20,6 +20,7 @@ struct Snapshot {
     logging: bool,
     normalization: bool,
     gapless: bool,
+    smart_shuffle: bool,
     crossfade: slate_core::crossfade::Settings,
     eq: slate_core::eq::Settings,
     gapless_supported: bool,
@@ -37,10 +38,15 @@ struct Snapshot {
     auth_max: bool,
     mcp: (bool, String),
     overlay: (bool, String),
+    dj: slate_core::dj::DjSettings,
 }
 
 /// Choices of the crossfade setting, in seconds (0 = off).
 const CROSSFADE_SECS: [u32; 7] = [0, 2, 4, 6, 8, 10, 12];
+
+/// DJ request-timeout choices, in seconds. A local model can take minutes to
+/// load and generate — anything tighter than 60 s will time out a real use.
+const DJ_TIMEOUT_SECS: [u64; 5] = [60, 120, 300, 600, 900];
 
 async fn snapshot(state: &Arc<AppState>) -> Snapshot {
     let mut s = Snapshot {
@@ -48,12 +54,14 @@ async fn snapshot(state: &Arc<AppState>) -> Snapshot {
         logging: utility::get_enable_logging(),
         normalization: utility::get_volume_normalization(state),
         gapless: utility::get_gapless(state),
+        smart_shuffle: utility::get_smart_shuffle(state),
         crossfade: utility::get_crossfade(state),
         eq: utility::get_eq(state),
         gapless_supported: utility::get_gapless_supported(),
         exclusive: utility::get_exclusive_mode(state),
         bit_perfect: utility::get_bit_perfect(state),
         report_plays: utility::get_report_plays(state),
+        dj: utility::get_dj(state),
         discord_rpc: utility::get_discord_rpc(state),
         discord_text: utility::get_discord_status_text(state),
         discord: utility::get_discord_prefs(state),
@@ -102,6 +110,8 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_lyrics_size_index(prefs.lyrics_size as i32);
     g.set_normalization(s.normalization);
     g.set_gapless(s.gapless);
+    g.set_smart_shuffle(s.smart_shuffle);
+    g.set_start_minimized(prefs.start_minimized);
     g.set_crossfade_index(
         CROSSFADE_SECS
             .iter()
@@ -136,6 +146,17 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_devices(ModelRc::new(VecModel::from(names)));
     g.set_device_index(s.device_index);
     g.set_report_plays(s.report_plays);
+    g.set_dj_enabled(s.dj.enabled);
+    g.set_dj_base_url(s.dj.base_url.clone().into());
+    g.set_dj_model(s.dj.model.clone().into());
+    g.set_dj_api_key(s.dj.api_key.clone().into());
+    // 0 = unset, which the core reads as the generous 300 s default.
+    g.set_dj_timeout_index(
+        DJ_TIMEOUT_SECS
+            .iter()
+            .position(|x| *x == s.dj.timeout_secs)
+            .unwrap_or(2) as i32,
+    );
     for (name, connected, user) in s.providers {
         match name.as_str() {
             "listenbrainz" => {
@@ -240,6 +261,17 @@ impl Backend {
                     utility::set_crossfade(&state, c.secs, v).map_err(|e| e.log_safe())
                 }
                 "gapless" => utility::set_gapless(&state, v).map_err(|e| e.log_safe()),
+                "smart-shuffle" => utility::set_smart_shuffle(&state, v).map_err(|e| e.log_safe()),
+                "start-minimized" => {
+                    let mut prefs = crate::uiprefs::UiPrefs::load();
+                    prefs.start_minimized = v;
+                    prefs.save().map_err(|e| e.to_string())
+                }
+                "dj-enabled" => {
+                    let mut d = utility::get_dj(&state);
+                    d.enabled = v;
+                    utility::set_dj(&state, d).map_err(|e| e.log_safe())
+                }
                 "exclusive" => utility::set_exclusive_mode(&state, v).map_err(|e| e.log_safe()),
                 "bit-perfect" => utility::set_bit_perfect(&state, v).map_err(|e| e.log_safe()),
                 "report-plays" => utility::set_report_plays(&state, v)
@@ -328,6 +360,14 @@ impl Backend {
                     },
                     Err(e) => Err(e.log_safe()),
                 },
+                "dj-timeout" => {
+                    let mut d = utility::get_dj(&state);
+                    d.timeout_secs = DJ_TIMEOUT_SECS
+                        .get(usize_i)
+                        .copied()
+                        .unwrap_or(DJ_TIMEOUT_SECS[2]);
+                    utility::set_dj(&state, d).map_err(|e| e.log_safe())
+                }
                 _ => Ok(()),
             };
             if let Err(e) = result {
@@ -363,6 +403,18 @@ impl Backend {
                 p.party_relay = v.trim().to_string();
                 if let Err(e) = p.save() {
                     this.settings_status(format!("Could not save: {e}"));
+                }
+                return;
+            }
+            if key == "dj-base-url" || key == "dj-model" || key == "dj-api-key" {
+                let mut d = utility::get_dj(&state);
+                match key.as_str() {
+                    "dj-base-url" => d.base_url = v.trim().to_string(),
+                    "dj-model" => d.model = v.trim().to_string(),
+                    _ => d.api_key = v.trim().to_string(),
+                }
+                if let Err(e) = utility::set_dj(&state, d) {
+                    this.settings_status(format!("Could not save DJ settings: {}", e.log_safe()));
                 }
                 return;
             }
@@ -425,6 +477,38 @@ impl Backend {
                     this.party_decide_id(&n["party-deny:".len()..], false);
                 }
                 "agent-refresh" => this.load_settings_ui(),
+                "dj-go" => {
+                    let d = this
+                        .read_ui(|w| w.global::<SettingsState>().get_dj_direction().to_string())
+                        .await;
+                    this.dj_direction(d);
+                    this.settings_status("Direction set — it steers the DJ's next block.");
+                    this.ui(|w| w.global::<SettingsState>().set_dj_direction("".into()));
+                }
+                "dj-now" => {
+                    this.settings_status("DJ is picking the next block…");
+                    this.dj_next();
+                }
+                "dj-test" => {
+                    let dj = this.read_ui(dj_from_ui).await;
+                    this.settings_status("Testing the DJ endpoint…");
+                    match utility::dj_test_endpoint(dj, &state).await {
+                        Ok(msg) => {
+                            this.ui(|w| {
+                                w.global::<SettingsState>()
+                                    .set_dj_status("Connected".into())
+                            });
+                            this.settings_status(msg);
+                        }
+                        Err(e) => {
+                            let label = format!("Not connected: {e}");
+                            this.ui(move |w| {
+                                w.global::<SettingsState>().set_dj_status(label.into())
+                            });
+                            this.settings_status(format!("DJ endpoint test failed: {e}"));
+                        }
+                    }
+                }
                 n if n.starts_with("agent-bearer-") => this.agent_bearer_action(n),
                 "pkce-start" => this.start_pkce(),
                 "pkce-finish" => this.finish_pkce().await,
@@ -632,4 +716,19 @@ fn proxy_from_ui(w: AppWindow) -> Option<ProxySettings> {
         username: opt(g.get_proxy_user()),
         password: opt(g.get_proxy_pass()),
     })
+}
+
+fn dj_from_ui(w: AppWindow) -> slate_core::dj::DjSettings {
+    let g = w.global::<SettingsState>();
+    slate_core::dj::DjSettings {
+        enabled: g.get_dj_enabled(),
+        base_url: g.get_dj_base_url().to_string(),
+        api_key: g.get_dj_api_key().to_string(),
+        model: g.get_dj_model().to_string(),
+        timeout_secs: DJ_TIMEOUT_SECS
+            .get(g.get_dj_timeout_index() as usize)
+            .copied()
+            .unwrap_or(DJ_TIMEOUT_SECS[2]),
+        ..slate_core::dj::DjSettings::default()
+    }
 }

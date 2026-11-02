@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 
 use crate::commands::{pages, playback, scrobble, utility};
 use crate::queue::{Next, Previous, Queue, Repeat, Skip, Snapshot, Source, Track};
+use crate::sync::LockExt;
 use crate::tidal_api::StreamInfo;
 use crate::{AppState, SlateError};
 
@@ -94,6 +95,7 @@ pub enum Outcome {
 
 pub struct Controller {
     state: Arc<AppState>,
+    app_handle: crate::events::AppHandle,
     queue: Mutex<Queue>,
     prefs: std::sync::Mutex<ContentPrefs>,
     /// (track id, qid) currently armed for a gapless transition.
@@ -108,6 +110,30 @@ pub struct Controller {
     autoplay_once: std::sync::atomic::AtomicBool,
     /// Track for which a crossfade was already decided, so it is decided once.
     fade_checked: std::sync::Mutex<Option<u64>>,
+    /// Listener's latest explicit direction (consumed by the next DJ pick).
+    dj_direction: std::sync::Mutex<Option<String>>,
+    /// Why the current DJ block was chosen (fed back into the next prompt).
+    dj_reason: std::sync::Mutex<Option<String>>,
+    /// Last DJ attempt, in words a listener understands: success
+    /// ("DJ is up a block — 'deep house'") or the reason nothing moved
+    /// ("TIDAL had no results for '…'"). `None` until the DJ was asked.
+    dj_status: std::sync::Mutex<Option<String>>,
+    /// A DJ block fetched by `dj_prepare` without the queue lock, for the queue it
+    /// was fetched for; `(key, None)` = the DJ was asked and failed (use the radio).
+    dj_ready: std::sync::Mutex<Option<(DjKey, Option<DjPick>)>>,
+}
+
+/// A DJ move and the TIDAL tracks found for it.
+struct DjPick {
+    move_: crate::dj::DjMove,
+    tracks: Vec<Track>,
+}
+
+/// Which queue a prepared DJ pick belongs to: its epoch and the playing track.
+type DjKey = (u64, Option<u64>);
+
+fn dj_key(q: &Queue) -> DjKey {
+    (q.epoch, q.current.as_ref().map(|t| t.id))
 }
 
 fn now_secs() -> i64 {
@@ -115,9 +141,10 @@ fn now_secs() -> i64 {
 }
 
 impl Controller {
-    pub fn new(state: Arc<AppState>) -> Self {
+    pub fn new(state: Arc<AppState>, app_handle: crate::events::AppHandle) -> Self {
         Self {
             state,
+            app_handle,
             queue: Mutex::new(Queue::new()),
             prefs: std::sync::Mutex::new(ContentPrefs::default()),
             armed: std::sync::Mutex::new(None),
@@ -126,6 +153,10 @@ impl Controller {
             armed_stream: std::sync::Mutex::new(None),
             autoplay_once: std::sync::atomic::AtomicBool::new(false),
             fade_checked: std::sync::Mutex::new(None),
+            dj_direction: std::sync::Mutex::new(None),
+            dj_reason: std::sync::Mutex::new(None),
+            dj_status: std::sync::Mutex::new(None),
+            dj_ready: std::sync::Mutex::new(None),
         }
     }
 
@@ -151,7 +182,7 @@ impl Controller {
 
     /// Read-only access for rendering the queue view.
     pub async fn with_queue<R>(&self, f: impl FnOnce(&Queue) -> R) -> R {
-        f(&*self.queue.lock().await)
+        f(&*self.lock_queue().await)
     }
 
     // ---------- starting playback ----------
@@ -242,9 +273,19 @@ impl Controller {
         }
     }
 
-    /// Play a single track, discarding the queue.
-    pub async fn play_single(&self, track: Track) -> Outcome {
+    /// The queue, with the smart-shuffle setting applied (one atomic read).
+    async fn lock_queue(&self) -> tokio::sync::MutexGuard<'_, Queue> {
         let mut q = self.queue.lock().await;
+        q.spread = self
+            .state
+            .smart_shuffle
+            .load(std::sync::atomic::Ordering::Relaxed);
+        q
+    }
+
+    /// Play a single track, replacing the context queue (the manual queue stays).
+    pub async fn play_single(&self, track: Track) -> Outcome {
+        let mut q = self.lock_queue().await;
         if self.prefs().blocks(&track) {
             return Outcome::Failed(PlayFailure::Unplayable);
         }
@@ -260,7 +301,7 @@ impl Controller {
         source: Option<Source>,
         album_mode: bool,
     ) -> Outcome {
-        let mut q = self.queue.lock().await;
+        let mut q = self.lock_queue().await;
         if self.prefs().blocks(&track) {
             return Outcome::Failed(PlayFailure::Unplayable);
         }
@@ -280,7 +321,7 @@ impl Controller {
         album_mode: bool,
         shuffle: bool,
     ) -> Outcome {
-        let mut q = self.queue.lock().await;
+        let mut q = self.lock_queue().await;
         let eligible: Vec<Track> = all
             .into_iter()
             .filter(|t| self.classify(t).is_none())
@@ -296,8 +337,11 @@ impl Controller {
     async fn finish_start(&self, q: &mut Queue, track: Track, chosen: bool) -> Outcome {
         match self.start(q, track.clone(), chosen).await {
             Ok(()) => Outcome::Playing(track),
-            Err(PlayFailure::Unplayable) => self.advance(q, true).await,
+            Err(PlayFailure::Unplayable) => self.advance_context_first(q).await,
             Err(PlayFailure::RateLimited) => {
+                // The request failed before the pipeline was touched, so the old
+                // track is still sounding while the UI says nothing plays.
+                let _ = playback::stop_track(&self.state).await;
                 q.requeue_head(track);
                 Outcome::Failed(PlayFailure::RateLimited)
             }
@@ -305,8 +349,24 @@ impl Controller {
         }
     }
 
+    /// [`Self::advance`] for a clicked track that cannot play: continue in its own
+    /// album or playlist before the manual queue, which plays when the collection
+    /// has nothing left.
+    async fn advance_context_first(&self, q: &mut Queue) -> Outcome {
+        let held = q.hold_manual_for_context(|t| self.classify(t).is_none());
+        if held.is_empty() {
+            return self.advance(q, true).await;
+        }
+        let out = self.advance(q, true).await;
+        q.release_manual(held);
+        match out {
+            Outcome::Stopped | Outcome::GaveUp => self.advance(q, true).await,
+            out => out,
+        }
+    }
+
     pub async fn play_from_queue(&self, index: usize) -> Outcome {
-        let mut q = self.queue.lock().await;
+        let mut q = self.lock_queue().await;
         let Some(track) = q.take_at(index) else {
             return Outcome::Nothing;
         };
@@ -322,7 +382,7 @@ impl Controller {
     /// The full list of the source being played finished loading after playback
     /// began on a partial one. Ignored if the user has since moved elsewhere.
     pub async fn extend_source(&self, all: Vec<Track>, source: &Source) {
-        let mut q = self.queue.lock().await;
+        let mut q = self.lock_queue().await;
         let same = q
             .playback_source
             .as_ref()
@@ -346,7 +406,7 @@ impl Controller {
         if remaining > settings.secs as f32 + 1.0 || remaining < 0.8 {
             return None;
         }
-        let mut q = self.queue.lock().await;
+        let mut q = self.lock_queue().await;
         let current = q.current.as_ref()?;
         let id = current.id;
         {
@@ -392,7 +452,12 @@ impl Controller {
         if !explicit {
             crate::startup::on_track_finished(&self.state).await;
         }
-        let mut q = self.queue.lock().await;
+        let prepared = self.dj_prepare(explicit).await;
+        let mut q = self.lock_queue().await;
+        if prepared.is_some_and(|key| key != dj_key(&q)) {
+            // The user played something else while the DJ was thinking.
+            return Outcome::Nothing;
+        }
         // Stop first so a stale `track-finished` from the old pipeline cannot
         // advance the queue a second time.
         let _ = playback::stop_track(&self.state).await;
@@ -431,7 +496,7 @@ impl Controller {
                 {
                     return Outcome::WaitForAgent;
                 }
-                Next::NeedAutoplay => match self.autoplay(q).await {
+                Next::NeedAutoplay => match self.autoplay_or_dj(q).await {
                     Some(first) => match self.start(q, first.clone(), false).await {
                         Ok(()) => return Outcome::Playing(first),
                         Err(PlayFailure::Unplayable) => {
@@ -496,8 +561,250 @@ impl Controller {
         })
     }
 
+    /// Set the listener's next DJ direction (consumed by the next genre pick).
+    pub fn dj_set_direction(&self, text: String) {
+        if let Ok(mut g) = self.dj_direction.lock() {
+            *g = Some(text);
+        }
+    }
+
+    fn dj_take_direction(&self) -> Option<String> {
+        self.dj_direction.lock().ok().and_then(|mut g| g.take())
+    }
+
+    fn dj_last_reason(&self) -> Option<String> {
+        self.dj_reason.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// The last DJ attempt in listener words — success or why nothing moved.
+    /// `None` until the DJ was first asked (`dj_next` / autoplay).
+    pub fn dj_status(&self) -> Option<String> {
+        self.dj_status.lock().ok().and_then(|g| g.clone())
+    }
+
+    fn dj_note(&self, msg: impl Into<String>) {
+        if let Ok(mut g) = self.dj_status.lock() {
+            *g = Some(msg.into());
+        }
+    }
+
+    /// What the DJ's model is told about the session (titles and artists only).
+    fn dj_context(&self, q: &Queue) -> crate::dj::DjContext {
+        let title = |t: &Track| {
+            t.extra
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        let artist = |t: &Track| t.artist_display();
+        crate::dj::DjContext {
+            current: q.current.as_ref().map(|t| (title(t), artist(t))),
+            recent: q
+                .history
+                .iter()
+                .rev()
+                .take(20)
+                .map(|t| (title(t), artist(t)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
+            direction: self.dj_take_direction(),
+            last_reason: self.dj_last_reason(),
+        }
+    }
+
+    /// The model picks the next genre and TIDAL search fills a block. Runs without the
+    /// queue lock: a local model can take minutes (the timeout defaults to 300 s) and
+    /// clicks, queue edits and the queue panel must not wait for it. `None` = the DJ is
+    /// off or failed (the reason is in [`Self::dj_status`]); the caller falls back.
+    async fn dj_fetch(&self, ctx: crate::dj::DjContext, forced: bool) -> Option<DjPick> {
+        // The usual case (DJ off): one atomic read, no file access.
+        if !forced
+            && !self
+                .state
+                .dj_enabled
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return None;
+        }
+        let settings = match self.state.load_settings() {
+            Some(s) => s,
+            None => {
+                self.dj_note("Could not read settings to run the DJ.");
+                return None;
+            }
+        };
+        if !settings.dj.enabled {
+            self.dj_note("The DJ is disabled — enable it in Settings → Playback.");
+            return None;
+        }
+        let dj = crate::dj::Dj::new(settings.dj, self.state.proxied_http.clone());
+        let move_ = match dj.decide(&ctx).await {
+            Some(m) => m,
+            None => {
+                self.dj_note(dj.last_diag().unwrap_or_else(|| {
+                    "The DJ endpoint did not answer, or the reply was not usable.".to_string()
+                }));
+                return None;
+            }
+        };
+
+        let mut client = self.state.tidal_client.lock().await;
+        let results = match client.search(&move_.query, dj.block_size()).await {
+            Ok(r) => r,
+            Err(e) => {
+                drop(client);
+                self.dj_note(format!(
+                    "TIDAL did not return results for the DJ's query '{}': {e}",
+                    move_.query
+                ));
+                return None;
+            }
+        };
+        drop(client);
+        let tracks: Vec<Track> = results
+            .tracks
+            .iter()
+            .filter_map(Track::from_serialized)
+            .collect();
+        if tracks.is_empty() {
+            self.dj_note(format!(
+                "TIDAL matched the DJ's query '{}' but nothing of it could be loaded as a track.",
+                move_.query
+            ));
+            return None;
+        }
+        Some(DjPick { move_, tracks })
+    }
+
+    /// Installs a fetched block as the autoplay queue and announces it.
+    fn dj_install(&self, q: &mut Queue, pick: DjPick) -> Option<Track> {
+        let DjPick { move_, tracks } = pick;
+        let prefs = self.prefs();
+        let first = match q.install_autoplay(tracks, |t| {
+            if prefs.blocks(t) {
+                Some(Skip::Blocked)
+            } else if t.is_unavailable(now_secs()) {
+                Some(Skip::Unavailable)
+            } else {
+                None
+            }
+        }) {
+            Some(first) => first,
+            None => {
+                self.dj_note("The DJ's best matches were blocked by your filters or unavailable.");
+                return None;
+            }
+        };
+
+        if !move_.reason.is_empty() {
+            if let Ok(mut g) = self.dj_reason.lock() {
+                *g = Some(move_.reason.clone());
+            }
+        }
+        self.dj_note(format!(
+            "DJ is up a block — '{}'{}",
+            move_.query,
+            if move_.reason.is_empty() {
+                String::new()
+            } else {
+                format!(" ({}).", move_.reason)
+            }
+        ));
+        self.app_handle
+            .emit(
+                "dj-branch",
+                serde_json::json!({
+                    "query": move_.query,
+                    "reason": move_.reason,
+                    "speaks": move_.speaks,
+                    "line": move_.line,
+                }),
+            )
+            .ok();
+        if move_.speaks {
+            crate::dj::speak(move_.line.as_deref());
+        }
+        Some(first)
+    }
+
+    /// Before `next` takes the queue lock: if the queue is about to run out and the DJ
+    /// is on, ask the model now, unlocked, and leave the result for [`Self::dj_autoplay`].
+    /// Returns the queue the pick was made for, `None` when nothing was asked.
+    async fn dj_prepare(&self, explicit: bool) -> Option<DjKey> {
+        if !self
+            .state
+            .dj_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return None;
+        }
+        let (ctx, key) = {
+            let q = self.lock_queue().await;
+            if !q.would_autoplay(explicit) {
+                return None;
+            }
+            (self.dj_context(&q), dj_key(&q))
+        };
+        let pick = self.dj_fetch(ctx, false).await;
+        *self.dj_ready.lock_safe() = Some((key, pick));
+        Some(key)
+    }
+
+    /// DJ autoplay: uses the block [`Self::dj_prepare`] fetched for this queue, if any,
+    /// otherwise asks the model now (a dead clicked track that ends a collection).
+    /// `None` = DJ unavailable/disabled → caller falls back to `autoplay`.
+    async fn dj_autoplay(&self, q: &mut Queue) -> Option<Track> {
+        let ready = self.dj_ready.lock_safe().take();
+        let pick = match ready {
+            Some((key, pick)) if key == dj_key(q) => pick,
+            _ => {
+                if !self
+                    .state
+                    .dj_enabled
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    return None;
+                }
+                let ctx = self.dj_context(q);
+                self.dj_fetch(ctx, false).await
+            }
+        };
+        self.dj_install(q, pick?)
+    }
+
+    /// DJ if available, else the usual TRACK_MIX radio. Drop-in for `autoplay`.
+    async fn autoplay_or_dj(&self, q: &mut Queue) -> Option<Track> {
+        if let Some(first) = self.dj_autoplay(q).await {
+            return Some(first);
+        }
+        self.autoplay(q).await
+    }
+
+    /// Force the DJ to pick a new block right now (manual trigger). The model is
+    /// asked before the queue is locked.
+    pub async fn dj_next(&self) -> Outcome {
+        let ctx = {
+            let q = self.lock_queue().await;
+            self.dj_context(&q)
+        };
+        let Some(pick) = self.dj_fetch(ctx, true).await else {
+            return Outcome::Nothing;
+        };
+        let mut q = self.lock_queue().await;
+        let Some(first) = self.dj_install(&mut q, pick) else {
+            return Outcome::Nothing;
+        };
+        match self.start(&mut q, first.clone(), true).await {
+            Ok(()) => Outcome::Playing(first),
+            Err(f) => Outcome::Failed(f),
+        }
+    }
+
     pub async fn previous(&self) -> Outcome {
-        let mut q = self.queue.lock().await;
+        let mut q = self.lock_queue().await;
         let pos = playback::get_playback_position(&self.state)
             .await
             .unwrap_or(0.0);
@@ -528,7 +835,7 @@ impl Controller {
     // ---------- queue editing ----------
 
     pub async fn add_to_queue(&self, track: Track, source: Option<Source>) {
-        self.queue.lock().await.add_to_queue(track, source.as_ref());
+        self.lock_queue().await.add_to_queue(track, source.as_ref());
     }
 
     pub async fn play_next_in_queue(&self, track: Track, source: Option<Source>) {
@@ -540,12 +847,14 @@ impl Controller {
 
     /// Makes `tracks` the upcoming queue (a restored snapshot), leaving what plays now alone.
     pub async fn replace_upcoming(&self, tracks: Vec<Track>) {
-        self.queue.lock().await.set_tracks(tracks, None, false);
+        let mut q = self.lock_queue().await;
+        q.clear_manual();
+        q.set_tracks(tracks, None, false);
     }
 
     /// Adds `tracks` after everything in "next up" (a restored snapshot, appended).
     pub async fn append_upcoming(&self, tracks: Vec<Track>) {
-        let mut q = self.queue.lock().await;
+        let mut q = self.lock_queue().await;
         for t in tracks {
             q.add_to_queue(t, None);
         }
@@ -553,16 +862,16 @@ impl Controller {
 
     /// Inserts into the "next up" list at `index`.
     pub async fn insert_in_queue(&self, index: usize, track: Track) {
-        self.queue.lock().await.insert_manual(index, track, None);
+        self.lock_queue().await.insert_manual(index, track, None);
     }
 
     pub async fn remove_from_queue(&self, index: usize) {
-        self.queue.lock().await.remove_at(index);
+        self.lock_queue().await.remove_at(index);
     }
 
     /// Drag-and-drop or an agent moving an upcoming track; false if the positions are invalid.
     pub async fn move_in_queue(&self, from: usize, to: usize) -> bool {
-        self.queue.lock().await.move_upcoming(from, to)
+        self.lock_queue().await.move_upcoming(from, to)
     }
 
     /// After the agent-DJ wait: let the next empty queue start the autoplay radio.
@@ -573,25 +882,25 @@ impl Controller {
 
     /// Empties the "next up" list but not the rest of the queue.
     pub async fn clear_next_up(&self) {
-        self.queue.lock().await.manual.clear();
+        self.lock_queue().await.manual.clear();
     }
 
     pub async fn clear_queue(&self) {
-        self.queue.lock().await.clear();
+        self.lock_queue().await.clear();
     }
 
     pub async fn toggle_shuffle(&self) -> bool {
-        let mut q = self.queue.lock().await;
+        let mut q = self.lock_queue().await;
         q.toggle_shuffle(&mut rand::rng());
         q.shuffle
     }
 
     pub async fn cycle_repeat(&self) -> Repeat {
-        self.queue.lock().await.cycle_repeat()
+        self.lock_queue().await.cycle_repeat()
     }
 
     pub async fn set_modes(&self, shuffle: bool, repeat: Repeat, autoplay: bool) {
-        let mut q = self.queue.lock().await;
+        let mut q = self.lock_queue().await;
         if q.shuffle != shuffle {
             q.toggle_shuffle(&mut rand::rng());
         }
@@ -601,7 +910,7 @@ impl Controller {
 
     /// Start the restored current track (loaded paused-in-UI after a restart).
     pub async fn resume_current(&self) -> Outcome {
-        let q = self.queue.lock().await;
+        let q = self.lock_queue().await;
         let Some(cur) = q.current.clone() else {
             return Outcome::Nothing;
         };
@@ -631,7 +940,7 @@ impl Controller {
     pub async fn refresh_gapless(&self) {
         const FAILURE_MEMO: Duration = Duration::from_secs(10);
         let wanted = {
-            let q = self.queue.lock().await;
+            let q = self.lock_queue().await;
             let prefs = self.prefs();
             if !self.gapless_enabled() || q.current.as_ref().is_none_or(Track::is_video) {
                 None
@@ -711,7 +1020,7 @@ impl Controller {
         // The outgoing track finished: finalise its scrobble / play report.
         crate::startup::on_track_finished(&self.state).await;
 
-        let mut q = self.queue.lock().await;
+        let mut q = self.lock_queue().await;
         let track = match q.adopt_advanced(track_id, qid) {
             Some(t) => t,
             None => {
@@ -733,7 +1042,7 @@ impl Controller {
     /// Shuffle / repeat / autoplay survive restarts too.
     pub async fn save_modes(&self) -> Result<(), SlateError> {
         let (shuffle, repeat, autoplay) = {
-            let q = self.queue.lock().await;
+            let q = self.lock_queue().await;
             (q.shuffle, q.repeat.as_u8(), q.autoplay)
         };
         let json =
@@ -764,7 +1073,7 @@ impl Controller {
     /// Write the queue to the encrypted state file. Blocking disk I/O: call
     /// from a blocking-safe context or accept the small write.
     pub async fn save(&self) -> Result<(), SlateError> {
-        let json = self.queue.lock().await.snapshot().to_json()?;
+        let json = self.lock_queue().await.snapshot().to_json()?;
         let state = Arc::clone(&self.state);
         tokio::task::spawn_blocking(move || playback::save_playback_queue(&state, json))
             .await
@@ -781,7 +1090,7 @@ impl Controller {
         let Some(raw) = raw else { return Ok(None) };
         let snap = Snapshot::from_json(&raw)?;
         let prefs = self.prefs();
-        let mut q = self.queue.lock().await;
+        let mut q = self.lock_queue().await;
         q.restore(snap, |t| !prefs.blocks(t));
         Ok(q.current.clone())
     }

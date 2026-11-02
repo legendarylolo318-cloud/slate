@@ -5,4 +5,5 @@
 #[cfg(feature = "party")]
 pub mod net;
 pub mod proto;
+pub mod reactions;
 pub mod requests;

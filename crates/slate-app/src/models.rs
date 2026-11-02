@@ -7,6 +7,7 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
+use slate_core::selection::{Modifier, Selection};
 use slint::{Image, Model, ModelNotify, ModelRc, ModelTracker, SharedString, VecModel};
 
 use crate::bootstrap::{AppWindow, CardItem, CardRow, TrackRow};
@@ -50,6 +51,10 @@ pub struct LazyTracks {
     last_page: Cell<usize>,
     /// While a filter is active: source index of each shown row.
     view: RefCell<Option<Vec<usize>>>,
+    /// Multi-selection, in the rows as shown (cleared whenever the shown rows change).
+    selection: RefCell<Selection>,
+    /// Told the selection size whenever it changes.
+    on_selection: Box<dyn Fn(usize)>,
     notify: ModelNotify,
 }
 
@@ -66,8 +71,16 @@ impl LazyTracks {
             evicted: RefCell::new(HashSet::new()),
             last_page: Cell::new(0),
             view: RefCell::new(None),
+            selection: RefCell::new(Selection::default()),
+            on_selection: Box::new(|_| {}),
             notify: ModelNotify::default(),
         }
+    }
+
+    /// Sets what is told the number of selected rows (the window's `selection-count`).
+    pub fn with_selection_hook(mut self, f: Box<dyn Fn(usize)>) -> Self {
+        self.on_selection = f;
+        self
     }
 
     /// Sets how evicted thumbnails are fetched again (by page).
@@ -79,7 +92,62 @@ impl LazyTracks {
     /// Shows only `rows` (source indices), or everything again with `None`.
     pub fn set_view(&self, rows: Option<Vec<usize>>) {
         *self.view.borrow_mut() = rows;
+        self.selection.borrow_mut().clear();
         self.notify.reset();
+        (self.on_selection)(0);
+    }
+
+    // ---------- selection ----------
+
+    /// A click on shown row `row`. True when it was a selecting click (the caller then
+    /// does not play the row).
+    pub fn select_click(&self, row: usize, modifier: Modifier) -> bool {
+        let before = self.selection.borrow().clone();
+        let len = self.row_count();
+        let selecting = self.selection.borrow_mut().click(row, modifier, len);
+        self.selection_changed(&before);
+        selecting
+    }
+
+    pub fn select_all(&self) {
+        let before = self.selection.borrow().clone();
+        self.selection.borrow_mut().select_all(self.row_count());
+        self.selection_changed(&before);
+    }
+
+    pub fn select_clear(&self) {
+        let before = self.selection.borrow().clone();
+        self.selection.borrow_mut().clear();
+        self.selection_changed(&before);
+    }
+
+    /// The selected rows as source indices (into the unfiltered list), in list order.
+    pub fn selected_sources(&self) -> Vec<usize> {
+        let view = self.view.borrow();
+        self.selection
+            .borrow()
+            .indices()
+            .into_iter()
+            .filter_map(|r| match &*view {
+                Some(v) => v.get(r).copied(),
+                None => Some(r),
+            })
+            .collect()
+    }
+
+    /// Redraws the rows whose selected state differs from `before`.
+    fn selection_changed(&self, before: &Selection) {
+        let (n, changed) = {
+            let now = self.selection.borrow();
+            let mut changed: Vec<usize> = before.indices();
+            changed.extend(now.indices());
+            changed.retain(|i| before.contains(*i) != now.contains(*i));
+            (now.len(), changed)
+        };
+        for i in changed {
+            self.notify.row_changed(i);
+        }
+        (self.on_selection)(n);
     }
 
     fn changed_many(&self, rows: impl IntoIterator<Item = usize>) {
@@ -94,7 +162,12 @@ impl LazyTracks {
 
     pub fn set_total(&self, total: usize) {
         self.total.set(total);
+        let before = self.selection.borrow().clone();
+        self.selection.borrow_mut().prune(self.row_count());
         self.notify.reset();
+        if *self.selection.borrow() != before {
+            (self.on_selection)(self.selection.borrow().len());
+        }
     }
 
     /// Stores a fetched page starting at `offset` and redraws those rows.
@@ -116,6 +189,7 @@ impl LazyTracks {
                     quality: r.quality,
                     atmos: r.atmos,
                     cover: Image::default(),
+                    selected: false,
                 },
             );
         }
@@ -199,6 +273,7 @@ impl LazyTracks {
             quality: 0,
             atmos: false,
             cover: Image::default(),
+            selected: false,
         }
     }
 }
@@ -214,6 +289,7 @@ impl Model for LazyTracks {
     }
 
     fn row_data(&self, row: usize) -> Option<TrackRow> {
+        let shown = row;
         let row = match &*self.view.borrow() {
             Some(v) => *v.get(row)?,
             None => row,
@@ -231,6 +307,7 @@ impl Model for LazyTracks {
             if let Some(c) = self.covers.borrow().get(&row) {
                 r.cover = c.clone();
             }
+            r.selected = self.selection.borrow().contains(shown);
             return Some(r);
         }
         if self.requested.borrow_mut().insert(page) {
@@ -515,6 +592,41 @@ pub fn with_card_rows<R>(w: &AppWindow, f: impl FnOnce(&CardRows) -> R) -> Optio
 mod tests {
     use super::*;
     use std::rc::Rc;
+
+    #[test]
+    fn the_track_list_selection_follows_clicks_and_resets_with_the_view() {
+        let told = Rc::new(Cell::new(usize::MAX));
+        let hook = Rc::clone(&told);
+        let m =
+            LazyTracks::new(Box::new(|_| {})).with_selection_hook(Box::new(move |n| hook.set(n)));
+        m.set_total(10);
+        m.fill(
+            0,
+            (0..10)
+                .map(|i| RowData {
+                    id: i.to_string(),
+                    ..RowData::default()
+                })
+                .collect(),
+        );
+        assert!(!m.select_click(3, Modifier::None), "a plain click plays");
+        assert!(m.select_click(3, Modifier::Ctrl));
+        assert!(m.select_click(6, Modifier::Shift));
+        assert_eq!(told.get(), 4);
+        assert_eq!(m.selected_sources(), vec![3, 4, 5, 6]);
+        assert!(m.row_data(4).expect("row").selected);
+        assert!(!m.row_data(2).expect("row").selected);
+        // A filter shows other rows: the selection is dropped, and a later one maps
+        // through the view to source indices.
+        m.set_view(Some(vec![8, 1, 5]));
+        assert_eq!(told.get(), 0);
+        assert!(m.select_click(2, Modifier::Ctrl));
+        assert_eq!(m.selected_sources(), vec![5]);
+        m.select_all();
+        assert_eq!(m.selected_sources(), vec![8, 1, 5]);
+        m.select_clear();
+        assert_eq!(told.get(), 0);
+    }
 
     fn card(id: &str) -> (CardItem, Option<String>) {
         (

@@ -7,21 +7,20 @@
 use crate::control::{Control, ControlFn};
 
 /// Shortcut id, what it does, keymap action id.
-const SHORTCUTS: [(&str, &str, &str); 3] = [
+const SHORTCUTS: [(&str, &str, &str); 4] = [
     ("play-pause", "Play / pause", "g-play-pause"),
     ("next", "Next track", "g-next"),
     ("previous", "Previous track", "g-previous"),
+    ("like", "Like current track", "g-like"),
 ];
 
 /// "Ctrl+Alt+Space play / pause, …" for the settings hint.
 pub fn describe() -> String {
     SHORTCUTS
         .iter()
-        .map(|(_, what, action)| {
-            let keys = crate::keys::combo(action)
-                .map(|c| c.display())
-                .unwrap_or_default();
-            format!("{keys} {}", what.to_lowercase())
+        .filter_map(|(_, what, action)| {
+            let keys = crate::keys::combo(action)?.display();
+            Some(format!("{keys} {}", what.to_lowercase()))
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -32,6 +31,7 @@ fn control_for(id: &str) -> Option<Control> {
         "play-pause" => Some(Control::PlayPause),
         "next" => Some(Control::Next),
         "previous" => Some(Control::Previous),
+        "like" => Some(Control::Like),
         _ => None,
     }
 }
@@ -65,9 +65,14 @@ pub mod portal {
         let session = portal.create_session().await?;
         let wanted: Vec<NewShortcut> = SHORTCUTS
             .iter()
-            .filter_map(|(id, what, action)| {
-                let trigger = crate::keys::combo(action)?.to_xdg();
-                Some(NewShortcut::new(*id, *what).preferred_trigger(trigger.as_str()))
+            .map(|(id, what, action)| {
+                // An unbound action is still offered, so the desktop's shortcut
+                // settings can give it a key.
+                let shortcut = NewShortcut::new(*id, *what);
+                match crate::keys::combo(action) {
+                    Some(c) => shortcut.preferred_trigger(c.to_xdg().as_str()),
+                    None => shortcut,
+                }
             })
             .collect();
         portal
@@ -144,6 +149,9 @@ pub mod hotkeys {
             let mut ids = Vec::new();
             // The bindings from Settings → Shortcuts (their defaults are Ctrl+Alt+Space / → / ←).
             for (id, _, action) in SHORTCUTS {
+                if crate::keys::combo(action).is_none() {
+                    continue; // unbound
+                }
                 let Some(hotkey) = crate::keys::combo(action).as_ref().and_then(to_hotkey) else {
                     tracing::warn!("shortcut {id}: its key cannot be a system-wide shortcut");
                     continue;

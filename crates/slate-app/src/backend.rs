@@ -137,6 +137,10 @@ pub struct Backend {
     pub(crate) nav: Arc<Mutex<crate::pages::Nav>>,
     pub(crate) lyrics: Arc<Mutex<Vec<slate_core::lyrics::Line>>>,
     pub(crate) lyric_index: Arc<AtomicI32>,
+    /// Timing offset of the playing track's synced lyrics (ms); 0 until lyrics are shown.
+    pub(crate) lyric_offset_ms: Arc<AtomicI32>,
+    /// A lyrics view (panel or full screen) is open: only then is the offset file read.
+    pub(crate) lyrics_visible: Arc<AtomicBool>,
     pub(crate) pending_scrobble: Arc<Mutex<Option<(String, String)>>>,
     pub(crate) favs: Arc<Mutex<crate::favorites::Favs>>,
     pub(crate) theme: crate::themes::SharedTheme,
@@ -175,6 +179,8 @@ impl Backend {
             nav: Arc::new(Mutex::new(crate::pages::Nav::default())),
             lyrics: Arc::new(Mutex::new(Vec::new())),
             lyric_index: Arc::new(AtomicI32::new(-1)),
+            lyric_offset_ms: Arc::new(AtomicI32::new(0)),
+            lyrics_visible: Arc::new(AtomicBool::new(false)),
             pending_scrobble: Arc::new(Mutex::new(None)),
             favs: Arc::new(Mutex::new(crate::favorites::Favs::default())),
             theme: Arc::new(Mutex::new(initial_theme)),
@@ -281,7 +287,7 @@ impl Backend {
             slate_core::startup::run_startup(&this.app).await;
             this.start_theme_watcher();
 
-            let controller = Arc::new(Controller::new(Arc::clone(&state)));
+            let controller = Arc::new(Controller::new(Arc::clone(&state), this.app.clone()));
             let (shuffle, repeat, autoplay) = controller.load_modes().await;
             controller.set_modes(shuffle, repeat, autoplay).await;
             match controller.restore().await {
@@ -750,6 +756,32 @@ impl Backend {
         });
     }
 
+    /// DJ: force a new genre block right now (manual trigger).
+    pub fn dj_next(&self) {
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let Some(ctl) = this.controller() else { return };
+            let outcome = ctl.dj_next().await;
+            let failed = matches!(outcome, Outcome::Nothing);
+            this.apply(outcome).await;
+            if failed {
+                // Say *why* the DJ did not come up instead of staying silent.
+                let why = ctl.dj_status().unwrap_or_else(|| {
+                    "The DJ could not pick a block. Check its endpoint in Settings → Playback."
+                        .to_string()
+                });
+                this.ui(move |w| w.set_error(why.into()));
+            }
+        });
+    }
+
+    /// Set the listener's next DJ direction (consumed on the next genre pick).
+    pub fn dj_direction(&self, text: String) {
+        if let Some(ctl) = self.controller() {
+            ctl.dj_set_direction(text);
+        }
+    }
+
     pub fn previous(&self) {
         let this = self.clone();
         self.rt.spawn(async move {
@@ -861,6 +893,17 @@ impl Backend {
         });
     }
 
+    /// Moves the volume by `notches` of 5 %, from the level the window shows.
+    pub fn step_volume(&self, notches: i32) {
+        let this = self.clone();
+        self.ui(move |w| {
+            let level = volume_after_steps(w.get_volume(), notches);
+            this.set_volume(level);
+        });
+    }
+
+    /// Linux: remembers that the window starts hidden, so a failed tray shows it.
+    #[cfg(target_os = "linux")]
     pub fn set_volume(&self, level: f32) {
         let level = level.clamp(0.0, 1.0);
         self.ui(move |w| w.set_volume(level));
@@ -1017,6 +1060,8 @@ impl Backend {
             Control::SeekRelative(off) => self.seek_to_secs(pos + off as f32),
             Control::SetPosition(secs) => self.seek_to_secs(secs as f32),
             Control::SetVolume(v) => self.set_volume(v as f32),
+            Control::VolumeStep(n) => self.step_volume(n),
+            Control::Like => self.toggle_current_favorite(),
             Control::SetShuffle(want) => {
                 if self.ui_shuffle() != want {
                     self.toggle_shuffle();
@@ -1065,8 +1110,17 @@ impl Backend {
             {
                 let sink = crate::platform::mpris::start(this.control_fn(), this.position_fn());
                 state.media.set_sink(sink);
-                if let Some(handle) = crate::platform::tray::start(this.control_fn()).await {
-                    *this.shared.tray.lock().await = Some(handle);
+                match crate::platform::tray::start(this.control_fn()).await {
+                    Some(handle) => *this.shared.tray.lock().await = Some(handle),
+                    // Started hidden for the tray, and there is none: show the window.
+                    // Read here, not from a flag bootstrap sets: a tray that fails fast
+                    // could otherwise look before it is set and leave no window at all.
+                    None if crate::uiprefs::UiPrefs::load().start_minimized => {
+                        this.ui(|w| {
+                            let _ = w.show();
+                        });
+                    }
+                    None => {}
                 }
             }
             #[cfg(windows)]
@@ -1241,5 +1295,24 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), shared.playing_changed.notified())
             .await
             .expect("stored permit");
+    }
+}
+
+/// Volume after `notches` scroll steps of 5 %, kept in 0..=1.
+pub(crate) fn volume_after_steps(level: f32, notches: i32) -> f32 {
+    // Round to the step grid so repeated scrolling does not drift (0.1 + 0.05 + ...).
+    (((level + notches as f32 * 0.05) * 100.0).round() / 100.0).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod volume_step_tests {
+    use super::volume_after_steps;
+
+    #[test]
+    fn scrolling_moves_five_percent_and_stops_at_the_ends() {
+        assert_eq!(volume_after_steps(0.50, 1), 0.55);
+        assert_eq!(volume_after_steps(0.50, -2), 0.40);
+        assert_eq!(volume_after_steps(0.98, 1), 1.0);
+        assert_eq!(volume_after_steps(0.02, -1), 0.0);
     }
 }

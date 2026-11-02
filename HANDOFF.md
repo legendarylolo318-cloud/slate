@@ -52,3 +52,23 @@ Notes for anyone working on Slate's code. What changed per release is in
   sound-server wakeups; `buffer-time` is GStreamer's 200 ms.
 - The theme.json watcher is a plain inotify watcher plus a thread that waits in `recv()`; do
   not bring back a ticking debouncer (it cost 4 idle wakeups a second).
+- 1.4: the multi-selection lives in `models::LazyTracks` (shown-row indices, cleared when the shown rows
+  change; `slate_core::selection` is the click logic) and in `selection_ui::QUEUE_SEL` for the queue
+  panel. `Queue::set_tracks` no longer clears the manual queue; `Queue::play_all` does, except for an
+  artist source. `Queue::requeue_head` puts the track at the head of the manual queue.
+- 1.4 party: `HostMsg::Heir` (to the successor only, key redacted in `Debug`) and `HostMsg::Successor`
+  (to everyone) are sent on every roster change and to each joiner after it subscribes;
+  `Host::start_as` continues a party under that key and secret. `reactions.rs` holds the emoji set (indexes
+  on the wire, appending is compatible) and the 5-per-10-s limit.
+- 1.4 audio: exclusive-writer teardown never waits more than `WRITER_SHUTDOWN_TIMEOUT`; the appsink
+  callback gives up on a full writer queue once `sink_closing` is set (not on a generation bump, a seek
+  bumps it too). Tests that wait on a thread run it under `within()`.
+- The DJ (`dj.rs`) is called from `Controller::autoplay_or_dj`; `AppState::dj_enabled` is the only thing
+  the autoplay path reads while it is off. Never ask the model with the queue locked: `next` calls
+  `dj_prepare` first (model + TIDAL search unlocked, result keyed on epoch and current track) and returns
+  `Outcome::Nothing` if the user played something meanwhile.
+- Party handoff key: `HostInner::heir` is regenerated whenever the successor changes; a kick sends no
+  heir/secret message itself (the roster change after the kicked guest leaves does), and the guest loop's
+  `select!` is `biased` so the kick branch wins.
+- `blocking` is pinned to 1.6.2 in Cargo.lock: 1.7.0's idle pool thread never exits and woke 2/s for the
+  whole session (AccessKit's AT-SPI connect starts it). Check before letting `cargo update` move it.

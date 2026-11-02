@@ -202,7 +202,15 @@ impl Backend {
                     )
                     .await
                     {
-                        Ok((_, added)) => format!("Created “{name}” with {added} tracks"),
+                        Ok((p, added)) => {
+                            this.note_created(&p.uuid, &p.title);
+                            slate_core::playlist_tools::created_message(
+                                &name,
+                                added,
+                                slate_core::playlist_tools::unique_ids(&ids).len(),
+                                stop(),
+                            )
+                        }
                         Err(e) => format!("Could not create the playlist: {}", e.log_safe()),
                     }
                 }

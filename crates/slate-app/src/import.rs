@@ -318,6 +318,7 @@ impl Backend {
                 .await
                 .map_err(|e| format!("Could not create the playlist: {}", e.log_safe()))?;
 
+        self.note_created(&playlist.uuid, &playlist.title);
         let mut added = 0usize;
         for (n, batch) in ids.chunks(BATCH).enumerate() {
             if n > 0 {
@@ -325,9 +326,13 @@ impl Backend {
             }
             let text = format!("Importing… adding {} of {} tracks", added, ids.len());
             self.ui(move |w| w.set_notice(text.into()));
-            match lib_cmds::add_tracks_to_playlist(&state, playlist.uuid.clone(), batch.to_vec())
-                .await
-            {
+            let first = if n == 0 {
+                lib_cmds::add_tracks_to_new_playlist(&state, &playlist.uuid, batch.to_vec()).await
+            } else {
+                lib_cmds::add_tracks_to_playlist(&state, playlist.uuid.clone(), batch.to_vec())
+                    .await
+            };
+            match first {
                 Ok(()) => added += batch.len(),
                 Err(e) if e.is_rate_limited() => {
                     return Err(format!(

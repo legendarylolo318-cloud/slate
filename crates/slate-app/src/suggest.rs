@@ -212,6 +212,7 @@ impl Backend {
                     quality: r.quality,
                     atmos: r.atmos,
                     cover: Image::default(),
+                    selected: false,
                 })
                 .collect();
             w.set_suggestions(ModelRc::new(VecModel::from(model)));

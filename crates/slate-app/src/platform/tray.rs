@@ -31,6 +31,15 @@ fn rgba_to_argb(rgba: &[u8]) -> Vec<u8> {
     out
 }
 
+/// A vertical scroll as +1 (up) / -1 (down) volume notch; horizontal scrolls and
+/// zero deltas are ignored.
+fn scroll_notches(delta: i32, orientation: ksni::Orientation) -> Option<i32> {
+    match orientation {
+        ksni::Orientation::Vertical if delta != 0 => Some(delta.signum()),
+        _ => None,
+    }
+}
+
 fn item(label: &str, ctl: Control) -> MenuItem<SlateTray> {
     StandardItem {
         label: label.into(),
@@ -66,6 +75,18 @@ impl ksni::Tray for SlateTray {
         (self.control)(Control::Raise);
     }
 
+    /// Middle click.
+    fn secondary_activate(&mut self, _x: i32, _y: i32) {
+        (self.control)(Control::PlayPause);
+    }
+
+    /// Mouse wheel over the icon: volume.
+    fn scroll(&mut self, delta: i32, orientation: ksni::Orientation) {
+        if let Some(n) = scroll_notches(delta, orientation) {
+            (self.control)(Control::VolumeStep(n));
+        }
+    }
+
     fn menu(&self) -> Vec<MenuItem<Self>> {
         vec![
             item("Show", Control::Raise),
@@ -73,6 +94,7 @@ impl ksni::Tray for SlateTray {
             item("Play / Pause", Control::PlayPause),
             item("Next Track", Control::Next),
             item("Previous Track", Control::Previous),
+            item("Like / Unlike Current Track", Control::Like),
             MenuItem::Separator,
             item("Quit", Control::Quit),
         ]
@@ -123,6 +145,15 @@ pub async fn start(control: ControlFn) -> Option<TrayHandle> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_vertical_scrolls_change_the_volume() {
+        use ksni::Orientation::{Horizontal, Vertical};
+        assert_eq!(super::scroll_notches(120, Vertical), Some(1));
+        assert_eq!(super::scroll_notches(-3, Vertical), Some(-1));
+        assert_eq!(super::scroll_notches(0, Vertical), None);
+        assert_eq!(super::scroll_notches(5, Horizontal), None);
+    }
+
     #[test]
     fn converts_rgba_to_argb() {
         assert_eq!(super::rgba_to_argb(&[1, 2, 3, 4]), vec![4, 1, 2, 3]);

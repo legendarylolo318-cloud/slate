@@ -347,3 +347,165 @@ async fn a_flooding_guest_is_cut_off_and_stray_reports_are_not_kept() {
     assert!(host.guest_names().is_empty());
     host.end().await;
 }
+
+/// The first guest is given the key to continue the party under; every guest is told the
+/// public id and secret to find it at. After the old host is gone the heir hosts under
+/// that id, and a guest holding the announced secret joins it.
+#[tokio::test]
+async fn the_party_continues_under_the_announced_heir() {
+    use slate_core::party::net::Heir;
+
+    let (htx, _hrx) = mpsc::unbounded_channel();
+    let host = Host::start(Some("none"), "Lolo", Policy::default(), None, htx)
+        .await
+        .expect("host");
+
+    let (atx, mut arx) = mpsc::unbounded_channel();
+    let (ann, _) = Guest::join(&host.link(), "Ann", Some("none"), atx)
+        .await
+        .expect("join Ann");
+    let (btx, mut brx) = mpsc::unbounded_channel();
+    let (_bob, _) = Guest::join(&host.link(), "Bob", Some("none"), btx)
+        .await
+        .expect("join Bob");
+
+    // Only the earliest guest (no co-host) is handed the key.
+    let key = match until(&mut arx, |e| matches!(e, Event::Host(HostMsg::Heir { .. }))).await {
+        Event::Host(HostMsg::Heir { key }) => key.0,
+        other => panic!("{other:?}"),
+    };
+    let (id, secret) = match until(&mut arx, |e| {
+        matches!(e, Event::Host(HostMsg::Successor { .. }))
+    })
+    .await
+    {
+        Event::Host(HostMsg::Successor { id, secret }) => (id, secret),
+        other => panic!("{other:?}"),
+    };
+    let bob_heard = until(&mut brx, |e| {
+        matches!(e, Event::Host(HostMsg::Successor { .. }))
+    })
+    .await;
+    assert!(matches!(&bob_heard, Event::Host(HostMsg::Successor { id: i, .. }) if *i == id));
+    while let Ok(e) = brx.try_recv() {
+        assert!(
+            !matches!(e, Event::Host(HostMsg::Heir { .. })),
+            "Bob is not the heir"
+        );
+    }
+
+    // The old host goes; Ann takes over under the announced identity.
+    ann.leave().await;
+    host.end().await;
+    let (ntx, _nrx) = mpsc::unbounded_channel();
+    let new_host = Host::start_as(
+        Some("none"),
+        "Ann",
+        Policy::default(),
+        None,
+        ntx,
+        Some(Heir { key, secret }),
+    )
+    .await
+    .expect("heir hosts");
+    assert_eq!(new_host.id(), id, "the party keeps the announced public id");
+
+    // Bob, holding only what the old host announced, can join the new host.
+    let (b2tx, _b2) = mpsc::unbounded_channel();
+    Guest::join(&new_host.link(), "Bob", Some("none"), b2tx)
+        .await
+        .expect("Bob follows");
+    new_host.end().await;
+}
+
+#[tokio::test]
+async fn a_damaged_handoff_key_is_refused() {
+    use slate_core::party::net::Heir;
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let r = Host::start_as(
+        Some("none"),
+        "x",
+        Policy::default(),
+        None,
+        tx,
+        Some(Heir {
+            key: "short".into(),
+            secret: "s".into(),
+        }),
+    )
+    .await;
+    assert!(r.is_err());
+}
+
+#[test]
+fn heir_links_need_a_valid_id() {
+    assert!(slate_core::party::net::heir_link("nonsense", "s").is_err());
+}
+
+/// A kick must not hand the kicked guest the new invite secret, and a guest who stops
+/// being the successor loses the party's next home: the remaining guests are told a new
+/// id, and the new successor gets a new key.
+#[tokio::test]
+async fn a_kicked_successor_gets_neither_the_new_secret_nor_the_next_home() {
+    let (htx, _hrx) = mpsc::unbounded_channel();
+    let host = Host::start(Some("none"), "Lolo", Policy::default(), None, htx)
+        .await
+        .expect("host");
+    let (atx, mut arx) = mpsc::unbounded_channel();
+    let (_ann, _) = Guest::join(&host.link(), "Ann", Some("none"), atx)
+        .await
+        .expect("join Ann");
+    let (btx, mut brx) = mpsc::unbounded_channel();
+    let (_bob, _) = Guest::join(&host.link(), "Bob", Some("none"), btx)
+        .await
+        .expect("join Bob");
+    let ann_key = match until(&mut arx, |e| matches!(e, Event::Host(HostMsg::Heir { .. }))).await {
+        Event::Host(HostMsg::Heir { key }) => key.0,
+        other => panic!("{other:?}"),
+    };
+    let old_id = match until(&mut brx, |e| {
+        matches!(e, Event::Host(HostMsg::Successor { .. }))
+    })
+    .await
+    {
+        Event::Host(HostMsg::Successor { id, .. }) => id,
+        other => panic!("{other:?}"),
+    };
+
+    assert!(host.kick("Ann"));
+    let new_secret = {
+        let v: serde_json::Value = serde_json::from_slice(&base64_decode(
+            host.link().trim_start_matches("slate://party/"),
+        ))
+        .expect("json");
+        v["s"].as_str().expect("secret").to_string()
+    };
+    // Everything Ann hears until her connection closes.
+    loop {
+        match next(&mut arx).await {
+            Event::Closed(_) => break,
+            Event::Host(HostMsg::Successor { secret, .. }) => {
+                assert_ne!(secret, new_secret, "the kicked guest got the new secret");
+            }
+            _ => {}
+        }
+    }
+    // Bob is the successor now: a new id for everyone, and a key that is not Ann's.
+    let (id, secret) = match until(
+        &mut brx,
+        |e| matches!(e, Event::Host(HostMsg::Successor { id, .. }) if *id != old_id),
+    )
+    .await
+    {
+        Event::Host(HostMsg::Successor { id, secret }) => (id, secret),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(secret, new_secret);
+    let bob_key = match until(&mut brx, |e| matches!(e, Event::Host(HostMsg::Heir { .. }))).await {
+        Event::Host(HostMsg::Heir { key }) => key.0,
+        other => panic!("{other:?}"),
+    };
+    assert_ne!(bob_key, ann_key);
+    assert_ne!(id, old_id);
+    host.end().await;
+}

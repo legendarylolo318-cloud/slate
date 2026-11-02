@@ -305,6 +305,15 @@ component Row inherits Rectangle {
     /// Rows of an owned playlist in its own order accept other rows dropped on them.
     in property <bool> reorder-target: false;
     callback add();
+    /// Rows selected in the list (Ctrl / Shift click); the menu offers bulk actions when this
+    /// row is one of several.
+    in property <int> selected-count: 0;
+    /// Own playlist: the selection can be removed from it.
+    in property <bool> can-remove: false;
+    callback select(bool, bool);
+    property <bool> multi: root.item.selected && root.selected-count > 1;
+    property <bool> m-ctrl: false;
+    property <bool> m-shift: false;
     in property <length> quality-w;
     in property <length> title-w;
     in property <length> artist-w;
@@ -313,7 +322,7 @@ component Row inherits Rectangle {
     callback action(string);
     height: 48px;
     border-radius: 6px;
-    background: ta.has-hover ? Theme.surface : transparent;
+    background: root.item.selected ? Theme.accent.with-alpha(0.22) : (ta.has-hover ? Theme.surface : transparent);
 
     DragArea {
         data: Dnd.make((root.suggestion ? "sugg:" : "row:") + root.index);
@@ -322,8 +331,18 @@ component Row inherits Rectangle {
         changed dragging => { if (self.dragging) { Dnd.cancelled = false; } }
         ta := TouchArea {
             mouse-cursor: MouseCursor.pointer;
-            // One click plays, as people expect from a track list.
-            clicked => { root.play(); }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    root.m-ctrl = e.modifiers.control;
+                    root.m-shift = e.modifiers.shift;
+                }
+            }
+            // One click plays, as people expect from a track list; with Ctrl or Shift it
+            // selects instead.
+            clicked => {
+                if (!root.suggestion && (root.m-ctrl || root.m-shift)) { root.select(root.m-ctrl, root.m-shift); }
+                else { root.play(); }
+            }
         }
     }
     DropArea {
@@ -334,18 +353,24 @@ component Row inherits Rectangle {
     }
     ContextMenuArea {
         Menu {
-            MenuItem { title: "Play"; activated => { root.play(); } }
-            MenuItem { title: root.item.favorite ? "Remove from Loved Tracks" : "Add to Loved Tracks"; activated => { root.action("favorite"); } }
-            MenuItem { title: "Add to playlist…"; enabled: !root.suggestion; activated => { root.action("add-to-playlist"); } }
-            MenuItem { title: "Remove from this playlist"; enabled: !root.suggestion; activated => { root.action("remove-from-playlist"); } }
-            MenuItem { title: "Play next"; activated => { root.action("play-next"); } }
-            MenuItem { title: "Add to queue"; activated => { root.action("queue"); } }
-            MenuItem { title: "Go to album"; activated => { root.action("album"); } }
-            MenuItem { title: "Go to artist"; activated => { root.action("artist"); } }
-            MenuItem { title: "Other versions…"; activated => { root.action("versions"); } }
-            MenuItem { title: "Credits"; activated => { root.action("credits"); } }
-            if PartyState.can-suggest: MenuItem { title: "Suggest to party"; activated => { root.action("suggest"); } }
-            MenuItem { title: "Copy TIDAL link"; activated => { root.action("copy-link"); } }
+            if root.multi: MenuItem { title: "Add " + root.selected-count + " tracks to queue"; activated => { root.action("sel-queue"); } }
+            if root.multi: MenuItem { title: "Play " + root.selected-count + " tracks next"; activated => { root.action("sel-next"); } }
+            if root.multi: MenuItem { title: "Add " + root.selected-count + " tracks to playlist…"; activated => { root.action("sel-playlist"); } }
+            if root.multi && PartyState.can-suggest: MenuItem { title: "Suggest to party"; activated => { root.action("sel-suggest"); } }
+            if root.multi && root.can-remove: MenuItem { title: "Remove " + root.selected-count + " tracks from this playlist"; activated => { root.action("sel-remove"); } }
+            if root.multi: MenuItem { title: "Clear selection"; activated => { root.action("sel-clear"); } }
+            if !root.multi: MenuItem { title: "Play"; activated => { root.play(); } }
+            if !root.multi: MenuItem { title: root.item.favorite ? "Remove from Loved Tracks" : "Add to Loved Tracks"; activated => { root.action("favorite"); } }
+            if !root.multi: MenuItem { title: "Add to playlist…"; enabled: !root.suggestion; activated => { root.action("add-to-playlist"); } }
+            if !root.multi: MenuItem { title: "Remove from this playlist"; enabled: !root.suggestion; activated => { root.action("remove-from-playlist"); } }
+            if !root.multi: MenuItem { title: "Play next"; activated => { root.action("play-next"); } }
+            if !root.multi: MenuItem { title: "Add to queue"; activated => { root.action("queue"); } }
+            if !root.multi: MenuItem { title: "Go to album"; activated => { root.action("album"); } }
+            if !root.multi: MenuItem { title: "Go to artist"; activated => { root.action("artist"); } }
+            if !root.multi: MenuItem { title: "Other versions…"; activated => { root.action("versions"); } }
+            if !root.multi: MenuItem { title: "Credits"; activated => { root.action("credits"); } }
+            if !root.multi && PartyState.can-suggest: MenuItem { title: "Suggest to party"; activated => { root.action("suggest"); } }
+            if !root.multi: MenuItem { title: "Copy TIDAL link"; activated => { root.action("copy-link"); } }
         }
     }
     HorizontalLayout {
@@ -466,6 +491,9 @@ component Row inherits Rectangle {
 }
 
 export component TrackPage inherits Rectangle {
+    /// Rows selected with Ctrl / Shift click.
+    in property <int> selection-count: 0;
+    callback select-row(int, bool, bool);
     in property <string> title;
     in property <string> subtitle;
     in property <bool> loading;
@@ -666,7 +694,10 @@ export component TrackPage inherits Rectangle {
                 artist-w: 2 * root.share;
                 album-w: 2 * root.share;
                 reorder-target: root.can-reorder;
+                selected-count: root.selection-count;
+                can-remove: root.can-reorder;
                 play => { root.play-row(i); }
+                select(c, s) => { root.select-row(i, c, s); }
                 action(a) => { root.row-action(i, a); }
             }
         }

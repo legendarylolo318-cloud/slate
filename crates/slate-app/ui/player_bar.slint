@@ -150,6 +150,7 @@ export component PlayerBar inherits Rectangle {
                         height: 18px * root.scale;
                         thickness: 4px * root.scale;
                         live: true;
+                        scroll-step: 0.05;
                         fraction: root.volume;
                         changed(f) => { root.set-volume(f); }
                         picked(f) => { root.set-volume(f); }

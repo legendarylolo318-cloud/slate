@@ -1299,6 +1299,37 @@ impl Default for ApiUrls {
     }
 }
 
+/// How the playlist-items endpoint treats a track already in the playlist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnDupes {
+    /// Reject with 409.
+    Fail,
+    /// Leave the duplicate out.
+    Skip,
+    /// Add another copy.
+    Add,
+}
+
+impl OnDupes {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fail => "FAIL",
+            Self::Skip => "SKIP",
+            Self::Add => "ADD",
+        }
+    }
+}
+
+/// The 409 TIDAL answers an `onDupes=FAIL` add with when the track is in the playlist.
+pub fn is_duplicate_error(e: &SlateError) -> bool {
+    matches!(e, SlateError::Api { status: 409, .. })
+}
+
+/// Statuses a just-created playlist can answer while the two hosts catch up.
+pub fn retry_after_create(e: &SlateError) -> bool {
+    matches!(e, SlateError::Api { status, .. } if matches!(*status, 404 | 409 | 412 | 500..=599))
+}
+
 /// The playlist API knows only `PUBLIC` and `UNLISTED` (HTTP 400 for anything
 /// else). "Private" is what the app calls an unlisted playlist.
 fn playlist_access_type(access_type: &str) -> &'static str {
@@ -2315,6 +2346,18 @@ impl TidalClient {
         playlist_id: &str,
         track_id: u64,
     ) -> Result<(), SlateError> {
+        self.add_track_to_playlist_with(playlist_id, track_id, OnDupes::Fail)
+            .await
+    }
+
+    /// [`Self::add_track_to_playlist`] with a choice of what happens when the track
+    /// is already there: `Fail` rejects with 409, `Add` ("Add anyway") appends a copy.
+    pub async fn add_track_to_playlist_with(
+        &self,
+        playlist_id: &str,
+        track_id: u64,
+        on_dupes: OnDupes,
+    ) -> Result<(), SlateError> {
         let _ordered = self.shared.write.lock().await;
         let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
 
@@ -2342,7 +2385,7 @@ impl TidalClient {
             .query(&[("countryCode", self.country_code.as_str())])
             .form(&[
                 ("trackIds", &track_id.to_string()),
-                ("onDupes", &"FAIL".to_string()),
+                ("onDupes", &on_dupes.as_str().to_string()),
                 ("onArtifactNotFound", &"FAIL".to_string()),
             ]);
         let response = self.send(generation, req).await?;
@@ -4043,6 +4086,40 @@ impl TidalClient {
         playlist_id: &str,
         track_ids: &[u64],
     ) -> Result<(), SlateError> {
+        self.add_tracks_once(playlist_id, track_ids, false).await
+    }
+
+    /// [`Self::add_tracks_to_playlist`] for a playlist created a moment ago. The
+    /// playlist is made through the OpenAPI host and edited through the v1 host,
+    /// which can answer 404 / 412 / 5xx for a short while after creation; a failed
+    /// ETag lookup is treated as an error here (not as "*") and the whole add is
+    /// retried after each of `delays`.
+    pub async fn add_tracks_to_new_playlist(
+        &self,
+        playlist_id: &str,
+        track_ids: &[u64],
+        delays: &[std::time::Duration],
+    ) -> Result<(), SlateError> {
+        let mut last = None;
+        for attempt in 0..=delays.len() {
+            if attempt > 0 {
+                tokio::time::sleep(delays[attempt - 1]).await;
+            }
+            match self.add_tracks_once(playlist_id, track_ids, true).await {
+                Ok(()) => return Ok(()),
+                Err(e) if retry_after_create(&e) => last = Some(e),
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last.unwrap_or(SlateError::NotAuthenticated))
+    }
+
+    async fn add_tracks_once(
+        &self,
+        playlist_id: &str,
+        track_ids: &[u64],
+        strict_etag: bool,
+    ) -> Result<(), SlateError> {
         let _ordered = self.shared.write.lock().await;
         let tokens = self.tokens.as_ref().ok_or(SlateError::NotAuthenticated)?;
 
@@ -4053,6 +4130,11 @@ impl TidalClient {
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .query(&[("countryCode", self.country_code.as_str())]);
         let head_response = self.send(generation, req).await?;
+        if strict_etag && !head_response.status().is_success() {
+            let status = head_response.status().as_u16();
+            let body = head_response.text().await.unwrap_or_default();
+            return Err(SlateError::Api { status, body });
+        }
 
         let etag = head_response
             .headers()

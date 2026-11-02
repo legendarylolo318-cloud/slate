@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use slate_core::commands::{metadata, versions};
-use slate_core::party::net::{Event, Guest, Host};
+use slate_core::party::net::{heir_link, Event, Guest, Heir, Host};
 use slate_core::party::proto::{self, Correction, HostMsg, ReqView};
+use slate_core::party::reactions;
 use slate_core::party::requests::{
     self, Handoff, Placement, Policy, RequestMode, RequestTrack, Submitted, HANDOFF_GRACE,
 };
@@ -37,6 +38,8 @@ static OWNERS: Mutex<Vec<(u64, u64, String)>> = Mutex::new(Vec::new());
 static PENDING: Mutex<Vec<Track>> = Mutex::new(Vec::new());
 /// Guest: what we know about the party we are in (also while reconnecting).
 static GUEST: Mutex<Option<GuestCtx>> = Mutex::new(None);
+/// Counts reactions so only the newest one clears the flash.
+static REACTION_SEQ: AtomicU64 = AtomicU64::new(0);
 /// A party is being started or joined (the network setup takes seconds); a second click waits.
 static CONNECTING: AtomicBool = AtomicBool::new(false);
 /// Bumped by `party_end`, so a start or join still in flight ends itself when it completes.
@@ -60,6 +63,11 @@ struct GuestCtx {
     requests_on: bool,
     /// Join order, with co-host flags.
     guests: Vec<(String, bool)>,
+    /// Where the party continues if the host goes away: the successor's public id and
+    /// the invite secret there (from the host's last `Successor`).
+    heir: Option<(String, String)>,
+    /// Only the successor has this: the key to host the party under.
+    heir_key: Option<String>,
 }
 
 pub fn hosting() -> bool {
@@ -211,6 +219,10 @@ impl Backend {
     // ---- host ----
 
     pub fn party_start(&self) {
+        self.party_start_with(None);
+    }
+
+    fn party_start_with(&self, heir: Option<Heir>) {
         if lock(&ROLE).is_some() {
             self.party_status("A party is already running.");
             return;
@@ -225,7 +237,8 @@ impl Backend {
         let session = SESSION.load(Ordering::Acquire);
         let this = self.clone();
         self.rt.spawn(async move {
-            let started = Host::start(relay_pref().as_deref(), "Host", policy, vote, tx).await;
+            let started =
+                Host::start_as(relay_pref().as_deref(), "Host", policy, vote, tx, heir).await;
             CONNECTING.store(false, Ordering::Release);
             match started {
                 // Ended (or left) while the endpoint was coming up.
@@ -279,6 +292,11 @@ impl Backend {
                     Event::CohostSkip(_) | Event::VoteSkipPassed => this.next(),
                     Event::CohostMove { from, to, .. } => {
                         this.queue_move(from as usize, to as usize)
+                    }
+                    Event::Reaction { from, emoji, tally } => {
+                        this.show_reaction(&from, emoji);
+                        let text = reactions::tally_text(&tally);
+                        this.ui(move |w| w.global::<PartyState>().set_reaction_tally(text.into()));
                     }
                     Event::RequestsChanged => {}
                     Event::Closed(_) | Event::Lost(_) | Event::Host(_) => {}
@@ -522,6 +540,8 @@ impl Backend {
         if hosting() {
             lock(&OWNERS).retain(|o| o.0 != id);
             with_host(|h| h.track_changed(id, 0, true));
+            // The counts belong to the track that just ended.
+            self.ui(|w| w.global::<PartyState>().set_reaction_tally("".into()));
         }
     }
 
@@ -610,6 +630,8 @@ impl Backend {
             cohost: false,
             requests_on: allow_suggest,
             guests: guests.iter().map(|g| (g.clone(), false)).collect(),
+            heir: None,
+            heir_key: None,
         });
         let _ = name;
         lock(&REPORTED).clear();
@@ -742,6 +764,9 @@ impl Backend {
                 }
                 Handoff::OfferToOther => {
                     LOST_SINCE.with_lock(|l| *l = None);
+                    if self.guest_follow_heir(&ctx, &order).await {
+                        return;
+                    }
                     *lock(&GUEST) = None;
                     self.party_show("", String::new(), Vec::new());
                     let next = order
@@ -765,11 +790,60 @@ impl Backend {
         }
     }
 
+    /// The successor is taking the party over: keep trying to join it under the id and
+    /// secret the old host announced. True once joined. False when nothing was announced,
+    /// the window ran out or the guest left, which falls back to "ask for the new link".
+    async fn guest_follow_heir(&self, ctx: &GuestCtx, order: &[(u64, String, bool)]) -> bool {
+        let Some((id, secret)) = ctx.heir.clone() else {
+            return false;
+        };
+        let Ok(link) = heir_link(&id, &secret) else {
+            return false;
+        };
+        let next = order
+            .iter()
+            .find(|(i, _, _)| Some(*i) == requests::successor(order))
+            .map(|g| g.1.clone())
+            .unwrap_or_default();
+        self.party_status(format!(
+            "The host is gone. Waiting for {next} to take the party over…"
+        ));
+        let started = Instant::now();
+        while requests::keep_following(started.elapsed()) {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            if lock(&GUEST).is_none() {
+                return true; // left meanwhile: nothing more to say
+            }
+            let name = UiPrefs::load().party_name;
+            let (tx, rx) = mpsc::unbounded_channel();
+            let session = SESSION.load(Ordering::Acquire);
+            if let Ok((guest, welcome)) =
+                Guest::join(&link, &name, relay_pref().as_deref(), tx).await
+            {
+                if SESSION.load(Ordering::Acquire) != session || lock(&GUEST).is_none() {
+                    guest.leave().await;
+                    return true;
+                }
+                self.guest_joined(guest, welcome, link.clone(), name, rx);
+                return true;
+            }
+        }
+        false
+    }
+
     /// "Take over" after the host left: this Slate becomes the host.
     pub fn party_takeover(&self) {
+        // Hosting under the key the old host handed over keeps the party's id and invite
+        // secret, so the other guests find it again without a new link.
+        let heir = lock(&GUEST).as_ref().and_then(|c| {
+            Some(Heir {
+                key: c.heir_key.clone()?,
+                secret: c.heir.clone()?.1,
+            })
+        });
         *lock(&GUEST) = None;
         self.ui(|w| w.global::<SettingsState>().set_party_offer(false));
-        self.party_start();
+        self.party_start_with(heir);
     }
 
     pub fn party_decline(&self) {
@@ -830,8 +904,57 @@ impl Backend {
             HostMsg::Requests { pending, .. } => self.show_cohost_requests(pending),
             HostMsg::RequestResult { reason, .. } => self.notify(&reason),
             HostMsg::Notice { text } => self.notify(&text),
+            HostMsg::Reaction { from, e } => self.show_reaction(&from, e),
+            HostMsg::Heir { key } => {
+                if let Some(c) = lock(&GUEST).as_mut() {
+                    c.heir_key = Some(key.0);
+                }
+            }
+            HostMsg::Successor { id, secret } => {
+                if let Some(c) = lock(&GUEST).as_mut() {
+                    // A new id means a new successor and key: one held from before is
+                    // void (the new successor's `Heir` follows this message).
+                    if c.heir.as_ref().is_some_and(|(old, _)| *old != id) {
+                        c.heir_key = None;
+                    }
+                    c.heir = Some((id, secret));
+                }
+            }
             _ => {}
         }
+    }
+
+    /// Flashes "Ann 🔥" next to the player for a few seconds (the newest one wins).
+    fn show_reaction(&self, from: &str, e: u8) {
+        let Some(emoji) = reactions::emoji(e) else {
+            return;
+        };
+        let text = format!("{} {emoji}", proto::clip(from, 24));
+        let seq = REACTION_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+        self.ui(move |w| w.global::<PartyState>().set_reaction_flash(text.into()));
+        let this = self.clone();
+        self.rt.spawn(async move {
+            tokio::time::sleep(Duration::from_secs(4)).await;
+            if REACTION_SEQ.load(Ordering::Acquire) == seq {
+                this.ui(|w| w.global::<PartyState>().set_reaction_flash("".into()));
+            }
+        });
+    }
+
+    /// An emoji button: the host reacts directly, a guest tells the host. Only while a
+    /// party runs.
+    pub fn party_react(&self, index: i32) {
+        let Ok(e) = u8::try_from(index) else { return };
+        if with_host(|h| h.react(e)).is_some() {
+            return;
+        }
+        let Some(g) = guest_handle() else { return };
+        let this = self.clone();
+        self.rt.spawn(async move {
+            if g.react(e).await.is_err() {
+                this.notify("Could not reach the host.");
+            }
+        });
     }
 
     fn show_cohost_requests(&self, pending: Vec<ReqView>) {

@@ -329,7 +329,14 @@ fn launch(
         tracing::debug!("could not set the app id: {e}");
     }
     let window = AppWindow::new().context("creating main window")?;
-    window.show().context("showing main window")?;
+    // "Start minimized to tray": the window stays hidden; the tray (Linux: when its
+    // registration answers, Windows: right below) shows it again if there is none.
+    let start_hidden = crate::uiprefs::UiPrefs::load().start_minimized;
+    // Windows media controls need the window handle, which exists once shown: the
+    // window is shown for a moment there and hidden again once the tray is up.
+    if !start_hidden || cfg!(windows) {
+        window.show().context("showing main window")?;
+    }
     #[cfg(windows)]
     crate::platform::win_smtc::remember_window(window.window());
     tracing::info!(renderer = %active, "UI renderer active");
@@ -345,7 +352,12 @@ fn launch(
     wire(&window, &backend);
     // The tray icon belongs to the UI thread (it needs its message pump).
     #[cfg(windows)]
-    crate::platform::win_tray::start(backend.control_fn());
+    {
+        crate::platform::win_tray::start(backend.control_fn());
+        if start_hidden && crate::platform::win_tray::present() {
+            let _ = window.hide();
+        }
+    }
     if let Some(l) = link {
         backend.queue_link(l);
     }
@@ -361,7 +373,7 @@ fn launch(
     // Not `window.run()`: hiding the window to the tray must not end the loop.
     // Only the GL renderers report frames reliably (Skia/Vulkan does not call
     // the rendering notifier; Vulkan is probed before selection instead).
-    let watch = matches!(chosen, Some(Renderer::SkiaOpenGl | Renderer::FemtoVg));
+    let watch = !start_hidden && matches!(chosen, Some(Renderer::SkiaOpenGl | Renderer::FemtoVg));
     let no_frame = first_frame_watchdog(&window, watch);
     if let Some(r) = chosen {
         confirm_renderer(r.name(), index, std::rc::Rc::clone(&no_frame));
@@ -506,6 +518,14 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_lyric_seek, |b, i| b
         .lyric_seek(usize::try_from(i).unwrap_or(0)));
     bind!(on_toggle_favorite, |b| b.toggle_current_favorite());
+    bind!(on_lyrics_nudge, |b, d| b.lyrics_nudge(d));
+    bind!(on_party_react, |b, i| b.party_react(i));
+    bind!(on_select_row, |b, i, c, s| b.select_row(i, c, s));
+    bind!(on_select_all, |b| b.select_all());
+    bind!(on_select_clear, |b| b.select_clear());
+    bind!(on_queue_select, |b, i, c, s| b.queue_select(i, c, s));
+    bind!(on_queue_sel_action, |b, a| b.queue_selection_action(&a));
+    bind!(on_lyrics_visible, |b, v| b.lyrics_visible(v));
     bind!(on_toggle_page_favorite, |b| b.toggle_page_favorite());
     bind!(on_export_list, |b, f| b.export_list(&f));
     bind!(on_remove_duplicates, |b| b.scan_duplicates());

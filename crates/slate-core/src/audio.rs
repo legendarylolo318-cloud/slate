@@ -470,6 +470,123 @@ enum WriterCommand {
     Shutdown,
 }
 
+const WRITER_SEND_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Hands a chunk to the writer, waiting while it is busy but giving up once
+/// this pipeline is being torn down. A plain blocking send here stalls the
+/// pipeline's state change forever behind a writer that is not reading (#233).
+/// Keyed on teardown, not the generation: a seek bumps the generation while
+/// the pipeline keeps running, and giving up there pauses the stream.
+fn send_chunk(
+    tx: &crossbeam_channel::Sender<WriterCommand>,
+    chunk: AudioChunk,
+    closing: &AtomicBool,
+    poll: std::time::Duration,
+) -> Result<(), gst::FlowError> {
+    let mut cmd = WriterCommand::Data(chunk);
+    loop {
+        match tx.send_timeout(cmd, poll) {
+            Ok(()) => return Ok(()),
+            Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => {
+                return Err(gst::FlowError::Error)
+            }
+            Err(crossbeam_channel::SendTimeoutError::Timeout(back)) => {
+                if closing.load(Ordering::Acquire) {
+                    return Err(gst::FlowError::Flushing);
+                }
+                cmd = back;
+            }
+        }
+    }
+}
+
+const WRITER_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Stops an ALSA writer without ever blocking past `timeout`. The stop flag is
+/// authoritative: a Shutdown can be swallowed by a Flush or refused by a full
+/// queue, and the bus watcher's sender means the writer never sees a
+/// disconnect. A writer still running at the deadline is handed back.
+fn shutdown_writer(
+    tx: Option<crossbeam_channel::Sender<WriterCommand>>,
+    handle: Option<JoinHandle<()>>,
+    stop: Option<Arc<AtomicBool>>,
+    paused: &AtomicBool,
+    timeout: std::time::Duration,
+) -> Option<JoinHandle<()>> {
+    if let Some(stop) = &stop {
+        stop.store(true, Ordering::Release);
+    }
+    paused.store(false, Ordering::Release);
+    if let Some(tx) = &tx {
+        let _ = tx.try_send(WriterCommand::Shutdown);
+    }
+    let handle = handle?;
+    let deadline = std::time::Instant::now() + timeout;
+    while !handle.is_finished() {
+        if std::time::Instant::now() >= deadline {
+            log::warn!("[audio] writer did not exit within {timeout:?}, leaving it to finish");
+            return Some(handle);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    handle.join().ok();
+    None
+}
+
+const WRITER_REAP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1000);
+
+/// Gives writers that missed their shutdown deadline a bounded chance to exit
+/// before the device is opened again. Their stop flag is already set, so a
+/// writer stuck in one slow ALSA call leaves as soon as that call returns.
+fn reap_lingering_writers(lingering: &mut Vec<JoinHandle<()>>, timeout: std::time::Duration) {
+    if lingering.is_empty() {
+        return;
+    }
+    let deadline = std::time::Instant::now() + timeout;
+    while lingering.iter().any(|h| !h.is_finished()) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let (done, running): (Vec<_>, Vec<_>) = std::mem::take(lingering)
+        .into_iter()
+        .partition(|h| h.is_finished());
+    for h in done {
+        h.join().ok();
+    }
+    *lingering = running;
+    if !lingering.is_empty() {
+        log::warn!(
+            "[audio] {} previous exclusive writer(s) still running; the device may be busy",
+            lingering.len()
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, PartialEq)]
+enum ResumeOutcome {
+    Resumed,
+    Failed,
+    Stopped,
+}
+
+/// Waits out a suspended device (`resume` keeps returning EAGAIN until the
+/// system wakes), but gives up as soon as the writer is told to stop.
+#[cfg(target_os = "linux")]
+fn retry_resume(mut resume: impl FnMut() -> Result<(), i32>, stop: &AtomicBool) -> ResumeOutcome {
+    loop {
+        match resume() {
+            Ok(()) => return ResumeOutcome::Resumed,
+            Err(libc::EAGAIN) => {
+                if stop.load(Ordering::Acquire) {
+                    return ResumeOutcome::Stopped;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(_) => return ResumeOutcome::Failed,
+        }
+    }
+}
+
 /// Active playback backend — determines command dispatch.
 /// The ALSA writer sender + thread handle live as separate state variables
 /// so they persist across PlayUrl calls (track changes keep DAC open).
@@ -489,6 +606,8 @@ enum PlaybackBackend {
         pipeline: gst::Pipeline,
         user_volume_el: Option<gst::Element>,
         norm_volume_el: Option<gst::Element>,
+        /// This pipeline's appsink gives up waiting on the writer once set.
+        sink_closing: Arc<AtomicBool>,
     },
 }
 
@@ -614,6 +733,33 @@ fn apply_normalization_gain(
     signal_path.set_norm_gain_factor(gain as f32);
 }
 
+/// Compressed lookahead per stream. `uridecodebin` leaves `buffer-size` at its
+/// 2 MB default, and the buffer stops at whichever of size and `buffer-duration`
+/// it reaches first. 16/44.1 FLAC (~110 KB/s) is time-bound either way (2 MB is
+/// ~18 s), but hi-res FLAC (24/96 ~0.4 MB/s, 24/192 ~0.75 MB/s) hit 2 MB after
+/// 3-5 s of its 15 s window. 6 MiB lets 24/96 fill the window and 24/192 hold
+/// ~8 s, and bounds the cost: the playing and the prerolled next stream hold at
+/// most 12 MiB, 8 MiB more than the default did, and only at hi-res.
+const STREAM_BUFFER_SIZE_BYTES: i32 = 6 * 1024 * 1024;
+
+fn stream_buffer_duration_ns(is_dash: bool) -> i64 {
+    if is_dash {
+        15_000_000_000
+    } else {
+        5_000_000_000
+    }
+}
+
+fn make_stream_decodebin(uri: &str, is_dash: bool) -> Result<gst::Element, String> {
+    gst::ElementFactory::make("uridecodebin")
+        .property("uri", uri)
+        .property("buffer-duration", stream_buffer_duration_ns(is_dash))
+        .property("buffer-size", STREAM_BUFFER_SIZE_BYTES)
+        .property("use-buffering", true)
+        .build()
+        .map_err(|e| format!("Failed to create uridecodebin: {e}"))
+}
+
 /// 2b-A2: build + preroll the next-track branch on the executor thread.
 ///
 /// Mirrors the first branch's wiring (sink_0): legacy `uridecodebin` →
@@ -631,15 +777,7 @@ fn attach_next_bin(
     uri: &str,
     is_dash: bool,
 ) -> Result<(gst::Element, gst::Element), String> {
-    let udb = gst::ElementFactory::make("uridecodebin")
-        .property("uri", uri)
-        // 15s compressed buffer so the next track (and the current one once this
-        // becomes active) rides out network jitter on slow connections. We have
-        // the whole current track as lead time to fill it during preroll.
-        .property("buffer-duration", 15_000_000_000i64)
-        .property("use-buffering", true)
-        .build()
-        .map_err(|e| format!("Failed to create next uridecodebin: {e}"))?;
+    let udb = make_stream_decodebin(uri, true)?;
     // No route here: this bin joins a pipeline whose `watch_pipeline_sources`
     // hook already configures every HTTP source that appears under it.
     // Same props as the first branch's queue: 15s of decoded reservoir ahead of
@@ -1202,6 +1340,7 @@ fn spawn_alsa_writer(
     current_sample_rate: Arc<AtomicU32>,
     writer_gen: Arc<AtomicU64>,
     paused: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
     bit_perfect: bool,
     combined_vol: Arc<AtomicU32>,
     signal_path: Arc<SignalPathTracker>,
@@ -1317,40 +1456,56 @@ fn spawn_alsa_writer(
             };
 
             // Recover from ALSA errors (XRUN, suspend, etc.)
-            fn alsa_recover(pcm: &alsa::PCM, errno: i32) -> bool {
+            /// A write that ended because the writer is stopping. Never an
+            /// `audio-error`: the device is fine, the writer is just leaving.
+            const WRITE_STOPPED: &str = "stopped";
+
+            /// Reports a writer fault unless the writer is stopping: its errors
+            /// then belong to no track, and `tearing_down` already belongs to
+            /// the next one (it suppresses that track's `track-finished`).
+            fn report_fault(
+                app: &crate::AppHandle,
+                tearing_down: &AtomicBool,
+                stop: &AtomicBool,
+                payload: serde_json::Value,
+                tear_down: bool,
+            ) {
+                if stop.load(Ordering::Acquire) { return; }
+                app.emit("audio-error", payload).ok();
+                if tear_down { tearing_down.store(true, Ordering::SeqCst); }
+            }
+
+            enum Recovery { Recovered, Unrecoverable, Stopped }
+
+            fn alsa_recover(pcm: &alsa::PCM, errno: i32, stop: &AtomicBool) -> Recovery {
                 if errno == libc::EPIPE {
                     log::warn!("[alsa-writer] XRUN, recovering");
                     pcm.prepare().ok();
-                    true
+                    Recovery::Recovered
                 } else if errno == libc::ESTRPIPE {
-                    let mut recovered = false;
-                    loop {
-                        match pcm.resume() {
-                            Ok(_) => { recovered = true; break; }
-                            Err(e) if e.errno() == libc::EAGAIN => {
-                                std::thread::sleep(std::time::Duration::from_millis(10));
-                            }
-                            Err(_) => {
-                                if pcm.prepare().is_ok() { recovered = true; }
-                                break;
-                            }
-                        }
+                    match retry_resume(|| pcm.resume().map_err(|e| e.errno()), stop) {
+                        ResumeOutcome::Resumed => Recovery::Recovered,
+                        ResumeOutcome::Stopped => Recovery::Stopped,
+                        ResumeOutcome::Failed if pcm.prepare().is_ok() => Recovery::Recovered,
+                        ResumeOutcome::Failed => Recovery::Unrecoverable,
                     }
-                    recovered
                 } else {
-                    false
+                    Recovery::Unrecoverable
                 }
             }
 
-            fn write_bytes(pcm: &alsa::PCM, data: &[u8], fmt: &PcmFormat, fw: &AtomicU64, silence_buf: &[u8]) -> Result<(), &'static str> {
+            fn write_bytes(pcm: &alsa::PCM, data: &[u8], fmt: &PcmFormat, fw: &AtomicU64, silence_buf: &[u8], stop: &AtomicBool) -> Result<(), &'static str> {
                 let frame_size = fmt.channels as usize * fmt.bytes_per_sample as usize;
                 if frame_size == 0 { return Ok(()); }
                 let mut offset = 0;
                 while offset < data.len() {
+                    if stop.load(Ordering::Acquire) { return Err(WRITE_STOPPED); }
                     let result = {
                         let io = pcm.io_bytes();
                         io.writei(&data[offset..])
                     }; // io dropped here — flag cleared before any recovery
+                    // `frames_written` belongs to the next writer once we are stopping.
+                    if stop.load(Ordering::Acquire) { return Err(WRITE_STOPPED); }
                     match result {
                         Ok(0) => break, // sub-frame remnant
                         Ok(frames) => {
@@ -1359,16 +1514,21 @@ fn spawn_alsa_writer(
                         }
                         Err(e) => {
                             let errno = e.errno();
-                            if alsa_recover(pcm, errno) {
-                                let kick_frames = (fmt.sample_rate as usize * 50) / 1000;
-                                let kick_bytes = kick_frames * frame_size;
-                                let io = pcm.io_bytes();
-                                let _ = io.writei(&silence_buf[..kick_bytes.min(silence_buf.len())]);
-                            } else if errno == libc::ENODEV {
-                                return Err("device_disconnected");
-                            } else {
-                                log::error!("[alsa-writer] write error: {e}");
-                                return Err("write_error");
+                            match alsa_recover(pcm, errno, stop) {
+                                Recovery::Recovered => {
+                                    let kick_frames = (fmt.sample_rate as usize * 50) / 1000;
+                                    let kick_bytes = kick_frames * frame_size;
+                                    let io = pcm.io_bytes();
+                                    let _ = io.writei(&silence_buf[..kick_bytes.min(silence_buf.len())]);
+                                }
+                                Recovery::Stopped => return Err(WRITE_STOPPED),
+                                Recovery::Unrecoverable if errno == libc::ENODEV => {
+                                    return Err("device_disconnected");
+                                }
+                                Recovery::Unrecoverable => {
+                                    log::error!("[alsa-writer] write error: {e}");
+                                    return Err("write_error");
+                                }
                             }
                         }
                     }
@@ -1376,23 +1536,27 @@ fn spawn_alsa_writer(
                 Ok(())
             }
 
-            fn write_silence(pcm: &alsa::PCM, buf: &[u8]) -> bool {
+            fn write_silence(pcm: &alsa::PCM, buf: &[u8], stop: &AtomicBool) -> Result<(), &'static str> {
                 let result = {
                     let io = pcm.io_bytes();
                     io.writei(buf)
                 }; // io dropped here
+                if stop.load(Ordering::Acquire) { return Err(WRITE_STOPPED); }
                 match result {
-                    Ok(_) => {}
-                    Err(e) if alsa_recover(pcm, e.errno()) => {
-                        let io = pcm.io_bytes();
-                        let _ = io.writei(buf);
-                    }
-                    Err(e) => {
-                        log::error!("[alsa-writer] silence write error: {e}");
-                        return false;
-                    }
+                    Ok(_) => Ok(()),
+                    Err(e) => match alsa_recover(pcm, e.errno(), stop) {
+                        Recovery::Recovered => {
+                            let io = pcm.io_bytes();
+                            let _ = io.writei(buf);
+                            Ok(())
+                        }
+                        Recovery::Stopped => Err(WRITE_STOPPED),
+                        Recovery::Unrecoverable => {
+                            log::error!("[alsa-writer] silence write error: {e}");
+                            Err("device_disconnected")
+                        }
+                    },
                 }
-                true
             }
 
             /// Scale raw PCM samples in-place by a volume multiplier.
@@ -1465,6 +1629,7 @@ fn spawn_alsa_writer(
                 Ok((pcm, negotiated))
             }
 
+            #[must_use]
             fn drain_writer_rx(rx: &crossbeam_channel::Receiver<WriterCommand>) -> bool {
                 while let Ok(cmd) = rx.try_recv() {
                     if let WriterCommand::Shutdown = cmd { return true; }
@@ -1479,7 +1644,12 @@ fn spawn_alsa_writer(
             );
 
             'main: loop {
-                match rx.recv_timeout(period_duration) {
+                if stop.load(Ordering::Acquire) { break 'main; }
+                let received = rx.recv_timeout(period_duration);
+                // Before acting on it: a stopping writer must not reopen the
+                // device or touch state the next writer now owns.
+                if stop.load(Ordering::Acquire) { break 'main; }
+                match received {
                     Ok(WriterCommand::Data(mut chunk)) => {
                         if chunk.generation < writer_gen.load(Ordering::Acquire) {
                             continue; // discard stale data from old pipeline
@@ -1491,22 +1661,26 @@ fn spawn_alsa_writer(
                                 && pcm.hw_params_current().map(|p| p.can_pause()).unwrap_or(false);
                             if can_hw { pcm.pause(true).ok(); }
 
-                            while paused.load(Ordering::Acquire) {
+                            while paused.load(Ordering::Acquire) && !stop.load(Ordering::Acquire) {
                                 if can_hw {
                                     // HW pause: DAC frozen, nothing to feed — just sleep
                                     std::thread::sleep(std::time::Duration::from_millis(50));
                                 } else {
                                     // SW pause: blocking writei paces the thread (~50ms per period)
-                                    if !write_silence(&pcm, &silence_buf) {
-                                        *decoded_cell.lock_safe() = None;
-                                        *output_cell.lock_safe() = None;
-                                        app_handle.emit("audio-error",
-                                            serde_json::json!({ "kind": "device_disconnected" })).ok();
-                                        tearing_down.store(true, Ordering::SeqCst);
-                                        break 'main;
+                                    match write_silence(&pcm, &silence_buf, &stop) {
+                                        Ok(()) => {}
+                                        Err(WRITE_STOPPED) => break 'main,
+                                        Err(_) => {
+                                            *decoded_cell.lock_safe() = None;
+                                            *output_cell.lock_safe() = None;
+                                            report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": "device_disconnected" }), true);
+                                            break 'main;
+                                        }
                                     }
                                 }
                             }
+                            // Leave without un-pausing the DAC into a stale buffer.
+                            if stop.load(Ordering::Acquire) { break 'main; }
 
                             if can_hw {
                                 pcm.pause(false).ok();
@@ -1536,9 +1710,7 @@ fn spawn_alsa_writer(
                                             chunk.format.gst_format, chunk.format.channels,
                                             negotiated.gst_format, negotiated.channels
                                         );
-                                        app_handle.emit("audio-error",
-                                            serde_json::json!({ "kind": "device_changed" })).ok();
-                                        tearing_down.store(true, Ordering::SeqCst);
+                                        report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": "device_changed" }), true);
                                         return;
                                     }
                                     sp.set_output(&negotiated.gst_format, negotiated.sample_rate, negotiated.channels);
@@ -1551,8 +1723,7 @@ fn spawn_alsa_writer(
                                 }
                                 Err(e) => {
                                     log::error!("[alsa-writer] reopen failed: {e}");
-                                    app_handle.emit("audio-error", serde_json::json!({ "kind": "format_change_failed", "message": e })).ok();
-                                    tearing_down.store(true, Ordering::SeqCst);
+                                    report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": "format_change_failed", "message": e }), true);
                                     return; // pcm already dropped, just exit thread
                                 }
                             }
@@ -1560,10 +1731,13 @@ fn spawn_alsa_writer(
                         resolve_pending(&mut pending_promotion_from, &current_fmt);
                         let vol = f32::from_bits(combined_vol.load(Ordering::Relaxed));
                         apply_volume(&mut chunk.data, &current_fmt, vol);
-                        if let Err(kind) = write_bytes(&pcm, &chunk.data, &current_fmt, &frames_written, &silence_buf) {
-                            app_handle.emit("audio-error", serde_json::json!({ "kind": kind })).ok();
-                            tearing_down.store(true, Ordering::SeqCst);
-                            break;
+                        match write_bytes(&pcm, &chunk.data, &current_fmt, &frames_written, &silence_buf, &stop) {
+                            Ok(()) => {}
+                            Err(WRITE_STOPPED) => break 'main,
+                            Err(kind) => {
+                                report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": kind }), true);
+                                break;
+                            }
                         }
                     }
 
@@ -1583,9 +1757,7 @@ fn spawn_alsa_writer(
                                             "[alsa-writer] channel mismatch after format-hint reopen: requested={}ch, ALSA={}ch",
                                             requested.channels, negotiated.channels
                                         );
-                                        app_handle.emit("audio-error",
-                                            serde_json::json!({ "kind": "device_changed" })).ok();
-                                        tearing_down.store(true, Ordering::SeqCst);
+                                        report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": "device_changed" }), true);
                                         return;
                                     }
                                     sp.set_output(&negotiated.gst_format, negotiated.sample_rate, negotiated.channels);
@@ -1598,8 +1770,7 @@ fn spawn_alsa_writer(
                                 }
                                 Err(e) => {
                                     log::error!("[alsa-writer] reopen for format hint failed: {e}");
-                                    app_handle.emit("audio-error", serde_json::json!({ "kind": "format_change_failed", "message": e })).ok();
-                                    tearing_down.store(true, Ordering::SeqCst);
+                                    report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": "format_change_failed", "message": e }), true);
                                     return;
                                 }
                             }
@@ -1629,13 +1800,15 @@ fn spawn_alsa_writer(
                             continue; // stale EOS from old pipeline
                         }
                         let got_shutdown = drain_writer_rx(&rx);
-                        if !write_silence(&pcm, &silence_buf) {
-                            *decoded_cell.lock_safe() = None;
-                            *output_cell.lock_safe() = None;
-                            app_handle.emit("audio-error",
-                                serde_json::json!({ "kind": "device_disconnected" })).ok();
-                            tearing_down.store(true, Ordering::SeqCst);
-                            break 'main;
+                        match write_silence(&pcm, &silence_buf, &stop) {
+                            Ok(()) => {}
+                            Err(WRITE_STOPPED) => break 'main,
+                            Err(_) => {
+                                *decoded_cell.lock_safe() = None;
+                                *output_cell.lock_safe() = None;
+                                report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": "device_disconnected" }), true);
+                                break 'main;
+                            }
                         }
 
                         if emit_finished && !tearing_down.load(Ordering::SeqCst) {
@@ -1648,15 +1821,19 @@ fn spawn_alsa_writer(
                         // Idle silence loop — keep DAC clock alive between tracks
                         log::debug!("[alsa-writer] entering idle silence loop");
                         loop {
-                            if !write_silence(&pcm, &silence_buf) {
-                                *decoded_cell.lock_safe() = None;
-                                *output_cell.lock_safe() = None;
-                                app_handle.emit("audio-error",
-                                    serde_json::json!({ "kind": "device_disconnected" })).ok();
-                                tearing_down.store(true, Ordering::SeqCst);
-                                break 'main;
+                            match write_silence(&pcm, &silence_buf, &stop) {
+                                Ok(()) => {}
+                                Err(WRITE_STOPPED) => break 'main,
+                                Err(_) => {
+                                    *decoded_cell.lock_safe() = None;
+                                    *output_cell.lock_safe() = None;
+                                    report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": "device_disconnected" }), true);
+                                    break 'main;
+                                }
                             }
-                            match rx.try_recv() {
+                            let received = rx.try_recv();
+                            if stop.load(Ordering::Acquire) { break 'main; }
+                            match received {
                                 Ok(WriterCommand::Data(mut chunk)) => {
                                     if chunk.generation < writer_gen.load(Ordering::Acquire) {
                                         continue; // discard stale data, stay in idle
@@ -1675,9 +1852,7 @@ fn spawn_alsa_writer(
                                                         chunk.format.gst_format, chunk.format.channels,
                                                         negotiated.gst_format, negotiated.channels
                                                     );
-                                                    app_handle.emit("audio-error",
-                                                        serde_json::json!({ "kind": "device_changed" })).ok();
-                                                    tearing_down.store(true, Ordering::SeqCst);
+                                                    report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": "device_changed" }), true);
                                                     return;
                                                 }
                                                 sp.set_output(&negotiated.gst_format, negotiated.sample_rate, negotiated.channels);
@@ -1690,7 +1865,7 @@ fn spawn_alsa_writer(
                                             }
                                             Err(e) => {
                                                 log::error!("[alsa-writer] reopen failed in idle: {e}");
-                                                app_handle.emit("audio-error", serde_json::json!({ "kind": "format_change_failed", "message": e })).ok();
+                                                report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": "format_change_failed", "message": e }), false);
                                                 return;
                                             }
                                         }
@@ -1702,14 +1877,25 @@ fn spawn_alsa_writer(
                                     resolve_pending(&mut pending_promotion_from, &current_fmt);
                                     let vol = f32::from_bits(combined_vol.load(Ordering::Relaxed));
                                     apply_volume(&mut chunk.data, &current_fmt, vol);
-                                    if let Err(kind) = write_bytes(&pcm, &chunk.data, &current_fmt, &frames_written, &silence_buf) {
-                                        app_handle.emit("audio-error", serde_json::json!({ "kind": kind })).ok();
-                                        break 'main;
+                                    match write_bytes(&pcm, &chunk.data, &current_fmt, &frames_written, &silence_buf, &stop) {
+                                        Ok(()) => {}
+                                        Err(WRITE_STOPPED) => break 'main,
+                                        Err(kind) => {
+                                            report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": kind }), false);
+                                            break 'main;
+                                        }
                                     }
                                     break; // back to main loop
                                 }
                                 Ok(WriterCommand::Shutdown) => break 'main,
-                                Ok(WriterCommand::Flush) => { drain_writer_rx(&rx); pcm.drop().ok(); pcm.prepare().ok(); pending_promotion_from = None; break; }
+                                Ok(WriterCommand::Flush) => {
+                                    let got_shutdown = drain_writer_rx(&rx);
+                                    pcm.drop().ok();
+                                    if got_shutdown { break 'main; }
+                                    pcm.prepare().ok();
+                                    pending_promotion_from = None;
+                                    break;
+                                }
                                 Ok(WriterCommand::FormatHint(new_fmt)) => {
                                     sp.set_decoded(&new_fmt.gst_format, new_fmt.sample_rate, new_fmt.channels);
                                     if new_fmt != current_fmt {
@@ -1724,9 +1910,7 @@ fn spawn_alsa_writer(
                                                         "[alsa-writer] channel mismatch after format-hint reopen (idle): requested={}ch, ALSA={}ch",
                                                         requested.channels, negotiated.channels
                                                     );
-                                                    app_handle.emit("audio-error",
-                                                        serde_json::json!({ "kind": "device_changed" })).ok();
-                                                    tearing_down.store(true, Ordering::SeqCst);
+                                                    report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": "device_changed" }), true);
                                                     return;
                                                 }
                                                 sp.set_output(&negotiated.gst_format, negotiated.sample_rate, negotiated.channels);
@@ -1739,7 +1923,7 @@ fn spawn_alsa_writer(
                                             }
                                             Err(e) => {
                                                 log::error!("[alsa-writer] reopen for format hint failed (idle): {e}");
-                                                app_handle.emit("audio-error", serde_json::json!({ "kind": "format_change_failed", "message": e })).ok();
+                                                report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": "format_change_failed", "message": e }), false);
                                                 return;
                                             }
                                         }
@@ -1763,8 +1947,9 @@ fn spawn_alsa_writer(
                     }
 
                     Ok(WriterCommand::Flush) => {
-                        drain_writer_rx(&rx);
+                        let got_shutdown = drain_writer_rx(&rx);
                         pcm.drop().ok();
+                        if got_shutdown { break 'main; }
                         pcm.prepare().ok();
                         pending_promotion_from = None;
                     }
@@ -1776,13 +1961,15 @@ fn spawn_alsa_writer(
                     }
 
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                        if !write_silence(&pcm, &silence_buf) {
-                            *decoded_cell.lock_safe() = None;
-                            *output_cell.lock_safe() = None;
-                            app_handle.emit("audio-error",
-                                serde_json::json!({ "kind": "device_disconnected" })).ok();
-                            tearing_down.store(true, Ordering::SeqCst);
-                            break 'main;
+                        match write_silence(&pcm, &silence_buf, &stop) {
+                            Ok(()) => {}
+                            Err(WRITE_STOPPED) => break 'main,
+                            Err(_) => {
+                                *decoded_cell.lock_safe() = None;
+                                *output_cell.lock_safe() = None;
+                                report_fault(&app_handle, &tearing_down, &stop, serde_json::json!({ "kind": "device_disconnected" }), true);
+                                break 'main;
+                            }
                         }
                     }
 
@@ -1822,7 +2009,7 @@ fn direct_alsa_seek(
     let was_paused = paused.load(Ordering::Acquire);
     paused.store(false, Ordering::Release);
     if let Some(tx) = writer_tx {
-        let _ = tx.send(WriterCommand::Flush);
+        let _ = tx.send_timeout(WriterCommand::Flush, WRITER_SHUTDOWN_TIMEOUT);
     }
     let pos = gst::ClockTime::from_nseconds((position_secs as f64 * 1_000_000_000.0) as u64);
     let seek_frames = (position_secs as f64 * sample_rate.load(Ordering::Relaxed) as f64) as u64;
@@ -2183,6 +2370,10 @@ impl AudioPlayer {
             // ALSA writer state — lives outside PlaybackBackend so it persists across track changes
             let mut writer_tx: Option<crossbeam_channel::Sender<WriterCommand>> = None;
             let mut writer_thread: Option<JoinHandle<()>> = None;
+            let mut writer_stop: Option<Arc<AtomicBool>> = None;
+            // Writers that missed their shutdown deadline, kept so the next
+            // open of the device can wait for them to let go of it.
+            let mut lingering_writers: Vec<JoinHandle<()>> = Vec::new();
             #[cfg_attr(not(target_os = "linux"), allow(unused_mut, unused_variables))]
             let mut writer_fmt: Option<PcmFormat> = None;
             #[cfg_attr(not(target_os = "linux"), allow(unused_mut, unused_variables))]
@@ -2322,7 +2513,11 @@ impl AudioPlayer {
                                             old_pipe.set_state(gst::State::Null).ok();
                                         });
                                     }
-                                    PlaybackBackend::DirectAlsa { pipeline, .. } => {
+                                    PlaybackBackend::DirectAlsa {
+                                        pipeline,
+                                        sink_closing,
+                                        ..
+                                    } => {
                                         // Unblock writer if paused, then bump generation —
                                         // writer instantly discards stale Data, channel
                                         // drains fast, pipeline can reach Null without blocking.
@@ -2338,6 +2533,7 @@ impl AudioPlayer {
                                         if let Some(bus) = pipeline.bus() {
                                             bus.set_flushing(true);
                                         }
+                                        sink_closing.store(true, Ordering::Release);
                                         pipeline.set_state(gst::State::Null).ok();
                                         let _ = pipeline.state(gst::ClockTime::from_mseconds(500));
                                         drop(pipeline);
@@ -2449,13 +2645,18 @@ impl AudioPlayer {
                                         || device_changed
                                         || mode_changed
                                     {
-                                        // Shut down old writer cleanly
-                                        if let Some(tx) = writer_tx.take() {
-                                            tx.try_send(WriterCommand::Shutdown).ok();
-                                        }
-                                        if let Some(h) = writer_thread.take() {
-                                            h.join().ok();
-                                        }
+                                        lingering_writers.extend(shutdown_writer(
+                                            writer_tx.take(),
+                                            writer_thread.take(),
+                                            writer_stop.take(),
+                                            &paused,
+                                            WRITER_SHUTDOWN_TIMEOUT,
+                                        ));
+                                        reap_lingering_writers(
+                                            &mut lingering_writers,
+                                            WRITER_REAP_TIMEOUT,
+                                        );
+                                        let stop = Arc::new(AtomicBool::new(false));
                                         let (
                                             tx,
                                             handle,
@@ -2471,6 +2672,7 @@ impl AudioPlayer {
                                             Arc::clone(&current_sample_rate),
                                             Arc::clone(&writer_gen),
                                             Arc::clone(&paused),
+                                            Arc::clone(&stop),
                                             bit_perfect,
                                             Arc::clone(&combined_vol),
                                             Arc::clone(&signal_path),
@@ -2479,6 +2681,7 @@ impl AudioPlayer {
                                         )?;
                                         writer_tx = Some(tx);
                                         writer_thread = Some(handle);
+                                        writer_stop = Some(stop);
                                         writer_fmt = Some(negotiated_fmt);
                                         writer_supported_fmts = Some(supported_gst_fmts);
                                         writer_supported_rates = Some(supported_rates);
@@ -2498,6 +2701,7 @@ impl AudioPlayer {
                                     let supported_rates_for_pipeline = writer_supported_rates
                                         .as_deref()
                                         .unwrap_or(&[44100, 48000]);
+                                    let sink_closing = Arc::new(AtomicBool::new(false));
                                     let (pipe, u_vol, n_vol) = build_appsink_pipeline(
                                         &uri,
                                         is_dash,
@@ -2506,6 +2710,7 @@ impl AudioPlayer {
                                         bit_perfect,
                                         wtx.clone(),
                                         Arc::clone(&writer_gen),
+                                        Arc::clone(&sink_closing),
                                         fmt_for_pipeline,
                                         supported_fmts_for_pipeline,
                                         supported_rates_for_pipeline,
@@ -2587,17 +2792,21 @@ impl AudioPlayer {
                                         pipeline: pipe,
                                         user_volume_el: u_vol,
                                         norm_volume_el: n_vol,
+                                        sink_closing,
                                     });
                                 }
                             } else {
                                 // ── Normal path (unchanged) ──
                                 // Shut down any lingering ALSA writer from a mode switch
-                                if let Some(tx) = writer_tx.take() {
-                                    tx.try_send(WriterCommand::Shutdown).ok();
-                                }
-                                if let Some(h) = writer_thread.take() {
-                                    h.join().ok();
-                                }
+                                lingering_writers.extend(shutdown_writer(
+                                    writer_tx.take(),
+                                    writer_thread.take(),
+                                    writer_stop.take(),
+                                    &paused,
+                                    WRITER_SHUTDOWN_TIMEOUT,
+                                ));
+                                // The sound server can't take a DAC an old writer still holds.
+                                reap_lingering_writers(&mut lingering_writers, WRITER_REAP_TIMEOUT);
 
                                 let pipe = gst::Pipeline::new();
                                 watch_pipeline_sources(&pipe, route);
@@ -2606,20 +2815,7 @@ impl AudioPlayer {
                                 // about-to-finish. Legacy uridecodebin handles Tidal
                                 // `data:application/dash+xml` URIs and works on GStreamer
                                 // < 1.24.
-                                let mut udb =
-                                    gst::ElementFactory::make("uridecodebin").property("uri", &uri);
-                                if is_dash {
-                                    udb = udb
-                                        .property("buffer-duration", 15_000_000_000i64)
-                                        .property("use-buffering", true);
-                                } else {
-                                    udb = udb
-                                        .property("buffer-duration", 5_000_000_000i64)
-                                        .property("use-buffering", true);
-                                }
-                                let uridecodebin = udb
-                                    .build()
-                                    .map_err(|e| format!("Failed to create uridecodebin: {e}"))?;
+                                let uridecodebin = make_stream_decodebin(&uri, is_dash)?;
                                 // Per-branch upstream queue (C1): decouples the decoder from
                                 // concat's gate so the next branch can pre-buffer ahead while
                                 // the current track plays. With one branch it's a passthrough.
@@ -3224,7 +3420,11 @@ impl AudioPlayer {
                                 *output_cell_thread.lock_safe() = None;
                                 Ok(())
                             }
-                            Some(PlaybackBackend::DirectAlsa { pipeline, .. }) => {
+                            Some(PlaybackBackend::DirectAlsa {
+                                pipeline,
+                                sink_closing,
+                                ..
+                            }) => {
                                 // Bump generation so writer discards stale data,
                                 // then unblock and shut down
                                 paused.store(false, Ordering::Release);
@@ -3233,39 +3433,20 @@ impl AudioPlayer {
                                 if let Some(bus) = pipeline.bus() {
                                     bus.set_flushing(true);
                                 }
-                                let tx = writer_tx.take();
-                                // A disconnected writer has already exited.
-                                let send_shutdown = |ms| {
-                                    tx.as_ref().is_none_or(|tx| {
-                                        !matches!(
-                                            tx.send_timeout(
-                                                WriterCommand::Shutdown,
-                                                std::time::Duration::from_millis(ms),
-                                            ),
-                                            Err(crossbeam_channel::SendTimeoutError::Timeout(_))
-                                        )
-                                    })
-                                };
-                                let mut shutdown_sent = send_shutdown(200);
+                                // Lets a blocked appsink callback give up, so the
+                                // pipeline reaches Null even while the writer is
+                                // not reading.
+                                sink_closing.store(true, Ordering::Release);
                                 pipeline.set_state(gst::State::Null).ok();
                                 let _ = pipeline.state(gst::ClockTime::from_mseconds(500));
                                 drop(pipeline);
-                                // With the pipeline down nothing refills the channel,
-                                // so a Shutdown refused while it was full fits now.
-                                if !shutdown_sent {
-                                    shutdown_sent = send_shutdown(500);
-                                }
-                                drop(tx);
-                                if let Some(h) = writer_thread.take() {
-                                    // The bus watcher holds a sender too, so a writer
-                                    // that never got Shutdown never sees a disconnect:
-                                    // joining it would hang this thread.
-                                    if shutdown_sent {
-                                        h.join().ok();
-                                    } else {
-                                        log::warn!("[audio] stop: writer did not take Shutdown, detaching it");
-                                    }
-                                }
+                                lingering_writers.extend(shutdown_writer(
+                                    writer_tx.take(),
+                                    writer_thread.take(),
+                                    writer_stop.take(),
+                                    &paused,
+                                    WRITER_SHUTDOWN_TIMEOUT,
+                                ));
                                 eos.store(false, Ordering::SeqCst);
                                 has_uri.store(false, Ordering::SeqCst);
                                 *decoded_cell_thread.lock_safe() = None;
@@ -3274,13 +3455,13 @@ impl AudioPlayer {
                             }
                             None => {
                                 // Clean up orphaned writer (e.g. pipeline build failed after spawn)
-                                paused.store(false, Ordering::Release);
-                                if let Some(tx) = writer_tx.take() {
-                                    let _ = tx.send(WriterCommand::Shutdown);
-                                }
-                                if let Some(h) = writer_thread.take() {
-                                    h.join().ok();
-                                }
+                                lingering_writers.extend(shutdown_writer(
+                                    writer_tx.take(),
+                                    writer_thread.take(),
+                                    writer_stop.take(),
+                                    &paused,
+                                    WRITER_SHUTDOWN_TIMEOUT,
+                                ));
                                 Ok(())
                             }
                         };
@@ -4447,6 +4628,8 @@ fn build_appsink_pipeline(
     bit_perfect: bool,
     writer_tx: crossbeam_channel::Sender<WriterCommand>,
     writer_gen: Arc<AtomicU64>,
+    // Set by teardown before Null, so the appsink stops waiting on the writer.
+    sink_closing: Arc<AtomicBool>,
     // The ALSA writer's negotiated device format. Its channel count drives the
     // stereo→Nch upmix (mix-matrix) and the capsfilter / appsink channel pin
     // when the DAC exposes only a fixed channel count (> 2).
@@ -4460,19 +4643,7 @@ fn build_appsink_pipeline(
 
     let pipe = gst::Pipeline::new();
     watch_pipeline_sources(&pipe, route);
-    let mut udb = gst::ElementFactory::make("uridecodebin").property("uri", uri);
-    if is_dash {
-        udb = udb
-            .property("buffer-duration", 15_000_000_000i64)
-            .property("use-buffering", true);
-    } else {
-        udb = udb
-            .property("buffer-duration", 5_000_000_000i64)
-            .property("use-buffering", true);
-    }
-    let uridecodebin = udb
-        .build()
-        .map_err(|e| format!("Failed to create uridecodebin: {e}"))?;
+    let uridecodebin = make_stream_decodebin(uri, is_dash)?;
     let device_channels = negotiated_fmt.channels;
     let audioconvert = gst::ElementFactory::make("audioconvert")
         .build()
@@ -4834,15 +5005,17 @@ fn build_appsink_pipeline(
                 let data = map.as_slice().to_vec();
                 let generation = chunk_gen.load(Ordering::Acquire);
 
-                writer_tx
-                    .send(WriterCommand::Data(AudioChunk {
+                send_chunk(
+                    &writer_tx,
+                    AudioChunk {
                         data,
                         format,
                         generation,
-                    }))
-                    .map_err(|_| gst::FlowError::Error)?;
-
-                Ok(gst::FlowSuccess::Ok)
+                    },
+                    &sink_closing,
+                    WRITER_SEND_POLL,
+                )
+                .map(|_| gst::FlowSuccess::Ok)
             })
             .build(),
     );
@@ -5042,6 +5215,276 @@ mod proxy_source_tests {
     }
 
     use super::*;
+
+    /// A seek bumps the generation while the pipeline keeps running. Giving up
+    /// there returns Flushing, which pauses the stream for good if the seek
+    /// then fails, so a slow writer is waited for until teardown.
+    #[test]
+    fn a_chunk_send_keeps_waiting_through_a_seek() {
+        let (tx, rx) = crossbeam_channel::bounded::<WriterCommand>(1);
+        tx.send(WriterCommand::Flush).unwrap();
+        let reader = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let _ = rx.recv();
+            let _ = rx.recv();
+        });
+        let closing = Arc::new(AtomicBool::new(false));
+        let result = within(std::time::Duration::from_secs(2), move || {
+            send_chunk(&tx, test_chunk(1), &closing, WRITER_SEND_POLL)
+        });
+        assert_eq!(result, Ok(()));
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn a_chunk_send_to_a_gone_writer_is_an_error() {
+        let (tx, rx) = crossbeam_channel::bounded::<WriterCommand>(1);
+        drop(rx);
+        let closing = AtomicBool::new(false);
+        assert_eq!(
+            send_chunk(&tx, test_chunk(1), &closing, WRITER_SEND_POLL),
+            Err(gst::FlowError::Error)
+        );
+    }
+
+    fn test_chunk(generation: u64) -> AudioChunk {
+        AudioChunk {
+            data: vec![0; 8],
+            format: PcmFormat {
+                sample_rate: 44_100,
+                channels: 2,
+                gst_format: "S16LE".into(),
+                bytes_per_sample: 2,
+            },
+            generation,
+        }
+    }
+
+    /// Runs `f` on its own thread so a regression that blocks fails the test
+    /// instead of hanging the suite.
+    fn within<T: Send + 'static>(
+        limit: std::time::Duration,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(f());
+        });
+        done_rx
+            .recv_timeout(limit)
+            .expect("still blocked past the limit")
+    }
+
+    // Beyond the old 2 MB default, and the playing plus the prerolled next stream stay
+    // inside the release's 10 MB RAM budget.
+    const _: () = assert!(STREAM_BUFFER_SIZE_BYTES > 2 * 1024 * 1024);
+    const _: () = assert!(2 * (STREAM_BUFFER_SIZE_BYTES - 2 * 1024 * 1024) <= 10 * 1024 * 1024);
+
+    #[test]
+    fn dash_streams_buffer_longer_than_progressive_ones() {
+        assert!(stream_buffer_duration_ns(true) > stream_buffer_duration_ns(false));
+    }
+
+    #[test]
+    fn a_chunk_send_gives_up_once_the_sink_is_closing() {
+        let (tx, _rx) = crossbeam_channel::bounded::<WriterCommand>(1);
+        tx.send(WriterCommand::Flush).unwrap();
+        let closing = Arc::new(AtomicBool::new(false));
+        let close = Arc::clone(&closing);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            close.store(true, Ordering::Release);
+        });
+        let result = within(std::time::Duration::from_secs(2), move || {
+            send_chunk(&tx, test_chunk(1), &closing, WRITER_SEND_POLL)
+        });
+        assert_eq!(result, Err(gst::FlowError::Flushing));
+    }
+
+    const TEST_SHUTDOWN: std::time::Duration = std::time::Duration::from_millis(200);
+    const TEST_LIMIT: std::time::Duration = std::time::Duration::from_millis(2200);
+
+    #[test]
+    fn a_writer_that_takes_shutdown_is_joined() {
+        let (tx, rx) = crossbeam_channel::bounded::<WriterCommand>(4);
+        let handle = std::thread::spawn(move || {
+            while let Ok(cmd) = rx.recv() {
+                if let WriterCommand::Shutdown = cmd {
+                    break;
+                }
+            }
+        });
+        let left = within(TEST_LIMIT, move || {
+            let paused = AtomicBool::new(false);
+            let stop = Arc::new(AtomicBool::new(false));
+            shutdown_writer(Some(tx), Some(handle), Some(stop), &paused, TEST_SHUTDOWN)
+        });
+        assert!(left.is_none(), "a writer that took Shutdown must be joined");
+    }
+
+    #[test]
+    fn a_writer_behind_a_full_queue_exits_on_its_stop_flag() {
+        let (tx, rx) = crossbeam_channel::bounded::<WriterCommand>(1);
+        tx.send(WriterCommand::Flush).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&stop);
+        let handle = std::thread::spawn(move || {
+            let _rx = rx;
+            while !seen.load(Ordering::Acquire) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+        let left = within(TEST_LIMIT, move || {
+            let paused = AtomicBool::new(false);
+            shutdown_writer(Some(tx), Some(handle), Some(stop), &paused, TEST_SHUTDOWN)
+        });
+        assert!(
+            left.is_none(),
+            "the stop flag must end a writer the queue can't reach"
+        );
+    }
+
+    #[test]
+    fn a_paused_writer_still_exits() {
+        let (tx, rx) = crossbeam_channel::bounded::<WriterCommand>(4);
+        let paused = Arc::new(AtomicBool::new(true));
+        let spinning = Arc::clone(&paused);
+        let handle = std::thread::spawn(move || {
+            while spinning.load(Ordering::Acquire) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            while let Ok(cmd) = rx.recv() {
+                if let WriterCommand::Shutdown = cmd {
+                    break;
+                }
+            }
+        });
+        let left = within(TEST_LIMIT, move || {
+            shutdown_writer(Some(tx), Some(handle), None, &paused, TEST_SHUTDOWN)
+        });
+        assert!(
+            left.is_none(),
+            "shutdown must unpause the writer so it reads Shutdown"
+        );
+    }
+
+    #[test]
+    fn a_writer_that_takes_shutdown_but_never_exits_is_handed_back_in_time() {
+        let (tx, rx) = crossbeam_channel::bounded::<WriterCommand>(4);
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let held = Arc::clone(&release);
+        let handle = std::thread::spawn(move || {
+            while let Ok(cmd) = rx.recv() {
+                if let WriterCommand::Shutdown = cmd {
+                    held.wait();
+                    break;
+                }
+            }
+        });
+        let left = within(TEST_LIMIT, move || {
+            let paused = AtomicBool::new(false);
+            shutdown_writer(Some(tx), Some(handle), None, &paused, TEST_SHUTDOWN)
+        });
+        let left = left.expect("a writer that never exits must be handed back, not joined");
+        release.wait();
+        left.join().unwrap();
+    }
+
+    #[test]
+    fn a_wedged_writer_is_handed_back_in_time() {
+        let (tx, rx) = crossbeam_channel::bounded::<WriterCommand>(4);
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let held = Arc::clone(&release);
+        let handle = std::thread::spawn(move || {
+            let _rx = rx;
+            held.wait();
+        });
+        let left = within(TEST_LIMIT, move || {
+            let paused = AtomicBool::new(false);
+            let stop = Arc::new(AtomicBool::new(false));
+            shutdown_writer(Some(tx), Some(handle), Some(stop), &paused, TEST_SHUTDOWN)
+        });
+        let left = left.expect("a wedged writer must be handed back, not joined");
+        release.wait();
+        left.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resume_retry_returns_once_the_device_comes_back() {
+        let stop = AtomicBool::new(false);
+        let mut tries = 0;
+        let outcome = retry_resume(
+            || {
+                tries += 1;
+                if tries <= 3 {
+                    Err(libc::EAGAIN)
+                } else {
+                    Ok(())
+                }
+            },
+            &stop,
+        );
+        assert_eq!(outcome, ResumeOutcome::Resumed);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resume_retry_ends_when_the_writer_is_stopped() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let setter = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            setter.store(true, Ordering::Release);
+        });
+        let outcome = within(std::time::Duration::from_secs(1), move || {
+            retry_resume(|| Err(libc::EAGAIN), &stop)
+        });
+        assert_eq!(outcome, ResumeOutcome::Stopped);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resume_retry_fails_on_other_errors() {
+        let stop = AtomicBool::new(false);
+        assert_eq!(
+            retry_resume(|| Err(libc::EIO), &stop),
+            ResumeOutcome::Failed
+        );
+    }
+
+    #[test]
+    fn lingering_writers_that_finish_are_reaped_early() {
+        let mut lingering = vec![std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        })];
+        let started = std::time::Instant::now();
+        reap_lingering_writers(&mut lingering, std::time::Duration::from_secs(1));
+        assert!(lingering.is_empty(), "a finished writer must be reaped");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "reaping must not wait out the deadline once every writer is done"
+        );
+    }
+
+    #[test]
+    fn lingering_writer_still_running_at_the_deadline_is_kept() {
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let held = Arc::clone(&release);
+        let mut lingering = vec![std::thread::spawn(move || {
+            held.wait();
+        })];
+        let started = std::time::Instant::now();
+        reap_lingering_writers(&mut lingering, std::time::Duration::from_millis(200));
+        assert_eq!(
+            lingering.len(),
+            1,
+            "a writer still running must be kept, not joined"
+        );
+        assert!(started.elapsed() >= std::time::Duration::from_millis(200));
+        release.wait();
+        lingering.pop().unwrap().join().unwrap();
+    }
     use crate::proxy::{BlockReason, Capability, HostCaps, Route};
 
     #[test]

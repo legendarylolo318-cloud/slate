@@ -46,7 +46,10 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
   panel with a PRISTINE / MODIFIED verdict.
 - Scrobbling to Last.fm, Libre.fm and ListenBrainz; TIDAL play reporting (toggleable);
   Discord Rich Presence with your own text templates and per-playlist hiding.
-- Listening party: listen together with friends, in sync (see below).
+- Listening party: listen together with friends, in sync, with emoji reactions (see below).
+- Multi-select in track lists (Ctrl / Shift click, Ctrl+A), smarter shuffle (no same artist or album
+  back to back, optional), a per-track lyrics timing nudge, "Like current track" from a global
+  shortcut or the tray, and an optional LLM "DJ mixer" (see below).
 - HTTP / HTTPS / SOCKS5 proxy with fail-closed behaviour.
 - MCP server (`127.0.0.1:5577`) and OBS overlay (`127.0.0.1:5578`), both off by default. The
   MCP server has queue, search, playlist and context tools, an optional access token,
@@ -81,6 +84,23 @@ the next few tracks. Guests can suggest tracks for you to approve.
 - Up to 10 guests. Kicking a guest makes a new invite link. Nothing party-related runs until
   a party starts, and ending it closes everything. Builds without the `party` Cargo feature
   have no party at all.
+
+Guests and the host can react to the current track with 👍 ❤️ 🔥 😂 🎉 👏 (shown next to the player;
+the host sees the counts). If the host disappears, the co-host (or the guest who joined first) can take
+the party over and the other guests follow to the new host without a new link.
+
+## DJ mixer
+
+Settings → Playback → DJ mixer (off by default). When your queue runs out, instead of dropping
+straight to the radio, a chat model you configure picks the next genre, Slate searches TIDAL for
+matching tracks and queues a block of them.
+
+- **Bring your own model.** Any OpenAI-compatible `chat/completions` endpoint: OpenAI, OpenRouter,
+  Ollama or something local. The titles and artists of the last 20 tracks are sent to it; nothing is
+  sent while the DJ is off. Requests go through Slate's proxy settings.
+- **Steer it.** The direction box takes plain words ("deeper into house"); "DJ up a block" asks for
+  one now; "Test" checks the endpoint and says why it fails.
+- **Fails soft.** Any error falls back to the usual radio, so the music does not stop.
 
 Security, performance and feature-parity review results are in [REVIEW.md](REVIEW.md).
 

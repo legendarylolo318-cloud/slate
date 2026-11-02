@@ -19,6 +19,7 @@ use super::proto::{
     self, Flood, GuestMsg, HostMsg, PingSample, PlayState, RateLimit, ReqView, Roster,
     MAX_MESSAGE_BYTES, MAX_REQUEST_VIEWS, PROTOCOL_VERSION,
 };
+use super::reactions::Reactions;
 use super::requests::{
     Policy, Reject, Request, RequestBook, RequestMode, RequestTrack, Submitted, Vote, VoteSkip,
     RECENT_HISTORY,
@@ -62,6 +63,12 @@ pub enum Event {
     },
     /// Enough guests voted to skip (host side).
     VoteSkipPassed,
+    /// Someone reacted to the playing track (host side); `tally` is the track's counts.
+    Reaction {
+        from: String,
+        emoji: u8,
+        tally: Vec<(u8, u32)>,
+    },
     /// The connection ended on purpose (guest side: ended, kicked, left) or the party closed.
     Closed(String),
     /// Guest side: the connection dropped without a goodbye; the host may come back.
@@ -88,7 +95,18 @@ fn decode_ticket(s: &str) -> Result<Ticket, String> {
 }
 
 async fn bind(relay: Option<&str>, accept: bool) -> Result<Endpoint, String> {
+    bind_with(relay, accept, None).await
+}
+
+async fn bind_with(
+    relay: Option<&str>,
+    accept: bool,
+    key: Option<iroh::SecretKey>,
+) -> Result<Endpoint, String> {
     let mut b = Endpoint::builder(presets::N0);
+    if let Some(key) = key {
+        b = b.secret_key(key);
+    }
     if accept {
         b = b.alpns(vec![ALPN.to_vec()]);
     }
@@ -178,6 +196,48 @@ fn secret_matches(given: &str, expected: &str) -> bool {
     diff == 0
 }
 
+/// What the successor was given: the key to host under and the invite secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Heir {
+    /// URL-safe base64 of the 32-byte key.
+    pub key: String,
+    pub secret: String,
+}
+
+impl std::fmt::Debug for Heir {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Heir(..)")
+    }
+}
+
+impl Heir {
+    fn encode_key(k: &iroh::SecretKey) -> String {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(k.to_bytes())
+    }
+
+    fn secret_key(&self) -> Result<iroh::SecretKey, String> {
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&self.key)
+            .map_err(|_| "The handoff key is damaged.".to_string())?;
+        let arr: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| "The handoff key is damaged.".to_string())?;
+        Ok(iroh::SecretKey::from_bytes(&arr))
+    }
+}
+
+/// The invite link of a party that continues under `id` (the public id from
+/// [`HostMsg::Successor`]) with `secret`. No addresses: the guest finds the new host
+/// through iroh's address lookup, like any endpoint known only by its id.
+pub fn heir_link(id: &str, secret: &str) -> Result<String, String> {
+    let id: iroh::PublicKey = id.parse().map_err(|_| "The new host's id is not valid.")?;
+    let ticket = encode_ticket(&Ticket {
+        a: EndpointAddr::new(id),
+        s: secret.to_string(),
+    })?;
+    Ok(proto::ticket_link(&ticket))
+}
+
 // ---------------------------------------------------------------- host
 
 struct HostState {
@@ -188,6 +248,7 @@ struct HostState {
     kicks: HashMap<u64, CancellationToken>,
     book: RequestBook,
     vote: VoteSkip,
+    reactions: Reactions,
     /// Every upcoming track id (capped) and who asked for the first few.
     upcoming: Vec<u64>,
     by: Vec<String>,
@@ -204,6 +265,10 @@ enum Audience {
 }
 
 struct HostInner {
+    /// Handed to the successor, who hosts under it after this host is gone, and the
+    /// guest it was handed to. A new successor gets a new key, so a guest who stopped
+    /// being the successor (kicked, left, a co-host was named) cannot host the party.
+    heir: Mutex<(iroh::SecretKey, Option<u64>)>,
     /// The invite's secret. A kick replaces it, so the kicked guest's link stops working.
     secret: Mutex<String>,
     started: Instant,
@@ -252,6 +317,50 @@ impl HostInner {
             (s.roster.names(), s.roster.cohosts())
         };
         self.send(Audience::All, HostMsg::Guests { guests, cohosts });
+        self.push_heir(None);
+    }
+
+    /// Tells the guests where the party continues if this host goes away, and gives the
+    /// successor (a co-host, else the earliest guest) the key to host it.
+    ///
+    /// `only`: just that guest (a joiner, whose connection subscribes after the roster
+    /// broadcast); `None`: everyone.
+    fn push_heir(&self, only: Option<u64>) {
+        let successor = {
+            let s = self.lock();
+            super::requests::successor(&s.roster.successor_input())
+        };
+        let Some(successor) = successor else { return };
+        let (key, rotated) = {
+            let mut heir = self
+                .heir
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let rotated = heir.1.is_some_and(|g| g != successor);
+            if rotated {
+                heir.0 = iroh::SecretKey::generate();
+            }
+            heir.1 = Some(successor);
+            (heir.0.clone(), rotated)
+        };
+        // A new key moves the party's next home: everyone hears it, not only `only`.
+        let only = if rotated { None } else { only };
+        let secret = self.secret().clone();
+        self.send(
+            only.map_or(Audience::All, Audience::Guest),
+            HostMsg::Successor {
+                id: key.public().to_string(),
+                secret,
+            },
+        );
+        if only.is_none_or(|g| g == successor) {
+            self.send(
+                Audience::Guest(successor),
+                HostMsg::Heir {
+                    key: proto::Redacted(Heir::encode_key(&key)),
+                },
+            );
+        }
     }
 
     fn secret(&self) -> std::sync::MutexGuard<'_, String> {
@@ -290,11 +399,30 @@ impl Host {
         vote_percent: Option<u8>,
         events: mpsc::UnboundedSender<Event>,
     ) -> Result<Self, String> {
-        let endpoint = bind(relay, true).await?;
+        Self::start_as(relay, host_name, policy, vote_percent, events, None).await
+    }
+
+    /// [`Host::start`] continuing a party whose host went away: `heir` is what the old
+    /// host gave this guest (see [`Heir`]), so the party keeps its public id and invite
+    /// secret and the other guests can find it without a new link.
+    pub async fn start_as(
+        relay: Option<&str>,
+        host_name: &str,
+        policy: Policy,
+        vote_percent: Option<u8>,
+        events: mpsc::UnboundedSender<Event>,
+        heir: Option<Heir>,
+    ) -> Result<Self, String> {
+        let (key, secret) = match heir {
+            Some(h) => (h.secret_key()?, h.secret),
+            None => (iroh::SecretKey::generate(), new_secret()),
+        };
+        // The key the party continues under if this host goes away in turn.
+        let heir_key = iroh::SecretKey::generate();
+        let endpoint = bind_with(relay, true, Some(key)).await?;
         if relay.map(str::trim) != Some("none") {
             let _ = tokio::time::timeout(ONLINE_WAIT, endpoint.online()).await;
         }
-        let secret = new_secret();
         // Checked once here, so `link` cannot fail later.
         encode_ticket(&Ticket {
             a: endpoint.addr(),
@@ -303,6 +431,7 @@ impl Host {
         let (tx, _) = broadcast::channel(64);
         let inner = Arc::new(HostInner {
             secret: Mutex::new(secret),
+            heir: Mutex::new((heir_key, None)),
             started: Instant::now(),
             host_name: proto::clean_name(host_name),
             tx,
@@ -314,6 +443,7 @@ impl Host {
                 kicks: HashMap::new(),
                 book: RequestBook::new(policy),
                 vote: VoteSkip::new(vote_percent),
+                reactions: Reactions::default(),
                 upcoming: Vec::new(),
                 by: Vec::new(),
                 recent: Vec::new(),
@@ -334,6 +464,12 @@ impl Host {
         })
     }
 
+    /// This host's public id, as announced to guests in [`HostMsg::Successor`] when this
+    /// party was the heir of an earlier one.
+    pub fn id(&self) -> String {
+        self.endpoint.id().to_string()
+    }
+
     /// The invite: `slate://party/<ticket>`. It changes after a kick.
     pub fn link(&self) -> String {
         let ticket = encode_ticket(&Ticket {
@@ -342,6 +478,30 @@ impl Host {
         })
         .unwrap_or_default();
         proto::ticket_link(&ticket)
+    }
+
+    /// The host's own reaction to the playing track (guest id 0 is never a guest).
+    pub fn react(&self, e: u8) -> bool {
+        let counted = {
+            let mut s = self.inner.lock();
+            let now = self.inner.now_ms();
+            s.reactions.add(0, e, now).then(|| s.reactions.tally())
+        };
+        let Some(tally) = counted else { return false };
+        let from = self.inner.host_name.clone();
+        self.inner.send(
+            Audience::All,
+            HostMsg::Reaction {
+                from: from.clone(),
+                e,
+            },
+        );
+        let _ = self.inner.events.send(Event::Reaction {
+            from,
+            emoji: e,
+            tally,
+        });
+        true
     }
 
     pub fn guest_names(&self) -> Vec<String> {
@@ -359,6 +519,7 @@ impl Host {
                 s.recent.drain(..extra);
             }
             s.vote.reset();
+            s.reactions.new_track();
             let HostState {
                 book,
                 upcoming,
@@ -598,7 +759,9 @@ impl Host {
         match token {
             Some(t) => {
                 // A new invite: the kicked guest's link (and anyone they passed it to) is dead.
-                // Guests still in the party stay connected.
+                // Guests still in the party stay connected. The new secret reaches them
+                // with the roster change once the kicked guest is gone; sending it here
+                // would race the kick and could hand it to the kicked guest.
                 *self.inner.secret() = new_secret();
                 t.cancel();
                 true
@@ -760,10 +923,13 @@ async fn serve_guest(
     inner.push_guests();
 
     let mut rx = inner.tx.subscribe();
+    inner.push_heir(Some(id));
     let mut flood = Flood::default();
     let result: Result<(), String> = async {
         loop {
             tokio::select! {
+                // A kick wins over anything queued for this guest (a new secret).
+                biased;
                 () = cancel.cancelled() => return Ok(()),
                 () = kick.cancelled() => {
                     let _ = write_frame(&mut send, &proto::encode(&HostMsg::Kicked)?).await;
@@ -823,6 +989,19 @@ async fn serve_guest(
                                 inner.push_requests();
                             }
                         }
+                        GuestMsg::React { e } => {
+                            // An index this version does not know, or a guest over the
+                            // limit, is dropped quietly.
+                            let counted = {
+                                let mut s = inner.lock();
+                                let now = inner.now_ms();
+                                s.reactions.add(id, e, now).then(|| s.reactions.tally())
+                            };
+                            if let Some(tally) = counted {
+                                inner.send(Audience::All, HostMsg::Reaction { from: name.clone(), e });
+                                let _ = inner.events.send(Event::Reaction { from: name.clone(), emoji: e, tally });
+                            }
+                        }
                         GuestMsg::VoteSkip => {
                             let outcome = {
                                 let mut s = inner.lock();
@@ -871,6 +1050,7 @@ async fn serve_guest(
         s.kicks.remove(&id);
         s.book.forget_guest(id);
         s.vote.forget(id);
+        s.reactions.forget(id);
     }
     let _ = inner.events.send(Event::GuestLeft(name));
     inner.push_guests();
@@ -1051,6 +1231,11 @@ impl Guest {
     /// Tells the host this guest cannot play `track_id` (region or plan).
     pub async fn unavailable(&self, track_id: u64) -> Result<(), String> {
         self.send_msg(&GuestMsg::Unavailable { track_id }).await
+    }
+
+    /// Reacts to the playing track with emoji number `e`.
+    pub async fn react(&self, e: u8) -> Result<(), String> {
+        self.send_msg(&GuestMsg::React { e }).await
     }
 
     pub async fn vote_skip(&self) -> Result<(), String> {
