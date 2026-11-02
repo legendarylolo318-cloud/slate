@@ -913,8 +913,6 @@ impl Backend {
         });
     }
 
-    /// Linux: remembers that the window starts hidden, so a failed tray shows it.
-    #[cfg(target_os = "linux")]
     pub fn set_volume(&self, level: f32) {
         let level = level.clamp(0.0, 1.0);
         self.ui(move |w| w.set_volume(level));
