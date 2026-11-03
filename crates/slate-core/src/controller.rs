@@ -1028,6 +1028,18 @@ impl Controller {
         self.lock_queue().await.manual.clear();
     }
 
+    /// Empties the queue and forgets the playing track (the MPD `clear`); the caller stops audio.
+    pub async fn clear_all(&self) {
+        let mut q = self.lock_queue().await;
+        q.clear();
+        q.current = None;
+    }
+
+    /// Shuffles the upcoming tracks once, whatever the shuffle button says.
+    pub async fn shuffle_upcoming(&self) {
+        self.lock_queue().await.shuffle_upcoming(&mut rand::rng());
+    }
+
     pub async fn clear_queue(&self) {
         self.lock_queue().await.clear();
     }

@@ -108,6 +108,24 @@ Security, performance and feature-parity review results are in [REVIEW.md](REVIE
 stream over HTTPS, then exits (useful for packaged builds). `slate --self-test --party-relay`
 checks that the iroh relay a party would use (the default, or your custom one) is reachable.
 
+## Phone remote (MPD)
+
+Slate can speak the MPD protocol, so MPD clients (M.A.L.P. on Android, MaximumMPD and Rigelian on iPhone, `mpc` on a computer) can control it. It is off by default and no socket exists until you switch it on.
+
+1. Settings → Integrations → **MPD server**: switch it on. It listens on `127.0.0.1:6600` (this computer only).
+2. For a phone, switch on **Allow LAN**. Slate then listens on every network interface and generates a password; the settings page shows the password and your `IP:port`. **Copy** puts the password on the clipboard.
+3. In the app, add a server: host = the IP shown, port = 6600, password = the one from Slate.
+   - **iPhone** (MaximumMPD / Rigelian): Settings → add server, enter host, port and password, then pick it.
+   - **Android** (M.A.L.P.): Settings → Profiles → add profile, same three fields.
+4. Firewall: allow TCP 6600 from your local network.
+   - ufw: `sudo ufw allow from 192.168.0.0/16 to any port 6600 proto tcp`
+   - firewalld: `sudo firewall-cmd --add-port=6600/tcp` (add `--permanent` to keep it)
+   - Windows: choose **Private networks** in the prompt Windows shows the first time.
+
+Your TIDAL playlists appear as stored playlists, search uses TIDAL track search, and the MPD playlist is the playing track followed by the queue. Limits: 8 clients, 60 commands per 10 s each, idle connections close after 10 minutes.
+
+**Warning:** anyone on the network who has the password can control playback. Use LAN mode on trusted networks only.
+
 ## Build
 
 Requirements: a recent stable Rust toolchain and GStreamer 1.20+ (1.24+ for gapless).

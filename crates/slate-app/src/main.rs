@@ -33,6 +33,7 @@ mod keys;
 mod library;
 mod mini;
 mod models;
+mod mpd_host;
 mod pages;
 mod panels;
 #[cfg_attr(not(feature = "party"), path = "party_off.rs")]

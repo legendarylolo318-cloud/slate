@@ -52,6 +52,7 @@ pub mod keymap;
 pub mod list_filter;
 pub mod logging;
 pub mod mcp;
+pub mod mpd;
 pub mod overlay;
 pub mod party;
 pub mod pipeline_probe;
@@ -98,6 +99,9 @@ mod defaults {
     }
     pub fn mcp_port() -> u16 {
         5577
+    }
+    pub fn mpd_port() -> u16 {
+        6600
     }
     pub fn overlay_enabled() -> bool {
         false
@@ -226,6 +230,17 @@ pub struct Settings {
     /// Smarter shuffle: avoid the same artist, then album, back to back. Off by default.
     #[serde(default)]
     pub smart_shuffle: bool,
+    /// MPD protocol server for MPD clients (off by default).
+    #[serde(default)]
+    pub mpd_enabled: bool,
+    #[serde(default = "defaults::mpd_port")]
+    pub mpd_port: u16,
+    /// Listen on every interface (needs a password) instead of this computer only.
+    #[serde(default)]
+    pub mpd_lan: bool,
+    /// MPD `password`; required for LAN, empty (none) is allowed on this computer only.
+    #[serde(default)]
+    pub mpd_password: String,
     /// Shuffle albums (tracks stay together in album order) instead of single tracks.
     #[serde(default)]
     pub album_shuffle: bool,
@@ -322,6 +337,10 @@ impl Default for Settings {
             bit_perfect: false,
             gapless: true,
             smart_shuffle: false,
+            mpd_enabled: false,
+            mpd_port: 6600,
+            mpd_lan: false,
+            mpd_password: String::new(),
             album_shuffle: false,
             hide_explicit: false,
             hide_ai: false,
@@ -409,6 +428,12 @@ pub struct AppState {
     pub overlay_state: crate::overlay::OverlayStateRef,
     pub overlay_handle: Mutex<Option<crate::overlay::OverlayHandle>>,
     pub signal_path: Arc<SignalPathTracker>,
+    /// The running MPD server; `None` (no socket, no task) unless it is switched on.
+    pub mpd_handle: Mutex<Option<crate::mpd::server::Handle>>,
+    /// How the MPD server reaches the player; set once by the app.
+    pub mpd_host: std::sync::OnceLock<Arc<dyn crate::mpd::Host>>,
+    /// True only while the MPD server runs; app hooks check this before doing any work.
+    pub mpd_active: AtomicBool,
 }
 
 /// Evaluates a smart playlist for the MCP tools: id → (name, tracks) or a message.
@@ -702,6 +727,9 @@ impl AppState {
             },
             overlay_handle: Mutex::new(None),
             signal_path,
+            mpd_handle: Mutex::new(None),
+            mpd_host: std::sync::OnceLock::new(),
+            mpd_active: AtomicBool::new(false),
         })
     }
 

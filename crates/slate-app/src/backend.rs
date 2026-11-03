@@ -27,7 +27,7 @@ pub(crate) struct Shared {
     playing_changed: tokio::sync::Notify,
     has_track: AtomicBool,
     /// Audio pipeline holds the current track (false for a restored, not yet started one).
-    loaded: AtomicBool,
+    pub(crate) loaded: AtomicBool,
     pub(crate) shuffle: AtomicBool,
     current_id: AtomicU64,
     /// Volume before muting, as `f32` bits; 0 when not muted.
@@ -59,6 +59,10 @@ pub(crate) struct Shared {
     pub(crate) update: Mutex<Option<(String, String)>>,
     /// Bumped on every volume change so only the last of a drag is persisted.
     volume_seq: AtomicU64,
+    /// The volume (0..1) as `f32` bits, for the MPD server.
+    pub(crate) volume: AtomicU32,
+    /// A status read for MPD clients is already scheduled.
+    pub(crate) mpd_pending: AtomicBool,
     /// The music video open in the player, 0 when none.
     pub(crate) video_id: AtomicU64,
     /// Linux: the task holding the global-shortcuts portal session.
@@ -275,6 +279,9 @@ impl Backend {
                 slate_core::controller::ContentPrefs::hiding(hide_explicit, hide_ai);
             crate::library::set_content_hide(content_prefs);
             let volume = state.load_settings().map(|s| s.volume).unwrap_or(1.0);
+            this.shared
+                .volume
+                .store(volume.to_bits(), Ordering::Relaxed);
             this.ui(move |w| w.set_volume(volume));
 
             // Decide the screen first, from the saved settings alone: no
@@ -307,6 +314,11 @@ impl Backend {
                 Err(e) => tracing::warn!("queue restore failed: {}", e.log_safe()),
             }
             let _ = this.shared.controller.set(Arc::clone(&controller));
+            // The MPD server (off unless switched on) drives the player through this.
+            let _ = state
+                .mpd_host
+                .set(crate::mpd_host::AppMpd::new(this.clone()));
+            slate_core::commands::mpd::mpd_start_if_enabled(&state).await;
             // Lets the MCP tools evaluate a smart playlist (only called when an agent asks).
             let for_mcp = this.clone();
             let _ = state.smart_bridge.set(Arc::new(move |id: String| {
@@ -839,6 +851,7 @@ impl Backend {
             let Some(ctl) = this.controller() else { return };
             let on = ctl.toggle_shuffle().await;
             this.shared.shuffle.store(on, Ordering::Relaxed);
+            this.mpd_changed();
             this.ui(move |w| w.set_shuffle(on));
             if let Some(state) = this.state() {
                 let _ = playback::update_mpris_shuffle(&state, on);
@@ -860,6 +873,7 @@ impl Backend {
     }
 
     fn publish_repeat(&self, mode: Repeat) {
+        self.mpd_changed();
         self.ui(move |w| w.set_repeat(i32::from(mode.as_u8())));
         if let Some(state) = self.state() {
             let _ = playback::update_mpris_loop_status(&state, mode.as_u8());
@@ -915,6 +929,8 @@ impl Backend {
 
     pub fn set_volume(&self, level: f32) {
         let level = level.clamp(0.0, 1.0);
+        self.shared.volume.store(level.to_bits(), Ordering::Relaxed);
+        self.mpd_changed();
         self.ui(move |w| w.set_volume(level));
         let Some(state) = self.state() else { return };
         // Dragging the bar fires this per pointer event. The audible change is

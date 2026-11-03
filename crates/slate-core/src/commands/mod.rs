@@ -3,6 +3,7 @@ pub mod feed;
 pub mod library;
 pub mod mcp;
 pub mod metadata;
+pub mod mpd;
 pub mod overlay;
 pub mod pages;
 pub mod playback;

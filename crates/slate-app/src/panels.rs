@@ -19,6 +19,7 @@ impl Backend {
 
     pub async fn publish_queue(&self) {
         self.publish_queue_to_mcp().await;
+        self.mpd_changed();
         let Some(ctl) = self.controller() else { return };
         if crate::party_ui::hosting() {
             let ids: Vec<u64> = ctl

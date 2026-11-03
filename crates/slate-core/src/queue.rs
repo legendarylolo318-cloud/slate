@@ -622,6 +622,11 @@ impl Queue {
         }
     }
 
+    /// Shuffles the context queue once (MPD `shuffle`).
+    pub fn shuffle_upcoming(&mut self, rng: &mut impl rand::Rng) {
+        self.shuffle_queue(rng);
+    }
+
     /// Shuffles the queue again with the current mode, keeping the order `toggle_shuffle`
     /// restores. Does nothing while shuffle is off.
     pub fn reshuffle(&mut self, rng: &mut impl rand::Rng) {

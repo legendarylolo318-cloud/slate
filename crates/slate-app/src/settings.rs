@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use slate_core::commands::{mcp, overlay, scrobble, utility};
+use slate_core::commands::{mcp, mpd, overlay, scrobble, utility};
 use slate_core::{AppState, ProxySettings, ProxyType};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
@@ -40,6 +40,7 @@ struct Snapshot {
     auth_max: bool,
     mcp: (bool, String),
     overlay: (bool, String),
+    mpd: slate_core::commands::mpd::MpdInfo,
     dj: slate_core::dj::DjSettings,
 }
 
@@ -101,6 +102,7 @@ async fn snapshot(state: &Arc<AppState>) -> Snapshot {
     if let Ok(i) = overlay::overlay_get_connection_info(state).await {
         s.overlay = (i.enabled, i.url.unwrap_or_default());
     }
+    s.mpd = mpd::mpd_info(state).await;
     s
 }
 
@@ -206,6 +208,10 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_mcp_url(s.mcp.1.into());
     g.set_overlay_enabled(s.overlay.0);
     g.set_overlay_url(s.overlay.1.into());
+    g.set_mpd_enabled(s.mpd.running);
+    g.set_mpd_lan(s.mpd.lan);
+    g.set_mpd_address(s.mpd.address.into());
+    g.set_mpd_password(s.mpd.password.into());
     g.set_version(env!("CARGO_PKG_VERSION").into());
 }
 
@@ -330,6 +336,10 @@ impl Backend {
                     .await
                     .map(|_| ())
                     .map_err(|e| e.log_safe()),
+                "mpd" => mpd::mpd_set_enabled(&state, v)
+                    .await
+                    .map_err(|e| e.log_safe()),
+                "mpd-lan" => mpd::mpd_set_lan(&state, v).await.map_err(|e| e.log_safe()),
                 "overlay" => overlay::overlay_set_enabled(&state, v)
                     .await
                     .map(|_| ())
@@ -570,6 +580,23 @@ impl Backend {
                         .and_then(|i| i.url);
                     this.copy_setting_url(url, "MCP URL").await;
                 }
+                "mpd-copy-password" => {
+                    let info = mpd::mpd_info(&state).await;
+                    this.copy_setting_url(Some(info.password), "MPD password")
+                        .await;
+                }
+                "mpd-new-password" => match mpd::mpd_new_password(&state).await {
+                    Ok(_) => {
+                        this.settings_status(
+                            "New MPD password set; connected clients were disconnected.",
+                        );
+                        this.load_settings_ui();
+                    }
+                    Err(e) => this.settings_status(format!(
+                        "Could not change the password: {}",
+                        e.log_safe()
+                    )),
+                },
                 "overlay-copy" => {
                     let url = overlay::overlay_get_connection_info(&state)
                         .await

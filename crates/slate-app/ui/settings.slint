@@ -93,6 +93,10 @@ export global SettingsState {
     in-out property <string> mcp-url;
     in-out property <bool> overlay-enabled;
     in-out property <string> overlay-url;
+    in-out property <bool> mpd-enabled;
+    in-out property <bool> mpd-lan;
+    in-out property <string> mpd-address;
+    in-out property <string> mpd-password;
     // Settings search
     in-out property <string> query;
     in-out property <[string]> search-results;
@@ -846,6 +850,25 @@ export component SettingsPage inherits Rectangle {
                         label: "Overlay URL";
                         hint: "Paste it into an OBS browser source.";
                         Button { label: "Copy URL"; clicked => { SettingsState.action("overlay-copy"); } }
+                    }
+                    Row {
+                        label: "MPD server";
+                        hint: SettingsState.mpd-enabled ? ("Listening on " + SettingsState.mpd-address + ". Phone and desktop MPD clients can control Slate; see \"Phone remote (MPD)\" in the README.") : "Lets MPD clients (M.A.L.P., MaximumMPD, Rigelian, mpc) control Slate. Local only (127.0.0.1:6600) unless you allow the LAN. Off by default.";
+                        Toggle { checked: SettingsState.mpd-enabled; toggled(v) => { SettingsState.mpd-enabled = v; SettingsState.changed-bool("mpd", v); } }
+                    }
+                    if SettingsState.mpd-enabled: Row {
+                        label: "Allow LAN";
+                        hint: "Listen on every network interface so a phone on your Wi-Fi can connect. A password is required, and anyone on the network who has it can control playback: use it on trusted networks only.";
+                        Toggle { checked: SettingsState.mpd-lan; toggled(v) => { SettingsState.mpd-lan = v; SettingsState.changed-bool("mpd-lan", v); } }
+                    }
+                    if SettingsState.mpd-enabled && SettingsState.mpd-lan: Row {
+                        label: "MPD password";
+                        hint: SettingsState.mpd-password;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { label: "Copy"; clicked => { SettingsState.action("mpd-copy-password"); } }
+                            Button { label: "New password"; clicked => { SettingsState.action("mpd-new-password"); } }
+                        }
                     }
                 }
 

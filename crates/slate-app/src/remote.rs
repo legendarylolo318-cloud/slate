@@ -306,6 +306,9 @@ impl Backend {
     /// itself and only needs changes of track, play state and position jumps.
     pub(crate) fn publish_now(&self, overlay: bool) {
         let Some(state) = self.state() else { return };
+        if overlay {
+            self.mpd_changed();
+        }
         let now = self.shared.now.lock().ok().and_then(|n| n.clone());
         let playing = self.shared.playing.load(Ordering::Relaxed);
         let position = f32::from_bits(self.shared.position.load(Ordering::Relaxed)).max(0.0);
