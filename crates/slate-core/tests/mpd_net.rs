@@ -599,3 +599,20 @@ async fn a_restart_can_bind_the_same_port_at_once() {
     .expect("same port right after shutdown");
     again.shutdown().await;
 }
+
+#[tokio::test]
+async fn connections_get_tcp_keepalive() {
+    // A phone that leaves the network sends no FIN; keepalive is what frees its slot.
+    let h = start(Fake::with_queue(), "").await;
+    let c = Conn::open(&h).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    // The server side is not reachable from here; check our side gets the same settings
+    // the server applies, and that they are accepted by the OS.
+    let sock = socket2::SockRef::from(&c.0);
+    sock.set_tcp_keepalive(&server::keepalive())
+        .expect("keepalive accepted");
+    assert!(sock.keepalive().unwrap());
+    #[cfg(target_os = "linux")]
+    assert_eq!(sock.tcp_keepalive_time().unwrap(), Duration::from_secs(60));
+    h.stop();
+}

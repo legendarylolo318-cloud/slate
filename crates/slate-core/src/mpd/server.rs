@@ -300,6 +300,9 @@ async fn serve(sh: Arc<Shared>, mut sock: TcpStream, _peer: SocketAddr) {
     }
     let _slot = Slot(Arc::clone(&sh));
     let _ = sock.set_nodelay(true);
+    // A phone that drops off the network leaves a half-open connection; a client waiting in
+    // `idle` sends nothing, so without keepalive it would hold its slot forever.
+    let _ = socket2::SockRef::from(&sock).set_tcp_keepalive(&keepalive());
     let mut stop = sh.stop.clone();
     let (rd, mut wr) = sock.into_split();
     let mut client = Peer::new(rd, sh.events.subscribe(), sh.password.is_empty());
@@ -311,6 +314,14 @@ async fn serve(sh: Arc<Shared>, mut sock: TcpStream, _peer: SocketAddr) {
         log::debug!("[mpd] connection ended: {e}");
     }
     let _ = wr.shutdown().await;
+}
+
+/// Probes a silent peer after a minute, then every 15 s: a dead one is gone within ~3 min.
+pub fn keepalive() -> socket2::TcpKeepalive {
+    let k = socket2::TcpKeepalive::new().with_time(Duration::from_secs(60));
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+    let k = k.with_interval(Duration::from_secs(15));
+    k
 }
 
 /// Reads lines of at most [`proto::MAX_LINE`] bytes. Cancel safe.
