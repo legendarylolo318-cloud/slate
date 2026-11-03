@@ -992,13 +992,13 @@ export component SettingsPage inherits Rectangle {
                     }
                     if SettingsState.party-role != "": HorizontalLayout {
                         spacing: 8px;
-                        Text { text: "Chat (" + PartyState.chat-lines.length + ")"; color: Theme.text; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: "Chat (" + PartyState.chat-count + ")"; color: Theme.text; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
                         Button { label: PartyState.chat-open ? "Hide" : "Show"; clicked => { PartyState.chat-open = !PartyState.chat-open; } }
                     }
                     if SettingsState.party-role != "" && PartyState.chat-open: VerticalLayout {
                         spacing: 4px;
-                        if PartyState.chat-lines.length == 0: Text { text: "No messages yet. Messages live in memory only and are gone when the party ends."; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; }
-                        for l[i] in PartyState.chat-lines: Text { visible: i >= PartyState.chat-lines.length - 8; height: i >= PartyState.chat-lines.length - 8 ? 22px : 0px; text: l; color: Theme.text; overflow: elide; vertical-alignment: center; }
+                        if PartyState.chat-count == 0: Text { text: "No messages yet. Messages live in memory only and are gone when the party ends."; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; }
+                        for l in PartyState.chat-recent: Text { height: 22px; text: l; color: Theme.text; overflow: elide; vertical-alignment: center; }
                         HorizontalLayout {
                             spacing: 8px;
                             TextField { text <=> SettingsState.party-chat-draft; placeholder: "Say something (200 characters)"; field-width: 360px; accepted(t) => { SettingsState.action("party-chat-send"); } }

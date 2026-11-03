@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use serde_json::Value;
-use slate_core::commands::{library as lib_cmds, metadata, search, utility};
+use slate_core::commands::{library as lib_cmds, metadata, playback, search, utility};
 use slate_core::mpd::{proto, Action, BoxFut, Host, HostError, PlayState, Song, Status};
 use slate_core::queue::{Repeat, Track};
 
@@ -120,6 +120,24 @@ impl AppMpd {
             .map_err(HostError::system)
     }
 
+    /// Stops audio and waits for it, so a command that follows (`play` after `clear`) cannot
+    /// be undone by a stop that was still queued.
+    async fn stop_now(&self) {
+        if let Some(state) = self.backend.state() {
+            let _ = playback::stop_track(&state).await;
+        }
+        self.backend.shared.loaded.store(false, Ordering::Relaxed);
+        self.backend.shared_set_playing(false);
+    }
+
+    /// Plays the queue entry `index` and waits until it has started.
+    async fn play_index(&self, index: usize) {
+        if let Some(ctl) = self.backend.controller() {
+            let outcome = ctl.play_from_queue(index).await;
+            self.backend.apply(outcome).await;
+        }
+    }
+
     async fn act_now(&self, action: Action) -> Result<(), HostError> {
         let b = &self.backend;
         let Some(ctl) = b.controller() else {
@@ -130,12 +148,12 @@ impl AppMpd {
                 if ctl.with_queue(|q| q.current.is_some()).await {
                     b.handle_control(Control::Play);
                 } else {
-                    b.queue_play(0);
+                    self.play_index(0).await;
                 }
             }
             Action::Pause(true) => b.handle_control(Control::Pause),
             Action::Pause(false) => b.handle_control(Control::Play),
-            Action::Stop => b.handle_control(Control::Stop),
+            Action::Stop => self.stop_now().await,
             Action::Next => b.next(),
             Action::Previous => b.previous(),
             Action::PlayPos(pos) => {
@@ -150,7 +168,7 @@ impl AppMpd {
                     let outcome = ctl.resume_current().await;
                     b.apply(outcome).await;
                 } else {
-                    b.queue_play(pos - off);
+                    self.play_index(pos - off).await;
                 }
             }
             Action::Seek(secs) => b.seek_to_secs(secs as f32),
@@ -159,7 +177,7 @@ impl AppMpd {
             Action::SetRepeat(on) => b.handle_control(Control::SetLoop(u8::from(on))),
             Action::Clear => {
                 ctl.clear_all().await;
-                b.handle_control(Control::Stop);
+                self.stop_now().await;
                 b.refresh_queue_info().await;
                 b.save().await;
             }
@@ -175,7 +193,9 @@ impl AppMpd {
                     // Removing the playing song moves on to the next one.
                     b.next();
                 } else {
-                    b.queue_remove(pos - off);
+                    ctl.remove_from_queue(pos - off).await;
+                    b.refresh_queue_info().await;
+                    b.save().await;
                 }
             }
             Action::Move { from, to } => {
@@ -189,7 +209,10 @@ impl AppMpd {
                 if from >= len + off || to >= len + off {
                     return Err(HostError::no_exist("Bad song index"));
                 }
-                b.queue_move(from - off, to - off);
+                if ctl.move_in_queue(from - off, to - off).await {
+                    b.refresh_queue_info().await;
+                    b.save().await;
+                }
             }
             Action::Add { uri, pos } => {
                 let id =

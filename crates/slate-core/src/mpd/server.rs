@@ -21,6 +21,18 @@ pub const MAX_CLIENTS: usize = 8;
 pub const RATE_COMMANDS: usize = 60;
 pub const RATE_WINDOW: Duration = Duration::from_secs(10);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
+/// A connection that has not given the password yet is dropped after this long, so silent
+/// sockets cannot hold the 8 client slots.
+pub const PREAUTH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long to wait for the next line from a peer.
+pub fn read_timeout(authed: bool) -> Duration {
+    if authed {
+        IDLE_TIMEOUT
+    } else {
+        PREAUTH_TIMEOUT
+    }
+}
 /// Searches go to TIDAL: at most one at a time, this far apart (all clients together).
 const SEARCH_SPACING: Duration = Duration::from_millis(500);
 const VERSION: &str = "0.23.5";
@@ -396,17 +408,18 @@ impl Peer {
             .await
             .map_err(|e| e.to_string())?;
         loop {
-            let line = match tokio::time::timeout(IDLE_TIMEOUT, self.lines.next()).await {
-                Err(_) => return Ok(()),
-                Ok(Err(LineError::Closed)) => return Ok(()),
-                Ok(Err(LineError::TooLong)) => {
-                    let _ = wr
-                        .write_all(ack(proto::ACK_ARG, 0, "", "line too long").as_bytes())
-                        .await;
-                    return Ok(());
-                }
-                Ok(Ok(l)) => l,
-            };
+            let line =
+                match tokio::time::timeout(read_timeout(self.authed), self.lines.next()).await {
+                    Err(_) => return Ok(()),
+                    Ok(Err(LineError::Closed)) => return Ok(()),
+                    Ok(Err(LineError::TooLong)) => {
+                        let _ = wr
+                            .write_all(ack(proto::ACK_ARG, 0, "", "line too long").as_bytes())
+                            .await;
+                        return Ok(());
+                    }
+                    Ok(Ok(l)) => l,
+                };
             let mut out: Out = Vec::new();
             let flow = self.handle_line(sh, line, &mut out, wr).await?;
             if !out.is_empty() {
@@ -991,5 +1004,17 @@ pub fn describe(addr: SocketAddr) -> String {
         IpAddr::V4(ip) if ip.is_unspecified() => format!("0.0.0.0:{}", addr.port()),
         IpAddr::V6(ip) if ip == Ipv6Addr::UNSPECIFIED => format!("[::]:{}", addr.port()),
         _ => addr.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peers_without_the_password_get_a_short_leash() {
+        assert_eq!(read_timeout(true), Duration::from_secs(600));
+        assert_eq!(read_timeout(false), Duration::from_secs(30));
+        assert!(PREAUTH_TIMEOUT < IDLE_TIMEOUT);
     }
 }

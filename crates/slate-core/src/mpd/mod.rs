@@ -148,13 +148,50 @@ pub trait Host: Send + Sync + 'static {
     fn cover(&self, song_id: Option<u64>) -> BoxFut<'_, Option<Vec<u8>>>;
 }
 
+/// A password that prints as `<set>` / `<empty>`, so no `{:?}` of the settings can leak it.
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Secret(pub String);
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "<empty>"
+        } else {
+            "<set>"
+        })
+    }
+}
+
+impl Secret {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<&str> for Secret {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
 /// Server settings.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     pub port: u16,
     /// Listen on every interface instead of loopback only. Needs a password.
     pub lan: bool,
     pub password: String,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("port", &self.port)
+            .field("lan", &self.lan)
+            .field("password", &Secret(self.password.clone()))
+            .finish()
+    }
 }
 
 impl Config {
@@ -163,5 +200,30 @@ impl Config {
             return Err("LAN access needs a password".into());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_password_never_shows_in_debug_output() {
+        let c = Config {
+            port: 6600,
+            lan: true,
+            password: "hunter2hunter2".into(),
+        };
+        assert!(!format!("{c:?}").contains("hunter2"));
+        assert!(format!("{c:?}").contains("<set>"));
+        let s = Secret::from("hunter2");
+        assert_eq!(format!("{s:?}"), "<set>");
+        assert_eq!(format!("{:?}", Secret::default()), "<empty>");
+        // Stored as a plain string, as before.
+        assert_eq!(serde_json::to_string(&s).expect("json"), "\"hunter2\"");
+        assert_eq!(
+            serde_json::from_str::<Secret>("\"x\"").expect("json"),
+            Secret::from("x")
+        );
     }
 }

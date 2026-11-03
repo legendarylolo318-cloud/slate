@@ -25,10 +25,15 @@ static ACTIVE: AtomicU64 = AtomicU64::new(0);
 static SPEAKING: AtomicBool = AtomicBool::new(false);
 /// The next track start belongs to the line just spoken and must not interrupt it.
 static SKIP_NEXT_START: AtomicBool = AtomicBool::new(false);
-static CHILDREN: Mutex<Vec<Child>> = Mutex::new(Vec::new());
+/// The processes of one spoken line. Each line owns its own list, so a cut-off line's
+/// cleanup can never touch the line that replaced it.
+type Procs = Arc<Mutex<Vec<Child>>>;
 
-fn children() -> std::sync::MutexGuard<'static, Vec<Child>> {
-    CHILDREN.lock().unwrap_or_else(|p| p.into_inner())
+/// The line being spoken now, for `interrupt`.
+static CURRENT: Mutex<Option<Procs>> = Mutex::new(None);
+
+fn procs(p: &Procs) -> std::sync::MutexGuard<'_, Vec<Child>> {
+    p.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Which voice reads the DJ's lines.
@@ -117,8 +122,11 @@ pub fn track_changed() {
 /// Kills whatever is speaking now.
 pub fn interrupt() {
     GENERATION.fetch_add(1, Ordering::AcqRel);
-    for c in children().iter_mut() {
-        let _ = c.kill();
+    let current = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(p) = current {
+        for c in procs(&p).iter_mut() {
+            let _ = c.kill();
+        }
     }
 }
 
@@ -142,32 +150,34 @@ pub fn speak_piper(
     let generation = GENERATION.load(Ordering::Acquire);
     SKIP_NEXT_START.store(true, Ordering::Release);
     ACTIVE.store(generation, Ordering::Release);
+    SPEAKING.store(true, Ordering::Relaxed);
+    let mine: Procs = Arc::default();
+    *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&mine));
     let model = model.to_string();
     std::thread::Builder::new()
         .name("slate-dj-voice".into())
         .spawn(move || {
-            SPEAKING.store(true, Ordering::Relaxed);
             if let Some(d) = &duck {
                 d(true);
             }
-            if let Err(e) = run(&text, &model, &path, generation) {
+            if let Err(e) = run(&text, &model, &path, generation, &mine) {
                 log::warn!("[dj] Piper voice failed: {e}");
             }
-            children().clear();
-            // A newer line owns the flag now.
+            procs(&mine).clear();
+            // A newer line owns the flag and the volume now: it restores both itself.
             if ACTIVE.load(Ordering::Acquire) == generation {
                 SPEAKING.store(false, Ordering::Relaxed);
                 SKIP_NEXT_START.store(false, Ordering::Relaxed);
-            }
-            if let Some(d) = &duck {
-                d(false);
+                if let Some(d) = &duck {
+                    d(false);
+                }
             }
         })
         .map_err(|e| format!("could not start the voice: {e}"))?;
     Ok(())
 }
 
-fn run(text: &str, model: &str, path: &OsStr, generation: u64) -> Result<(), String> {
+fn run(text: &str, model: &str, path: &OsStr, generation: u64, mine: &Procs) -> Result<(), String> {
     let rate = model_rate(model);
     let piper = find_in(&["piper"], path).ok_or("piper vanished")?;
     let mut tts = Command::new(piper);
@@ -176,7 +186,8 @@ fn run(text: &str, model: &str, path: &OsStr, generation: u64) -> Result<(), Str
         .stdin(Stdio::piped())
         .stderr(Stdio::null());
     #[cfg(windows)]
-    let wav = std::env::temp_dir().join(format!("slate-dj-{}.wav", std::process::id()));
+    let wav =
+        std::env::temp_dir().join(format!("slate-dj-{}-{generation}.wav", std::process::id()));
     #[cfg(windows)]
     {
         tts.arg("--output_file").arg(&wav).stdout(Stdio::null());
@@ -190,7 +201,7 @@ fn run(text: &str, model: &str, path: &OsStr, generation: u64) -> Result<(), Str
     #[cfg(not(windows))]
     let audio = tts.stdout.take().ok_or("no stdout")?;
     // Register before anything blocks, so an interrupt can reach it.
-    children().push(tts);
+    procs(mine).push(tts);
     if GENERATION.load(Ordering::Acquire) != generation {
         return Ok(());
     }
@@ -235,12 +246,12 @@ fn run(text: &str, model: &str, path: &OsStr, generation: u64) -> Result<(), Str
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("starting the player: {e}"))?;
-        children().push(play);
+        procs(mine).push(play);
     }
     #[cfg(windows)]
     {
         let _ = rate;
-        wait_all(generation);
+        wait_all(generation, mine);
         if GENERATION.load(Ordering::Acquire) != generation {
             let _ = std::fs::remove_file(&wav);
             return Ok(());
@@ -254,27 +265,27 @@ fn run(text: &str, model: &str, path: &OsStr, generation: u64) -> Result<(), Str
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("starting the player: {e}"))?;
-        children().push(play);
-        wait_all(generation);
+        procs(mine).push(play);
+        wait_all(generation, mine);
         let _ = std::fs::remove_file(&wav);
         return Ok(());
     }
     #[cfg(not(windows))]
     {
-        wait_all(generation);
+        wait_all(generation, mine);
         Ok(())
     }
 }
 
 /// Waits (polling, only while a line is spoken) until every registered process has ended,
 /// the line was interrupted or [`MAX_SPEECH`] passed.
-fn wait_all(generation: u64) {
+fn wait_all(generation: u64, mine: &Procs) {
     let start = std::time::Instant::now();
     loop {
         if GENERATION.load(Ordering::Acquire) != generation {
             return;
         }
-        let done = children()
+        let done = procs(mine)
             .iter_mut()
             .all(|c| !matches!(c.try_wait(), Ok(None)));
         if done {
@@ -435,5 +446,40 @@ mod tests {
         assert!(wait_for(is_speaking));
         interrupt();
         assert!(wait_for(|| !is_speaking()));
+    }
+
+    #[test]
+    fn a_cut_off_line_does_not_touch_the_one_that_replaced_it() {
+        let _s = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().expect("dir");
+        script(dir.path(), "piper", "cat > /dev/null; sleep 30");
+        script(dir.path(), "aplay", "cat > /dev/null");
+        let model = dir.path().join("v.onnx");
+        std::fs::write(&model, b"x").expect("model");
+        let m = model.to_str().expect("utf8");
+        let ducks = Arc::new(Mutex::new(Vec::new()));
+        let d = Arc::clone(&ducks);
+        let duck: Duck = Arc::new(move |on| d.lock().expect("ducks").push(on));
+        let path = dir.path().as_os_str().to_owned();
+        speak_piper("one", m, Some(Arc::clone(&duck)), Some(path.clone())).expect("speaks");
+        speak_piper("two", m, Some(duck), Some(path)).expect("speaks");
+        // Long enough for the first line's thread to have finished its cleanup.
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(is_speaking(), "the second line is still going");
+        assert!(
+            !ducks.lock().expect("ducks").contains(&false),
+            "the music stays down while the second line speaks: {:?}",
+            ducks.lock().expect("ducks")
+        );
+        interrupt();
+        assert!(wait_for(|| !is_speaking()));
+        assert!(wait_for(
+            || ducks.lock().expect("ducks").last() == Some(&false)
+        ));
+        assert_eq!(
+            ducks.lock().expect("ducks").iter().filter(|d| !**d).count(),
+            1,
+            "restored exactly once"
+        );
     }
 }

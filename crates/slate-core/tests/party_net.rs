@@ -581,19 +581,38 @@ async fn chat_reaches_everyone_is_limited_and_can_be_muted() {
     assert!(matches!(note, Event::Host(HostMsg::Notice { text }) if text.contains("Slow down")));
 
     // Muted guests are refused; unmuting is possible; unknown names are not guests.
-    assert!(host.set_chat_muted("Ann", true));
     assert!(!host.set_chat_muted("Nobody", true));
+    // Bob has not chatted, so the rate limit is out of the picture: muting him is what stops it.
+    assert!(host.set_chat_muted("Bob", true));
     while hrx.try_recv().is_ok() {}
-    tokio::time::sleep(Duration::from_millis(10_200)).await;
-    ann.chat("muted?").await.expect("send");
+    _bob.chat("muted?").await.expect("send");
     let note = until(
-        &mut arx,
+        &mut brx,
         |e| matches!(e, Event::Host(HostMsg::Notice { text }) if text.contains("muted")),
     )
     .await;
     assert!(matches!(note, Event::Host(_)));
-    assert!(hrx
-        .try_recv()
-        .map_or(true, |e| !matches!(e, Event::Chat { .. })));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    while let Ok(e) = hrx.try_recv() {
+        assert!(
+            !matches!(e, Event::Chat { ref from, .. } if from == "Bob"),
+            "muted: {e:?}"
+        );
+    }
+    assert_eq!(host.chat_muted_names(), vec!["Bob".to_string()]);
+    assert!(host.set_chat_muted("Bob", false));
+    assert!(host.chat_muted_names().is_empty());
+
+    // Someone who joins late is sent the recent messages.
+    let (ctx, mut crx) = mpsc::unbounded_channel();
+    let (_cy, _) = Guest::join(&host.link(), "Cy", Some("none"), ctx)
+        .await
+        .expect("join");
+    let Event::Host(HostMsg::Chat { from, .. }) =
+        until(&mut crx, |e| matches!(e, Event::Host(HostMsg::Chat { .. }))).await
+    else {
+        panic!("history");
+    };
+    assert_eq!(from, "Ann", "the oldest kept message comes first");
     host.end().await;
 }

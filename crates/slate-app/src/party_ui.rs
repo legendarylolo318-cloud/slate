@@ -41,6 +41,8 @@ static GUEST: Mutex<Option<GuestCtx>> = Mutex::new(None);
 /// Counts reactions so only the newest one clears the flash.
 static REACTION_SEQ: AtomicU64 = AtomicU64::new(0);
 /// Counts chat messages so only the newest one clears the flash.
+/// Chat lines drawn in the panel (all 100 are kept).
+const CHAT_SHOWN: usize = 8;
 static CHAT_SEQ: AtomicU64 = AtomicU64::new(0);
 /// The last 100 chat lines, in memory only; emptied when the party ends.
 static CHAT: Mutex<std::collections::VecDeque<String>> =
@@ -189,7 +191,8 @@ impl Backend {
             p.set_role(role.into());
             p.set_can_suggest(can_suggest);
             if role.is_empty() {
-                p.set_chat_lines(ModelRc::default());
+                p.set_chat_count(0);
+                p.set_chat_recent(ModelRc::default());
                 p.set_chat_flash("".into());
                 p.set_chat_open(false);
                 s.set_party_requests(ModelRc::default());
@@ -946,18 +949,21 @@ impl Backend {
             return;
         };
         let line = format!("{}: {text}", proto::clip(from, 24));
-        let lines: Vec<String> = {
+        let (count, recent): (usize, Vec<String>) = {
             let mut log = lock(&CHAT);
             log.push_back(line.clone());
             while log.len() > slate_core::party::chat::MAX_KEPT {
                 log.pop_front();
             }
-            log.iter().cloned().collect()
+            let skip = log.len().saturating_sub(CHAT_SHOWN);
+            (log.len(), log.iter().skip(skip).cloned().collect())
         };
         let seq = CHAT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
         self.ui(move |w| {
             let p = w.global::<PartyState>();
-            p.set_chat_lines(strings(lines));
+            // The panel draws the newest few; the count is what is kept.
+            p.set_chat_count(i32::try_from(count).unwrap_or(0));
+            p.set_chat_recent(strings(recent));
             p.set_chat_flash(line.into());
         });
         let this = self.clone();

@@ -134,8 +134,10 @@ export global PartyState {
     in-out property <string> reaction-tally;
     /// "Ann: hi": the latest chat message, shown for a few seconds.
     in-out property <string> chat-flash;
-    /// The last 100 messages (memory only, cleared when the party ends).
-    in-out property <[string]> chat-lines;
+    /// How many messages are kept (at most 100; memory only, cleared when the party ends).
+    in-out property <int> chat-count;
+    /// The newest few of them, which is what the panel draws.
+    in-out property <[string]> chat-recent;
     in-out property <bool> chat-open;
 }
 

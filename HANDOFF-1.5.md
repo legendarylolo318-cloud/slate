@@ -1,19 +1,29 @@
-# 1.5.0 handoff
+# 1.5.0 handoff (paused mid-fix)
 
-All seven features are committed on `main`; nothing is tagged or published. `cargo fmt --check`,
-`cargo clippy --workspace --all-targets -D warnings` and `cargo test --workspace` pass.
+## State
+- Seven 1.5 features, release prep and the 10 review fixes are committed on `main` (not tagged).
+- `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings` and `cargo test --workspace`
+  all pass on the final commit.
 
-Commits: content filter, window state, album shuffle, MPD server, party chat, then Piper voice and
-DJ-from-playlist together (they share the DJ files), then release prep (version 1.5.0, CHANGELOG, MCP.md).
+## The 10 review fixes
+1. `dj_voice.rs`: each spoken line owns its processes (`Procs`), only the current line restores volume;
+   new test `a_cut_off_line_does_not_touch_the_one_that_replaced_it`.
+2/3. `mpd_host.rs`: Delete/Move/PlayPos/Stop/Clear/Resume are awaited (no fire-and-forget), so multi-delete
+   order is right and `seek N t` seeks after the new song has started.
+4. `mpd/mod.rs`: `Secret` newtype (Debug shows `<set>`), `Settings.mpd_password` uses it; custom `Debug`
+   for `mpd::Config`.
+5. `window_state.rs`: first observation while maximized remembers 80 % of the screen as the restored size.
+6. `mpd/server.rs`: `PREAUTH_TIMEOUT` 30 s for peers without the password (`read_timeout`). Only the constant
+   is unit-tested, not a real timeout.
+7. `dj_voice.rs`: Windows temp wav name includes the line's generation (untested on Windows).
+8. `party/net.rs` + `chat.rs`: late joiners get the last 20 chat messages (`Chat::recent`); loopback test extended.
+9. Chat panel draws `chat-recent` (newest 8) and `chat-count` (replaces `chat-lines`).
+10. `tests/party_net.rs`: mute is tested on a guest who has not chatted, no 10 s sleep.
 
-Review hints:
-- `slate-core/src/mpd/` + `tests/mpd_net.rs` (server, limits); `slate-app/src/mpd_host.rs` (maps to Control/queue).
-  A source guard rejects a type named `Client` with `::new(`: the MPD per-connection type is `Peer`.
-- `slate-core/src/dj_voice.rs`: child processes, `track_changed()` hook in `Controller::start` and
-  `on_track_advanced`; `Controller::dj_playlist`.
-- `slate-core/src/party/chat.rs`; `window_state.rs` (core rules + app glue).
+## Still to do
+- Measurements: only the default login-screen table exists (CHANGELOG). Playing, VRAM and the
+  "all features on" table were not measured. Nothing was tried with a real MPD client or a signed-in account.
+- Weakly covered: the 30 s pre-auth timeout (constant only), the Windows temp-file name (Windows untested).
+- Do not tag or publish.
 
-Measured: login screen, default settings, 1.4.1 vs 1.5.0 (CHANGELOG). NOT measured: playing, VRAM,
-window-map time, "all features on" table. See CHANGELOG "Not tested" for the full honest list
-(no real MPD client, no signed-in session, UI never clicked through, Windows untested).
-Known: MPD playlist model quirks (CHANGELOG Notes); window check skipped for start-hidden on Linux.
+Note: this file is `HANDOFF-1.5.md` (not `handoff.md`) because `HANDOFF.md` is the tracked architecture doc.

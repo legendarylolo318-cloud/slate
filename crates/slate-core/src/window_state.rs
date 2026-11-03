@@ -118,10 +118,11 @@ pub fn observe(prev: Option<Geom>, now: Observed) -> Option<Geom> {
         return None;
     }
     if now.maximized {
-        // Never saw it un-maximized: store the flag with no usable size of its own.
+        // Never saw it un-maximized: the maximized size is no restored size, so remember a
+        // smaller window (80 %) to come back to, and no position.
         let base = prev.unwrap_or(Geom {
-            w: now.logical_w,
-            h: now.logical_h,
+            w: (now.logical_w * 0.8).floor(),
+            h: (now.logical_h * 0.8).floor(),
             x: None,
             y: None,
             maximized: true,
@@ -399,6 +400,15 @@ mod tests {
         let g = observe(Some(g), seen(900.0, 600.0, Some((50, 60)))).expect("stored");
         assert!(!g.maximized);
         assert_eq!((g.w, g.x), (900.0, Some(50)));
+    }
+
+    #[test]
+    fn maximized_with_no_earlier_size_remembers_a_smaller_window() {
+        let mut now = seen(1920.0, 1080.0, Some((0, 0)));
+        now.maximized = true;
+        let g = observe(None, now).expect("stored");
+        assert!(g.maximized);
+        assert_eq!((g.w, g.h, g.x, g.y), (1536.0, 864.0, None, None));
     }
 
     #[test]

@@ -38,7 +38,7 @@ pub fn config_of(s: &Settings) -> Result<Config, String> {
     let cfg = Config {
         port: s.mpd_port,
         lan: s.mpd_lan,
-        password: s.mpd_password.clone(),
+        password: s.mpd_password.0.clone(),
     };
     cfg.check()?;
     Ok(cfg)
@@ -59,7 +59,7 @@ pub async fn mpd_info(state: &AppState) -> MpdInfo {
         enabled: s.mpd_enabled,
         running,
         lan: s.mpd_lan,
-        password: s.mpd_password,
+        password: s.mpd_password.0,
         port: s.mpd_port,
         address: format!("{host}:{}", s.mpd_port),
     }
@@ -116,7 +116,7 @@ pub async fn mpd_set_lan(state: &AppState, lan: bool) -> Result<(), SlateError> 
     let mut s = state.load_settings().unwrap_or_default();
     s.mpd_lan = lan;
     if lan && s.mpd_password.is_empty() {
-        s.mpd_password = generate_password();
+        s.mpd_password = crate::mpd::Secret(generate_password());
     }
     if s.mpd_enabled {
         apply(state, &s).await?;
@@ -128,12 +128,12 @@ pub async fn mpd_set_lan(state: &AppState, lan: bool) -> Result<(), SlateError> 
 /// Replaces the password (clients must be given the new one); returns it.
 pub async fn mpd_new_password(state: &AppState) -> Result<String, SlateError> {
     let mut s = state.load_settings().unwrap_or_default();
-    s.mpd_password = generate_password();
+    s.mpd_password = crate::mpd::Secret(generate_password());
     if s.mpd_enabled {
         apply(state, &s).await?;
     }
     state.save_settings(&s)?;
-    Ok(s.mpd_password)
+    Ok(s.mpd_password.0)
 }
 
 /// Gives the running server (if any) a fresh status; a no-op when it is off.

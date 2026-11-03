@@ -241,7 +241,7 @@ pub struct Settings {
     pub mpd_lan: bool,
     /// MPD `password`; required for LAN, empty (none) is allowed on this computer only.
     #[serde(default)]
-    pub mpd_password: String,
+    pub mpd_password: crate::mpd::Secret,
     /// Shuffle albums (tracks stay together in album order) instead of single tracks.
     #[serde(default)]
     pub album_shuffle: bool,
@@ -341,7 +341,7 @@ impl Default for Settings {
             mpd_enabled: false,
             mpd_port: 6600,
             mpd_lan: false,
-            mpd_password: String::new(),
+            mpd_password: Default::default(),
             album_shuffle: false,
             hide_explicit: false,
             hide_ai: false,

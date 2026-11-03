@@ -100,6 +100,12 @@ impl Chat {
         self.log.iter()
     }
 
+    /// The newest `n` messages, oldest first (sent to someone who joins late).
+    pub fn recent(&self, n: usize) -> Vec<Line> {
+        let skip = self.log.len().saturating_sub(n);
+        self.log.iter().skip(skip).cloned().collect()
+    }
+
     pub fn len(&self) -> usize {
         self.log.len()
     }
@@ -159,6 +165,20 @@ mod tests {
         assert_eq!(c.len(), MAX_KEPT);
         assert_eq!(c.lines().next().map(|l| l.text.as_str()), Some("m150"));
         assert_eq!(c.lines().last().map(|l| l.text.as_str()), Some("m249"));
+    }
+
+    #[test]
+    fn the_newest_messages_come_back_oldest_first() {
+        let mut c = Chat::default();
+        for i in 0..30u64 {
+            assert!(c.post(i, "G", &format!("m{i}"), i * 20_000).is_ok());
+        }
+        let r = c.recent(5);
+        assert_eq!(r.len(), 5);
+        assert_eq!(r[0].text, "m25");
+        assert_eq!(r[4].text, "m29");
+        assert_eq!(c.recent(500).len(), 30);
+        assert!(Chat::default().recent(5).is_empty());
     }
 
     #[test]

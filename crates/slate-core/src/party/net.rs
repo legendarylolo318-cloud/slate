@@ -246,6 +246,9 @@ pub fn heir_link(id: &str, secret: &str) -> Result<String, String> {
 
 // ---------------------------------------------------------------- host
 
+/// How many of the latest chat messages a guest who joins late is sent.
+const CHAT_HISTORY_FOR_JOINERS: usize = 20;
+
 struct HostState {
     play: PlayState,
     queue: Vec<u64>,
@@ -935,6 +938,7 @@ async fn serve_guest(
             CancellationToken,
             Vec<u64>,
             Vec<String>,
+            Vec<super::chat::Line>,
         ),
         String,
     > = {
@@ -960,11 +964,20 @@ async fn serve_guest(
                     you: name.clone(),
                     vote_skip: s.vote.percent.is_some(),
                 };
-                Ok((id, name, welcome, kick, s.queue.clone(), s.by.clone()))
+                let history = s.chat.recent(CHAT_HISTORY_FOR_JOINERS);
+                Ok((
+                    id,
+                    name,
+                    welcome,
+                    kick,
+                    s.queue.clone(),
+                    s.by.clone(),
+                    history,
+                ))
             }
         }
     };
-    let (id, name, welcome, kick, queued, queued_by) = match joined {
+    let (id, name, welcome, kick, queued, queued_by, history) = match joined {
         Ok(j) => j,
         Err(reason) => {
             let _ = write_frame(&mut send, &proto::encode(&reject(&reason))?).await;
@@ -981,6 +994,14 @@ async fn serve_guest(
             by: queued_by,
         };
         write_frame(&mut send, &proto::encode(&q)?).await?;
+    }
+    // So a late joiner sees the recent conversation, not an empty chat.
+    for line in history {
+        let m = HostMsg::Chat {
+            from: line.from,
+            text: line.text,
+        };
+        write_frame(&mut send, &proto::encode(&m)?).await?;
     }
     drop(handshake);
     let _ = inner.events.send(Event::GuestJoined(name.clone()));
