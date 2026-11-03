@@ -70,7 +70,8 @@ pub async fn mpd_info(state: &AppState) -> MpdInfo {
 async fn apply(state: &AppState, s: &Settings) -> Result<(), SlateError> {
     let mut guard = state.mpd_handle.lock().await;
     if let Some(h) = guard.take() {
-        h.stop();
+        // Waits for the old socket to close: the new one may want the same port.
+        h.shutdown().await;
     }
     state.mpd_active.store(false, Ordering::Relaxed);
     if !s.mpd_enabled {

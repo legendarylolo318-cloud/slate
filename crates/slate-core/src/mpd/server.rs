@@ -188,6 +188,8 @@ pub struct Handle {
     addr: SocketAddr,
     shared: Arc<Shared>,
     stop: watch::Sender<bool>,
+    /// The accept loop; it owns the listening socket.
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Handle {
@@ -208,6 +210,15 @@ impl Handle {
     /// Closes the socket and every connection.
     pub fn stop(&self) {
         let _ = self.stop.send(true);
+    }
+
+    /// Stops and waits until the listening socket is closed, so the port can be bound again
+    /// at once (a restart for a new password or LAN setting).
+    pub async fn shutdown(mut self) {
+        self.stop();
+        if let Some(task) = self.task.take() {
+            let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
+        }
     }
 }
 
@@ -245,7 +256,7 @@ pub async fn start(host: Arc<dyn Host>, cfg: Config) -> std::io::Result<Handle> 
     });
     let sh = Arc::clone(&shared);
     let mut stop = stop_rx;
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         loop {
             tokio::select! {
                 _ = stop.changed() => break,
@@ -266,6 +277,7 @@ pub async fn start(host: Arc<dyn Host>, cfg: Config) -> std::io::Result<Handle> 
         addr,
         shared,
         stop: stop_tx,
+        task: Some(task),
     })
 }
 

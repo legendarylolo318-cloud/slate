@@ -579,3 +579,23 @@ async fn idle_and_command_lists_need_the_password_too() {
     assert_eq!(c.reply().await, vec!["OK"]);
     h.stop();
 }
+
+#[tokio::test]
+async fn a_restart_can_bind_the_same_port_at_once() {
+    // Switching "Allow LAN" or making a new password restarts the server on its port.
+    let h = start(Fake::with_queue(), "").await;
+    let port = h.local_addr().port();
+    let _c = Conn::open(&h).await;
+    h.shutdown().await;
+    let again = server::start(
+        Fake::with_queue(),
+        Config {
+            port,
+            lan: false,
+            password: String::new(),
+        },
+    )
+    .await
+    .expect("same port right after shutdown");
+    again.shutdown().await;
+}
