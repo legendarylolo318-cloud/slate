@@ -509,3 +509,91 @@ async fn a_kicked_successor_gets_neither_the_new_secret_nor_the_next_home() {
     assert_ne!(id, old_id);
     host.end().await;
 }
+
+#[tokio::test]
+async fn chat_reaches_everyone_is_limited_and_can_be_muted() {
+    let (htx, mut hrx) = mpsc::unbounded_channel();
+    let host = Host::start(Some("none"), "Lolo", Policy::default(), None, htx)
+        .await
+        .expect("host");
+    let (atx, mut arx) = mpsc::unbounded_channel();
+    let (ann, _) = Guest::join(&host.link(), "Ann", Some("none"), atx)
+        .await
+        .expect("join");
+    let (btx, mut brx) = mpsc::unbounded_channel();
+    let (_bob, _) = Guest::join(&host.link(), "Bob", Some("none"), btx)
+        .await
+        .expect("join");
+    until(
+        &mut hrx,
+        |e| matches!(e, Event::GuestJoined(n) if n == "Bob"),
+    )
+    .await;
+
+    // A guest's message reaches the host and the other guest, cleaned and cut.
+    ann.chat(&format!("  hello\n\u{7}world {}", "x".repeat(300)))
+        .await
+        .expect("chat");
+    let Event::Chat { from, text } = until(&mut hrx, |e| matches!(e, Event::Chat { .. })).await
+    else {
+        panic!("chat event");
+    };
+    assert_eq!(from, "Ann");
+    assert!(text.starts_with("helloworld xxx") && text.chars().count() == 200);
+    let Event::Host(HostMsg::Chat { from, text: got }) =
+        until(&mut brx, |e| matches!(e, Event::Host(HostMsg::Chat { .. }))).await
+    else {
+        panic!("guest chat");
+    };
+    assert_eq!((from.as_str(), got), ("Ann", text));
+
+    // The host can talk too.
+    assert!(host.chat("welcome").is_ok());
+    let Event::Host(HostMsg::Chat { from, .. }) = until(
+        &mut arx,
+        |e| matches!(e, Event::Host(HostMsg::Chat { from, .. }) if from == "Lolo"),
+    )
+    .await
+    else {
+        panic!("host chat");
+    };
+    assert_eq!(from, "Lolo");
+
+    // Five per ten seconds; the sixth is dropped and the sender is told.
+    for i in 0..8 {
+        ann.chat(&format!("spam {i}")).await.expect("chat");
+    }
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let mut seen = 0;
+    while let Ok(e) = hrx.try_recv() {
+        if matches!(e, Event::Chat { ref from, .. } if from == "Ann") {
+            seen += 1;
+        }
+    }
+    assert_eq!(
+        seen, 4,
+        "5 per window, one already used by the first message"
+    );
+    let note = until(&mut arx, |e| {
+        matches!(e, Event::Host(HostMsg::Notice { .. }))
+    })
+    .await;
+    assert!(matches!(note, Event::Host(HostMsg::Notice { text }) if text.contains("Slow down")));
+
+    // Muted guests are refused; unmuting is possible; unknown names are not guests.
+    assert!(host.set_chat_muted("Ann", true));
+    assert!(!host.set_chat_muted("Nobody", true));
+    while hrx.try_recv().is_ok() {}
+    tokio::time::sleep(Duration::from_millis(10_200)).await;
+    ann.chat("muted?").await.expect("send");
+    let note = until(
+        &mut arx,
+        |e| matches!(e, Event::Host(HostMsg::Notice { text }) if text.contains("muted")),
+    )
+    .await;
+    assert!(matches!(note, Event::Host(_)));
+    assert!(hrx
+        .try_recv()
+        .map_or(true, |e| !matches!(e, Event::Chat { .. })));
+    host.end().await;
+}

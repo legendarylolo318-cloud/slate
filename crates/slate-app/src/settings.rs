@@ -528,6 +528,23 @@ impl Backend {
                         this.copy_setting_url(Some(link), "Party link").await;
                     }
                 }
+                "party-chat-send" => {
+                    let text = this
+                        .read_ui(|w| {
+                            let g = w.global::<SettingsState>();
+                            let t = g.get_party_chat_draft().to_string();
+                            g.set_party_chat_draft("".into());
+                            t
+                        })
+                        .await;
+                    this.party_chat_send(text);
+                }
+                n if n.starts_with("party-mute:") => {
+                    this.party_chat_mute(&n["party-mute:".len()..], true)
+                }
+                n if n.starts_with("party-unmute:") => {
+                    this.party_chat_mute(&n["party-unmute:".len()..], false)
+                }
                 n if n.starts_with("party-kick:") => this.party_kick(&n["party-kick:".len()..]),
                 n if n.starts_with("party-approve:") => {
                     this.party_decide_id(&n["party-approve:".len()..], true);

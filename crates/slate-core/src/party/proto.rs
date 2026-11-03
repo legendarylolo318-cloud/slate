@@ -111,6 +111,11 @@ pub enum HostMsg {
         /// Index into `reactions::EMOJI`.
         e: u8,
     },
+    /// A chat message (already cleaned by the host). Peers on an older 1.x ignore it.
+    Chat {
+        from: String,
+        text: String,
+    },
     Kicked,
     Ended,
     Rejected {
@@ -166,6 +171,10 @@ pub enum GuestMsg {
     /// An emoji reaction to the current track (index into `reactions::EMOJI`).
     React {
         e: u8,
+    },
+    /// A short plain-text chat message (the host cleans and limits it).
+    Chat {
+        text: String,
     },
     /// Co-host only.
     Decide {
@@ -262,6 +271,8 @@ pub fn validate_guest(m: &GuestMsg) -> Result<(), String> {
             Err("bad track id".into())
         }
         GuestMsg::Move { from, to } if *from > 64 || *to > 64 => Err("bad position".into()),
+        // Far more than any message needs (200 characters, up to 4 bytes each).
+        GuestMsg::Chat { text } if text.len() > 2048 => Err("message too long".into()),
         _ => Ok(()),
     }
 }
@@ -794,6 +805,30 @@ mod tests {
             super::super::requests::successor(&r.successor_input()),
             Some(b)
         );
+    }
+
+    #[test]
+    fn chat_messages_round_trip_keep_version_2_and_older_peers_ignore_them() {
+        let m = GuestMsg::Chat { text: "hi".into() };
+        assert_eq!(decode::<GuestMsg>(&encode(&m).expect("encode")), Ok(m));
+        let h = HostMsg::Chat {
+            from: "Ann".into(),
+            text: "hi".into(),
+        };
+        assert_eq!(decode::<HostMsg>(&encode(&h).expect("encode")), Ok(h));
+        assert_eq!(
+            decode::<GuestMsg>(br#"{"t":"chat_v9","text":"x"}"#),
+            Ok(GuestMsg::Unknown)
+        );
+        assert_eq!(PROTOCOL_VERSION, 2, "chat needs no new protocol version");
+        assert!(validate_guest(&GuestMsg::Chat {
+            text: "x".repeat(3000)
+        })
+        .is_err());
+        assert!(validate_guest(&GuestMsg::Chat {
+            text: "x".repeat(800)
+        })
+        .is_ok());
     }
 
     #[test]

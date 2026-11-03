@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
+use super::chat::{Chat, Refused};
 use super::proto::{
     self, Flood, GuestMsg, HostMsg, PingSample, PlayState, RateLimit, ReqView, Roster,
     MAX_MESSAGE_BYTES, MAX_REQUEST_VIEWS, PROTOCOL_VERSION,
@@ -68,6 +69,11 @@ pub enum Event {
         from: String,
         emoji: u8,
         tally: Vec<(u8, u32)>,
+    },
+    /// A chat message (host side: from a guest or the host itself).
+    Chat {
+        from: String,
+        text: String,
     },
     /// The connection ended on purpose (guest side: ended, kicked, left) or the party closed.
     Closed(String),
@@ -249,6 +255,7 @@ struct HostState {
     book: RequestBook,
     vote: VoteSkip,
     reactions: Reactions,
+    chat: Chat,
     /// Every upcoming track id (capped) and who asked for the first few.
     upcoming: Vec<u64>,
     by: Vec<String>,
@@ -449,6 +456,7 @@ impl Host {
                 book: RequestBook::new(policy),
                 vote: VoteSkip::new(vote_percent),
                 reactions: Reactions::default(),
+                chat: Chat::default(),
                 upcoming: Vec::new(),
                 by: Vec::new(),
                 recent: Vec::new(),
@@ -508,6 +516,45 @@ impl Host {
             tally,
         });
         true
+    }
+
+    /// The host's own chat message.
+    pub fn chat(&self, text: &str) -> Result<(), Refused> {
+        let line = {
+            let mut s = self.inner.lock();
+            let now = self.inner.now_ms();
+            s.chat.post(0, &self.inner.host_name, text, now)?
+        };
+        self.inner.send(
+            Audience::All,
+            HostMsg::Chat {
+                from: line.from.clone(),
+                text: line.text.clone(),
+            },
+        );
+        let _ = self.inner.events.send(Event::Chat {
+            from: line.from,
+            text: line.text,
+        });
+        Ok(())
+    }
+
+    /// Mutes or unmutes a guest's chat. False when no guest has that name.
+    pub fn set_chat_muted(&self, name: &str, muted: bool) -> bool {
+        let mut s = self.inner.lock();
+        let id = s
+            .roster
+            .guests()
+            .iter()
+            .find(|g| g.name == name)
+            .map(|g| g.id);
+        match id {
+            Some(id) => {
+                s.chat.set_muted(id, muted);
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn guest_names(&self) -> Vec<String> {
@@ -708,6 +755,17 @@ impl Host {
             .guests()
             .iter()
             .map(|g| (g.name.clone(), g.cohost))
+            .collect()
+    }
+
+    /// Names of the guests whose chat is muted.
+    pub fn chat_muted_names(&self) -> Vec<String> {
+        let s = self.inner.lock();
+        s.roster
+            .guests()
+            .iter()
+            .filter(|g| s.chat.is_muted(g.id))
+            .map(|g| g.name.clone())
             .collect()
     }
 
@@ -1008,6 +1066,22 @@ async fn serve_guest(
                                 let _ = inner.events.send(Event::Reaction { from: name.clone(), emoji: e, tally });
                             }
                         }
+                        GuestMsg::Chat { text } => {
+                            let posted = {
+                                let mut s = inner.lock();
+                                let now = inner.now_ms();
+                                s.chat.post(id, &name, &text, now)
+                            };
+                            match posted {
+                                Ok(line) => {
+                                    inner.send(Audience::All, HostMsg::Chat { from: line.from.clone(), text: line.text.clone() });
+                                    let _ = inner.events.send(Event::Chat { from: line.from, text: line.text });
+                                }
+                                Err(Refused::TooFast) => inner.send(Audience::Guest(id), HostMsg::Notice { text: "Slow down: too many messages.".into() }),
+                                Err(Refused::Muted) => inner.send(Audience::Guest(id), HostMsg::Notice { text: "The host muted your chat.".into() }),
+                                Err(Refused::Empty) => {}
+                            }
+                        }
                         GuestMsg::VoteSkip => {
                             let outcome = {
                                 let mut s = inner.lock();
@@ -1057,6 +1131,7 @@ async fn serve_guest(
         s.book.forget_guest(id);
         s.vote.forget(id);
         s.reactions.forget(id);
+        s.chat.forget(id);
     }
     let _ = inner.events.send(Event::GuestLeft(name));
     inner.push_guests();
@@ -1244,6 +1319,14 @@ impl Guest {
         self.send_msg(&GuestMsg::React { e }).await
     }
 
+    /// Sends a chat message; the host cleans and limits it.
+    pub async fn chat(&self, text: &str) -> Result<(), String> {
+        self.send_msg(&GuestMsg::Chat {
+            text: text.to_string(),
+        })
+        .await
+    }
+
     pub async fn vote_skip(&self) -> Result<(), String> {
         self.send_msg(&GuestMsg::VoteSkip).await
     }
@@ -1324,6 +1407,7 @@ mod tests {
             book: RequestBook::new(Policy::default()),
             vote: VoteSkip::new(None),
             reactions: Reactions::default(),
+            chat: Chat::default(),
             upcoming: Vec::new(),
             by: Vec::new(),
             recent: Vec::new(),

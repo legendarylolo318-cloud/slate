@@ -118,6 +118,8 @@ export struct PartyRequest {
 export struct PartyGuest {
     name: string,
     cohost: bool,
+    /// The host muted this guest's chat.
+    muted: bool,
 }
 
 /// What the track lists need to know about a party.
@@ -130,6 +132,11 @@ export global PartyState {
     in-out property <string> reaction-flash;
     /// The host's counts for the playing track: "🔥 3  👍 1".
     in-out property <string> reaction-tally;
+    /// "Ann: hi": the latest chat message, shown for a few seconds.
+    in-out property <string> chat-flash;
+    /// The last 100 messages (memory only, cleared when the party ends).
+    in-out property <[string]> chat-lines;
+    in-out property <bool> chat-open;
 }
 
 /// One line of the credits panel: a group heading, or a person in a role.

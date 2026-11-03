@@ -40,6 +40,11 @@ static PENDING: Mutex<Vec<Track>> = Mutex::new(Vec::new());
 static GUEST: Mutex<Option<GuestCtx>> = Mutex::new(None);
 /// Counts reactions so only the newest one clears the flash.
 static REACTION_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Counts chat messages so only the newest one clears the flash.
+static CHAT_SEQ: AtomicU64 = AtomicU64::new(0);
+/// The last 100 chat lines, in memory only; emptied when the party ends.
+static CHAT: Mutex<std::collections::VecDeque<String>> =
+    Mutex::new(std::collections::VecDeque::new());
 /// A party is being started or joined (the network setup takes seconds); a second click waits.
 static CONNECTING: AtomicBool = AtomicBool::new(false);
 /// Bumped by `party_end`, so a start or join still in flight ends itself when it completes.
@@ -159,6 +164,10 @@ impl Backend {
                 }
             }
         };
+        let muted = with_host(Host::chat_muted_names).unwrap_or_default();
+        if role.is_empty() {
+            lock(&CHAT).clear();
+        }
         let can_suggest = role == "guest" && lock(&GUEST).as_ref().is_some_and(|g| g.requests_on);
         let cohost = role == "guest" && lock(&GUEST).as_ref().is_some_and(|g| g.cohost);
         self.ui(move |w| {
@@ -170,6 +179,7 @@ impl Backend {
             let rows: Vec<PartyGuest> = guests
                 .into_iter()
                 .map(|(name, cohost)| PartyGuest {
+                    muted: muted.contains(&name),
                     name: name.into(),
                     cohost,
                 })
@@ -179,6 +189,9 @@ impl Backend {
             p.set_role(role.into());
             p.set_can_suggest(can_suggest);
             if role.is_empty() {
+                p.set_chat_lines(ModelRc::default());
+                p.set_chat_flash("".into());
+                p.set_chat_open(false);
                 s.set_party_requests(ModelRc::default());
                 s.set_party_upcoming(ModelRc::default());
                 s.set_party_offer(false);
@@ -293,6 +306,7 @@ impl Backend {
                     Event::CohostMove { from, to, .. } => {
                         this.queue_move(from as usize, to as usize)
                     }
+                    Event::Chat { from, text } => this.show_chat(&from, &text),
                     Event::Reaction { from, emoji, tally } => {
                         this.show_reaction(&from, emoji);
                         let text = reactions::tally_text(&tally);
@@ -905,6 +919,7 @@ impl Backend {
             HostMsg::RequestResult { reason, .. } => self.notify(&reason),
             HostMsg::Notice { text } => self.notify(&text),
             HostMsg::Reaction { from, e } => self.show_reaction(&from, e),
+            HostMsg::Chat { from, text } => self.show_chat(&from, &text),
             HostMsg::Heir { key } => {
                 if let Some(c) = lock(&GUEST).as_mut() {
                     c.heir_key = Some(key.0);
@@ -922,6 +937,64 @@ impl Backend {
             }
             _ => {}
         }
+    }
+
+    /// Adds a chat line to the panel and flashes it next to the player for a few seconds.
+    /// Text from the network is cleaned again here: a peer's message is never trusted.
+    fn show_chat(&self, from: &str, text: &str) {
+        let Some(text) = slate_core::party::chat::clean(text) else {
+            return;
+        };
+        let line = format!("{}: {text}", proto::clip(from, 24));
+        let lines: Vec<String> = {
+            let mut log = lock(&CHAT);
+            log.push_back(line.clone());
+            while log.len() > slate_core::party::chat::MAX_KEPT {
+                log.pop_front();
+            }
+            log.iter().cloned().collect()
+        };
+        let seq = CHAT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+        self.ui(move |w| {
+            let p = w.global::<PartyState>();
+            p.set_chat_lines(strings(lines));
+            p.set_chat_flash(line.into());
+        });
+        let this = self.clone();
+        self.rt.spawn(async move {
+            tokio::time::sleep(Duration::from_secs(6)).await;
+            if CHAT_SEQ.load(Ordering::Acquire) == seq {
+                this.ui(|w| w.global::<PartyState>().set_chat_flash("".into()));
+            }
+        });
+    }
+
+    /// Sends what is typed in the chat box (the host speaks directly, a guest asks the host).
+    pub fn party_chat_send(&self, text: String) {
+        if text.trim().is_empty() {
+            return;
+        }
+        match with_host(|h| h.chat(&text)) {
+            Some(Ok(())) => return,
+            Some(Err(slate_core::party::chat::Refused::TooFast)) => {
+                return self.notify("Slow down: 5 messages per 10 seconds.");
+            }
+            Some(Err(_)) => return,
+            None => {}
+        }
+        let Some(g) = guest_handle() else { return };
+        let this = self.clone();
+        self.rt.spawn(async move {
+            if g.chat(&text).await.is_err() {
+                this.notify("Could not reach the host.");
+            }
+        });
+    }
+
+    pub fn party_chat_mute(&self, name: &str, muted: bool) {
+        with_host(|h| h.set_chat_muted(name, muted));
+        let guests = with_host(Host::guests_detail).unwrap_or_default();
+        self.party_show("host", self.current_party_link(), guests);
     }
 
     /// Flashes "Ann 🔥" next to the player for a few seconds (the newest one wins).

@@ -569,8 +569,8 @@ export component AppWindow inherits Window {
                     spacing: 4px;
                     alignment: end;
                     Text {
-                        text: PartyState.reaction-flash != "" ? PartyState.reaction-flash : PartyState.reaction-tally;
-                        color: PartyState.reaction-flash != "" ? Theme.accent : Theme.text-muted;
+                        text: PartyState.chat-flash != "" ? PartyState.chat-flash : (PartyState.reaction-flash != "" ? PartyState.reaction-flash : PartyState.reaction-tally);
+                        color: PartyState.chat-flash != "" || PartyState.reaction-flash != "" ? Theme.accent : Theme.text-muted;
                         font-size: 13px;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
