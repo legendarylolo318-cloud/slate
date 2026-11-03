@@ -226,6 +226,9 @@ pub struct Settings {
     /// Smarter shuffle: avoid the same artist, then album, back to back. Off by default.
     #[serde(default)]
     pub smart_shuffle: bool,
+    /// Shuffle albums (tracks stay together in album order) instead of single tracks.
+    #[serde(default)]
+    pub album_shuffle: bool,
     /// Skip explicit tracks in the queue, autoplay, radio and DJ (shown dimmed in lists). Off by default.
     #[serde(default)]
     pub hide_explicit: bool,
@@ -319,6 +322,7 @@ impl Default for Settings {
             bit_perfect: false,
             gapless: true,
             smart_shuffle: false,
+            album_shuffle: false,
             hide_explicit: false,
             hide_ai: false,
             crossfade_secs: 0,
@@ -377,6 +381,7 @@ pub struct AppState {
     pub bit_perfect: AtomicBool,
     pub gapless: AtomicBool,
     pub smart_shuffle: AtomicBool,
+    pub album_shuffle: AtomicBool,
     /// Mirror of `Settings::dj.enabled`: the autoplay path checks this, not the file.
     pub dj_enabled: AtomicBool,
     pub max_quality: std::sync::Mutex<String>,
@@ -561,6 +566,7 @@ impl AppState {
         let bit_perfect = saved.as_ref().map(|s| s.bit_perfect).unwrap_or(false);
         let gapless = saved.as_ref().map(|s| s.gapless).unwrap_or(true);
         let smart_shuffle = saved.as_ref().map(|s| s.smart_shuffle).unwrap_or(false);
+        let album_shuffle = saved.as_ref().is_some_and(|s| s.album_shuffle);
         let dj_enabled = saved.as_ref().is_some_and(|s| s.dj.enabled);
         let exclusive_device = saved.as_ref().and_then(|s| s.exclusive_device.clone());
         let max_quality = saved
@@ -673,6 +679,7 @@ impl AppState {
             bit_perfect: AtomicBool::new(bit_perfect),
             gapless: AtomicBool::new(gapless),
             smart_shuffle: AtomicBool::new(smart_shuffle),
+            album_shuffle: AtomicBool::new(album_shuffle),
             dj_enabled: AtomicBool::new(dj_enabled),
             max_quality: std::sync::Mutex::new(max_quality),
             exclusive_device: std::sync::Mutex::new(exclusive_device),

@@ -353,6 +353,10 @@ impl Controller {
             .state
             .smart_shuffle
             .load(std::sync::atomic::Ordering::Relaxed);
+        q.album_shuffle = self
+            .state
+            .album_shuffle
+            .load(std::sync::atomic::Ordering::Relaxed);
         q
     }
 
@@ -1032,6 +1036,11 @@ impl Controller {
         let mut q = self.lock_queue().await;
         q.toggle_shuffle(&mut rand::rng());
         q.shuffle
+    }
+
+    /// The shuffle mode changed: shuffle the queue again if shuffle is on (one pass).
+    pub async fn reshuffle(&self) {
+        self.lock_queue().await.reshuffle(&mut rand::rng());
     }
 
     pub async fn cycle_repeat(&self) -> Repeat {

@@ -35,6 +35,7 @@ export global SettingsState {
     in-out property <bool> normalization;
     in-out property <bool> gapless;
     in-out property <bool> smart-shuffle;
+    in-out property <int> shuffle-mode;
     in-out property <bool> hide-explicit;
     in-out property <bool> hide-ai;
     in-out property <bool> start-minimized;
@@ -523,6 +524,15 @@ export component SettingsPage inherits Rectangle {
                         label: "Smarter shuffle";
                         hint: "Shuffle avoids the same artist, then the same album, twice in a row when it can. Off keeps the plain random shuffle.";
                         Toggle { checked: SettingsState.smart-shuffle; toggled(v) => { SettingsState.smart-shuffle = v; SettingsState.changed-bool("smart-shuffle", v); } }
+                    }
+                    Row {
+                        label: "Shuffle mode";
+                        hint: "Tracks shuffles single tracks. Albums shuffles whole albums and keeps each one in track order, so gapless playback and album ReplayGain stay intact. Also on the shuffle button's right-click menu.";
+                        Segmented {
+                            options: ["Tracks", "Albums"];
+                            index: SettingsState.shuffle-mode;
+                            picked(i) => { SettingsState.shuffle-mode = i; SettingsState.changed-int("shuffle-mode", i); }
+                        }
                     }
                     Row {
                         label: "Hide explicit tracks";

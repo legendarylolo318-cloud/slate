@@ -202,6 +202,18 @@ pub fn set_smart_shuffle(state: &AppState, enabled: bool) -> Result<(), SlateErr
 }
 
 /// The content filter: (hide explicit, hide AI-generated).
+pub fn get_album_shuffle(state: &AppState) -> bool {
+    state.album_shuffle.load(Ordering::Relaxed)
+}
+
+pub fn set_album_shuffle(state: &AppState, enabled: bool) -> Result<(), SlateError> {
+    state.album_shuffle.store(enabled, Ordering::Relaxed);
+    let mut settings = state.load_settings().unwrap_or_default();
+    settings.album_shuffle = enabled;
+    state.save_settings(&settings)?;
+    Ok(())
+}
+
 pub fn get_content_filter(state: &AppState) -> (bool, bool) {
     state
         .load_settings()

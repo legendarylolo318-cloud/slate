@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
 import { IconButton, Bar, QualityBadges } from "widgets.slint";
+import { SettingsState } from "settings.slint";
 
 export component PlayerBar inherits Rectangle {
     callback go-album();
@@ -112,7 +113,7 @@ export component PlayerBar inherits Rectangle {
                 HorizontalLayout {
                     alignment: center;
                     spacing: 10px * root.scale;
-                    IconButton { tip: "Shuffle"; side: root.btn; icon: @image-url("icons/shuffle.svg"); active: root.shuffle; opacity: root.shuffle ? 1.0 : 0.6; clicked => { root.toggle-shuffle(); } }
+                    IconButton { tip: SettingsState.shuffle-mode == 1 ? "Shuffle albums" : "Shuffle"; menu-a: (SettingsState.shuffle-mode == 0 ? "✓ " : "") + "Shuffle tracks"; menu-b: (SettingsState.shuffle-mode == 1 ? "✓ " : "") + "Shuffle albums"; menu-picked(i) => { SettingsState.shuffle-mode = i; SettingsState.changed-int("shuffle-mode", i); } side: root.btn; icon: @image-url("icons/shuffle.svg"); active: root.shuffle; opacity: root.shuffle ? 1.0 : 0.6; clicked => { root.toggle-shuffle(); } }
                     IconButton { tip: "Previous"; side: root.btn; icon: @image-url("icons/previous.svg"); enabled: root.has-track; clicked => { root.previous(); } }
                     IconButton { primary: true; side: root.btn-primary; enabled: root.has-track; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); clicked => { root.toggle-play(); } }
                     IconButton { tip: "Next"; side: root.btn; icon: @image-url("icons/next.svg"); enabled: root.has-track; clicked => { root.next(); } }
@@ -161,7 +162,7 @@ export component PlayerBar inherits Rectangle {
         if root.compact: HorizontalLayout {
             alignment: center;
             spacing: 6px * root.scale;
-            IconButton { tip: "Shuffle"; icon: @image-url("icons/shuffle.svg"); side: 36px * root.scale; active: root.shuffle; clicked => { root.toggle-shuffle(); } }
+            IconButton { tip: SettingsState.shuffle-mode == 1 ? "Shuffle albums" : "Shuffle"; menu-a: (SettingsState.shuffle-mode == 0 ? "✓ " : "") + "Shuffle tracks"; menu-b: (SettingsState.shuffle-mode == 1 ? "✓ " : "") + "Shuffle albums"; menu-picked(i) => { SettingsState.shuffle-mode = i; SettingsState.changed-int("shuffle-mode", i); } icon: @image-url("icons/shuffle.svg"); side: 36px * root.scale; active: root.shuffle; clicked => { root.toggle-shuffle(); } }
             IconButton { tip: "Previous"; icon: @image-url("icons/previous.svg"); side: 40px * root.scale; enabled: root.has-track; clicked => { root.previous(); } }
             IconButton { primary: true; side: root.btn-primary; enabled: root.has-track; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); clicked => { root.toggle-play(); } }
             IconButton { tip: "Next"; icon: @image-url("icons/next.svg"); side: 40px * root.scale; enabled: root.has-track; clicked => { root.next(); } }

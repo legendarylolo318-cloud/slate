@@ -82,6 +82,10 @@ export component IconButton inherits Rectangle {
     in property <bool> enabled: true;
     in property <length> side: primary ? 44px : 34px;
     callback clicked();
+    /// Optional right-click menu with two entries.
+    in property <string> menu-a;
+    in property <string> menu-b;
+    callback menu-picked(int);
     width: root.side;
     height: root.side;
     border-radius: root.side / 2;
@@ -127,6 +131,12 @@ export component IconButton inherits Rectangle {
         enabled: root.enabled;
         mouse-cursor: MouseCursor.pointer;
         clicked => { root.clicked(); }
+    }
+    if root.menu-a != "": ContextMenuArea {
+        Menu {
+            MenuItem { title: root.menu-a; activated => { root.menu-picked(0); } }
+            MenuItem { title: root.menu-b; activated => { root.menu-picked(1); } }
+        }
     }
 }
 

@@ -317,6 +317,8 @@ pub struct Queue {
     pub shuffle: bool,
     /// Smarter shuffle (Settings → Playback): spread artists and albums.
     pub spread: bool,
+    /// Shuffle albums instead of tracks (Settings → Playback, right-click the shuffle button).
+    pub album_shuffle: bool,
     pub repeat: Repeat,
     pub autoplay: bool,
     pub playback_source: Option<Source>,
@@ -586,7 +588,9 @@ impl Queue {
     /// Shuffles `v` (plain, or spread when the setting is on); `prev` is the track
     /// that comes before it.
     fn shuffle_vec(&self, v: &mut Vec<Track>, prev: Option<&Track>, rng: &mut impl rand::Rng) {
-        if self.spread {
+        if self.album_shuffle {
+            crate::shuffle::album_shuffle(v, prev, self.spread, rng);
+        } else if self.spread {
             crate::shuffle::spread_shuffle(v, prev, rng);
         } else {
             v.shuffle(rng);
@@ -615,6 +619,14 @@ impl Queue {
                     .collect();
             }
             self.shuffle = false;
+        }
+    }
+
+    /// Shuffles the queue again with the current mode, keeping the order `toggle_shuffle`
+    /// restores. Does nothing while shuffle is off.
+    pub fn reshuffle(&mut self, rng: &mut impl rand::Rng) {
+        if self.shuffle {
+            self.shuffle_queue(rng);
         }
     }
 

@@ -21,6 +21,7 @@ struct Snapshot {
     normalization: bool,
     gapless: bool,
     smart_shuffle: bool,
+    album_shuffle: bool,
     content_filter: (bool, bool),
     crossfade: slate_core::crossfade::Settings,
     eq: slate_core::eq::Settings,
@@ -56,6 +57,7 @@ async fn snapshot(state: &Arc<AppState>) -> Snapshot {
         normalization: utility::get_volume_normalization(state),
         gapless: utility::get_gapless(state),
         smart_shuffle: utility::get_smart_shuffle(state),
+        album_shuffle: utility::get_album_shuffle(state),
         content_filter: utility::get_content_filter(state),
         crossfade: utility::get_crossfade(state),
         eq: utility::get_eq(state),
@@ -113,6 +115,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_normalization(s.normalization);
     g.set_gapless(s.gapless);
     g.set_smart_shuffle(s.smart_shuffle);
+    g.set_shuffle_mode(i32::from(s.album_shuffle));
     g.set_hide_explicit(s.content_filter.0);
     g.set_hide_ai(s.content_filter.1);
     g.set_start_minimized(prefs.start_minimized);
@@ -244,6 +247,20 @@ impl Backend {
         Ok(())
     }
 
+    /// Tracks (false) or albums (true). Reshuffles the queue once if shuffle is on.
+    fn set_shuffle_mode(&self, state: &Arc<AppState>, albums: bool) -> Result<(), String> {
+        utility::set_album_shuffle(state, albums).map_err(|e| e.log_safe())?;
+        if let Some(ctl) = self.controller() {
+            let this = self.clone();
+            self.rt.spawn(async move {
+                ctl.reshuffle().await;
+                this.refresh_queue_info().await;
+                this.save().await;
+            });
+        }
+        Ok(())
+    }
+
     pub fn setting_bool(&self, key: &str, v: bool) {
         let key = key.to_string();
         let this = self.clone();
@@ -367,6 +384,7 @@ impl Backend {
                     utility::set_crossfade(&state, secs, c.skip_same_album)
                         .map_err(|e| e.log_safe())
                 }
+                "shuffle-mode" => this.set_shuffle_mode(&state, usize_i == 1),
                 "suggest" => this.set_suggest_index(usize_i),
                 "ui-scale" => {
                     let mut p = UiPrefs::load();
