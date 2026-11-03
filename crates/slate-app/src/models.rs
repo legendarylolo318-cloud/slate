@@ -33,6 +33,8 @@ pub struct RowData {
     /// 0 none, 1 Lossless, 2 Hi-Res.
     pub quality: i32,
     pub atmos: bool,
+    /// Hidden by the content filter: shown dimmed, skipped by playback.
+    pub blocked: bool,
 }
 
 pub struct LazyTracks {
@@ -188,6 +190,7 @@ impl LazyTracks {
                     favorite: r.favorite,
                     quality: r.quality,
                     atmos: r.atmos,
+                    blocked: r.blocked,
                     cover: Image::default(),
                     selected: false,
                 },
@@ -272,6 +275,7 @@ impl LazyTracks {
             favorite: false,
             quality: 0,
             atmos: false,
+            blocked: false,
             cover: Image::default(),
             selected: false,
         }

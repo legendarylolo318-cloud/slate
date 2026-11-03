@@ -118,6 +118,20 @@ pub(crate) fn to_track(t: &TidalTrack) -> Option<Track> {
     Track::from_serialized(t)
 }
 
+/// The content filter as `ContentPrefs::to_bits`, mirrored for row building (no lock, no IO).
+static CONTENT_HIDE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub(crate) fn set_content_hide(prefs: slate_core::controller::ContentPrefs) {
+    CONTENT_HIDE.store(prefs.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn hidden_by_filter(t: &Track) -> bool {
+    slate_core::controller::ContentPrefs::from_bits(
+        CONTENT_HIDE.load(std::sync::atomic::Ordering::Relaxed),
+    )
+    .blocks(t)
+}
+
 pub(crate) fn row_of(t: &Track) -> RowData {
     let version = t
         .extra
@@ -145,6 +159,7 @@ pub(crate) fn row_of(t: &Track) -> RowData {
         favorite: false,
         quality: crate::quality::track_badges(t).tier,
         atmos: crate::quality::track_badges(t).atmos,
+        blocked: hidden_by_filter(t),
     }
 }
 

@@ -21,6 +21,7 @@ struct Snapshot {
     normalization: bool,
     gapless: bool,
     smart_shuffle: bool,
+    content_filter: (bool, bool),
     crossfade: slate_core::crossfade::Settings,
     eq: slate_core::eq::Settings,
     gapless_supported: bool,
@@ -55,6 +56,7 @@ async fn snapshot(state: &Arc<AppState>) -> Snapshot {
         normalization: utility::get_volume_normalization(state),
         gapless: utility::get_gapless(state),
         smart_shuffle: utility::get_smart_shuffle(state),
+        content_filter: utility::get_content_filter(state),
         crossfade: utility::get_crossfade(state),
         eq: utility::get_eq(state),
         gapless_supported: utility::get_gapless_supported(),
@@ -111,6 +113,8 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_normalization(s.normalization);
     g.set_gapless(s.gapless);
     g.set_smart_shuffle(s.smart_shuffle);
+    g.set_hide_explicit(s.content_filter.0);
+    g.set_hide_ai(s.content_filter.1);
     g.set_start_minimized(prefs.start_minimized);
     g.set_crossfade_index(
         CROSSFADE_SECS
@@ -221,6 +225,24 @@ impl Backend {
         });
     }
 
+    /// Saves one of the two content-filter toggles and applies it to the controller and the
+    /// row dimming. Lists already on screen pick it up when they are reloaded.
+    fn set_content_filter(&self, state: &Arc<AppState>, key: &str, v: bool) -> Result<(), String> {
+        let (mut explicit, mut ai) = utility::get_content_filter(state);
+        if key == "hide-explicit" {
+            explicit = v;
+        } else {
+            ai = v;
+        }
+        utility::set_content_filter(state, explicit, ai).map_err(|e| e.log_safe())?;
+        let prefs = slate_core::controller::ContentPrefs::hiding(explicit, ai);
+        crate::library::set_content_hide(prefs);
+        if let Some(ctl) = self.controller() {
+            ctl.set_content_prefs(prefs);
+        }
+        Ok(())
+    }
+
     pub fn setting_bool(&self, key: &str, v: bool) {
         let key = key.to_string();
         let this = self.clone();
@@ -262,6 +284,7 @@ impl Backend {
                 }
                 "gapless" => utility::set_gapless(&state, v).map_err(|e| e.log_safe()),
                 "smart-shuffle" => utility::set_smart_shuffle(&state, v).map_err(|e| e.log_safe()),
+                "hide-explicit" | "hide-ai" => this.set_content_filter(&state, &key, v),
                 "start-minimized" => {
                     let mut prefs = crate::uiprefs::UiPrefs::load();
                     prefs.start_minimized = v;

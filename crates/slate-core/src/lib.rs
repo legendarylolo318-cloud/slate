@@ -225,6 +225,12 @@ pub struct Settings {
     /// Smarter shuffle: avoid the same artist, then album, back to back. Off by default.
     #[serde(default)]
     pub smart_shuffle: bool,
+    /// Skip explicit tracks in the queue, autoplay, radio and DJ (shown dimmed in lists). Off by default.
+    #[serde(default)]
+    pub hide_explicit: bool,
+    /// Same for tracks TIDAL flags as AI-generated. Off by default.
+    #[serde(default)]
+    pub hide_ai: bool,
     /// Crossfade length in seconds; 0 (the default) is off.
     #[serde(default)]
     pub crossfade_secs: u32,
@@ -312,6 +318,8 @@ impl Default for Settings {
             bit_perfect: false,
             gapless: true,
             smart_shuffle: false,
+            hide_explicit: false,
+            hide_ai: false,
             crossfade_secs: 0,
             crossfade_skip_same_album: true,
             eq: Default::default(),

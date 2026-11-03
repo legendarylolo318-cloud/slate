@@ -238,6 +238,7 @@ impl Backend {
                     favorite: r.favorite,
                     quality: r.quality,
                     atmos: r.atmos,
+                    blocked: r.blocked,
                     cover: Image::default(),
                     selected: false,
                 })

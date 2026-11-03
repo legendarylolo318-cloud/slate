@@ -38,6 +38,23 @@ impl Default for ContentPrefs {
 }
 
 impl ContentPrefs {
+    /// The preferences for the two "hide" settings.
+    pub fn hiding(explicit: bool, ai: bool) -> Self {
+        Self {
+            allow_explicit: !explicit,
+            allow_ai: !ai,
+        }
+    }
+
+    /// Both flags as bits (1 = hide explicit, 2 = hide AI), for a process-wide mirror.
+    pub fn to_bits(self) -> u8 {
+        u8::from(!self.allow_explicit) | (u8::from(!self.allow_ai) << 1)
+    }
+
+    pub fn from_bits(bits: u8) -> Self {
+        Self::hiding(bits & 1 != 0, bits & 2 != 0)
+    }
+
     pub fn blocks(&self, t: &Track) -> bool {
         let flag = |k: &str| t.extra.get(k).and_then(serde_json::Value::as_bool);
         (!self.allow_explicit && flag("explicit") == Some(true))
@@ -1301,6 +1318,12 @@ mod tests {
         let mut t = Track::new(1);
         t.extra.insert("explicit".into(), true.into());
         assert!(!ContentPrefs::default().blocks(&t));
+        for (e, a) in [(false, false), (true, false), (false, true), (true, true)] {
+            let p = ContentPrefs::hiding(e, a);
+            assert_eq!(ContentPrefs::from_bits(p.to_bits()).to_bits(), p.to_bits());
+        }
+        assert_eq!(ContentPrefs::hiding(true, false).to_bits(), 1);
+        assert_eq!(ContentPrefs::hiding(false, true).to_bits(), 2);
         let strict = ContentPrefs {
             allow_explicit: false,
             allow_ai: true,

@@ -201,6 +201,25 @@ pub fn set_smart_shuffle(state: &AppState, enabled: bool) -> Result<(), SlateErr
     Ok(())
 }
 
+/// The content filter: (hide explicit, hide AI-generated).
+pub fn get_content_filter(state: &AppState) -> (bool, bool) {
+    state
+        .load_settings()
+        .map_or((false, false), |s| (s.hide_explicit, s.hide_ai))
+}
+
+pub fn set_content_filter(
+    state: &AppState,
+    hide_explicit: bool,
+    hide_ai: bool,
+) -> Result<(), SlateError> {
+    let mut settings = state.load_settings().unwrap_or_default();
+    settings.hide_explicit = hide_explicit;
+    settings.hide_ai = hide_ai;
+    state.save_settings(&settings)?;
+    Ok(())
+}
+
 pub fn get_gapless_supported() -> bool {
     crate::audio::gapless_supported()
 }

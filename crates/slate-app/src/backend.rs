@@ -269,6 +269,11 @@ impl Backend {
             }
             this.install_platform(Arc::clone(&state));
 
+            let (hide_explicit, hide_ai) =
+                slate_core::commands::utility::get_content_filter(&state);
+            let content_prefs =
+                slate_core::controller::ContentPrefs::hiding(hide_explicit, hide_ai);
+            crate::library::set_content_hide(content_prefs);
             let volume = state.load_settings().map(|s| s.volume).unwrap_or(1.0);
             this.ui(move |w| w.set_volume(volume));
 
@@ -293,6 +298,7 @@ impl Backend {
             this.start_theme_watcher();
 
             let controller = Arc::new(Controller::new(Arc::clone(&state), this.app.clone()));
+            controller.set_content_prefs(content_prefs);
             let (shuffle, repeat, autoplay) = controller.load_modes().await;
             controller.set_modes(shuffle, repeat, autoplay).await;
             match controller.restore().await {

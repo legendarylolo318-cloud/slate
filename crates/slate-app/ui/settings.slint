@@ -35,6 +35,8 @@ export global SettingsState {
     in-out property <bool> normalization;
     in-out property <bool> gapless;
     in-out property <bool> smart-shuffle;
+    in-out property <bool> hide-explicit;
+    in-out property <bool> hide-ai;
     in-out property <bool> start-minimized;
     in-out property <bool> gapless-supported: true;
     in-out property <int> crossfade-index: 0;
@@ -515,6 +517,16 @@ export component SettingsPage inherits Rectangle {
                         label: "Smarter shuffle";
                         hint: "Shuffle avoids the same artist, then the same album, twice in a row when it can. Off keeps the plain random shuffle.";
                         Toggle { checked: SettingsState.smart-shuffle; toggled(v) => { SettingsState.smart-shuffle = v; SettingsState.changed-bool("smart-shuffle", v); } }
+                    }
+                    Row {
+                        label: "Hide explicit tracks";
+                        hint: "Skip explicit tracks in the queue, autoplay, radio and the DJ. They stay in lists, dimmed. Off by default.";
+                        Toggle { checked: SettingsState.hide-explicit; toggled(v) => { SettingsState.hide-explicit = v; SettingsState.changed-bool("hide-explicit", v); } }
+                    }
+                    Row {
+                        label: "Hide AI-generated tracks";
+                        hint: "The same for tracks TIDAL marks as AI-generated. Off by default.";
+                        Toggle { checked: SettingsState.hide-ai; toggled(v) => { SettingsState.hide-ai = v; SettingsState.changed-bool("hide-ai", v); } }
                     }
                     Row {
                         label: "Crossfade";

@@ -10,6 +10,8 @@ export struct TrackRow {
     /// 0 none, 1 Lossless, 2 Hi-Res.
     quality: int,
     atmos: bool,
+    /// Hidden by the content filter (dimmed, skipped by playback).
+    blocked: bool,
     cover: image,
     /// Part of the multi-selection.
     selected: bool,

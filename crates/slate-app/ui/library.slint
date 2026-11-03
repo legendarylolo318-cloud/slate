@@ -330,6 +330,7 @@ component Row inherits Rectangle {
     callback action(string);
     height: 48px;
     border-radius: 6px;
+    opacity: root.item.blocked ? 0.45 : 1.0;
     background: root.item.selected ? Theme.accent.with-alpha(0.22) : (ta.has-hover ? Theme.surface : transparent);
 
     DragArea {
@@ -422,6 +423,13 @@ component Row inherits Rectangle {
             }
             if root.item.explicit: Text {
                 text: "E";
+                font-size: 10px;
+                color: Theme.text-muted;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+            if root.item.blocked: Text {
+                text: "hidden by filter";
                 font-size: 10px;
                 color: Theme.text-muted;
                 vertical-alignment: center;
