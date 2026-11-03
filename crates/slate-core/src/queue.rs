@@ -361,17 +361,23 @@ impl Queue {
     }
 
     /// Replace the context queue with a shuffled `tracks`.
+    /// `first` is the track that will play before these (the one just chosen), which the
+    /// shuffle arranges around: its album plays on first in album shuffle, and smarter
+    /// shuffle avoids its artist next.
     pub fn set_shuffled_tracks(
         &mut self,
         tracks: Vec<Track>,
         source: Option<Source>,
         album_mode: bool,
+        first: Option<&Track>,
         rng: &mut impl rand::Rng,
     ) {
         self.set_tracks(tracks, source, album_mode);
         let ordered = self.queue.clone();
         self.original = self.shuffle.then(|| ordered.clone());
-        self.shuffle_queue(rng);
+        let mut q = std::mem::take(&mut self.queue);
+        self.shuffle_vec(&mut q, first.or(self.current.as_ref()), rng);
+        self.queue = q;
     }
 
     /// Empties the manual queue.
@@ -409,7 +415,7 @@ impl Queue {
             None => all.into_iter().filter(|t| t.id != track.id).collect(),
         };
         if self.shuffle {
-            self.set_shuffled_tracks(rest, source, album_mode, rng);
+            self.set_shuffled_tracks(rest, source, album_mode, Some(&track), rng);
         } else {
             self.set_tracks(rest, source, album_mode);
         }
@@ -469,8 +475,14 @@ impl Queue {
         }
         if shuffle || self.shuffle {
             let mut all = all;
-            let first = all.remove(rng_index(rng, all.len()));
-            self.set_shuffled_tracks(all, source, album_mode, rng);
+            let pick = if self.album_shuffle {
+                // Album shuffle starts at the top of a random album, not halfway through one.
+                first_of_random_album(&all, rng)
+            } else {
+                rng_index(rng, all.len())
+            };
+            let first = all.remove(pick);
+            self.set_shuffled_tracks(all, source, album_mode, Some(&first), rng);
             Some(first)
         } else {
             let mut it = all.into_iter();
@@ -1008,6 +1020,21 @@ impl Queue {
         self.context_source = snap.context_source;
         self.epoch += 1;
     }
+}
+
+/// Index in `all` of the first track (in album order) of a randomly chosen album.
+fn first_of_random_album(all: &[Track], rng: &mut impl rand::Rng) -> usize {
+    // Tag copies with their index, so the pick is found again even among duplicates.
+    let mut tracks: Vec<Track> = all.to_vec();
+    for (i, t) in tracks.iter_mut().enumerate() {
+        t.qid = Some(i.to_string());
+    }
+    crate::shuffle::album_shuffle(&mut tracks, None, false, rng);
+    tracks
+        .first()
+        .and_then(|t| t.qid.as_deref())
+        .and_then(|q| q.parse().ok())
+        .unwrap_or(0)
 }
 
 fn rng_index(rng: &mut impl rand::Rng, len: usize) -> usize {
