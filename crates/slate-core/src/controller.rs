@@ -270,7 +270,7 @@ impl Controller {
         track: Track,
         chosen_by_user: bool,
     ) -> Result<(), PlayFailure> {
-        let use_gain = q.use_track_gain;
+        let use_gain = q.track_gain();
         let mut attempt = 0;
         loop {
             match playback::play_tidal_track(&self.state, track.id, use_gain).await {
@@ -558,7 +558,7 @@ impl Controller {
                     let Some(cur) = q.current.clone() else {
                         return Outcome::Stopped;
                     };
-                    return match playback::play_tidal_track(&self.state, cur.id, q.use_track_gain)
+                    return match playback::play_tidal_track(&self.state, cur.id, q.track_gain())
                         .await
                     {
                         Ok(info) => {
@@ -1038,7 +1038,7 @@ impl Controller {
                 let _ = playback::stop_track(&self.state).await;
                 // `previous` already moved the old current out; start without
                 // pushing history again.
-                match playback::play_tidal_track(&self.state, track.id, q.use_track_gain).await {
+                match playback::play_tidal_track(&self.state, track.id, q.track_gain()).await {
                     Ok(info) => {
                         self.set_stream(Some(info));
                         q.begin(track.clone(), true);
@@ -1151,7 +1151,7 @@ impl Controller {
         let Some(cur) = q.current.clone() else {
             return Outcome::Nothing;
         };
-        match playback::play_tidal_track(&self.state, cur.id, q.use_track_gain).await {
+        match playback::play_tidal_track(&self.state, cur.id, q.track_gain()).await {
             Ok(info) => {
                 self.set_stream(Some(info));
                 self.forget_armed();
@@ -1183,7 +1183,7 @@ impl Controller {
                 None
             } else {
                 q.pick_gapless_next(now_secs(), |t| prefs.blocks(t))
-                    .map(|t| (t.clone(), q.use_track_gain))
+                    .map(|t| (t.clone(), q.track_gain()))
             }
         };
         let Some((next, use_gain)) = wanted else {

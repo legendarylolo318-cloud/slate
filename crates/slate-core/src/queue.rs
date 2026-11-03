@@ -639,6 +639,12 @@ impl Queue {
         self.shuffle_queue(rng);
     }
 
+    /// Track ReplayGain, or album gain: for an album, and in album shuffle, where whole
+    /// albums play in their order (a playlist shuffled by album gets each album's gain).
+    pub fn track_gain(&self) -> bool {
+        self.use_track_gain && !(self.shuffle && self.album_shuffle)
+    }
+
     /// Shuffles the queue again with the current mode, keeping the order `toggle_shuffle`
     /// restores. Does nothing while shuffle is off.
     pub fn reshuffle(&mut self, rng: &mut impl rand::Rng) {

@@ -423,4 +423,21 @@ mod tests {
         q.toggle_shuffle(&mut rng);
         assert_eq!(queue_ids(&q), before);
     }
+
+    #[test]
+    fn album_shuffle_plays_each_album_at_its_album_gain() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        let mut q = crate::queue::Queue::new();
+        q.set_tracks(two_albums(), None, false);
+        assert!(q.track_gain(), "a playlist in order: track gain");
+        q.toggle_shuffle(&mut rng);
+        assert!(q.track_gain(), "shuffled by track: track gain");
+        q.album_shuffle = true;
+        q.reshuffle(&mut rng);
+        assert!(!q.track_gain(), "shuffled by album: album gain");
+        q.toggle_shuffle(&mut rng);
+        assert!(q.track_gain());
+        q.set_tracks(two_albums(), None, true);
+        assert!(!q.track_gain(), "an album: album gain");
+    }
 }
