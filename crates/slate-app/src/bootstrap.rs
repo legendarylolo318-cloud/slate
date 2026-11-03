@@ -498,6 +498,7 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_save_smart_snapshot, |b| b.save_smart_snapshot());
     bind!(on_toggle_discord_hidden, |b, id| b
         .toggle_playlist_discord_hidden(&id));
+    bind!(on_dj_playlist, |b, id| b.dj_playlist(&id));
     bind!(on_suggest_load, |b, m| b.suggest_load(&m));
     bind!(on_suggest_add, |b, i| b
         .suggest_add(usize::try_from(i).unwrap_or(usize::MAX)));

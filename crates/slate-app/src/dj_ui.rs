@@ -47,6 +47,17 @@ fn facts_for(block: &Block) -> (String, Vec<String>) {
     }
 }
 
+/// How the lines are heard with the chosen voice: Piper says what is missing, if anything.
+fn voice_text(dj: &DjSettings, program: Option<&str>, path: &std::ffi::OsStr) -> String {
+    if slate_core::dj_voice::Voice::parse(&dj.voice) == slate_core::dj_voice::Voice::Piper {
+        return match slate_core::dj_voice::piper_status(&dj.piper_model, path) {
+            Ok(()) => "When the DJ has something to say, it is read aloud with Piper.".into(),
+            Err(why) => why,
+        };
+    }
+    speech_text(program)
+}
+
 /// Whether the DJ's spoken lines (the model decides when to speak) are heard here.
 fn speech_text(program: Option<&str>) -> String {
     match program {
@@ -121,7 +132,7 @@ impl Backend {
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
             let st = std::sync::Arc::clone(&state);
-            let (dj, program) = tokio::task::spawn_blocking(move || {
+            let (dj, speech) = tokio::task::spawn_blocking(move || {
                 let mut dj = utility::get_dj(&st);
                 if slate_core::dj::is_configured(&dj) && !dj.enabled {
                     dj.enabled = true;
@@ -130,12 +141,13 @@ impl Backend {
                         dj.enabled = false;
                     }
                 }
-                (dj, slate_core::dj::speech_program())
+                let path = std::env::var_os("PATH").unwrap_or_default();
+                let speech = voice_text(&dj, slate_core::dj::speech_program(), &path);
+                (dj, speech)
             })
             .await
             .unwrap_or_default();
             let configured = slate_core::dj::is_configured(&dj);
-            let speech = speech_text(program);
             let block = last().clone().unwrap_or_default();
             let status = this
                 .controller()
@@ -148,6 +160,12 @@ impl Backend {
                 g.set_editing(false);
                 g.set_busy(false);
                 g.set_speech(speech.into());
+                g.set_voice_index(i32::from(
+                    slate_core::dj_voice::Voice::parse(&dj.voice)
+                        == slate_core::dj_voice::Voice::Piper,
+                ));
+                g.set_piper_model(dj.piper_model.clone().into());
+                g.set_duck(!dj.no_duck);
                 g.set_endpoint(dj.base_url.into());
                 g.set_api_key(dj.api_key.into());
                 g.set_model(dj.model.into());
@@ -170,7 +188,24 @@ impl Backend {
             self.ui(move |w| w.global::<DjState>().set_model(m.into()));
             return;
         }
+        if let Some(v) = action.strip_prefix("voice:") {
+            self.dj_voice_change(Some(v == "1"), None, None);
+            return;
+        }
         match action {
+            "piper-model" => {
+                let this = self.clone();
+                self.rt.spawn(async move {
+                    let m = this
+                        .read_ui(|w| w.global::<DjState>().get_piper_model().to_string())
+                        .await;
+                    this.dj_voice_change(None, Some(m), None);
+                });
+            }
+            "piper-browse" => self.dj_pick_voice_file(),
+            "duck-on" => self.dj_voice_change(None, None, Some(true)),
+            "duck-off" => self.dj_voice_change(None, None, Some(false)),
+            "voice-test" => self.dj_voice_test(),
             "go" => self.dj_send_direction(),
             "now" => self.dj_now(),
             "settings" => {
@@ -204,6 +239,60 @@ impl Backend {
                 g.set_connect_status("".into());
                 g.set_editing(true);
             });
+        });
+    }
+
+    /// Right-click a playlist → "DJ this playlist": the model orders its tracks into a set.
+    pub(crate) fn dj_playlist(&self, uuid: &str) {
+        let uuid = uuid.to_string();
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let (Some(state), Some(ctl)) = (this.state(), this.controller()) else {
+                return;
+            };
+            let st = std::sync::Arc::clone(&state);
+            let configured = tokio::task::spawn_blocking(move || {
+                slate_core::dj::is_configured(&utility::get_dj(&st))
+            })
+            .await
+            .unwrap_or(false);
+            if !configured {
+                this.notify("Set up the DJ first (DJ page): it needs a model endpoint.");
+                return;
+            }
+            // The same disclosure as the DJ page, because this sends more.
+            this.notify(
+                "Asking the DJ: titles and artists of up to 200 tracks go to your DJ endpoint (a local server keeps them on this computer).",
+            );
+            let all = match crate::pages::fetch_all(
+                &state,
+                &this,
+                &crate::library::SourceKind::Playlist(uuid.clone()),
+            )
+            .await
+            {
+                Ok(a) if !a.is_empty() => a,
+                Ok(_) => return this.notify("That playlist is empty."),
+                Err(e) => return this.notify(&format!("Could not load the playlist: {e}")),
+            };
+            let source = slate_core::queue::Source {
+                kind: "playlist".into(),
+                id: serde_json::Value::from(uuid),
+                name: String::new(),
+                image: None,
+                subtitle: None,
+                mix_type: None,
+                tracks: all.clone(),
+            };
+            let (outcome, shuffle_off, status) = ctl.dj_playlist(all, Some(source)).await;
+            if shuffle_off {
+                this.shared
+                    .shuffle
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                this.ui(|w| w.set_shuffle(false));
+            }
+            this.apply(outcome).await;
+            this.notify(&status);
         });
     }
 
@@ -259,6 +348,89 @@ impl Backend {
                 }
             });
             this.ui(move |w| w.global::<DjState>().set_status(status.into()));
+        });
+    }
+
+    /// Saves a change to the voice settings and refreshes the line under the page.
+    fn dj_voice_change(&self, piper: Option<bool>, model: Option<String>, duck: Option<bool>) {
+        let Some(state) = self.state() else { return };
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let saved = tokio::task::spawn_blocking(move || {
+                let mut dj = utility::get_dj(&state);
+                if let Some(p) = piper {
+                    dj.voice = if p { "piper".into() } else { "system".into() };
+                }
+                if let Some(m) = model {
+                    dj.piper_model = m.trim().to_string();
+                }
+                if let Some(d) = duck {
+                    dj.no_duck = !d;
+                }
+                utility::set_dj(&state, dj.clone())?;
+                let path = std::env::var_os("PATH").unwrap_or_default();
+                Ok::<_, slate_core::SlateError>(voice_text(
+                    &dj,
+                    slate_core::dj::speech_program(),
+                    &path,
+                ))
+            })
+            .await;
+            match saved {
+                Ok(Ok(text)) => this.ui(move |w| {
+                    let g = w.global::<DjState>();
+                    g.set_speech(text.into());
+                    // The pick may have changed more than one control: re-read what is saved.
+                }),
+                Ok(Err(e)) => {
+                    let msg = format!("Could not save the DJ voice: {}", e.log_safe());
+                    this.ui(move |w| w.set_error(msg.into()));
+                }
+                Err(_) => {}
+            }
+        });
+    }
+
+    /// "Choose voice…": a file dialog for the Piper `.onnx` model.
+    fn dj_pick_voice_file(&self) {
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let Some(file) = rfd::AsyncFileDialog::new()
+                .set_title("Choose a Piper voice")
+                .add_filter("Piper voice", &["onnx"])
+                .pick_file()
+                .await
+            else {
+                return;
+            };
+            let path = file.path().to_string_lossy().into_owned();
+            let shown = path.clone();
+            this.ui(move |w| w.global::<DjState>().set_piper_model(shown.into()));
+            this.dj_voice_change(None, Some(path), None);
+        });
+    }
+
+    /// "Test voice": speaks a short line with the chosen voice, or says what is missing.
+    fn dj_voice_test(&self) {
+        let Some(state) = self.state() else { return };
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                let dj = utility::get_dj(&state);
+                let line = "Slate DJ here. This is how I sound.";
+                if slate_core::dj_voice::Voice::parse(&dj.voice)
+                    == slate_core::dj_voice::Voice::Piper
+                {
+                    slate_core::dj_voice::speak_piper(line, &dj.piper_model, None, None)
+                } else {
+                    slate_core::dj::speak(Some(line));
+                    Ok(())
+                }
+            })
+            .await;
+            if let Ok(Err(why)) = result {
+                this.ui(move |w| w.set_error(why.into()));
+            }
         });
     }
 

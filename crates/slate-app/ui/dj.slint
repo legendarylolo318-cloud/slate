@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { Button, TextField } from "widgets.slint";
+import { Button, TextField, Segmented, Toggle } from "widgets.slint";
 import { ScrollView } from "std-widgets.slint";
 
 /// The DJ page. Filled when the page opens and when the DJ installs a block; empty
@@ -13,6 +13,10 @@ export global DjState {
     in-out property <string> line;
     /// Whether the line is read aloud here, in words.
     in-out property <string> speech;
+    /// 0 = the system voice (espeak-ng / say), 1 = Piper.
+    in-out property <int> voice-index;
+    in-out property <string> piper-model;
+    in-out property <bool> duck: true;
     /// Facts about the genre (the built-in list), and the genre's name for the heading.
     in-out property <string> facts-title;
     in-out property <[string]> facts;
@@ -44,7 +48,7 @@ component Connect inherits VerticalLayout {
     spacing: 10px;
     Text { text: "CONNECT A CHAT MODEL"; font-size: 13px; font-weight: 700; color: Theme.text-muted; }
     Text {
-        text: "Any OpenAI-compatible endpoint works. A local server (Ollama, LM Studio) needs no key and keeps your listening on this computer; with a hosted one, the titles and artists of your last 20 tracks are sent to it.";
+        text: "Any OpenAI-compatible endpoint works. A local server (Ollama, LM Studio) needs no key and keeps your listening on this computer; with a hosted one, the titles and artists of your last 20 tracks are sent to it (up to 200 when you use “DJ this playlist” from a playlist's right-click menu).";
         color: Theme.text-muted;
         font-size: 12px;
         wrap: word-wrap;
@@ -143,7 +147,26 @@ export component DjPage inherits Rectangle {
                     title: "TRANSITION";
                     Text { text: "“" + DjState.line + "”"; color: Theme.text; font-italic: true; wrap: word-wrap; }
                 }
-                if DjState.configured && DjState.on && !DjState.editing: Text { text: DjState.speech; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; }
+                if DjState.configured && !DjState.editing: Section {
+                    title: "VOICE";
+                    Segmented {
+                        options: ["espeak-ng / say", "Piper"];
+                        index: DjState.voice-index;
+                        picked(i) => { DjState.voice-index = i; DjState.action("voice:" + i); }
+                    }
+                    if DjState.voice-index == 1: HorizontalLayout {
+                        spacing: 8px;
+                        TextField { text <=> DjState.piper-model; placeholder: "path to a voice .onnx file"; field-width: 300px; accepted(t) => { DjState.action("piper-model"); } }
+                        Button { label: "Choose…"; clicked => { DjState.action("piper-browse"); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Toggle { checked: DjState.duck; toggled(v) => { DjState.duck = v; DjState.action(v ? "duck-on" : "duck-off"); } }
+                        Text { text: "Lower the music while the DJ speaks"; color: Theme.text; vertical-alignment: center; }
+                        Button { label: "Test voice"; clicked => { DjState.action("voice-test"); } }
+                    }
+                }
+                if DjState.configured && !DjState.editing: Text { text: DjState.speech; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; }
                 if DjState.configured && DjState.on && !DjState.editing && DjState.facts.length > 0: Section {
                     title: DjState.facts-title;
                     for f in DjState.facts: Text { text: "• " + f; color: Theme.text; wrap: word-wrap; }

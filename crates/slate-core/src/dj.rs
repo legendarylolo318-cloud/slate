@@ -26,6 +26,12 @@ pub struct DjSettings {
     pub model: String,
     /// Ask the LLM for a short spoken line for each block (display/TTS'd).
     pub speak: bool,
+    /// Who reads the line: "" / "system" (espeak-ng or say) or "piper".
+    pub voice: String,
+    /// Path of the Piper voice (.onnx).
+    pub piper_model: String,
+    /// Leave the music at full volume while the line is spoken (ducked by default).
+    pub no_duck: bool,
     /// Tracks per genre block at TIDAL search time. 0 = default (10).
     pub block_size: u32,
     /// Seconds to wait for the model's answer. 0 = default (300). Local models
@@ -46,6 +52,8 @@ impl std::fmt::Debug for DjSettings {
             )
             .field("model", &self.model)
             .field("speak", &self.speak)
+            .field("voice", &self.voice)
+            .field("no_duck", &self.no_duck)
             .field("block_size", &self.block_size)
             .field("timeout_secs", &self.timeout_secs)
             .finish()
@@ -196,6 +204,80 @@ pub fn build_user_prompt(ctx: &DjContext) -> String {
         out.push_str(&format!("listener direction (follow it): {d}\n"));
     }
     out.push_str("Pick the next block now.");
+    out
+}
+
+/// Most tracks of a playlist sent to the model for "DJ this playlist".
+pub const SET_MAX_TRACKS: usize = 200;
+
+pub const SET_SYSTEM_PROMPT: &str = "You are a DJ ordering a playlist into one flowing set. You get numbered tracks (title - artist). Return an order that builds an energy curve (open easy, build, peak, ease off), moves smoothly between genres and avoids the same artist back to back.
+Respond with ONLY this JSON: {\"order\": [<track numbers, every one exactly once, in the order to play them>]}.";
+
+/// The numbered track list the model orders: `0. Title - Artist`, one per line, at most
+/// [`SET_MAX_TRACKS`], each field cut so one odd title cannot swamp the prompt.
+pub fn set_prompt(tracks: &[(String, String)]) -> String {
+    let clip = |s: &str| -> String {
+        s.chars()
+            .filter(|c| !c.is_control())
+            .take(80)
+            .collect::<String>()
+            .trim()
+            .to_string()
+    };
+    let mut out = String::from("tracks:\n");
+    for (i, (title, artist)) in tracks.iter().take(SET_MAX_TRACKS).enumerate() {
+        out.push_str(&format!("{i}. {} - {}\n", clip(title), clip(artist)));
+    }
+    out.push_str("Order them now.");
+    out
+}
+
+/// The track numbers in a model's answer: `{"order":[…]}` or a bare array, possibly inside
+/// a code fence or other words. `None` when no list of numbers is found.
+pub fn parse_order(raw: &str) -> Option<Vec<i64>> {
+    let numbers = |v: &serde_json::Value| -> Option<Vec<i64>> {
+        v.as_array()?
+            .iter()
+            .map(|n| {
+                n.as_i64()
+                    .or_else(|| n.as_str().and_then(|s| s.trim().parse().ok()))
+            })
+            .collect()
+    };
+    let try_slice = |s: &str| -> Option<Vec<i64>> {
+        let v: serde_json::Value = serde_json::from_str(s).ok()?;
+        numbers(&v).or_else(|| numbers(v.get("order")?))
+    };
+    if let Some(o) = try_slice(raw.trim()) {
+        return Some(o);
+    }
+    for (open, close) in [('{', '}'), ('[', ']')] {
+        if let (Some(a), Some(b)) = (raw.find(open), raw.rfind(close)) {
+            if a < b {
+                if let Some(o) = try_slice(&raw[a..=b]) {
+                    return Some(o);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A usable order of `0..n` from what the model returned: indexes out of range or repeated
+/// are dropped and the ones it left out are appended in their original order, so every
+/// track plays exactly once whatever the model did.
+pub fn finish_order(returned: &[i64], n: usize) -> Vec<usize> {
+    let mut seen = vec![false; n];
+    let mut out = Vec::with_capacity(n);
+    for &i in returned {
+        if let Ok(i) = usize::try_from(i) {
+            if i < n && !seen[i] {
+                seen[i] = true;
+                out.push(i);
+            }
+        }
+    }
+    out.extend((0..n).filter(|i| !seen[*i]));
     out
 }
 
@@ -481,6 +563,35 @@ impl Dj {
                 None
             }
         }
+    }
+
+    /// Asks the model to order `tracks` (title, artist; at most [`SET_MAX_TRACKS`] are sent)
+    /// into a set. The answer is validated by [`finish_order`]; `Err` says why there was none
+    /// (the caller then keeps the original order).
+    pub async fn order_set(&self, tracks: &[(String, String)]) -> Result<Vec<usize>, String> {
+        let base_url = self.cfg.base_url.trim();
+        if base_url.is_empty() || self.cfg.model.trim().is_empty() {
+            return Err("The DJ endpoint or model is not filled in.".into());
+        }
+        let n = tracks.len().min(SET_MAX_TRACKS);
+        let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "model": self.cfg.model,
+            "messages": [
+                { "role": "system", "content": SET_SYSTEM_PROMPT },
+                { "role": "user", "content": set_prompt(&tracks[..n]) },
+            ],
+            "temperature": 0.4,
+        });
+        let raw = self.post(&url, &body).await?;
+        self.note_raw(&raw);
+        let order = parse_order(&raw).ok_or_else(|| {
+            format!(
+                "The reply was not a list of track numbers: {}",
+                raw.chars().take(120).collect::<String>()
+            )
+        })?;
+        Ok(finish_order(&order, n))
     }
 
     /// Connectivity check for the settings "Test endpoint" button: one minimal
@@ -1055,5 +1166,86 @@ mod tests {
             .expect("a good reply must parse");
         assert_eq!(m.query, "deep house");
         assert_eq!(m.reason, "groove");
+    }
+
+    #[test]
+    fn the_set_prompt_numbers_and_cuts_the_tracks() {
+        let tracks: Vec<(String, String)> = (0..300)
+            .map(|i| (format!("T{i}\nx"), "A".repeat(200)))
+            .collect();
+        let p = set_prompt(&tracks);
+        assert!(p.contains("\n0. T0x - AAA") && p.contains("\n199. "));
+        assert!(!p.contains("\n200. "), "at most 200 tracks");
+        assert!(p.lines().all(|l| l.len() < 200));
+    }
+
+    #[test]
+    fn orders_are_read_from_whatever_the_model_wrote() {
+        assert_eq!(parse_order(r#"{"order":[2,0,1]}"#), Some(vec![2, 0, 1]));
+        assert_eq!(parse_order("[1,0]"), Some(vec![1, 0]));
+        assert_eq!(parse_order(r#"{"order":["1"," 0"]}"#), Some(vec![1, 0]));
+        assert_eq!(
+            parse_order("Sure!\n```json\n{\"order\": [3, 1, 2]}\n```"),
+            Some(vec![3, 1, 2])
+        );
+        assert_eq!(parse_order("no idea"), None);
+        assert_eq!(parse_order(r#"{"order":"3,1"}"#), None);
+    }
+
+    #[test]
+    fn a_returned_order_is_made_valid() {
+        // Duplicates and out-of-range numbers go; missing ones are appended in order.
+        assert_eq!(finish_order(&[2, 2, 9, -1, 0], 5), vec![2, 0, 1, 3, 4]);
+        assert_eq!(finish_order(&[], 3), vec![0, 1, 2]);
+        assert_eq!(finish_order(&[1, 0], 2), vec![1, 0]);
+        assert_eq!(finish_order(&[0], 0), Vec::<usize>::new());
+        let o = finish_order(&[4, 4, 4, 100, 3], 6);
+        let mut sorted = o.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..6).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn order_set_returns_a_valid_order_from_a_messy_reply() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(chat_response(r#"{"order":[2,2,7,0]}"#))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dj = Dj::new(
+            DjSettings {
+                base_url: server.uri(),
+                model: "m".into(),
+                ..Default::default()
+            },
+            direct_http(),
+        );
+        let tracks: Vec<(String, String)> = (0..4).map(|i| (format!("t{i}"), "a".into())).collect();
+        assert_eq!(dj.order_set(&tracks).await, Ok(vec![2, 0, 1, 3]));
+    }
+
+    #[tokio::test]
+    async fn order_set_says_why_when_it_cannot() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(chat_response("I would start with the slow ones."))
+            .mount(&server)
+            .await;
+        let dj = Dj::new(
+            DjSettings {
+                base_url: server.uri(),
+                model: "m".into(),
+                ..Default::default()
+            },
+            direct_http(),
+        );
+        let e = dj
+            .order_set(&[("t".into(), "a".into())])
+            .await
+            .expect_err("no list");
+        assert!(e.contains("not a list of track numbers"), "{e}");
+        let none = Dj::new(DjSettings::default(), direct_http());
+        assert!(none.order_set(&[]).await.is_err());
     }
 }

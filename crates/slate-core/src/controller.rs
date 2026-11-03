@@ -16,6 +16,8 @@ use crate::sync::LockExt;
 use crate::tidal_api::StreamInfo;
 use crate::{AppState, SlateError};
 
+/// How loud the music stays while a DJ line is spoken.
+const DUCK_FACTOR: f32 = 0.3;
 const DEVICE_RETRY_DELAY: Duration = Duration::from_millis(500);
 const DEVICE_MAX_RETRIES: u32 = 10;
 /// Consecutive unplayable tracks before auto-advance gives up.
@@ -284,6 +286,7 @@ impl Controller {
             }
         }
         q.begin(track.clone(), false);
+        crate::dj_voice::track_changed();
         self.forget_armed();
         self.notify_started(q, &track, chosen_by_user).await;
         Ok(())
@@ -842,9 +845,83 @@ impl Controller {
             )
             .ok();
         if move_.speaks {
-            crate::dj::speak(move_.line.as_deref());
+            self.dj_say(move_.line.as_deref());
         }
         Some(first)
+    }
+
+    /// "DJ this playlist": asks the model for a flowing order of `tracks` (titles and artists
+    /// of up to 200 are sent) and plays that order. The request runs before the queue is
+    /// locked. Any failure keeps the playlist's own order. Returns the outcome of starting,
+    /// whether shuffle had to be switched off (it would scramble the set) and a sentence
+    /// saying what happened.
+    pub async fn dj_playlist(
+        &self,
+        tracks: Vec<Track>,
+        source: Option<Source>,
+    ) -> (Outcome, bool, String) {
+        let settings = self.state.load_settings().unwrap_or_default().dj;
+        let n = tracks.len().min(crate::dj::SET_MAX_TRACKS);
+        let pairs: Vec<(String, String)> = tracks[..n]
+            .iter()
+            .map(|t| (t.title().to_string(), t.artist_name().to_string()))
+            .collect();
+        let asked = if crate::dj::is_configured(&settings) {
+            let dj = crate::dj::Dj::new(settings, self.state.proxied_http.clone());
+            dj.order_set(&pairs).await
+        } else {
+            Err("the DJ endpoint is not set up (DJ page)".to_string())
+        };
+        let (ordered, status) = match asked {
+            Ok(order) => {
+                let mut slots: Vec<Option<Track>> = tracks.iter().cloned().map(Some).collect();
+                let mut out: Vec<Track> = order
+                    .iter()
+                    .filter_map(|&i| slots.get_mut(i).and_then(Option::take))
+                    .collect();
+                out.extend(slots.into_iter().flatten());
+                let status = format!("DJ set ready: {} tracks in a new order.", out.len());
+                (out, status)
+            }
+            Err(why) => (
+                tracks,
+                format!("Playing the playlist in its own order: {why}"),
+            ),
+        };
+        self.dj_note(status.clone());
+        let shuffle_off = {
+            let mut q = self.lock_queue().await;
+            let was = q.shuffle;
+            if was {
+                q.toggle_shuffle(&mut rand::rng());
+            }
+            was
+        };
+        let outcome = self.play_all(ordered, source, false, false).await;
+        (outcome, shuffle_off, status)
+    }
+
+    /// Speaks a DJ line with the chosen voice. Piper ducks the music while it talks and says
+    /// why when it cannot; the system voice is the original fire-and-forget one.
+    fn dj_say(&self, line: Option<&str>) {
+        let settings = self.state.load_settings().unwrap_or_default().dj;
+        if crate::dj_voice::Voice::parse(&settings.voice) != crate::dj_voice::Voice::Piper {
+            crate::dj::speak(line);
+            return;
+        }
+        let Some(line) = line else { return };
+        let duck: Option<crate::dj_voice::Duck> = (!settings.no_duck).then(|| {
+            let state = Arc::clone(&self.state);
+            Arc::new(move |on: bool| {
+                let full = state.load_settings().map_or(1.0, |s| s.volume);
+                let _ = state
+                    .audio_player
+                    .set_volume(if on { full * DUCK_FACTOR } else { full });
+            }) as crate::dj_voice::Duck
+        });
+        if let Err(why) = crate::dj_voice::speak_piper(line, &settings.piper_model, duck, None) {
+            self.dj_note(format!("DJ voice: {why}"));
+        }
     }
 
     /// Before `next` takes the queue lock: if the queue is about to run out and the DJ
@@ -1156,6 +1233,7 @@ impl Controller {
     /// Audio reality wins: reconcile the queue and adopt it. Returns the track now playing.
     pub async fn on_track_advanced(&self, payload: &serde_json::Value) -> Option<Track> {
         use std::sync::atomic::Ordering::Relaxed;
+        crate::dj_voice::track_changed();
         let track_id = payload.get("trackId").and_then(serde_json::Value::as_u64)?;
         let qid = payload
             .get("qid")
