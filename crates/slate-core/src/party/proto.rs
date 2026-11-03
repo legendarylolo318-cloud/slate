@@ -226,7 +226,7 @@ pub fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, String> {
 pub fn clean_name(raw: &str) -> String {
     let n: String = raw
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !super::chat::is_hidden_control(*c))
         .take(MAX_NAME_CHARS)
         .collect();
     let n = n.trim();

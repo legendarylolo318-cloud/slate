@@ -28,12 +28,20 @@ pub enum Refused {
     Muted,
 }
 
-/// Plain text only: control characters (newlines, escapes…) removed, surrounding space
-/// trimmed, cut to [`MAX_CHARS`] characters. `None` when nothing is left.
+/// Characters that change how text around them is shown without being seen themselves:
+/// control characters (newlines, escapes…) and the bidirectional overrides and isolates, which
+/// can make a message or a name read backwards ("Trojan Source" style spoofing).
+pub fn is_hidden_control(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}' | '\u{061C}')
+}
+
+/// Plain text only: hidden control characters ([`is_hidden_control`]) removed, surrounding
+/// space trimmed, cut to [`MAX_CHARS`] characters. `None` when nothing is left.
 pub fn clean(text: &str) -> Option<String> {
     let s: String = text
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !is_hidden_control(*c))
         .take(MAX_CHARS * 4)
         .collect();
     let s: String = s.trim().chars().take(MAX_CHARS).collect();
@@ -128,6 +136,21 @@ mod tests {
         assert_eq!(clean(&long).map(|s| s.chars().count()), Some(MAX_CHARS));
         // Cut at a character, never in the middle of one.
         assert!(clean(&"😀".repeat(300)).is_some_and(|s| s.chars().all(|c| c == '😀')));
+    }
+
+    #[test]
+    fn bidi_overrides_cannot_turn_text_around() {
+        assert_eq!(
+            clean("hi \u{202E}gnp.exe\u{202C} \u{2067}x\u{2069}\u{200F}").as_deref(),
+            Some("hi gnp.exe x")
+        );
+        assert_eq!(clean("\u{202E}\u{2066}"), None);
+        // Emoji sequences (zero-width joiner, variation selector) are kept.
+        assert_eq!(
+            clean("👩\u{200D}💻 ❤\u{FE0F}").as_deref(),
+            Some("👩\u{200D}💻 ❤\u{FE0F}")
+        );
+        assert_eq!(crate::party::proto::clean_name("\u{202E}nimdA"), "nimdA");
     }
 
     #[test]

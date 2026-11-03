@@ -948,7 +948,8 @@ impl Backend {
         let Some(text) = slate_core::party::chat::clean(text) else {
             return;
         };
-        let line = format!("{}: {text}", proto::clip(from, 24));
+        let from = slate_core::party::chat::clean(from).unwrap_or_else(|| "?".into());
+        let line = format!("{}: {text}", proto::clip(&from, 24));
         let (count, recent): (usize, Vec<String>) = {
             let mut log = lock(&CHAT);
             log.push_back(line.clone());
