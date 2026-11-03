@@ -154,7 +154,8 @@ pub fn speak_piper(
     let mine: Procs = Arc::default();
     *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&mine));
     let model = model.to_string();
-    std::thread::Builder::new()
+    let duck_again = duck.clone();
+    let spawned = std::thread::Builder::new()
         .name("slate-dj-voice".into())
         .spawn(move || {
             if let Some(d) = &duck {
@@ -163,7 +164,7 @@ pub fn speak_piper(
             if let Err(e) = run(&text, &model, &path, generation, &mine) {
                 log::warn!("[dj] Piper voice failed: {e}");
             }
-            procs(&mine).clear();
+            reap(&mine);
             // A newer line owns the flag and the volume now: it restores both itself.
             if ACTIVE.load(Ordering::Acquire) == generation {
                 SPEAKING.store(false, Ordering::Relaxed);
@@ -172,9 +173,31 @@ pub fn speak_piper(
                     d(false);
                 }
             }
-        })
-        .map_err(|e| format!("could not start the voice: {e}"))?;
+        });
+    if let Err(e) = spawned {
+        // Nothing ducked yet, but this line took the flag from the one it cut off.
+        if ACTIVE.load(Ordering::Acquire) == generation {
+            SPEAKING.store(false, Ordering::Relaxed);
+            SKIP_NEXT_START.store(false, Ordering::Relaxed);
+            if let Some(d) = &duck_again {
+                d(false);
+            }
+        }
+        return Err(format!("could not start the voice: {e}"));
+    }
     Ok(())
+}
+
+/// Ends and waits for every process of a line, so none is left running (an error halfway)
+/// or as a zombie (killed by an interrupt, which does not wait).
+fn reap(mine: &Procs) {
+    let children = std::mem::take(&mut *procs(mine));
+    for mut c in children {
+        if matches!(c.try_wait(), Ok(None)) {
+            let _ = c.kill();
+        }
+        let _ = c.wait();
+    }
 }
 
 fn run(text: &str, model: &str, path: &OsStr, generation: u64, mine: &Procs) -> Result<(), String> {
@@ -480,6 +503,53 @@ mod tests {
             ducks.lock().expect("ducks").iter().filter(|d| !**d).count(),
             1,
             "restored exactly once"
+        );
+    }
+
+    /// Our children that have exited but were never waited for, by program name.
+    #[cfg(target_os = "linux")]
+    fn zombies(names: &[&str]) -> usize {
+        let me = std::process::id().to_string();
+        std::fs::read_dir("/proc")
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| std::fs::read_to_string(e.path().join("stat")).ok())
+            .filter(|stat| {
+                // pid (comm) state ppid ...
+                let Some((comm, rest)) = stat.split_once(") ") else {
+                    return false;
+                };
+                let comm = comm.rsplit('(').next().unwrap_or("");
+                let mut f = rest.split(' ');
+                let (state, ppid) = (f.next(), f.next());
+                state == Some("Z") && ppid == Some(me.as_str()) && names.contains(&comm)
+            })
+            .count()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn interrupted_and_failed_lines_leave_no_processes_behind() {
+        let _s = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().expect("dir");
+        script(dir.path(), "piper", "exec cat > /dev/null");
+        script(dir.path(), "aplay", "exec sleep 30");
+        let model = dir.path().join("v.onnx");
+        std::fs::write(&model, b"x").expect("model");
+        let m = model.to_str().expect("utf8");
+        let path = dir.path().as_os_str().to_owned();
+        for line in ["one", "two", "three"] {
+            speak_piper(line, m, None, Some(path.clone())).expect("speaks");
+            assert!(wait_for(is_speaking));
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        interrupt();
+        assert!(wait_for(|| !is_speaking()));
+        assert!(
+            wait_for(|| zombies(&["piper", "aplay", "sleep", "cat"]) == 0),
+            "{} zombie voice processes",
+            zombies(&["piper", "aplay", "sleep", "cat"])
         );
     }
 }
