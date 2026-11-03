@@ -8,7 +8,7 @@ use crate::error::SlateError;
 use crate::mpd::{self, Config};
 use crate::{AppState, Settings};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct MpdInfo {
     pub enabled: bool,
     pub running: bool,
@@ -19,7 +19,21 @@ pub struct MpdInfo {
     pub address: String,
 }
 
-/// A fresh password: 20 hex digits (80 bits).
+impl std::fmt::Debug for MpdInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MpdInfo")
+            .field("enabled", &self.enabled)
+            .field("running", &self.running)
+            .field("lan", &self.lan)
+            .field("password", &crate::mpd::Secret(self.password.clone()))
+            .field("port", &self.port)
+            .field("address", &self.address)
+            .finish()
+    }
+}
+
+/// A fresh password: 20 hex digits of a random UUID (74 random bits; two digits of a v4 UUID
+/// are fixed).
 pub fn generate_password() -> String {
     uuid::Uuid::new_v4().simple().to_string()[..20].to_string()
 }
@@ -154,6 +168,17 @@ mod tests {
         assert_eq!(a.len(), 20);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn the_settings_page_info_never_prints_the_password() {
+        let info = MpdInfo {
+            password: "0123456789abcdef0123".into(),
+            ..MpdInfo::default()
+        };
+        let shown = format!("{info:?}");
+        assert!(!shown.contains("0123456789"), "{shown}");
+        assert!(shown.contains("<set>"), "{shown}");
     }
 
     #[test]
