@@ -9,6 +9,12 @@ Connect your client to the URL shown in Settings (`http://127.0.0.1:5577/<token>
 HTTP). The server keeps a session per client, so it knows the client's name from the `initialize`
 handshake and can push notifications.
 
+Not to be confused with the MPD server (Settings → Integrations → MPD server, README "Phone remote
+(MPD)"): that speaks the MPD protocol for phone and desktop MPD clients, is separate from MCP (its
+own port, password and switch), and drives the player through the same actions as these tools. Both
+are off by default and exist only while switched on. The 1.5 "DJ this playlist" and the Piper voice
+are app features, not MCP tools.
+
 ## Using Slate with Hermes and other agents
 
 * **Access token (optional).** Settings → Integrations → Access token → Generate. Clients must then

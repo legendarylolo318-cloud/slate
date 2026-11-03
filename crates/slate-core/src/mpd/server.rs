@@ -278,7 +278,7 @@ async fn serve(sh: Arc<Shared>, mut sock: TcpStream, _peer: SocketAddr) {
     let _ = sock.set_nodelay(true);
     let mut stop = sh.stop.clone();
     let (rd, mut wr) = sock.into_split();
-    let mut client = Client::new(rd, sh.events.subscribe(), sh.password.is_empty());
+    let mut client = Peer::new(rd, sh.events.subscribe(), sh.password.is_empty());
     let result = tokio::select! {
         _ = stop.changed() => Ok(()),
         r = client.run(&sh, &mut wr) => r,
@@ -326,7 +326,7 @@ impl Lines {
     }
 }
 
-struct Client {
+struct Peer {
     lines: Lines,
     events: broadcast::Receiver<u8>,
     /// Changes that happened since the client last asked.
@@ -344,7 +344,7 @@ enum Flow {
     Close,
 }
 
-impl Client {
+impl Peer {
     fn new(rd: OwnedReadHalf, events: broadcast::Receiver<u8>, authed: bool) -> Self {
         Self {
             lines: Lines {

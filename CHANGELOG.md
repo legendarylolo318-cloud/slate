@@ -1,5 +1,98 @@
 # Changelog
 
+## [1.5.0] - unreleased
+
+Resource rule for the whole release: with default settings nothing new is allocated, spawned or
+polled. Window-state restore is the only feature on by default and works only at launch and when a
+window stops moving or closes. Everything else is lazy and off by default. No crate added, the audio
+path, buffers and bit-perfect/exclusive behaviour are unchanged.
+
+### Added
+- Content filter (Settings → Playback): "Hide explicit tracks" and "Hide AI-generated tracks". Filtered
+  tracks are skipped by the queue, autoplay, radio and the DJ, and shown dimmed with "hidden by filter"
+  in lists (lists already on screen update when reloaded). Stored in the encrypted settings. Off by default.
+- Remember window size and position (Settings → General, on by default): size, position and maximized
+  state of the main window and the mini player, saved after a move or resize stops (one single-shot
+  timer, written off the UI thread) and on close, restored at launch. A saved position that is on no
+  monitor any more puts the window in the centre of the primary one. Sizes are stored logically, so the
+  interface scale and per-monitor DPI are respected. On Wayland only size and maximized are restored
+  (clients cannot set their position). Turning it off deletes `window.json`.
+- Album shuffle (Settings → Playback "Shuffle mode", or right-click the shuffle button): shuffles whole
+  albums and keeps each album's track order, so gapless playback and album ReplayGain stay intact; the
+  album that is playing plays on first. With smarter shuffle on, the same artist is avoided on
+  consecutive albums. One pass when shuffling.
+- MPD server (Settings → Integrations, off by default): a minimal MPD protocol server (no crate) so
+  M.A.L.P., MaximumMPD, Rigelian and `mpc` can control Slate. Loopback `127.0.0.1:6600` by default;
+  "Allow LAN" listens on every interface and requires a password (generated, with Copy). Queue,
+  transport, volume, modes, `idle`, TIDAL playlists (`listplaylists`, `load`), TIDAL track search and
+  cover art are supported; anything else gets an `ACK` error. 8 clients, 60 commands per 10 s each,
+  64 KiB lines, idle connections closed after 10 minutes. See the README, "Phone remote (MPD)".
+- Party text chat: guests and host send plain-text messages of up to 200 characters (5 per person per
+  10 s, counted by the existing 60-message flood rule). The Party tab has a collapsible chat panel and
+  the latest message shows beside the player like reactions. The last 100 messages are kept in memory
+  only and are gone when the party ends. The host can mute a guest. Protocol version stays 2: 1.3 and
+  1.4 peers ignore the new message.
+- DJ voice (DJ page): choose espeak-ng / say or Piper, pick a voice `.onnx` file, "Test voice". Piper is
+  started only while a line is spoken (the text goes in on stdin), played through a one-off
+  `paplay`/`aplay` (PowerShell on Windows), ducks the music while it talks (can be turned off) and is
+  killed when a new line or the next track interrupts it. A missing binary or voice file is named on
+  the page.
+- DJ this playlist (right-click a playlist): the model gets the titles and artists of up to 200 tracks
+  and returns a flowing order, which is queued. Returned numbers are deduplicated, out-of-range ones
+  dropped and missing ones appended; any failure plays the playlist in its own order. The request runs
+  without the queue lock. Shuffle is switched off for the set.
+
+### Changed
+- The DJ page's disclosure line mentions the 200 tracks "DJ this playlist" sends.
+
+### Fixed
+- Nothing in this release fixes an older bug.
+
+### Notes
+- Files: `window.json` (window geometry, plain JSON next to `ui.json`), settings keys `hide_explicit`,
+  `hide_ai`, `album_shuffle`, `mpd_*`, and `dj.voice` / `dj.piper_model` / `dj.no_duck`.
+- The MPD playlist is the playing track followed by the queue; `clear` stops playback; `play N` leaves
+  earlier entries queued; `lsinfo`, `list` and `count` answer empty (no local library).
+- The MPD port has no settings UI (`mpd_port` in the settings file, default 6600).
+
+### Performance (measured)
+Release builds of 1.4.1 (built from `194e36b` in its own worktree) and 1.5.0 on the same machine,
+login screen on an empty profile (`XDG_*` pointed at a temp directory), 12 s warm-up then a 60 s
+window, two runs each. Wakeups are voluntary context switches over all threads.
+
+| Default settings, login screen | 1.4.1 | 1.5.0 |
+|---|---|---|
+| Threads | 21, 21 | 21, 21 |
+| Wakeups/s | 0.7 (run 1 read −4.7: a thread exited mid-window, so its counter vanished) | 0.7, 0.7 |
+| CPU ticks in 60 s | 2, 1 | 0, 1 |
+| Anonymous PSS | 43.5, 43.0 MB | 43.3, 43.6 MB |
+| Total PSS | 153.8, 153.5 MB | 154.4, 154.8 MB |
+| VRAM | not measurable here | not measurable here |
+
+Default settings are within run-to-run noise of 1.4.1: same thread count, no new wakeups. The
+binary grew from 71 MB to 77 MB. VRAM: `nvidia-smi` showed no per-process figure and the GPU's total
+stayed at 15 MB with the app open, so no VRAM number is claimed. Playing (hi-res, PipeWire), the
+window-map time and the "with all 1.5 features on" table were **not measured**: they need a signed-in
+profile and the new switches turned on in the UI, and none was available. For the +10 MB RAM / +10 MB
+VRAM budget there is therefore no measured evidence for the all-features-on case; by construction
+the MPD server, chat, Piper and the filters allocate only when used (MPD: one listener task plus one
+task per connected client; Piper: one short-lived thread and two processes per spoken line).
+
+### Not tested (honest list)
+- No real MPD client (M.A.L.P., MaximumMPD, Rigelian) was connected; the protocol was tested against
+  a fake player over loopback sockets, including `idle`, command lists, limits and cover chunks.
+- No signed-in session was used: search, playlists, `load`, cover art, DJ this playlist against a real
+  model, playing numbers and anything that needs TIDAL were not exercised. DJ ordering was tested
+  against a mock endpoint.
+- Window restore, the off-monitor check and the debounce were never run on a real X11, Wayland or
+  Windows desktop (the rules are unit-tested). With "Start minimized to tray" on Linux the window is
+  not checked against the monitors until it is shown.
+- The new settings controls, dimmed rows, shuffle right-click menu, party chat panel, DJ voice section
+  and playlist menu item compile and their logic is tested, but they were not clicked through.
+- Piper: tested with stand-in `piper` and `paplay` scripts (stdin text, arguments, ducking, killing);
+  real Piper audio and the Windows playback path were not tried.
+- Windows builds were not made.
+
 ## [1.4.1] - 2026-11-02
 
 Maintenance release: bug fixes and resource reductions only. No new features, no setting or
