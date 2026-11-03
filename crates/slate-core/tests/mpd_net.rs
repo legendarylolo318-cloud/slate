@@ -561,3 +561,21 @@ async fn a_client_that_hangs_up_mid_command_changes_nothing() {
     assert_eq!(c.cmd("ping").await, vec!["OK"]);
     h.stop();
 }
+
+#[tokio::test]
+async fn idle_and_command_lists_need_the_password_too() {
+    let h = start(Fake::with_queue(), "secret").await;
+    let mut c = Conn::open(&h).await;
+    // `idle` waits without a timeout; before the password it must not wait at all.
+    let r = c.cmd("idle").await;
+    assert!(r[0].starts_with("ACK [4@0] {idle}"), "{r:?}");
+    c.0.write_all(b"command_list_begin\nstatus\ncommand_list_end\n")
+        .await
+        .unwrap();
+    let r = c.reply().await;
+    assert!(r[0].starts_with("ACK [4@0] {status}"), "{r:?}");
+    assert_eq!(c.cmd("password secret").await, vec!["OK"]);
+    c.0.write_all(b"idle\nnoidle\n").await.unwrap();
+    assert_eq!(c.reply().await, vec!["OK"]);
+    h.stop();
+}

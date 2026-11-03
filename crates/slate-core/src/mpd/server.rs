@@ -456,7 +456,7 @@ impl Peer {
                 let mut list: Vec<String> = Vec::new();
                 let mut bytes = 0usize;
                 loop {
-                    let l = tokio::time::timeout(IDLE_TIMEOUT, self.lines.next())
+                    let l = tokio::time::timeout(read_timeout(self.authed), self.lines.next())
                         .await
                         .map_err(|_| "timed out in a command list".to_string())?
                         .map_err(|_| "closed in a command list".to_string())?;
@@ -495,6 +495,20 @@ impl Peer {
                     }
                 }
                 out.extend(b"OK\n");
+                Ok(Flow::Continue)
+            }
+            // `idle` waits without a timeout, so it must not let a peer without the password
+            // hold a connection open.
+            "idle" if !self.authed => {
+                out.extend(
+                    ack(
+                        proto::ACK_PERMISSION,
+                        0,
+                        "idle",
+                        "you don't have permission for this command",
+                    )
+                    .as_bytes(),
+                );
                 Ok(Flow::Continue)
             }
             "idle" => {
