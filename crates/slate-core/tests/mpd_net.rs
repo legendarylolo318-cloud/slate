@@ -616,3 +616,212 @@ async fn connections_get_tcp_keepalive() {
     assert_eq!(sock.tcp_keepalive_time().unwrap(), Duration::from_secs(60));
     h.stop();
 }
+
+/// Throws junk at the server and checks it keeps serving everyone else.
+#[tokio::test]
+async fn hammering_never_breaks_the_server() {
+    let host = Fake::with_queue();
+    let h = start(host.clone(), "").await;
+    let addr = h.local_addr();
+
+    // A 1 MB line without a newline: refused and closed, nothing buffered beyond the limit.
+    {
+        let mut s = TcpStream::connect(addr).await.unwrap();
+        let mut greet = [0u8; 64];
+        let _ = s.read(&mut greet).await.unwrap();
+        let (mut rd, mut wr) = s.into_split();
+        let writer = tokio::spawn(async move {
+            let _ = wr.write_all(&vec![b'x'; 1 << 20]).await;
+        });
+        let mut out = Vec::new();
+        // The server answers "line too long" and hangs up; the reset that follows may eat the
+        // answer, so only the hang-up is certain.
+        let ended = tokio::time::timeout(Duration::from_secs(5), rd.read_to_end(&mut out)).await;
+        assert!(ended.is_ok(), "the connection is closed");
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.is_empty() || text.starts_with("ACK [2@0]"), "{text}");
+        let _ = writer.await;
+    }
+    // Binary junk, NULs, invalid UTF-8, unbalanced quotes, CR-only lines.
+    {
+        let mut c = Conn::open(&h).await;
+        for junk in [
+            &b"\x00\x01\x02\xff\xfe\n"[..],
+            b"\"unterminated\n",
+            b"play \"\\\n",
+            b"\r\n",
+            b"\n",
+            b"\x1b[31mstatus\n",
+            b"setvol 99999999999999999999999\n",
+            b"seek -1 -1\n",
+            b"delete 5:2\n",
+            b"move 0:1 99\n",
+            b"albumart tidal://track/1 18446744073709551615\n",
+            b"playlistinfo 4294967295:\n",
+            b"binarylimit 0\n",
+            b"plchanges -5\n",
+        ] {
+            c.0.write_all(junk).await.unwrap();
+            let r = c.reply().await;
+            assert!(
+                r.last().is_some_and(|l| l == "OK" || l.starts_with("ACK ")),
+                "{junk:?} -> {r:?}"
+            );
+        }
+        assert_eq!(c.cmd("ping").await, vec!["OK"]);
+    }
+    // 50 clients at once: 8 are served, the rest told so, and the server is fine afterwards.
+    let mut socks = Vec::new();
+    for _ in 0..50 {
+        socks.push(TcpStream::connect(addr).await.unwrap());
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(h.client_count(), server::MAX_CLIENTS);
+    let mut refused = 0;
+    for s in &mut socks {
+        let mut buf = vec![0u8; 128];
+        if let Ok(Ok(n)) = tokio::time::timeout(Duration::from_millis(500), s.read(&mut buf)).await
+        {
+            if String::from_utf8_lossy(&buf[..n]).contains("too many connections") {
+                refused += 1;
+            }
+        }
+    }
+    assert_eq!(refused, 50 - server::MAX_CLIENTS);
+    drop(socks);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(h.client_count(), 0);
+
+    // Half-open: a client that sends half a line and goes quiet holds one slot only, and
+    // leaving frees it; nothing it sent is run.
+    let mut half = TcpStream::connect(addr).await.unwrap();
+    half.write_all(b"setvol 1").await.unwrap();
+    let mut c = Conn::open(&h).await;
+    assert_eq!(h.client_count(), 2);
+    drop(half);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(h.client_count(), 1);
+    assert!(c.cmd("getvol").await.contains(&"volume: 70".to_string()));
+
+    // idle/noidle races: `noidle` outside idle is ignored; idle answered by a change and a
+    // `noidle` in flight gets exactly one OK each.
+    c.0.write_all(b"noidle\nping\n").await.unwrap();
+    assert_eq!(c.reply().await, vec!["OK"]);
+    for _ in 0..20 {
+        c.0.write_all(b"idle\n").await.unwrap();
+        host.0.lock().unwrap().volume ^= 1;
+        h.feed(&host.status_now());
+        c.0.write_all(b"noidle\n").await.unwrap();
+        let first = c.reply().await;
+        assert_eq!(first.last().map(String::as_str), Some("OK"), "{first:?}");
+        // Either the change ended idle (then `noidle` is ignored) or `noidle` did.
+        assert_eq!(c.cmd("ping").await, vec!["OK"]);
+    }
+    h.stop();
+}
+
+/// The sequence M.A.L.P. (Android), MaximumMPD and Rigelian (iOS) send after connecting and
+/// while browsing, as seen in their source and MPD logs. Every reply must end in OK, or in an
+/// ACK the clients handle (an unknown command or an empty library).
+#[tokio::test]
+async fn a_phone_client_session_walks_through() {
+    let host = Fake::with_queue();
+    let h = start(host.clone(), "pw").await;
+    let mut c = Conn::open(&h).await;
+    let ok = |r: &[String]| r.last().is_some_and(|l| l == "OK");
+    let ack = |r: &[String]| r.last().is_some_and(|l| l.starts_with("ACK "));
+    assert!(ok(&c.cmd("password \"pw\"").await));
+    for cmd in [
+        // Connection set-up.
+        "commands",
+        "notcommands",
+        "tagtypes",
+        "tagtypes clear",
+        "tagtypes enable Artist Album AlbumArtist Title Track Date",
+        "binarylimit 1048576",
+        "outputs",
+        "decoders",
+        "urlhandlers",
+        "replay_gain_status",
+        "stats",
+        // Now playing.
+        "status",
+        "currentsong",
+        "playlistinfo",
+        "plchanges 0",
+        "plchangesposid 0",
+        "getvol",
+        // Browsing a library Slate does not have: empty answers.
+        "lsinfo \"\"",
+        "lsinfo \"/\"",
+        "list album",
+        "list albumartist",
+        "list \"album\" \"group\" \"albumartist\"",
+        "count \"(Artist == 'A')\"",
+        // Stored playlists and search.
+        "listplaylists",
+        "listplaylistinfo \"Mix one\"",
+        "search \"(any contains 'one')\"",
+        "find \"(Artist == 'Found')\"",
+        "search any \"x\" window 0:50",
+        // Transport and queue edits as the app buttons send them.
+        "setvol 40",
+        "volume -5",
+        "pause 1",
+        "play",
+        "playid 2",
+        "seekcur 30",
+        "seekcur +5",
+        "seekid 2 10",
+        "random 1",
+        "repeat 0",
+        "single 0",
+        "consume 0",
+        "next",
+        "previous",
+        "moveid 3 1",
+        "addid \"tidal://track/77\"",
+        "add tidal://track/78 1",
+        "deleteid 3",
+        "load \"Mix one\"",
+        "albumart \"tidal://track/1\" 0",
+        "readpicture \"tidal://track/1\" 0",
+    ] {
+        let r = c.cmd(cmd).await;
+        assert!(ok(&r), "{cmd} -> {r:?}");
+    }
+    // A command list the way MaximumMPD polls.
+    c.0.write_all(b"command_list_ok_begin\nstatus\ncurrentsong\ncommand_list_end\n")
+        .await
+        .unwrap();
+    let r = c.reply().await;
+    assert!(
+        ok(&r) && r.iter().filter(|l| *l == "list_OK").count() == 2,
+        "{r:?}"
+    );
+    // Commands outside Slate's set get an ACK, and the connection carries on.
+    for cmd in [
+        "listfiles \"\"",
+        "channels",
+        "readmessages",
+        "config",
+        "listmounts",
+    ] {
+        let r = c.cmd(cmd).await;
+        assert!(ack(&r) && r[0].starts_with("ACK [5@0]"), "{cmd} -> {r:?}");
+    }
+    // Idle with the subsystems Rigelian asks for, woken by a volume change.
+    c.0.write_all(b"idle player playlist mixer options\n")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    host.0.lock().unwrap().volume = 12;
+    h.feed(&host.status_now());
+    // The queue edits above changed the playlist too.
+    let r = c.reply().await;
+    assert!(
+        has(&r, "changed: mixer") && r.last().is_some_and(|l| l == "OK"),
+        "{r:?}"
+    );
+    h.stop();
+}
