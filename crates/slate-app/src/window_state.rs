@@ -43,6 +43,9 @@ thread_local! {
     /// The last geometry stored per window (a maximized window keeps its restored size).
     static LAST: RefCell<[Option<Geom>; 2]> = const { RefCell::new([None, None]) };
     static STORE: RefCell<Store> = RefCell::new(Store::default());
+    /// Whether the on-screen check ran (a window started hidden in the tray is checked when
+    /// it is first shown).
+    static CHECKED: std::cell::Cell<[bool; 2]> = const { std::cell::Cell::new([false, false]) };
 }
 
 fn path() -> Option<PathBuf> {
@@ -126,9 +129,22 @@ fn monitors_of(window: &slint::Window) -> Option<(Vec<Rect>, Option<Rect>)> {
     })
 }
 
+/// [`after_show`] for a window that may have been shown before: runs it the first time only.
+pub fn after_first_show(window: &slint::Window, which: Which) {
+    if !CHECKED.with(|c| c.get()[index(which)]) {
+        after_show(window, which);
+    }
+}
+
 /// Once the window exists: if its remembered spot is on no monitor (unplugged, resolution
-/// change) or it is bigger than its screen, move it to the centre of the primary monitor.
+/// change), move it to the centre of the primary monitor; if it is bigger than its screen (a
+/// smaller monitor, a larger interface scale), shrink it to fit and centre it there.
 pub fn after_show(window: &slint::Window, which: Which) {
+    CHECKED.with(|c| {
+        let mut v = c.get();
+        v[index(which)] = true;
+        c.set(v);
+    });
     if !ENABLED.load(Ordering::Relaxed) || !can_position() {
         return;
     }
@@ -146,12 +162,35 @@ pub fn after_show(window: &slint::Window, which: Which) {
         w: i32::try_from(size.width).unwrap_or(i32::MAX),
         h: i32::try_from(size.height).unwrap_or(i32::MAX),
     };
-    if window.is_maximized() || !needs_recentering(current, &monitors) {
+    if window.is_maximized() {
+        return;
+    }
+    let off_screen = needs_recentering(current, &monitors);
+    // The screen the window opened on (by its title bar), else the primary.
+    let home = monitors
+        .iter()
+        .copied()
+        .find(|m| contains(*m, current.x + 24, current.y + 12))
+        .or(primary)
+        .or_else(|| monitors.first().copied());
+    let too_big = home.is_some_and(|m| current.w > m.w || current.h > m.h);
+    if !off_screen && !too_big {
         return;
     }
     let p = plan(g, window.scale_factor(), &monitors, primary, true);
-    let target = primary.or_else(|| monitors.first().copied());
+    let target = if off_screen {
+        primary.or_else(|| monitors.first().copied())
+    } else {
+        home
+    };
     if let Some(mon) = target {
+        // Fit the screen it lands on, whatever the stored size was.
+        let scale = window.scale_factor().max(0.1);
+        let p = slate_core::window_state::Plan {
+            w: p.w.min(mon.w as f32 / scale),
+            h: p.h.min(mon.h as f32 / scale),
+            ..p
+        };
         let (x, y) = slate_core::window_state::centered(
             (
                 (p.w * window.scale_factor()).round() as i32,
@@ -162,6 +201,10 @@ pub fn after_show(window: &slint::Window, which: Which) {
         window.set_size(LogicalSize::new(p.w, p.h));
         window.set_position(PhysicalPosition::new(x, y));
     }
+}
+
+fn contains(m: Rect, px: i32, py: i32) -> bool {
+    px >= m.x && px < m.x + m.w && py >= m.y && py < m.y + m.h
 }
 
 fn observed(window: &slint::Window) -> Observed {

@@ -1104,6 +1104,10 @@ impl Backend {
             }
             Control::Raise => self.ui(|w| {
                 let _ = w.show();
+                crate::window_state::after_first_show(
+                    w.window(),
+                    slate_core::window_state::Which::Main,
+                );
             }),
             Control::Quit => {
                 let _ = slint::quit_event_loop();
@@ -1145,6 +1149,10 @@ impl Backend {
                     None if crate::uiprefs::UiPrefs::load().start_minimized => {
                         this.ui(|w| {
                             let _ = w.show();
+                            crate::window_state::after_first_show(
+                                w.window(),
+                                slate_core::window_state::Which::Main,
+                            );
                         });
                     }
                     None => {}
