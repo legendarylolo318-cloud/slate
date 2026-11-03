@@ -51,6 +51,9 @@ pub struct UiPrefs {
     /// Open hidden in the tray (off by default; the window shows if there is no tray).
     #[serde(default)]
     pub start_minimized: bool,
+    /// Remember window size, position and maximized state (on by default).
+    #[serde(default = "default_true")]
+    pub remember_window: bool,
     /// Tint the player bar and full-screen player with the cover's colour.
     #[serde(default)]
     pub cover_colors: bool,
@@ -117,6 +120,7 @@ impl Default for UiPrefs {
             global_shortcuts: false,
             cover_colors: false,
             start_minimized: false,
+            remember_window: true,
             check_updates: true,
             last_update_check: 0,
             known_update: None,

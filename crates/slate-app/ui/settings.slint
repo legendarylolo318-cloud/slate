@@ -38,6 +38,7 @@ export global SettingsState {
     in-out property <bool> hide-explicit;
     in-out property <bool> hide-ai;
     in-out property <bool> start-minimized;
+    in-out property <bool> remember-window;
     in-out property <bool> gapless-supported: true;
     in-out property <int> crossfade-index: 0;
     in-out property <bool> crossfade-same-album: true;
@@ -315,6 +316,11 @@ export component SettingsPage inherits Rectangle {
                         label: "Start minimized to tray";
                         hint: "Open hidden in the system tray. The window opens normally if there is no tray.";
                         Toggle { checked: SettingsState.start-minimized; toggled(v) => { SettingsState.start-minimized = v; SettingsState.changed-bool("start-minimized", v); } }
+                    }
+                    Row {
+                        label: "Remember window size and position";
+                        hint: "Open the window and the mini player where you left them. On Wayland only the size and maximized state can be restored. Turning this off deletes the saved geometry.";
+                        Toggle { checked: SettingsState.remember-window; toggled(v) => { SettingsState.remember-window = v; SettingsState.changed-bool("remember-window", v); } }
                     }
                     Row {
                         label: "Global shortcuts";

@@ -116,6 +116,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_hide_explicit(s.content_filter.0);
     g.set_hide_ai(s.content_filter.1);
     g.set_start_minimized(prefs.start_minimized);
+    g.set_remember_window(prefs.remember_window);
     g.set_crossfade_index(
         CROSSFADE_SECS
             .iter()
@@ -285,6 +286,13 @@ impl Backend {
                 "gapless" => utility::set_gapless(&state, v).map_err(|e| e.log_safe()),
                 "smart-shuffle" => utility::set_smart_shuffle(&state, v).map_err(|e| e.log_safe()),
                 "hide-explicit" | "hide-ai" => this.set_content_filter(&state, &key, v),
+                "remember-window" => {
+                    let mut prefs = crate::uiprefs::UiPrefs::load();
+                    prefs.remember_window = v;
+                    let saved = prefs.save().map_err(|e| e.to_string());
+                    crate::window_state::set_enabled(v);
+                    saved
+                }
                 "start-minimized" => {
                     let mut prefs = crate::uiprefs::UiPrefs::load();
                     prefs.start_minimized = v;

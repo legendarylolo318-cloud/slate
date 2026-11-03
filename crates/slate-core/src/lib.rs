@@ -69,6 +69,7 @@ pub mod theme_config;
 pub mod tidal_api;
 pub mod tidal_report;
 pub mod versions;
+pub mod window_state;
 
 pub use error::SlateError;
 pub use signal_path::{SignalPath, SignalPathTracker};

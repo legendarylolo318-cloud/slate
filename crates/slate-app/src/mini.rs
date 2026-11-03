@@ -2,6 +2,8 @@
 
 use std::cell::RefCell;
 
+use slate_core::window_state::Which;
+use slint::winit_030::WinitWindowAccessor;
 use slint::ComponentHandle;
 
 use crate::backend::Backend;
@@ -56,22 +58,41 @@ impl Backend {
             mini.on_go_album(move || b.go_current("album"));
             let b = this.clone();
             mini.on_go_artist(move || b.go_current("artist"));
+            let (weak, rt) = (mini.as_weak(), this.rt.clone());
+            crate::window_state::install(Which::Mini, move || {
+                if let Some(w) = weak.upgrade() {
+                    crate::window_state::save_now(&rt, w.window(), Which::Mini);
+                }
+            });
+            mini.window().on_winit_window_event(|_, event| {
+                if crate::window_state::is_geometry_event(event) {
+                    crate::window_state::touch(Which::Mini);
+                }
+                slint::winit_030::EventResult::Propagate
+            });
             let b = this.clone();
             mini.on_expand(move || {
                 MINI.with(|m| {
-                    m.borrow_mut().take();
+                    if let Some(mini) = m.borrow_mut().take() {
+                        crate::window_state::save_now(&b.rt, mini.window(), Which::Mini);
+                    }
                 });
                 b.ui(|w| {
                     let _ = w.show();
                 });
             });
-            mini.window().on_close_requested(|| {
+            let rt = this.rt.clone();
+            mini.window().on_close_requested(move || {
                 MINI.with(|m| {
-                    m.borrow_mut().take();
+                    if let Some(mini) = m.borrow_mut().take() {
+                        crate::window_state::save_now(&rt, mini.window(), Which::Mini);
+                    }
                 });
                 slint::CloseRequestResponse::HideWindow
             });
+            crate::window_state::restore(mini.window(), Which::Mini);
             let _ = mini.show();
+            crate::window_state::after_show(mini.window(), Which::Mini);
             MINI.with(|m| *m.borrow_mut() = Some(mini));
             sync(&main);
         });

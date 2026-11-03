@@ -1,6 +1,7 @@
 //! Process bootstrap: logging, async runtime, renderer selection, main window.
 
 use anyhow::Context;
+use slate_core::window_state::Which;
 use slint::ComponentHandle;
 use std::time::{Duration, Instant};
 
@@ -342,11 +343,15 @@ fn launch(
     let window = AppWindow::new().context("creating main window")?;
     // "Start minimized to tray": the window stays hidden; the tray (Linux: when its
     // registration answers, Windows: right below) shows it again if there is none.
-    let start_hidden = crate::uiprefs::UiPrefs::load().start_minimized;
+    let launch_prefs = crate::uiprefs::UiPrefs::load();
+    let start_hidden = launch_prefs.start_minimized;
+    crate::window_state::init(launch_prefs.remember_window);
+    crate::window_state::restore(window.window(), Which::Main);
     // Windows media controls need the window handle, which exists once shown: the
     // window is shown for a moment there and hidden again once the tray is up.
     if !start_hidden || cfg!(windows) {
         window.show().context("showing main window")?;
+        crate::window_state::after_show(window.window(), Which::Main);
     }
     #[cfg(windows)]
     crate::platform::win_smtc::remember_window(window.window());
@@ -378,9 +383,13 @@ fn launch(
         inbox.set_handler(Box::new(move |msg| b.handle_message(msg)));
     }
     let b = backend.clone();
-    window
-        .window()
-        .on_close_requested(move || b.close_requested());
+    let (weak, rt) = (window.as_weak(), backend.rt.clone());
+    window.window().on_close_requested(move || {
+        if let Some(w) = weak.upgrade() {
+            crate::window_state::save_now(&rt, w.window(), Which::Main);
+        }
+        b.close_requested()
+    });
     // Not `window.run()`: hiding the window to the tray must not end the loop.
     // Only the GL renderers report frames reliably (Skia/Vulkan does not call
     // the rendering notifier; Vulkan is probed before selection instead).
@@ -451,7 +460,16 @@ fn wire(window: &AppWindow, backend: &Backend) {
         // A `.slatetheme` dropped on the window is imported.
         use slint::winit_030::{winit::event::WindowEvent, EventResult, WinitWindowAccessor};
         let b = backend.clone();
+        let (weak, rt) = (window.as_weak(), backend.rt.clone());
+        crate::window_state::install(Which::Main, move || {
+            if let Some(w) = weak.upgrade() {
+                crate::window_state::save_now(&rt, w.window(), Which::Main);
+            }
+        });
         window.window().on_winit_window_event(move |_, event| {
+            if crate::window_state::is_geometry_event(event) {
+                crate::window_state::touch(Which::Main);
+            }
             if let WindowEvent::DroppedFile(path) = event {
                 if path
                     .extension()

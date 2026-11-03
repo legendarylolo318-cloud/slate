@@ -58,6 +58,7 @@ mod uiprefs;
 mod updates;
 mod versions_ui;
 mod video;
+mod window_state;
 
 fn main() -> anyhow::Result<()> {
     // Environment surgery must happen before any thread exists: `set_var` and
