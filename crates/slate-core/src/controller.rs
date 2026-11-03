@@ -861,6 +861,12 @@ impl Controller {
         source: Option<Source>,
     ) -> (Outcome, bool, String) {
         let settings = self.state.load_settings().unwrap_or_default().dj;
+        // Tracks the filters (or availability) would skip are not sent: they would take
+        // places among the 200 and their titles would leave the machine for nothing.
+        let tracks: Vec<Track> = tracks
+            .into_iter()
+            .filter(|t| self.classify(t).is_none())
+            .collect();
         let n = tracks.len().min(crate::dj::SET_MAX_TRACKS);
         let pairs: Vec<(String, String)> = tracks[..n]
             .iter()
