@@ -291,7 +291,7 @@ fn run(text: &str, model: &str, path: &OsStr, generation: u64, mine: &Procs) -> 
         procs(mine).push(play);
         wait_all(generation, mine);
         let _ = std::fs::remove_file(&wav);
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(windows))]
     {
