@@ -426,9 +426,10 @@ export component AppWindow inherits Window {
                         }
                     }
                     if root.error != "": Rectangle {
-                        height: 32px;
+                        // Long messages wrap inside the bar instead of spilling over the sidebar.
+                        height: max(32px, err-text.preferred-height + 12px);
                         background: Theme.danger;
-                        Text { text: root.error; color: Theme.on-accent; overflow: elide; horizontal-alignment: center; vertical-alignment: center; }
+                        err-text := Text { x: 12px; width: parent.width - 24px; text: root.error; color: Theme.on-accent; wrap: word-wrap; horizontal-alignment: center; vertical-alignment: center; }
                     }
                     if root.view == "tracks": TrackPage {
                         vertical-stretch: 1;

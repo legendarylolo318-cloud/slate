@@ -87,6 +87,10 @@ fn ui_shots() {
     let which = std::env::var("SLATE_SHOTS").unwrap_or_else(|_| "settings".into());
     app.set_screen(Screen::Main);
     let _ = app.show();
+    // `SLATE_SHOTS_ERROR`: the error bar with that text.
+    if let Ok(e) = std::env::var("SLATE_SHOTS_ERROR") {
+        app.set_error(e.into());
+    }
     // `dialog-<kind>`: that dialog over the home page, with two sample entries.
     if let Some(kind) = which.strip_prefix("dialog-") {
         app.set_view("home".into());
