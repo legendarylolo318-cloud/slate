@@ -234,15 +234,23 @@ export component SettingsPage inherits Rectangle {
                 edited(t) => { SettingsState.search-changed(t); }
             }
         }
-        if SettingsState.query != "": VerticalLayout {
-            spacing: 4px;
-            if SettingsState.search-results.length == 0: Text { text: "No setting matches that."; color: Theme.text-muted; }
-            for r[i] in SettingsState.search-results: Rectangle {
-                height: 36px;
-                border-radius: 6px;
-                background: sr.has-hover ? Theme.surface-raised : Theme.surface;
-                Text { x: 12px; text: r; color: Theme.text; vertical-alignment: center; }
-                sr := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { SettingsState.tab = SettingsState.search-tabs[i]; SettingsState.query = ""; SettingsState.search-changed(""); } }
+        // Scrolls on its own: a long list of matches must not make the page taller than the
+        // window (it pushed the player bar off the bottom).
+        if SettingsState.query != "": results-sv := ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                x: 0;
+                width: results-sv.visible-width - 14px;
+                alignment: start;
+                spacing: 4px;
+                if SettingsState.search-results.length == 0: Text { text: "No setting matches that."; color: Theme.text-muted; }
+                for r[i] in SettingsState.search-results: Rectangle {
+                    height: 36px;
+                    border-radius: 6px;
+                    background: sr.has-hover ? Theme.surface-raised : Theme.surface;
+                    Text { x: 12px; text: r; color: Theme.text; vertical-alignment: center; }
+                    sr := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { SettingsState.tab = SettingsState.search-tabs[i]; SettingsState.query = ""; SettingsState.search-changed(""); } }
+                }
             }
         }
         if SettingsState.status != "": Rectangle {
@@ -252,7 +260,7 @@ export component SettingsPage inherits Rectangle {
             Text { text: SettingsState.status; color: Theme.text; overflow: elide; horizontal-alignment: center; vertical-alignment: center; }
         }
         page := ScrollView {
-            vertical-stretch: 1;
+            vertical-stretch: SettingsState.query == "" ? 1 : 0;
             VerticalLayout {
                 // The full page width, as in 1.1.0, less room on the right for the scroll bar,
                 // which floats over the content.
