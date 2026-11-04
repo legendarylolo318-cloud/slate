@@ -87,6 +87,24 @@ fn ui_shots() {
     let which = std::env::var("SLATE_SHOTS").unwrap_or_else(|_| "settings".into());
     app.set_screen(Screen::Main);
     let _ = app.show();
+    // `dialog-<kind>`: that dialog over the home page, with two sample entries.
+    if let Some(kind) = which.strip_prefix("dialog-") {
+        app.set_view("home".into());
+        let choices: Vec<crate::bootstrap::Choice> = [
+            "Friday night",
+            "A much longer snapshot name that has to elide",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, t)| crate::bootstrap::Choice {
+            title: (*t).into(),
+            id: i.to_string().into(),
+        })
+        .collect();
+        app.set_dialog_choices(slint::ModelRc::new(slint::VecModel::from(choices)));
+        app.set_dialog_kind(kind.into());
+        app.set_dialog_open(true);
+    }
     // Settings tabs, or the plain track page.
     let pages: Vec<(String, Option<i32>)> = if which == "settings" {
         (0..9).map(|t| (format!("settings{t}"), Some(t))).collect()
@@ -106,6 +124,7 @@ fn ui_shots() {
                         app.set_view("settings".into());
                         app.global::<SettingsState>().set_tab(*t);
                     }
+                    None if which.starts_with("dialog-") => {}
                     None => app.set_view(which.as_str().into()),
                 }
                 save(

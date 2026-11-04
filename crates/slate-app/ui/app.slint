@@ -977,9 +977,11 @@ export component AppWindow inherits Window {
         if root.dialog-open: Rectangle {
             background: #000000a0;
             TouchArea { clicked => { root.dialog-open = false; } }
-            Rectangle {
-                width: min(400px, parent.width - 32px);
-                height: root.dialog-kind == "snapshots" ? min(460px, parent.height - 48px) : root.dialog-kind == "move" ? min(420px, parent.height - 48px) : root.dialog-kind == "dedupe" || root.dialog-kind == "artists" || root.dialog-kind == "compare" ? min(420px, parent.height - 48px) : 190px;
+            dlg := Rectangle {
+                // Snapshots need room for a name field and two buttons on one line.
+                width: min(root.dialog-kind == "snapshots" ? 480px : 400px, parent.width - 32px);
+                // Snapshots: as tall as the list needs (the list scrolls past 460 px).
+                height: root.dialog-kind == "snapshots" ? min(460px, parent.height - 48px, 175px + 44px * max(1, root.dialog-choices.length)) : root.dialog-kind == "move" ? min(420px, parent.height - 48px) : root.dialog-kind == "dedupe" || root.dialog-kind == "artists" || root.dialog-kind == "compare" ? min(420px, parent.height - 48px) : 190px;
                 border-radius: 12px;
                 background: Theme.surface;
                 TouchArea { }
@@ -1034,7 +1036,8 @@ export component AppWindow inherits Window {
                     }
                     if root.dialog-kind == "snapshots": HorizontalLayout {
                         spacing: 8px;
-                        TextField { text <=> root.dialog-text; placeholder: "Name (optional)"; field-width: 220px; accepted(t) => { root.snapshot-action("save", "", t); } }
+                        vertical-stretch: 0;
+                        TextField { text <=> root.dialog-text; placeholder: "Name (optional)"; field-width: max(96px, dlg.width - 32px - 216px); accepted(t) => { root.snapshot-action("save", "", t); } }
                         Button { label: "Save queue"; primary: true; clicked => { root.snapshot-action("save", "", root.dialog-text); } }
                         Button { label: "Rename"; enabled: root.dialog-target != "" && root.dialog-text != ""; clicked => { root.snapshot-action("rename", root.dialog-target, root.dialog-text); } }
                     }
