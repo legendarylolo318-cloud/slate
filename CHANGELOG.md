@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.5.0] - unreleased
+## [1.5.0] - 2026-11-03
 
 Resource rule for the whole release: with default settings nothing new is allocated, spawned or
 polled. Window-state restore is the only feature on by default and works only at launch and when a
