@@ -575,6 +575,9 @@ impl Backend {
             Outcome::Failed(f) => {
                 let msg = match f {
                     PlayFailure::Unplayable => "Track unavailable.".to_string(),
+                    PlayFailure::Filtered => {
+                        "Hidden by your content filter (Settings → Playback).".to_string()
+                    }
                     PlayFailure::Blocked(r) => r,
                     PlayFailure::Network => "Network error. Check your connection.".to_string(),
                     PlayFailure::RateLimited => {

@@ -69,6 +69,8 @@ impl ContentPrefs {
 pub enum PlayFailure {
     /// This item can never play (removed, region-locked, …).
     Unplayable,
+    /// Hidden by the content filter (Settings → Playback).
+    Filtered,
     /// Proxy settings block all traffic; skipping tracks cannot help.
     Blocked(String),
     Network,
@@ -367,7 +369,7 @@ impl Controller {
     pub async fn play_single(&self, track: Track) -> Outcome {
         let mut q = self.lock_queue().await;
         if self.prefs().blocks(&track) {
-            return Outcome::Failed(PlayFailure::Unplayable);
+            return Outcome::Failed(PlayFailure::Filtered);
         }
         q.set_tracks(Vec::new(), None, false);
         self.finish_start(&mut q, track, true).await
@@ -383,7 +385,7 @@ impl Controller {
     ) -> Outcome {
         let mut q = self.lock_queue().await;
         if self.prefs().blocks(&track) {
-            return Outcome::Failed(PlayFailure::Unplayable);
+            return Outcome::Failed(PlayFailure::Filtered);
         }
         let all: Vec<Track> = all
             .into_iter()
@@ -450,8 +452,10 @@ impl Controller {
         let Some(track) = q.take_at(index) else {
             return Outcome::Nothing;
         };
-        if self.classify(&track).is_some() {
-            return Outcome::Failed(PlayFailure::Unplayable);
+        match self.classify(&track) {
+            Some(Skip::Blocked) => return Outcome::Failed(PlayFailure::Filtered),
+            Some(_) => return Outcome::Failed(PlayFailure::Unplayable),
+            None => {}
         }
         match self.start(&mut q, track.clone(), true).await {
             Ok(()) => Outcome::Playing(track),
