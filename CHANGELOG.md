@@ -14,19 +14,23 @@ path, buffers and bit-perfect/exclusive behaviour are unchanged.
 - Remember window size and position (Settings → General, on by default): size, position and maximized
   state of the main window and the mini player, saved after a move or resize stops (one single-shot
   timer, written off the UI thread) and on close, restored at launch. A saved position that is on no
-  monitor any more puts the window in the centre of the primary one. Sizes are stored logically, so the
+  monitor any more puts the window in the centre of the primary one, and a size bigger than the screen
+  is shrunk to fit (checked once the window exists: two single-shot timers at launch, nothing repeats).
+  Sizes are stored logically, so the
   interface scale and per-monitor DPI are respected. On Wayland only size and maximized are restored
   (clients cannot set their position). Turning it off deletes `window.json`.
 - Album shuffle (Settings → Playback "Shuffle mode", or right-click the shuffle button): shuffles whole
-  albums and keeps each album's track order, so gapless playback and album ReplayGain stay intact; the
-  album that is playing plays on first. With smarter shuffle on, the same artist is avoided on
+  albums and keeps each album's track order, so gapless playback works and each album plays at its album
+  ReplayGain; the album that is playing carries on from the playing track, and "Shuffle play" starts an
+  album at its first track. With smarter shuffle on, the same artist is avoided on
   consecutive albums. One pass when shuffling.
 - MPD server (Settings → Integrations, off by default): a minimal MPD protocol server (no crate) so
   M.A.L.P., MaximumMPD, Rigelian and `mpc` can control Slate. Loopback `127.0.0.1:6600` by default;
   "Allow LAN" listens on every interface and requires a password (generated, with Copy). Queue,
   transport, volume, modes, `idle`, TIDAL playlists (`listplaylists`, `load`), TIDAL track search and
   cover art are supported; anything else gets an `ACK` error. 8 clients, 60 commands per 10 s each,
-  64 KiB lines, idle connections closed after 10 minutes. See the README, "Phone remote (MPD)".
+  64 KiB lines, idle connections closed after 10 minutes, TCP keepalive so a phone that leaves the
+  network frees its slot within about 3 minutes. See the README, "Phone remote (MPD)".
 - Party text chat: guests and host send plain-text messages of up to 200 characters (5 per person per
   10 s, counted by the existing 60-message flood rule). The Party tab has a collapsible chat panel and
   the latest message shows beside the player like reactions. The last 100 messages are kept in memory
@@ -46,7 +50,31 @@ path, buffers and bit-perfect/exclusive behaviour are unchanged.
 - The DJ page's disclosure line mentions the 200 tracks "DJ this playlist" sends.
 
 ### Fixed
-- Nothing in this release fixes an older bug.
+- Older bugs found while clicking through the app in the 1.5 review: a long settings search pushed the
+  player bar off the bottom of the window (since 1.1); the queue snapshot dialog's buttons overlapped
+  (1.4); long error messages spilled out of the error bar over the sidebar; after "End party" the host's
+  page still said it was hosting (1.3).
+
+### Found in review before release
+Each was fixed in its own commit; details in REVIEW.md #105–120.
+- MPD: a client without the password could sit in `idle` for ever (and eight of them locked every phone out);
+  command lists waited 10 minutes before the password.
+- MPD: switching "Allow LAN" or making a new password failed with "address in use" (every time in the test).
+- MPD: a phone that left the Wi-Fi while waiting in `idle` held its connection slot for ever; connections now
+  use TCP keepalive (~3 min to notice a dead peer).
+- MPD: the settings-page info printed the LAN password in debug output.
+- Piper: each line cut off by a track change or a new line left two zombie processes; a failure halfway left
+  `piper` running; a failed start could leave the music ducked.
+- Album shuffle: starting from track 5 of an album played tracks 1–4 right after it; "Shuffle play" started
+  halfway through an album (both seen live on a real playlist).
+- Album shuffle played at track gain; it now uses album gain, as promised.
+- Window restore: the "on no monitor any more" and "bigger than the screen" checks never ran at launch (the
+  window did not exist yet), so a window saved on an unplugged monitor opened off-screen; under an interface
+  scale above 1 the correction was half size. Found by running it.
+- Party chat and names kept bidirectional-override characters (text that reads backwards).
+- "DJ this playlist" sent tracks hidden by the content filter to the model.
+- A track hidden by the content filter said "Track unavailable." instead of naming the filter.
+- The four older bugs under Fixed.
 
 ### Notes
 - Files: `window.json` (window geometry, plain JSON next to `ui.json`), settings keys `hide_explicit`,
@@ -56,42 +84,82 @@ path, buffers and bit-perfect/exclusive behaviour are unchanged.
 - The MPD port has no settings UI (`mpd_port` in the settings file, default 6600).
 
 ### Performance (measured)
-Release builds of 1.4.1 (built from `194e36b` in its own worktree) and 1.5.0 on the same machine,
-login screen on an empty profile (`XDG_*` pointed at a temp directory), 12 s warm-up then a 60 s
-window, two runs each. Wakeups are voluntary context switches over all threads.
+Measured in the 1.5 review on this machine (16 cores, NVIDIA, PipeWire 1.6): release builds of 1.4.1
+(`194e36b`), 1.5.0 as handed to review (`fa47f36`) and the final tree, each started 12 s before a 60 s
+window, on a copy of a signed-in profile with default settings. The window ran on a headless KWin with a
+nested Xwayland (not the desktop; the 1.4.1 notes' numbers came from Hyprland), Skia/Vulkan, so compare the
+columns with each other, not with older notes. Playing = TOTO "Africa", FLAC 24-bit/192 kHz, into a null
+PipeWire sink at s24le/192 kHz. Wakeups are voluntary context switches over all threads.
 
-| Default settings, login screen | 1.4.1 | 1.5.0 |
+| Default settings | 1.4.1 | 1.5.0 as handed over | 1.5.0 |
+|---|---|---|---|
+| Idle main screen: threads, wakeups/s, CPU ticks in 60 s | 24, 0.0, 0 | 24, 0.0, 0 | 24, 0.0, 0 |
+| Idle main screen: anonymous / total PSS | 72.8 / 206.2 MB | 73.3 / 207.5 MB | 72.4 / 207.1 MB, 72.1 / 204.6 MB |
+| Playing: threads (start / end of window) | 51 / 47 | 51 / 47 | 50 / 46, 51 / 47 |
+| Playing: wakeups/s | 416 | 380 | 402, 393 |
+| Playing: CPU ticks in 60 s | 90 | 88 | 93, 87 |
+| Playing: anonymous / total PSS | 127.4 / 273.3 MB | 132.3 / 279.1 MB | 136.4 / 282.7 MB, 128.6 / 274.8 MB |
+| Window mapped (7 launches, median and range) | 375 ms (137–479) | 372 ms (142–484) | 375 ms (141–476) |
+| Binary | 75,277,768 B | 76,714,968 B | 76,773,384 B |
+
+Default settings are within run-to-run noise of 1.4.1: the same thread names and counts (four extra runs
+each: 45–50 threads playing for both, the difference is tokio's short-lived blocking pool), no idle
+wakeups, memory inside the spread of repeated runs (anonymous PSS while playing varied 128.6–136.4 MB
+between two runs of the same build). Window-state work happens only at launch, after a move/resize stops
+and on close. The binary is 1,495,616 bytes (2.0 %) larger than 1.4.1. VRAM: `nvidia-smi` gives no per-process figure here
+and the nested display hides the driver's own number, so no VRAM figure is claimed.
+
+| All 1.5 features on (1.5.0) | Default settings, playing | All on, playing |
 |---|---|---|
-| Threads | 21, 21 | 21, 21 |
-| Wakeups/s | 0.7 (run 1 read −4.7: a thread exited mid-window, so its counter vanished) | 0.7, 0.7 |
-| CPU ticks in 60 s | 2, 1 | 0, 1 |
-| Anonymous PSS | 43.5, 43.0 MB | 43.3, 43.6 MB |
-| Total PSS | 153.8, 153.5 MB | 154.4, 154.8 MB |
-| VRAM | not measurable here | not measurable here |
+| Setup | as above | MPD on with LAN and a client connected waiting in `idle`, both content filters, album shuffle, DJ connected (mock endpoint) with the Piper voice selected |
+| Threads | 46–51 | 44 / 40 |
+| Wakeups/s, CPU ticks in 60 s | 393–402, 87–93 | 442, 86 |
+| Anonymous / total PSS | 128.6–136.4 / 274.8–282.7 MB | 129.1 / 246.8 MB |
 
-Default settings are within run-to-run noise of 1.4.1: same thread count, no new wakeups. The
-binary grew from 71 MB to 77 MB. VRAM: `nvidia-smi` showed no per-process figure and the GPU's total
-stayed at 15 MB with the app open, so no VRAM number is claimed. Playing (hi-res, PipeWire), the
-window-map time and the "with all 1.5 features on" table were **not measured**: they need a signed-in
-profile and the new switches turned on in the UI, and none was available. For the +10 MB RAM / +10 MB
-VRAM budget there is therefore no measured evidence for the all-features-on case; by construction
-the MPD server, chat, Piper and the filters allocate only when used (MPD: one listener task plus one
-task per connected client; Piper: one short-lived thread and two processes per spoken line).
+Party chat, measured on an idle host with a guest joined: 95.4 MB anonymous PSS with three chat messages
+and an MPD client in `idle`, 95.6 MB with neither, so chat adds nothing measurable; a party itself (1.3)
+costs about 23 MB on the host (95.6 vs 72.4 MB idle). Within the +10 MB budget for every 1.5 feature.
 
-### Not tested (honest list)
-- No real MPD client (M.A.L.P., MaximumMPD, Rigelian) was connected; the protocol was tested against
-  a fake player over loopback sockets, including `idle`, command lists, limits and cover chunks.
-- No signed-in session was used: search, playlists, `load`, cover art, DJ this playlist against a real
-  model, playing numbers and anything that needs TIDAL were not exercised. DJ ordering was tested
-  against a mock endpoint.
-- Window restore, the off-monitor check and the debounce were never run on a real X11, Wayland or
-  Windows desktop (the rules are unit-tested). With "Start minimized to tray" on Linux the window is
-  not checked against the monitors until it is shown.
-- The new settings controls, dimmed rows, shuffle right-click menu, party chat panel, DJ voice section
-  and playlist menu item compile and their logic is tested, but they were not clicked through.
-- Piper: tested with stand-in `piper` and `paplay` scripts (stdin text, arguments, ducking, killing);
-  real Piper audio and the Windows playback path were not tried.
-- Windows builds were not made.
+Optimizations kept (each its own commit):
+- Playback tick: with MCP off, the twice-a-second "now playing" publish no longer clones the playing
+  track's strings and spawns a task. Not measurable against GStreamer's own work (wakeups and CPU stayed in
+  noise); kept because with default settings nothing should run for a feature that is off.
+- Release profile check, `codegen-units = 1` (kept) against 16, same tree and lockfile, playing as above,
+  two runs each: binary 76,773,384 vs 92,082,248 bytes (16 is 20 % larger), total PSS 290–294 vs
+  298–305 MB, CPU ticks 89–90 vs 90–92, window mapped 373 vs 377 ms median. 16 units only win on build
+  time (an app-only rebuild took 242 s instead of about 390 s), so release builds keep 1.
+
+### Considered, not done
+- Moving slate-core to reqwest 0.13 (iroh already pulls it in): measured −688,128 bytes (−0.9 %). Not
+  done: `proxy::system_proxy_from_env` deliberately mirrors reqwest 0.12.28's proxy environment rules, and a
+  source-guard test refuses the bump until that mirror is re-checked against the new hyper-util. That is a
+  proxy behaviour change, not a size tweak.
+- Using iroh's `lru` 0.18 instead of 0.19 to drop a duplicate crate: the binary did not get smaller.
+- Skipping the start-up Vulkan probe (`vulkan_usable`): it costs 52–85 ms per launch here (2.3 s once, on a
+  cold driver cache), measured with a C program doing the same calls. Not done: it is what stops an
+  invisible window on machines without working Vulkan, and changing renderer selection needs an A/B on
+  machines this review does not have.
+- Decoding each cover once for all sizes: the image cache keys entries by size, so a cover shown at
+  three sizes is fetched from the disk cache and decoded three times. Not measured as a cost; left alone.
+- Allocation counts per tick: an `LD_PRELOAD` malloc counter crashed the app at start, and heaptrack,
+  bytehound and perf are not installed (no root), so no allocation profile was taken.
+- No audio path, buffer or renderer fallback change was made, so no PulseAudio / ALSA exclusive / WASAPI
+  A/B was needed.
+
+### Not tested before release
+- Windows: nothing was built or run on Windows in this review (the release workflow builds and self-tests).
+- Real phone MPD apps (M.A.L.P., MaximumMPD, Rigelian): the protocol was walked with a scripted client using
+  their command sequences, against the real signed-in app over loopback and the LAN address (search through
+  TIDAL, playlists, cover art, idle, the password gate), but no phone app was connected. A real half-open
+  connection (needs a second machine) was not produced; keepalive is set and accepted by the OS.
+- Piper audio: Piper is not installed here; the "not installed" message was checked live, the process
+  handling with stand-in scripts.
+- Multi-monitor and mixed-DPI window restore: one virtual monitor only. Off-screen, too-large, interface
+  scale 1.5 and 2, mini player and Wayland (size only) were checked live.
+- VRAM, map time and wakeups on the real desktop compositor; the A/B above used a nested display.
+- A 1.4.1 party host for comparison (the two-instance runs on 1.4.1 failed to set up: it has no window
+  restore, so both windows opened on top of each other).
+- Long sessions (hours), rapid skipping, music videos.
 
 ## [1.4.1] - 2026-11-02
 

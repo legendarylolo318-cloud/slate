@@ -77,3 +77,18 @@ Notes for anyone working on Slate's code. What changed per release is in
   lock (a parallel first creation crashed the tests).
 - `blocking` is pinned to 1.6.2 in Cargo.lock: 1.7.0's idle pool thread never exits and woke 2/s for the
   whole session (AccessKit's AT-SPI connect starts it). Check before letting `cargo update` move it.
+- 1.5 window state (`window_state.rs`): the platform window does not exist right after `show()` (winit creates
+  it once the event loop runs), so the on-screen check also runs on the window's first move/resize and from
+  two single-shot timers (`check_soon`); it only counts as done once monitors could be read. Set sizes on a
+  shown window in physical pixels: a `LogicalSize` there was converted with a different factor under
+  `SLINT_SCALE_FACTOR`.
+- 1.5 MPD: restart with `Handle::shutdown().await` (waits for the listener to close), never `stop()` then bind;
+  every connection gets TCP keepalive (`server::keepalive`) because clients in `idle` send nothing. `idle` and
+  command lists are refused/timed out like everything else before the password.
+- 1.5 Piper: every process of a line is reaped (`reap`) however the line ends; `kill()` alone leaves zombies.
+- 1.5 party: the host's event pump stops when its `SESSION` ends, or guests' "left" events redraw the host page.
+- Driving the real UI headless (1.5 review): `kwin_wayland --virtual --xwayland` plus a rootful
+  `Xwayland :N` inside it (XTEST works there, not on the rootless one), `SLINT_BACKEND=winit-software` (Vulkan
+  frames only repaint on input on a nested X server), a private `XDG_RUNTIME_DIR` per instance so test
+  instances never take the single-instance socket, and `PULSE_SINK` on a null sink. `ui_shots.rs` renders
+  dialogs (`SLATE_SHOTS=dialog-<kind>`) and the error bar (`SLATE_SHOTS_ERROR`) offscreen.
