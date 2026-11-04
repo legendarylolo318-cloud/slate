@@ -352,6 +352,7 @@ fn launch(
     if !start_hidden || cfg!(windows) {
         window.show().context("showing main window")?;
         crate::window_state::after_show(window.window(), Which::Main);
+        crate::window_state::check_soon(window.as_weak(), Which::Main);
     }
     #[cfg(windows)]
     crate::platform::win_smtc::remember_window(window.window());
@@ -466,8 +467,10 @@ fn wire(window: &AppWindow, backend: &Backend) {
                 crate::window_state::save_now(&rt, w.window(), Which::Main);
             }
         });
-        window.window().on_winit_window_event(move |_, event| {
+        window.window().on_winit_window_event(move |w, event| {
             if crate::window_state::is_geometry_event(event) {
+                // The first one comes from the window being created: check it is on screen.
+                crate::window_state::after_first_show(w, Which::Main);
                 crate::window_state::touch(Which::Main);
             }
             if let WindowEvent::DroppedFile(path) = event {

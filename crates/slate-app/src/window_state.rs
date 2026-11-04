@@ -19,7 +19,7 @@ use slate_core::window_state::{
     needs_recentering, observe, plan, positioning_supported, Geom, Observed, Rect, Store, Which,
 };
 use slint::winit_030::WinitWindowAccessor;
-use slint::{LogicalSize, PhysicalPosition};
+use slint::{LogicalSize, PhysicalPosition, PhysicalSize};
 
 /// How long a move or resize must stop before it is saved.
 const DEBOUNCE: Duration = Duration::from_millis(800);
@@ -129,6 +129,20 @@ fn monitors_of(window: &slint::Window) -> Option<(Vec<Rect>, Option<Rect>)> {
     })
 }
 
+/// Runs [`after_first_show`] again a moment after the event loop has started (at 200 ms, then
+/// 1 s), for a platform that sends no move or resize when the window is created. Two
+/// single-shot timers, only at launch or when the mini player opens; nothing repeats.
+pub fn check_soon<T: slint::ComponentHandle + 'static>(weak: slint::Weak<T>, which: Which) {
+    for ms in [200, 1000] {
+        let weak = weak.clone();
+        slint::Timer::single_shot(Duration::from_millis(ms), move || {
+            if let Some(c) = weak.upgrade() {
+                after_first_show(c.window(), which);
+            }
+        });
+    }
+}
+
 /// [`after_show`] for a window that may have been shown before: runs it the first time only.
 pub fn after_first_show(window: &slint::Window, which: Which) {
     if !CHECKED.with(|c| c.get()[index(which)]) {
@@ -139,21 +153,29 @@ pub fn after_first_show(window: &slint::Window, which: Which) {
 /// Once the window exists: if its remembered spot is on no monitor (unplugged, resolution
 /// change), move it to the centre of the primary monitor; if it is bigger than its screen (a
 /// smaller monitor, a larger interface scale), shrink it to fit and centre it there.
+///
+/// Right after `show()` the platform window may not exist yet (winit creates it once the event
+/// loop runs), so this only counts as done once the monitors could be read; the first move or
+/// resize event of the real window runs it again through [`after_first_show`].
 pub fn after_show(window: &slint::Window, which: Which) {
-    CHECKED.with(|c| {
-        let mut v = c.get();
-        v[index(which)] = true;
-        c.set(v);
-    });
+    let done = || {
+        CHECKED.with(|c| {
+            let mut v = c.get();
+            v[index(which)] = true;
+            c.set(v);
+        });
+    };
     if !ENABLED.load(Ordering::Relaxed) || !can_position() {
-        return;
+        return done();
     }
     let Some(g) = STORE.with(|s| s.borrow().get(which)) else {
+        return done();
+    };
+    let Some((monitors, primary)) = monitors_of(window).filter(|(m, _)| !m.is_empty()) else {
+        tracing::debug!(?which, "window state: monitors not known yet");
         return;
     };
-    let Some((monitors, primary)) = monitors_of(window) else {
-        return;
-    };
+    done();
     let size = window.size();
     let pos = window.position();
     let current = Rect {
@@ -162,6 +184,13 @@ pub fn after_show(window: &slint::Window, which: Which) {
         w: i32::try_from(size.width).unwrap_or(i32::MAX),
         h: i32::try_from(size.height).unwrap_or(i32::MAX),
     };
+    tracing::debug!(
+        ?which,
+        ?monitors,
+        ?primary,
+        ?current,
+        "window state: on-screen check"
+    );
     if window.is_maximized() {
         return;
     }
@@ -198,7 +227,12 @@ pub fn after_show(window: &slint::Window, which: Which) {
             ),
             mon,
         );
-        window.set_size(LogicalSize::new(p.w, p.h));
+        // Physical, with the same scale factor as the size above: a logical size set on a shown
+        // window was converted with a different factor under SLINT_SCALE_FACTOR (half size at 2×).
+        window.set_size(PhysicalSize::new(
+            (p.w * scale).round() as u32,
+            (p.h * scale).round() as u32,
+        ));
         window.set_position(PhysicalPosition::new(x, y));
     }
 }

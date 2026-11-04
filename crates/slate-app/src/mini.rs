@@ -64,8 +64,9 @@ impl Backend {
                     crate::window_state::save_now(&rt, w.window(), Which::Mini);
                 }
             });
-            mini.window().on_winit_window_event(|_, event| {
+            mini.window().on_winit_window_event(|w, event| {
                 if crate::window_state::is_geometry_event(event) {
+                    crate::window_state::after_first_show(w, Which::Mini);
                     crate::window_state::touch(Which::Mini);
                 }
                 slint::winit_030::EventResult::Propagate
@@ -93,6 +94,7 @@ impl Backend {
             crate::window_state::restore(mini.window(), Which::Mini);
             let _ = mini.show();
             crate::window_state::after_show(mini.window(), Which::Mini);
+            crate::window_state::check_soon(mini.as_weak(), Which::Mini);
             MINI.with(|m| *m.borrow_mut() = Some(mini));
             sync(&main);
         });
