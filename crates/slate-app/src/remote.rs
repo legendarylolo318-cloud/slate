@@ -308,6 +308,10 @@ impl Backend {
         let Some(state) = self.state() else { return };
         if overlay {
             self.mpd_changed();
+        } else if !state.mcp_active.load(Ordering::Relaxed) {
+            // The playback tick (twice a second) feeds only MCP: with it off there is no
+            // one to tell, so nothing is cloned or spawned.
+            return;
         }
         let now = self.shared.now.lock().ok().and_then(|n| n.clone());
         let playing = self.shared.playing.load(Ordering::Relaxed);
