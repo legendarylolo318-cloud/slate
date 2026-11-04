@@ -283,7 +283,13 @@ impl Backend {
                 Requests,
                 Other,
             }
+            // Ending the party disconnects the guests; their "left" events must not redraw the
+            // host's page after it has gone back to "Start a party".
+            let session = SESSION.load(Ordering::Acquire);
             while let Some(e) = rx.recv().await {
+                if SESSION.load(Ordering::Acquire) != session {
+                    break;
+                }
                 let e_kind = match &e {
                     Event::GuestJoined(_) | Event::GuestLeft(_) => Kind::Roster,
                     Event::RequestsChanged => Kind::Requests,
