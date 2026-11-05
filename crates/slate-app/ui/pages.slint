@@ -197,6 +197,10 @@ export component QueuePanel inherits Rectangle {
     callback remove(int);
     callback go(int, string);
     callback clear();
+    in property <bool> can-undo;
+    in property <bool> can-redo;
+    callback undo();
+    callback redo();
     callback close();
     callback menu(string);
     /// Ctrl / Shift click on a row, and a bulk action ("sel-…") on the selection.
@@ -211,6 +215,8 @@ export component QueuePanel inherits Rectangle {
         spacing: 8px;
         HorizontalLayout {
             Text { text: "Queue"; font-size: 20px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; }
+            Button { label: "↶"; min-width: 36px; height: 28px; enabled: root.can-undo; clicked => { root.undo(); } }
+            Button { label: "↷"; min-width: 36px; height: 28px; enabled: root.can-redo; clicked => { root.redo(); } }
             Button { label: "Clear"; min-width: 60px; height: 28px; clicked => { root.clear(); } }
             qmore := Button {
                 label: "⋯";

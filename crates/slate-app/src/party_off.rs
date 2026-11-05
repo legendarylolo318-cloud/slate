@@ -8,6 +8,10 @@ use crate::bootstrap::{AppWindow, SettingsState};
 
 const OFF: &str = "This build of Slate has no listening party.";
 
+pub fn is_guest() -> bool {
+    false
+}
+
 pub fn hosting() -> bool {
     false
 }

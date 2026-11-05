@@ -142,6 +142,8 @@ pub struct Controller {
     /// A DJ block fetched by `dj_prepare` without the queue lock, for the queue it
     /// was fetched for; `(key, None)` = the DJ was asked and failed (use the radio).
     dj_ready: std::sync::Mutex<Option<(DjKey, Option<DjPick>)>>,
+    /// Undo / redo of the user's queue edits (see `queue_undo`).
+    undo: std::sync::Mutex<crate::queue_undo::UndoStack>,
 }
 
 /// A DJ move and the TIDAL tracks found for it.
@@ -234,6 +236,7 @@ impl Controller {
             dj_reason: std::sync::Mutex::new(None),
             dj_status: std::sync::Mutex::new(None),
             dj_ready: std::sync::Mutex::new(None),
+            undo: std::sync::Mutex::new(crate::queue_undo::UndoStack::new()),
         }
     }
 
@@ -864,6 +867,10 @@ impl Controller {
         tracks: Vec<Track>,
         source: Option<Source>,
     ) -> (Outcome, bool, String) {
+        {
+            let q = self.lock_queue().await;
+            self.checkpoint(&q);
+        }
         let settings = self.state.load_settings().unwrap_or_default().dj;
         // Tracks the filters (or availability) would skip are not sent: they would take
         // places among the 200 and their titles would leave the machine for nothing.
@@ -1064,20 +1071,51 @@ impl Controller {
 
     // ---------- queue editing ----------
 
+    /// Remembers the queue as it is, before a user edit. Autoplay, radio and DJ additions never
+    /// call this, so they are not undo steps.
+    fn checkpoint(&self, q: &Queue) {
+        if let Ok(mut u) = self.undo.lock() {
+            let state = crate::queue_undo::QueueState::capture(q, u.newest());
+            u.record(state, std::time::Instant::now());
+        }
+    }
+
+    /// Steps the user's last queue edit back (`redo` false) or forward again. False when there
+    /// is nothing to do. What plays now is left alone; the caller refreshes the views.
+    pub async fn undo_queue(&self, redo: bool) -> bool {
+        let mut q = self.lock_queue().await;
+        let now = crate::queue_undo::QueueState::capture(&q, None);
+        let Ok(mut u) = self.undo.lock() else { return false };
+        let state = if redo { u.redo(now) } else { u.undo(now) };
+        let Some(state) = state else { return false };
+        state.apply(&mut q);
+        true
+    }
+
+    /// (can undo, can redo).
+    pub fn undo_state(&self) -> (bool, bool) {
+        self.undo
+            .lock()
+            .map(|u| (u.can_undo(), u.can_redo()))
+            .unwrap_or_default()
+    }
+
     pub async fn add_to_queue(&self, track: Track, source: Option<Source>) {
-        self.lock_queue().await.add_to_queue(track, source.as_ref());
+        let mut q = self.lock_queue().await;
+        self.checkpoint(&q);
+        q.add_to_queue(track, source.as_ref());
     }
 
     pub async fn play_next_in_queue(&self, track: Track, source: Option<Source>) {
-        self.queue
-            .lock()
-            .await
-            .play_next_in_queue(track, source.as_ref());
+        let mut q = self.lock_queue().await;
+        self.checkpoint(&q);
+        q.play_next_in_queue(track, source.as_ref());
     }
 
     /// Makes `tracks` the upcoming queue (a restored snapshot), leaving what plays now alone.
     pub async fn replace_upcoming(&self, tracks: Vec<Track>) {
         let mut q = self.lock_queue().await;
+        self.checkpoint(&q);
         q.clear_manual();
         q.set_tracks(tracks, None, false);
     }
@@ -1085,6 +1123,7 @@ impl Controller {
     /// Adds `tracks` after everything in "next up" (a restored snapshot, appended).
     pub async fn append_upcoming(&self, tracks: Vec<Track>) {
         let mut q = self.lock_queue().await;
+        self.checkpoint(&q);
         for t in tracks {
             q.add_to_queue(t, None);
         }
@@ -1096,12 +1135,16 @@ impl Controller {
     }
 
     pub async fn remove_from_queue(&self, index: usize) {
-        self.lock_queue().await.remove_at(index);
+        let mut q = self.lock_queue().await;
+        self.checkpoint(&q);
+        q.remove_at(index);
     }
 
     /// Drag-and-drop or an agent moving an upcoming track; false if the positions are invalid.
     pub async fn move_in_queue(&self, from: usize, to: usize) -> bool {
-        self.lock_queue().await.move_upcoming(from, to)
+        let mut q = self.lock_queue().await;
+        self.checkpoint(&q);
+        q.move_upcoming(from, to)
     }
 
     /// After the agent-DJ wait: let the next empty queue start the autoplay radio.
@@ -1124,15 +1167,20 @@ impl Controller {
 
     /// Shuffles the upcoming tracks once, whatever the shuffle button says.
     pub async fn shuffle_upcoming(&self) {
-        self.lock_queue().await.shuffle_upcoming(&mut rand::rng());
+        let mut q = self.lock_queue().await;
+        self.checkpoint(&q);
+        q.shuffle_upcoming(&mut rand::rng());
     }
 
     pub async fn clear_queue(&self) {
-        self.lock_queue().await.clear();
+        let mut q = self.lock_queue().await;
+        self.checkpoint(&q);
+        q.clear();
     }
 
     pub async fn toggle_shuffle(&self) -> bool {
         let mut q = self.lock_queue().await;
+        self.checkpoint(&q);
         q.toggle_shuffle(&mut rand::rng());
         q.shuffle
     }

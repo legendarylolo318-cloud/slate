@@ -261,6 +261,9 @@ export component AppWindow inherits Window {
     in property <[Choice]> dialog-choices;
     callback queue-remove(int);
     callback queue-clear();
+    in property <bool> queue-can-undo;
+    in property <bool> queue-can-redo;
+    callback queue-undo(bool);
     callback queue-action(string);
     callback snapshot-action(string, string, string);
     callback lyric-seek(int);
@@ -333,6 +336,8 @@ export component AppWindow inherits Window {
             if (a == "repeat") { root.cycle-repeat(); return accept; }
             if (a == "queue") { root.panel = root.panel == "queue" ? "" : "queue"; return accept; }
             if (a == "lyrics") { root.panel = root.panel == "lyrics" ? "" : "lyrics"; return accept; }
+            if (a == "queue-undo") { root.queue-undo(false); return accept; }
+            if (a == "queue-redo") { root.queue-undo(true); return accept; }
             if (a == "lyrics-fullscreen") { root.lyrics-full = !root.lyrics-full; return accept; }
             if (a == "lyrics-earlier") { root.lyrics-nudge(-100); return accept; }
             if (a == "lyrics-later") { root.lyrics-nudge(100); return accept; }
@@ -562,6 +567,10 @@ export component AppWindow inherits Window {
                     remove(i) => { root.queue-remove(i); }
                     go(i, k) => { root.queue-go(i, k); }
                     clear => { root.queue-clear(); }
+                    can-undo: root.queue-can-undo;
+                    can-redo: root.queue-can-redo;
+                    undo => { root.queue-undo(false); }
+                    redo => { root.queue-undo(true); }
                     menu(a) => { root.queue-action(a); }
                     close => { root.panel = ""; }
                 }

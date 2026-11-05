@@ -73,6 +73,11 @@ struct GuestCtx {
     heir_key: Option<String>,
 }
 
+/// This instance is a guest in somebody else's party.
+pub fn is_guest() -> bool {
+    matches!(*lock(&ROLE), Some(Role::Guest(_)))
+}
+
 pub fn hosting() -> bool {
     HOSTING.load(Ordering::Relaxed)
 }

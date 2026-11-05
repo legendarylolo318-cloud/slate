@@ -55,6 +55,8 @@ pub const ACTIONS: &[Action] = &[
     app("shortcuts", "Show the shortcut sheet", "?"),
     app("filter", "Filter this page", "Ctrl+F"),
     app("select-all", "Select all tracks in the list", "Ctrl+A"),
+    app("queue-undo", "Undo the last queue edit", "Ctrl+Z"),
+    app("queue-redo", "Redo the queue edit", "Ctrl+Shift+Z"),
     global("g-play-pause", "Play / pause (global)", "Ctrl+Alt+Space"),
     global("g-next", "Next track (global)", "Ctrl+Alt+Right"),
     global("g-previous", "Previous track (global)", "Ctrl+Alt+Left"),

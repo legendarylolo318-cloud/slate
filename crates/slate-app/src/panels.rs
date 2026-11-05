@@ -27,6 +27,7 @@ impl Backend {
                 .await;
             self.party_queue_changed(&ids);
         }
+        let (can_undo, can_redo) = ctl.undo_state();
         let rows: Vec<(String, String, bool)> = ctl
             .with_queue(|q| {
                 q.manual
@@ -49,8 +50,29 @@ impl Backend {
                 })
                 .collect();
             w.set_queue_rows(ModelRc::new(VecModel::from(model)));
+            w.set_queue_can_undo(can_undo);
+            w.set_queue_can_redo(can_redo);
             // The queue changed under the selection: keep what still fits.
             crate::selection_ui::refresh_queue_selection(&w, |s, len| s.prune(len));
+        });
+    }
+
+    /// Undo / redo of the user's last queue edit. A guest's queue belongs to the host.
+    pub fn queue_undo(&self, redo: bool) {
+        if crate::party_ui::is_guest() {
+            self.notify("The host controls the queue");
+            return;
+        }
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let Some(ctl) = this.controller() else { return };
+            if !ctl.undo_queue(redo).await {
+                this.notify(if redo { "Nothing to redo" } else { "Nothing to undo" });
+                return;
+            }
+            this.refresh_queue_info().await;
+            this.save().await;
+            this.notify(if redo { "Queue edit redone" } else { "Queue edit undone" });
         });
     }
 
