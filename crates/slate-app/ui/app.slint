@@ -1109,6 +1109,8 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                    // The list is only as tall as its rows: the rest goes below it, not above the field.
+                    if root.dialog-kind == "tags": Rectangle { vertical-stretch: 1; }
                     if root.dialog-kind == "party-set": TextField {
                         text <=> root.dialog-text;
                         placeholder: "Playlist name";

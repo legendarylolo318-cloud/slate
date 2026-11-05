@@ -105,7 +105,11 @@ fn ui_shots() {
             id: i.to_string().into(),
         })
         .collect();
-        app.set_dialog_choices(slint::ModelRc::new(slint::VecModel::from(choices)));
+        app.set_dialog_choices(slint::ModelRc::new(slint::VecModel::from(choices.clone())));
+        // The Tags dialog lists the targets' current tags too.
+        app.set_dialog_tags(slint::ModelRc::new(slint::VecModel::from(choices)));
+        app.set_dialog_count(3);
+        app.set_dialog_text("Party – 2026-11-05".into());
         app.set_dialog_kind(kind.into());
         app.set_dialog_open(true);
     }

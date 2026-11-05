@@ -143,6 +143,7 @@ Last updated 2026-11-05. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | 127 | Low | 1.6 tags: an edit made less than 0.7 s before quitting was never written (noted in the handoff, not fixed) | `Backend::shutdown` writes pending tag edits first |
 | 128 | Low | 1.6 full-screen lyrics: F11 from the full-screen player set the view open but drew it underneath the player (it came first in the window), so nothing changed on screen while Esc was then needed once just to close the hidden view; Esc also cleared a track selection first while the lyrics covered the page | The view is drawn after the full-screen player; Esc closes it before anything else but the shortcut sheet. Rendered offscreen at 1, 1.5 and 2× (`SLATE_SHOTS=lyrics-full SLATE_SHOTS_OVER_PLAYER=1`) |
 | 129 | Low | 1.6 full-screen lyrics: moving on to a track without a cover (or whose cover failed to load) left the previous track's blurred cover behind the new lyrics | The backdrop is cleared when the playing track turns out to have no cover |
+| 130 | Low | 1.6 Tags dialog (never seen before this review): the space the tag list did not use went above the text field, leaving a ~150 px gap under the title | A spacer below the list takes it. Rendered offscreen (`SLATE_SHOTS=dialog-tags`, which now fills the current-tags list too) |
 | 54 | Medium | The new `[tidal-req]` debug line (and two existing 401 logs) printed `/users/<account id>/…` paths | `loggable_path` replaces the id and drops the query. Test |
 
 ## Security verification
