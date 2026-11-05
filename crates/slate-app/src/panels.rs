@@ -67,12 +67,20 @@ impl Backend {
         self.rt.spawn(async move {
             let Some(ctl) = this.controller() else { return };
             if !ctl.undo_queue(redo).await {
-                this.notify(if redo { "Nothing to redo" } else { "Nothing to undo" });
+                this.notify(if redo {
+                    "Nothing to redo"
+                } else {
+                    "Nothing to undo"
+                });
                 return;
             }
             this.refresh_queue_info().await;
             this.save().await;
-            this.notify(if redo { "Queue edit redone" } else { "Queue edit undone" });
+            this.notify(if redo {
+                "Queue edit redone"
+            } else {
+                "Queue edit undone"
+            });
         });
     }
 

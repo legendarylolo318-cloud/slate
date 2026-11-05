@@ -128,7 +128,12 @@ fn ui_shots() {
         app.set_track_artist("Sample artist".into());
         let mut cover = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(320, 320);
         for (i, p) in cover.make_mut_slice().iter_mut().enumerate() {
-            *p = slint::Rgba8Pixel { r: (i % 320 * 255 / 320) as u8, g: (i / 320 * 255 / 320) as u8, b: 160, a: 255 };
+            *p = slint::Rgba8Pixel {
+                r: (i % 320 * 255 / 320) as u8,
+                g: (i / 320 * 255 / 320) as u8,
+                b: 160,
+                a: 255,
+            };
         }
         if let Some(b) = crate::lyrics_full::backdrop(&cover) {
             app.set_lyrics_backdrop(slint::Image::from_rgba8(b));

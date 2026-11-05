@@ -109,7 +109,9 @@ impl TagStore {
 
     /// Tags `id` (with a fresh snapshot). `false` when it already had the tag.
     pub fn add(&mut self, id: u64, snap: Snapshot, tag: &str) -> bool {
-        let Some(tag) = normalize(tag) else { return false };
+        let Some(tag) = normalize(tag) else {
+            return false;
+        };
         let known = self.canonical(&tag);
         let e = self.tracks.entry(id).or_default();
         e.snap = snap;
@@ -130,7 +132,9 @@ impl TagStore {
     }
 
     pub fn remove(&mut self, id: u64, tag: &str) -> bool {
-        let Some(e) = self.tracks.get_mut(&id) else { return false };
+        let Some(e) = self.tracks.get_mut(&id) else {
+            return false;
+        };
         let before = e.tags.len();
         e.tags.retain(|t| !same(t, tag));
         let changed = e.tags.len() != before;
@@ -148,7 +152,9 @@ impl TagStore {
     pub fn counts(&self) -> Vec<(String, usize)> {
         let mut m: BTreeMap<String, (String, usize)> = BTreeMap::new();
         for t in self.tracks.values().flat_map(|e| &e.tags) {
-            m.entry(t.to_lowercase()).or_insert_with(|| (t.clone(), 0)).1 += 1;
+            m.entry(t.to_lowercase())
+                .or_insert_with(|| (t.clone(), 0))
+                .1 += 1;
         }
         m.into_values().collect()
     }
@@ -161,7 +167,10 @@ impl TagStore {
             .into_iter()
             .filter(|(t, _)| t.to_lowercase().starts_with(&p) && !skip.iter().any(|s| same(s, t)))
             .collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+        v.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+        });
         v.into_iter().map(|(t, _)| t).take(SUGGESTIONS).collect()
     }
 
@@ -269,7 +278,7 @@ fn store() -> MutexGuard<'static, Option<TagStore>> {
 
 fn with<R>(f: impl FnOnce(&mut TagStore) -> R) -> R {
     let mut g = store();
-    f(g.as_mut().expect("loaded above"))
+    f(g.get_or_insert_with(TagStore::default))
 }
 
 /// Sidebar entry of a tag.
@@ -386,7 +395,10 @@ impl Backend {
             let mut counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
             for id in &target {
                 for t in s.tags_of(*id) {
-                    counts.entry(t.to_lowercase()).or_insert_with(|| (t.clone(), 0)).1 += 1;
+                    counts
+                        .entry(t.to_lowercase())
+                        .or_insert_with(|| (t.clone(), 0))
+                        .1 += 1;
                 }
             }
             let current: Vec<(String, usize)> = counts.into_values().collect();
@@ -401,13 +413,21 @@ impl Backend {
         let tags: Vec<Choice> = current
             .into_iter()
             .map(|(t, c)| Choice {
-                title: if n > 1 && c < n { format!("{t} ({c}/{n})") } else { t.clone() }.into(),
+                title: if n > 1 && c < n {
+                    format!("{t} ({c}/{n})")
+                } else {
+                    t.clone()
+                }
+                .into(),
                 id: t.into(),
             })
             .collect();
         let sugg: Vec<Choice> = suggestions
             .into_iter()
-            .map(|t| Choice { title: t.clone().into(), id: t.into() })
+            .map(|t| Choice {
+                title: t.clone().into(),
+                id: t.into(),
+            })
             .collect();
         self.ui(move |w| {
             w.set_dialog_tags(ModelRc::new(VecModel::from(tags)));
@@ -434,7 +454,11 @@ impl Backend {
                     this.tags_refresh_dialog("");
                 }
                 "remove" => {
-                    changed = with(|s| target.iter().fold(false, |c, (id, _)| s.remove(*id, &text) | c));
+                    changed = with(|s| {
+                        target
+                            .iter()
+                            .fold(false, |c, (id, _)| s.remove(*id, &text) | c)
+                    });
                     let typed = this.read_ui(|w| w.get_dialog_text().to_string()).await;
                     this.tags_refresh_dialog(&typed);
                 }
@@ -478,14 +502,25 @@ mod tests {
     use super::*;
 
     fn snap(title: &str) -> Snapshot {
-        Snapshot { title: title.into(), artist: "A".into(), duration: 100, ..Snapshot::default() }
+        Snapshot {
+            title: title.into(),
+            artist: "A".into(),
+            duration: 100,
+            ..Snapshot::default()
+        }
     }
 
     #[test]
     fn normalize_strips_bidi_controls_and_limits_length() {
-        assert_eq!(normalize("  jazz \u{202E}gnp\u{202C}  ").as_deref(), Some("jazz gnp"));
+        assert_eq!(
+            normalize("  jazz \u{202E}gnp\u{202C}  ").as_deref(),
+            Some("jazz gnp")
+        );
         assert_eq!(normalize("\u{202E}\u{2066}  \n"), None);
-        assert_eq!(normalize(&"x".repeat(100)).unwrap().chars().count(), MAX_TAG);
+        assert_eq!(
+            normalize(&"x".repeat(100)).unwrap().chars().count(),
+            MAX_TAG
+        );
     }
 
     #[test]
@@ -508,13 +543,17 @@ mod tests {
         s.save(&p).unwrap();
         assert!(!p.with_extension("json.tmp").exists());
         assert_eq!(TagStore::load(&p), s);
-        assert_eq!(TagStore::load(&dir.path().join("none.json")), TagStore::default());
+        assert_eq!(
+            TagStore::load(&dir.path().join("none.json")),
+            TagStore::default()
+        );
     }
 
     #[test]
     fn damaged_files_load_empty_and_bad_tags_are_dropped() {
         assert_eq!(TagStore::parse("{not json"), TagStore::default());
-        let s = TagStore::parse(r#"{"tracks":{"1":{"title":"t","tags":["ok","OK","\u202e","  "]}}}"#);
+        let s =
+            TagStore::parse(r#"{"tracks":{"1":{"title":"t","tags":["ok","OK","\u202e","  "]}}}"#);
         assert_eq!(s.tags_of(1), &["ok".to_string()]);
     }
 
@@ -551,16 +590,30 @@ mod tests {
         }
         s.add(1, snap("t"), "road trip");
         s.add(1, snap("t"), "jazz");
-        assert_eq!(s.suggest("ro", &[]), vec!["rock".to_string(), "road trip".to_string()]);
-        assert_eq!(s.suggest("ro", &["rock".to_string()]), vec!["road trip".to_string()]);
+        assert_eq!(
+            s.suggest("ro", &[]),
+            vec!["rock".to_string(), "road trip".to_string()]
+        );
+        assert_eq!(
+            s.suggest("ro", &["rock".to_string()]),
+            vec!["road trip".to_string()]
+        );
         assert_eq!(s.suggest("", &[]).len(), 3);
     }
 
     #[test]
     fn snapshots_become_playable_tracks() {
-        let t = Snapshot { title: "T".into(), artist: "Ar".into(), artist_id: 9, album: "Al".into(), album_id: 8, cover: Some("c-d".into()), duration: 61 }
-            .to_track(77)
-            .unwrap();
+        let t = Snapshot {
+            title: "T".into(),
+            artist: "Ar".into(),
+            artist_id: 9,
+            album: "Al".into(),
+            album_id: 8,
+            cover: Some("c-d".into()),
+            duration: 61,
+        }
+        .to_track(77)
+        .unwrap();
         assert_eq!((t.id, t.title.as_str(), t.duration), (77, "T", 61));
         assert_eq!(t.album.unwrap().id, 8);
     }

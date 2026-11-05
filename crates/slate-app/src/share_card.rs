@@ -86,14 +86,23 @@ pub fn fit(text: &str, max_w: f32, start: f32, min: f32, bold: bool, measure: Me
     }
     let size = size.max(min);
     if measure(text, size, bold) <= max_w {
-        return Line { text: text.to_string(), size, rtl };
+        return Line {
+            text: text.to_string(),
+            size,
+            rtl,
+        };
     }
     let chars: Vec<char> = text.chars().collect();
     // Longest prefix that fits with the ellipsis (binary search over the char count).
     let (mut lo, mut hi) = (0usize, chars.len());
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
-        let cut: String = chars[..mid].iter().collect::<String>().trim_end().to_string() + "…";
+        let cut: String = chars[..mid]
+            .iter()
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+            + "…";
         if measure(&cut, size, bold) <= max_w {
             lo = mid;
         } else {
@@ -101,7 +110,11 @@ pub fn fit(text: &str, max_w: f32, start: f32, min: f32, bold: bool, measure: Me
         }
     }
     let kept: String = chars[..lo].iter().collect();
-    Line { text: kept.trim_end().to_string() + "…", size, rtl }
+    Line {
+        text: kept.trim_end().to_string() + "…",
+        size,
+        rtl,
+    }
 }
 
 /// The four lines of the card.
@@ -113,10 +126,30 @@ pub struct Layout {
 }
 
 pub fn layout(card: &Card, measure: Measure) -> Layout {
-    let or = |s: &str, d: &str| if s.is_empty() { d.to_string() } else { s.to_string() };
+    let or = |s: &str, d: &str| {
+        if s.is_empty() {
+            d.to_string()
+        } else {
+            s.to_string()
+        }
+    };
     Layout {
-        title: fit(&or(&card.title, "Unknown title"), TEXT_W, 30.0, 18.0, true, measure),
-        artist: fit(&or(&card.artist, "Unknown artist"), TEXT_W, 20.0, 14.0, false, measure),
+        title: fit(
+            &or(&card.title, "Unknown title"),
+            TEXT_W,
+            30.0,
+            18.0,
+            true,
+            measure,
+        ),
+        artist: fit(
+            &or(&card.artist, "Unknown artist"),
+            TEXT_W,
+            20.0,
+            14.0,
+            false,
+            measure,
+        ),
         album: fit(&card.album, TEXT_W, 16.0, 12.0, false, measure),
         link: fit(&track_link(card.id), TEXT_W, 13.0, 9.0, false, measure),
     }
@@ -201,7 +234,11 @@ pub fn render(card: &Card, cover: Option<&SharedPixelBuffer<Rgba8Pixel>>) -> Opt
     let lay = layout(card, &measure);
     let tree = usvg::Tree::from_str(&svg(&lay), &opt).ok()?;
     let mut pixmap = tiny_skia::Pixmap::new(W, H)?;
-    resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
     if let Some(cover) = cover.and_then(cover_pixmap) {
         let mut rr = tiny_skia::PathBuilder::new();
         let (x, y, w, r) = (PAD, PAD, COVER, 8.0f32);
@@ -228,7 +265,13 @@ pub fn render(card: &Card, cover: Option<&SharedPixelBuffer<Rgba8Pixel>>) -> Opt
             anti_alias: true,
             ..tiny_skia::Paint::default()
         };
-        pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            tiny_skia::Transform::identity(),
+            None,
+        );
     }
     // Opaque everywhere, so premultiplied and straight alpha are the same bytes.
     Some(pixmap.take())
@@ -262,7 +305,9 @@ fn deliver(id: u64, rgba: Vec<u8>) -> Delivered {
     let Some(img) = image::RgbaImage::from_raw(W, H, rgba) else {
         return Delivered::Failed("bad image".into());
     };
-    match std::fs::create_dir_all(&dir).and_then(|()| img.save(&path).map_err(std::io::Error::other)) {
+    match std::fs::create_dir_all(&dir)
+        .and_then(|()| img.save(&path).map_err(std::io::Error::other))
+    {
         Ok(()) => Delivered::Saved(path),
         Err(e) => Delivered::Failed(e.to_string()),
     }
@@ -279,10 +324,11 @@ impl Backend {
             if let CacheResult::Fresh(b) | CacheResult::Stale(b) =
                 state.disk_cache.get(&url, CacheTier::Image).await
             {
-                if let Some(px) = tokio::task::spawn_blocking(move || crate::images::decode_fit(&b, 0))
-                    .await
-                    .ok()
-                    .flatten()
+                if let Some(px) =
+                    tokio::task::spawn_blocking(move || crate::images::decode_fit(&b, 0))
+                        .await
+                        .ok()
+                        .flatten()
                 {
                     return Some(px);
                 }
@@ -327,7 +373,12 @@ mod tests {
     }
 
     fn card(title: &str, artist: &str, album: &str) -> Card {
-        Card { id: 42, title: title.into(), artist: artist.into(), album: album.into() }
+        Card {
+            id: 42,
+            title: title.into(),
+            artist: artist.into(),
+            album: album.into(),
+        }
     }
 
     #[test]
@@ -386,7 +437,12 @@ mod tests {
         assert_eq!(plain.len(), (W * H * 4) as usize);
         let mut cover = SharedPixelBuffer::<Rgba8Pixel>::new(160, 160);
         for p in cover.make_mut_slice() {
-            *p = Rgba8Pixel { r: 200, g: 30, b: 30, a: 255 };
+            *p = Rgba8Pixel {
+                r: 200,
+                g: 30,
+                b: 30,
+                a: 255,
+            };
         }
         let with = render(&c, Some(&cover)).expect("card");
         assert_ne!(plain, with);
@@ -399,13 +455,27 @@ mod tests {
     #[test]
     #[ignore]
     fn write_sample() {
-        let Ok(out) = std::env::var("SLATE_CARD_OUT") else { return };
-        let c = card("Nights in White Satin (Extended Anniversary Remaster)", "The Moody Blues", "Days of Future Passed");
+        let Ok(out) = std::env::var("SLATE_CARD_OUT") else {
+            return;
+        };
+        let c = card(
+            "Nights in White Satin (Extended Anniversary Remaster)",
+            "The Moody Blues",
+            "Days of Future Passed",
+        );
         let mut cover = SharedPixelBuffer::<Rgba8Pixel>::new(160, 160);
         for (i, p) in cover.make_mut_slice().iter_mut().enumerate() {
-            *p = Rgba8Pixel { r: (i % 160) as u8, g: (i / 160) as u8, b: 120, a: 255 };
+            *p = Rgba8Pixel {
+                r: (i % 160) as u8,
+                g: (i / 160) as u8,
+                b: 120,
+                a: 255,
+            };
         }
         let rgba = render(&c, Some(&cover)).expect("card");
-        image::RgbaImage::from_raw(W, H, rgba).expect("size").save(out).expect("save");
+        image::RgbaImage::from_raw(W, H, rgba)
+            .expect("size")
+            .save(out)
+            .expect("save");
     }
 }

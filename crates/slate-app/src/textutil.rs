@@ -37,7 +37,10 @@ mod tests {
 
     #[test]
     fn bidi_overrides_and_controls_go() {
-        assert_eq!(clean_line("a \u{202E}gnp\u{202C}\u{2067}x\u{2069}\u{200F}b"), "a gnpxb");
+        assert_eq!(
+            clean_line("a \u{202E}gnp\u{202C}\u{2067}x\u{2069}\u{200F}b"),
+            "a gnpxb"
+        );
         assert_eq!(clean_line("  one\n two\t\u{7}three  "), "one two three");
         assert_eq!(clean_line("\u{202E}\u{2066}"), "");
     }

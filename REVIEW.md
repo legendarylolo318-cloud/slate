@@ -1,6 +1,6 @@
 # Review log
 
-Last updated 2026-11-01. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); Windows checks run on GitHub's `windows-latest` (MSVC, GStreamer 1.24.13).
+Last updated 2026-11-05. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); Windows checks run on GitHub's `windows-latest` (MSVC, GStreamer 1.24.13).
 
 ## Build and test status
 | Check | Linux | Windows |
@@ -134,6 +134,7 @@ Last updated 2026-11-01. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | 118 | Medium | 1.5 window state (found by running it, not by reading): the on-screen check never ran at launch. It ran right after `show()`, before winit had created the platform window, so it could not read the monitors and gave up; nothing ran it later. A window saved on an unplugged monitor (5000,3000) or bigger than the screen (3000×2000) opened exactly there. With the interface scale above 1 the correction was also half the size it should be (a logical size set on a shown window was converted with a different factor) | The check counts as done only once the monitors are known, and runs again on the window's first move/resize and from two single-shot timers (200 ms, 1 s) after launch or opening the mini player. The corrected size is set in physical pixels. Checked live on a nested X server (1600×1000): off-screen → centred at 300,175 and saved; 3000×2000 → 1600×1000; scale 2 and 1.5 → fits; normal case unchanged; Wayland (headless KWin) keeps size, drops position. Multi-monitor and mixed DPI not available here |
 | 119 | Low | 1.5 content filter: clicking a track the filter hides said "Track unavailable.", as if TIDAL had removed it, instead of pointing at the user's own setting. Found live | `PlayFailure::Filtered`: "Hidden by your content filter (Settings → Playback)." for a hidden track played directly, from a list or from the queue |
 | 120 | Low | Party (since 1.3): after "End party" the host's page went back to "You are hosting. Guests: 0" with an "End party" button and no invite link: ending the party disconnects the guests, and their "left" events, still arriving on the old event pump, redrew the hosting view. Found by ending a real party between two instances | The host's event pump stops once its party session has ended (`SESSION`). Checked live: host and guest both back to "Start a party" / "The host ended the party." |
+| 121 | Medium | 1.6 as handed over: `cargo fmt --all --check` failed in eight files and `cargo clippy -D warnings` failed (`expect()` in `tags.rs`, denied in production code), so the CI lint job and the release workflow would have refused the tree | `cargo fmt`; the store accessor uses `get_or_insert_with` instead of `expect`. No behaviour change |
 | 54 | Medium | The new `[tidal-req]` debug line (and two existing 401 logs) printed `/users/<account id>/…` paths | `loggable_path` replaces the id and drops the query. Test |
 
 ## Security verification

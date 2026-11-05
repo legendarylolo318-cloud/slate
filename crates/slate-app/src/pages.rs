@@ -1325,7 +1325,10 @@ pub(crate) async fn fetch_all(
         out.extend(items.iter().filter_map(Track::from_serialized));
         if got == 0
             || out.len() >= total
-            || matches!(kind, SourceKind::Mix(_) | SourceKind::Smart(_) | SourceKind::Tag(_))
+            || matches!(
+                kind,
+                SourceKind::Mix(_) | SourceKind::Smart(_) | SourceKind::Tag(_)
+            )
         {
             break;
         }

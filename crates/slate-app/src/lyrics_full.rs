@@ -94,7 +94,12 @@ mod tests {
     fn solid(w: u32, h: u32, c: [u8; 4]) -> Pixels {
         let mut b = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
         for p in b.make_mut_slice() {
-            *p = Rgba8Pixel { r: c[0], g: c[1], b: c[2], a: c[3] };
+            *p = Rgba8Pixel {
+                r: c[0],
+                g: c[1],
+                b: c[2],
+                a: c[3],
+            };
         }
         b
     }
