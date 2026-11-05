@@ -37,7 +37,7 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
   clean, Dolby Atmos) with replace in place, export to CSV / M3U and import from them.
 - Ctrl+F filter and quality chips (Lossless / Hi-Res / Atmos) on playlist, album, Loved
   Tracks and mix pages; Go to album / artist from any track.
-- Synced lyrics (click a line to seek), full-screen player, adaptive mini-player window,
+- Synced lyrics (click a line to seek), full-screen lyrics (`F11`) over a blurred cover, full-screen player, adaptive mini-player window,
   music-video playback (can shrink into the player bar).
 - Audio: GStreamer engine, gapless playback, optional crossfade (off by default),
   ReplayGain normalisation, maximum-quality cap with automatic
@@ -62,7 +62,9 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
   Optional global shortcuts (Ctrl+Alt+Space / → / ←). Every shortcut can be rebound in
   Settings → Shortcuts; defaults: `Space` play/pause, `←/→` seek, `Ctrl+←/→` previous/next,
   `M` mute, `S` shuffle, `R` repeat, `Q` queue, `L` lyrics, `F` full screen, `/` search,
-  `Ctrl+F` filter, `?` shortcut sheet.
+  `Ctrl+F` filter, `F11` full-screen lyrics, `Ctrl+Z` / `Ctrl+Shift+Z` queue undo / redo, `?` shortcut sheet.
+- Personal tags (right-click → Tags…, a Tags page in the sidebar), queue undo / redo (`Ctrl+Z` /
+  `Ctrl+Shift+Z`), and "Copy share card" / "Copy link" on any track.
 - Settings search, keyboard focus rings and Tab navigation, tooltips on icon buttons.
 - Single instance with `tidal://` and `slate://` links, profile editing, a daily update check
   against this repository's releases (can be turned off).
@@ -71,7 +73,8 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 
 Settings → Party → Host gives you a `slate://party/…` link to copy. Friends open the
 link (or paste it under Join) and their Slate follows yours: track, play / pause, seek and
-the next few tracks. Guests can suggest tracks for you to approve.
+the next few tracks. Guests can suggest tracks for you to approve. When you end the party you can save the tracks that
+played as a playlist.
 
 - **Everyone needs their own TIDAL subscription.** Only playback state is shared; each person
   streams from their own account. A track not available in a guest's region is skipped for

@@ -1,5 +1,62 @@
 # Changelog
 
+## [1.6.0] - 2026-11-05
+
+Resource rule for the whole release: with default settings nothing new is allocated, spawned, polled or
+redrawn. Every feature below is off or idle until it is used: the party set is recorded only while hosting,
+the share card and the lyrics backdrop exist only while they are made, `tags.json` is read on first use,
+and the undo stack holds shared track handles only. Audio path, buffers, gapless and bit-perfect/exclusive
+behaviour are unchanged.
+
+### Added
+- Save party set: while hosting, the ids of the tracks that played are kept in memory (at most 500, no
+  repeats, videos and tracks hidden by the content filter skipped, nothing for guests). "End party" offers
+  "Save set as playlist" (default name "Party – <date>"), and the Party tab offers it until the next party
+  starts. It makes an unlisted TIDAL playlist through the existing playlist code.
+- Share card: right-click a track, a queue row or the now-playing area → "Copy share card". A 600×300 PNG
+  (cached cover, title, artist, album, `https://tidal.com/browse/track/<id>`) is drawn once, copied as an
+  image and then every buffer is dropped. The cover is the cached thumbnail only, nothing is fetched. Without
+  image clipboard support the PNG is saved in the Pictures folder and the notice says where. Long titles
+  shrink and end in "…"; right-to-left titles are right-aligned.
+- Full-screen lyrics: a button on the lyrics panel and a shortcut (default F11, rebindable). Big centred lyrics,
+  current line highlighted, over the cover blurred and darkened once per track from a thumbnail of at most
+  128 px on a worker thread. The only redraw trigger is a line change (a 280 ms slide). Esc leaves; a
+  "No lyrics" state; follows the lyrics size setting; click a line to seek.
+- Personal tags: right-click track(s) → "Tags…" (works on a multi-selection) adds or removes free-text tags with
+  autocomplete from your existing ones. A "Tags" sidebar entry lists them with counts; a tag opens as a track
+  page (Play, Shuffle, queue actions, Ctrl+F filter) that needs no API call. Tags can be renamed (renaming to
+  an existing tag merges them) or deleted from the sidebar.
+- Queue undo / redo: Ctrl+Z and Ctrl+Shift+Z (rebindable) and ↶ ↷ buttons in the queue panel step through
+  your edits: remove, clear, move, shuffle on/off, add, play next, load snapshot, DJ this playlist. The last
+  20 states are kept as shared track handles; a new edit clears redo; edits within 0.6 s count as one step.
+
+### Changed
+- "Copy TIDAL link" is now "Copy link" and copies `https://tidal.com/browse/track/<id>`.
+- The sidebar has a Tags entry.
+
+### Removed
+- The party QR code. The `slate://party/…` link is shown as text with its Copy button. The `qrcode` crate
+  stays: the device-code sign-in still draws its QR code with it.
+
+### Fixed
+- Nothing outside the new features.
+
+### Notes
+- New file: `tags.json` (next to `ui.json`): `{"tracks": {"<id>": {title, artist, artist_id, album, album_id,
+  cover, duration, tags: [...]}}}`. Written through a temporary file, 0.7 s after the last edit, on a
+  blocking thread. Tags are one line of at most 40 characters; control and bidirectional-override characters
+  are stripped (as in party chat); "Jazz" and "jazz" are one tag.
+- New shortcut actions (Settings → Shortcuts): `lyrics-fullscreen` (F11), `queue-undo` (Ctrl+Z),
+  `queue-redo` (Ctrl+Shift+Z). No new settings keys.
+- Undo never touches the playing track or the history. Autoplay, radio, DJ blocks and party request
+  placements are not undo steps. A guest cannot undo the host's queue.
+- Dependencies: text for the share card is laid out by `resvg`, which Slint already links (its
+  `system-fonts` switch adds `fontconfig-parser`); `arboard` gets `image-data` (adds the macOS-only `fax`);
+  `dirs` moved from Linux-only to all platforms. No new direct crate.
+
+### Not tested before release
+- See HANDOFF-1.6.md for what was and was not run in the real app.
+
 ## [1.5.0] - 2026-11-03
 
 Resource rule for the whole release: with default settings nothing new is allocated, spawned or
