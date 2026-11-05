@@ -318,9 +318,9 @@ export component AppWindow inherits Window {
             // Esc during a drag: every drop target refuses until the next drag starts.
             if (e.text == Key.Escape) { Dnd.cancelled = true; }
             if (e.text == Key.Escape && root.shortcuts-open) { root.shortcuts-open = false; return accept; }
+            if (e.text == Key.Escape && root.lyrics-full) { root.lyrics-full = false; return accept; }
             if (e.text == Key.Escape && root.selection-count > 0) { root.select-clear(); return accept; }
             if (e.text == Key.Escape && root.queue-selection > 0 && root.panel == "queue") { root.queue-sel-action("sel-clear"); return accept; }
-            if (e.text == Key.Escape && root.lyrics-full) { root.lyrics-full = false; return accept; }
             if (e.text == Key.Escape && root.fullscreen) { root.fullscreen = false; return accept; }
             if (SettingsState.capturing != "") { return reject; }
             let a = root.resolve-key(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta);
@@ -664,19 +664,6 @@ export component AppWindow inherits Window {
             }
         }
 
-        if root.lyrics-full && root.screen == Screen.main: LyricsFullscreen {
-            title: root.track-title;
-            artist: root.track-artist;
-            backdrop: root.lyrics-backdrop;
-            lines: root.lyric-lines;
-            synced: root.lyrics-synced;
-            current: root.lyric-current;
-            status: root.lyrics-status;
-            scale: root.lyrics-scale;
-            close => { root.lyrics-full = false; }
-            seek(i) => { root.lyric-seek(i); }
-        }
-
         if root.fullscreen && root.screen == Screen.main: FullscreenPlayer {
             compact: root.compact;
             lyrics-scale: root.lyrics-scale;
@@ -709,6 +696,20 @@ export component AppWindow inherits Window {
             toggle-favorite => { root.toggle-favorite(); }
             seek(f) => { root.seek(f); }
             lyric-seek(i) => { root.lyric-seek(i); }
+        }
+
+        // After the full-screen player so F11 from there shows the lyrics on top (Esc goes back).
+        if root.lyrics-full && root.screen == Screen.main: LyricsFullscreen {
+            title: root.track-title;
+            artist: root.track-artist;
+            backdrop: root.lyrics-backdrop;
+            lines: root.lyric-lines;
+            synced: root.lyrics-synced;
+            current: root.lyric-current;
+            status: root.lyrics-status;
+            scale: root.lyrics-scale;
+            close => { root.lyrics-full = false; }
+            seek(i) => { root.lyric-seek(i); }
         }
 
         if root.picker-open: Rectangle {

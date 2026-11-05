@@ -138,6 +138,10 @@ fn ui_shots() {
         if let Some(b) = crate::lyrics_full::backdrop(&cover) {
             app.set_lyrics_backdrop(slint::Image::from_rgba8(b));
         }
+        // `SLATE_SHOTS_OVER_PLAYER`: opened (F11) from the full-screen player.
+        if std::env::var_os("SLATE_SHOTS_OVER_PLAYER").is_some() {
+            app.set_fullscreen(true);
+        }
         app.set_lyrics_full(true);
     }
     // Settings tabs, or the plain track page.
