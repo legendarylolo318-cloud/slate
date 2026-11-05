@@ -513,7 +513,10 @@ impl Backend {
             this.set_now(None);
             if let Some(ctl) = this.controller() {
                 ctl.clear_queue().await;
+                ctl.forget_undo();
             }
+            #[cfg(feature = "party")]
+            crate::party_set::reset();
             this.ui(|w| {
                 w.set_has_track(false);
                 w.set_playing(false);
