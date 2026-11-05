@@ -59,6 +59,13 @@ impl Backend {
         }
     }
 
+    /// The playing track has no cover: the previous track's backdrop must not stay.
+    pub(crate) fn lyrics_full_no_cover(&self) {
+        if OPEN.load(Ordering::Relaxed) {
+            self.ui(|w: AppWindow| w.set_lyrics_backdrop(Image::default()));
+        }
+    }
+
     /// A new cover arrived while the view is open.
     pub(crate) fn lyrics_full_cover(&self, px: &Pixels) {
         if OPEN.load(Ordering::Relaxed) {

@@ -228,6 +228,7 @@ impl Backend {
         if let Ok(mut slot) = self.shared.cover_px.lock() {
             *slot = None;
         }
+        self.lyrics_full_no_cover();
         if let Ok(mut slot) = self.shared.cover_color.lock() {
             *slot = None;
         }
