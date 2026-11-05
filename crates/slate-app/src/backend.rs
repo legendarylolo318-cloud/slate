@@ -1237,6 +1237,7 @@ impl Backend {
 
     /// Stops audio and flushes the queue; called once on shutdown.
     pub fn shutdown(&self) {
+        crate::tags::flush();
         let this = self.clone();
         self.rt.block_on(async move {
             this.save().await;

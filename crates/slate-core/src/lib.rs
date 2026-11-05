@@ -121,7 +121,7 @@ mod defaults {
 
 /// Write via a sibling temp file and rename so a crash mid-write cannot leave
 /// a truncated (undecryptable) settings or state file behind.
-pub(crate) fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+pub fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = std::path::PathBuf::from(tmp);

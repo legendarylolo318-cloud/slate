@@ -69,8 +69,15 @@ fn same(a: &str, b: &str) -> bool {
 }
 
 impl TagStore {
+    /// Lenient: anything unreadable is an empty store (tests and hand-made input).
+    #[cfg(test)]
     pub fn parse(s: &str) -> Self {
-        let mut st: Self = serde_json::from_str(s).unwrap_or_default();
+        Self::parse_strict(s).unwrap_or_default()
+    }
+
+    /// The store in `s`, or the JSON error when the file is not a tag store at all.
+    pub fn parse_strict(s: &str) -> Result<Self, serde_json::Error> {
+        let mut st: Self = serde_json::from_str(s)?;
         // A hand-edited or damaged file must not break the lookups below.
         for e in st.tracks.values_mut() {
             let mut kept: Vec<String> = Vec::new();
@@ -84,27 +91,35 @@ impl TagStore {
             e.tags = kept;
         }
         st.tracks.retain(|_, e| !e.tags.is_empty());
-        st
+        Ok(st)
     }
 
+    #[cfg(test)]
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
-            .map(|s| Self::parse(&s))
-            .unwrap_or_default()
+        Self::read(path).unwrap_or_default()
+    }
+
+    /// The file's store; an empty one when there is no file yet. `Err` when a file is there
+    /// but cannot be read or parsed: it must not be overwritten by an empty store.
+    pub fn read(path: &Path) -> Result<Self, String> {
+        match std::fs::read_to_string(path) {
+            Ok(s) => Self::parse_strict(&s).map_err(|e| e.to_string()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into())
     }
 
-    /// Writes through a temporary file so a crash cannot leave half a file.
+    /// Writes through a temporary file so a crash cannot leave half a file; owner-only, like
+    /// the other state files.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, self.to_json())?;
-        std::fs::rename(&tmp, path)
+        slate_core::write_atomic(path, self.to_json().as_bytes())
     }
 
     /// Tags `id` (with a fresh snapshot). `false` when it already had the tag.
@@ -258,6 +273,14 @@ impl Snapshot {
 
 static STORE: Mutex<Option<TagStore>> = Mutex::new(None);
 static WRITE_GEN: AtomicU64 = AtomicU64::new(0);
+/// Edits not on disk yet (a quit inside the debounce writes them, see [`flush`]).
+static DIRTY: AtomicBool = AtomicBool::new(false);
+/// One write at a time; the store is copied under it, so the last write has the newest state.
+static SAVE: Mutex<()> = Mutex::new(());
+/// Set when `tags.json` could not be read and could not be moved aside: never overwrite it.
+static FROZEN: AtomicBool = AtomicBool::new(false);
+/// What to tell the user about a damaged file, once.
+static WARNING: Mutex<Option<String>> = Mutex::new(None);
 /// The sidebar list is open: changes refresh it.
 static SIDEBAR_OPEN: AtomicBool = AtomicBool::new(false);
 /// The tracks the open Tags dialog edits.
@@ -267,13 +290,65 @@ fn path() -> Option<PathBuf> {
     slate_core::config_dir_for_env().map(|d| d.join("tags.json"))
 }
 
-/// The store, read from disk on first use.
+/// The store, read from disk on first use. A file that is there but unreadable is moved
+/// aside (`tags.json.damaged-<time>`) so the next write cannot destroy it; if even that
+/// fails, tags are not written at all this session.
 fn store() -> MutexGuard<'static, Option<TagStore>> {
     let mut g = STORE.lock().unwrap_or_else(|e| e.into_inner());
     if g.is_none() {
-        *g = Some(path().map(|p| TagStore::load(&p)).unwrap_or_default());
+        *g = Some(path().map(open).unwrap_or_default());
     }
     g
+}
+
+fn open(p: PathBuf) -> TagStore {
+    match TagStore::read(&p) {
+        Ok(s) => s,
+        Err(why) => {
+            tracing::warn!("tags.json unreadable: {why}");
+            let aside = p.with_extension(format!("json.damaged-{}", slate_core::now_secs()));
+            let msg = match std::fs::rename(&p, &aside) {
+                Ok(()) => format!(
+                    "Your tags file could not be read, so tags start empty. The old file is kept as {}.",
+                    aside.display()
+                ),
+                Err(e) => {
+                    tracing::warn!("tags.json could not be moved aside: {e}");
+                    FROZEN.store(true, Ordering::Relaxed);
+                    format!(
+                        "Your tags file could not be read ({}). Tags will not be saved until it is fixed or removed.",
+                        p.display()
+                    )
+                }
+            };
+            *WARNING.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg);
+            TagStore::default()
+        }
+    }
+}
+
+/// Writes the store now (on the calling thread). Copied under [`SAVE`] so two writes cannot
+/// interleave and an older copy cannot land after a newer one.
+fn write_now() -> std::io::Result<()> {
+    let _one = SAVE.lock().unwrap_or_else(|e| e.into_inner());
+    if FROZEN.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    DIRTY.store(false, Ordering::Release);
+    let snapshot = with(|s| s.clone());
+    match path() {
+        Some(p) => snapshot.save(&p),
+        None => Ok(()),
+    }
+}
+
+/// Quit: writes edits that are still waiting for the debounce.
+pub fn flush() {
+    if DIRTY.load(Ordering::Acquire) {
+        if let Err(e) = write_now() {
+            tracing::warn!("tags not saved at exit: {e}");
+        }
+    }
 }
 
 fn with<R>(f: impl FnOnce(&mut TagStore) -> R) -> R {
@@ -295,6 +370,7 @@ fn entry((name, n): &(String, usize)) -> PlaylistEntry {
 impl Backend {
     /// Writes the file after the edits have been quiet for a moment, on a blocking thread.
     fn tags_changed(&self) {
+        DIRTY.store(true, Ordering::Release);
         let gen = WRITE_GEN.fetch_add(1, Ordering::AcqRel) + 1;
         let this = self.clone();
         self.rt.spawn(async move {
@@ -302,12 +378,7 @@ impl Backend {
             if WRITE_GEN.load(Ordering::Acquire) != gen {
                 return;
             }
-            let snapshot = with(|s| s.clone());
-            let saved = tokio::task::spawn_blocking(move || match path() {
-                Some(p) => snapshot.save(&p),
-                None => Ok(()),
-            })
-            .await;
+            let saved = tokio::task::spawn_blocking(write_now).await;
             if !matches!(saved, Ok(Ok(()))) {
                 this.ui(|w| w.set_error("Could not save your tags.".into()));
             }
@@ -317,8 +388,16 @@ impl Backend {
         }
     }
 
+    /// Shows the damaged-file notice, once, after the store was first read.
+    fn tags_warn(&self) {
+        if let Some(m) = WARNING.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.ui(move |w| w.set_error(m.into()));
+        }
+    }
+
     fn tags_fill_sidebar(&self) {
         let counts = with(|s| s.counts());
+        self.tags_warn();
         self.ui(move |w| {
             let rows: Vec<PlaylistEntry> = counts.iter().map(entry).collect();
             w.set_tag_lists(ModelRc::new(VecModel::from(rows)));
@@ -384,6 +463,7 @@ impl Backend {
 
     /// Current tags of the targets and the suggestions for what is typed.
     fn tags_refresh_dialog(&self, typed: &str) {
+        self.tags_warn();
         let target: Vec<u64> = TARGET
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -555,6 +635,45 @@ mod tests {
         let s =
             TagStore::parse(r#"{"tracks":{"1":{"title":"t","tags":["ok","OK","\u202e","  "]}}}"#);
         assert_eq!(s.tags_of(1), &["ok".to_string()]);
+    }
+
+    #[test]
+    fn a_damaged_file_is_an_error_not_an_empty_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("tags.json");
+        assert_eq!(TagStore::read(&p), Ok(TagStore::default()));
+        std::fs::write(
+            &p,
+            "{\"tracks\": {\"1\": {\"title\": \"t\", \"tags\": [\"a\"]},",
+        )
+        .unwrap();
+        assert!(TagStore::read(&p).is_err());
+        let moved = open(p.clone());
+        assert_eq!(moved, TagStore::default());
+        assert!(
+            !p.exists(),
+            "the damaged file is moved aside, not left to be overwritten"
+        );
+        let kept: Vec<_> = std::fs::read_dir(dir.path()).unwrap().flatten().collect();
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0]
+            .file_name()
+            .to_string_lossy()
+            .starts_with("tags.json.damaged-"));
+        assert!(WARNING.lock().unwrap().take().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("tags.json");
+        TagStore::default().save(&p).unwrap();
+        assert_eq!(
+            std::fs::metadata(&p).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]
