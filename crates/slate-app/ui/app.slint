@@ -45,6 +45,12 @@ export component AppWindow inherits Window {
     callback suggest-play(int);
     callback suggest-action(int, string);
     in property <[PlaylistEntry]> smart-lists;
+    in property <[PlaylistEntry]> tag-lists;
+    callback tags-toggled(bool);
+    // The Tags dialog: tags on the chosen tracks (dialog-choices holds the suggestions).
+    in property <[Choice]> dialog-tags;
+    in property <int> dialog-count;
+    callback tag-dialog(string, string);
     in-out property <[PlaylistEntry]> pick-lists;
     in-out property <[PlaylistEntry]> folder-lists;
     in property <bool> can-save-smart;
@@ -361,6 +367,8 @@ export component AppWindow inherits Window {
                     playlists: root.playlists;
                     playlists-loading: root.playlists-loading;
                     smart-lists: root.smart-lists;
+                    tag-lists: root.tag-lists;
+                    tags-toggled(o) => { root.tags-toggled(o); }
                     new-smart => { root.new-smart(); }
                     smart-action(id, a) => { root.smart-action(id, a); }
                     selected: root.selected-source;
@@ -1005,7 +1013,7 @@ export component AppWindow inherits Window {
                 // Snapshots need room for a name field and two buttons on one line.
                 width: min(root.dialog-kind == "snapshots" ? 480px : 400px, parent.width - 32px);
                 // Snapshots: as tall as the list needs (the list scrolls past 460 px).
-                height: root.dialog-kind == "snapshots" ? min(460px, parent.height - 48px, 175px + 44px * max(1, root.dialog-choices.length)) : root.dialog-kind == "move" ? min(420px, parent.height - 48px) : root.dialog-kind == "dedupe" || root.dialog-kind == "artists" || root.dialog-kind == "compare" ? min(420px, parent.height - 48px) : 190px;
+                height: root.dialog-kind == "snapshots" ? min(460px, parent.height - 48px, 175px + 44px * max(1, root.dialog-choices.length)) : root.dialog-kind == "move" ? min(420px, parent.height - 48px) : root.dialog-kind == "dedupe" || root.dialog-kind == "artists" || root.dialog-kind == "compare" || root.dialog-kind == "tags" ? min(420px, parent.height - 48px) : 190px;
                 border-radius: 12px;
                 background: Theme.surface;
                 TouchArea { }
@@ -1013,7 +1021,7 @@ export component AppWindow inherits Window {
                     padding: 16px;
                     spacing: 10px;
                     Text {
-                        text: root.dialog-kind == "snapshots" ? "Queue snapshots" : root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : root.dialog-kind == "compare" ? "Compare with…" : root.dialog-kind == "dup" ? "Already in playlist" : root.dialog-kind == "party-set" ? "Save set as playlist" : "Move to folder";
+                        text: root.dialog-kind == "snapshots" ? "Queue snapshots" : root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : root.dialog-kind == "compare" ? "Compare with…" : root.dialog-kind == "dup" ? "Already in playlist" : root.dialog-kind == "party-set" ? "Save set as playlist" : root.dialog-kind == "tags" ? (root.dialog-count > 1 ? "Tags (" + root.dialog-count + " tracks)" : "Tags") : "Move to folder";
                         font-size: 18px; font-weight: 700; color: Theme.text;
                     }
                     if root.dialog-kind == "delete": Text {
@@ -1057,6 +1065,39 @@ export component AppWindow inherits Window {
                         placeholder: "New name";
                         field-width: 340px;
                         accepted(t) => { root.dialog-accepted("rename", root.dialog-target, t); root.dialog-open = false; }
+                    }
+                    if root.dialog-kind == "tags": TextField {
+                        text <=> root.dialog-text;
+                        placeholder: "Add a tag";
+                        field-width: 340px;
+                        edited(t) => { root.tag-dialog("type", t); }
+                        accepted(t) => { root.tag-dialog("add", t); }
+                    }
+                    if root.dialog-kind == "tags": Flickable {
+                        vertical-stretch: 1;
+                        content-height: tl.preferred-height;
+                        tl := VerticalLayout {
+                            spacing: 4px;
+                            if root.dialog-tags.length == 0: Text { text: "No tags yet."; color: Theme.text-muted; }
+                            for c in root.dialog-tags: Rectangle {
+                                height: 30px;
+                                border-radius: 6px;
+                                background: Theme.surface-raised;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 4px;
+                                    Text { text: c.title; color: Theme.text; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Button { label: "✕"; height: 26px; min-width: 32px; clicked => { root.tag-dialog("remove", c.id); } }
+                                }
+                            }
+                            for c in root.dialog-choices: Rectangle {
+                                height: 30px;
+                                border-radius: 6px;
+                                background: sg.has-hover ? Theme.surface-raised : transparent;
+                                Text { x: 10px; text: "＋ " + c.title; color: Theme.accent; vertical-alignment: center; overflow: elide; width: parent.width - 20px; }
+                                sg := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.tag-dialog("add", c.id); } }
+                            }
+                        }
                     }
                     if root.dialog-kind == "party-set": TextField {
                         text <=> root.dialog-text;
@@ -1114,8 +1155,9 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         alignment: end;
                         spacing: 8px;
-                        Button { label: "Cancel"; clicked => { root.dialog-open = false; } }
+                        Button { label: root.dialog-kind == "tags" ? "Done" : "Cancel"; clicked => { root.dialog-open = false; } }
                         if root.dialog-kind == "rename": Button { label: "Rename"; primary: true; enabled: root.dialog-text != ""; clicked => { root.dialog-accepted("rename", root.dialog-target, root.dialog-text); root.dialog-open = false; } }
+                        if root.dialog-kind == "tags": Button { label: "Add"; primary: true; enabled: root.dialog-text != ""; clicked => { root.tag-dialog("add", root.dialog-text); } }
                         if root.dialog-kind == "party-set": Button { label: "Save"; primary: true; clicked => { root.dialog-accepted("party-set", "", root.dialog-text); root.dialog-open = false; } }
                         if root.dialog-kind == "dup": Button { label: "Add anyway"; primary: true; clicked => { root.dialog-accepted("dup", root.dialog-target, ""); root.dialog-open = false; } }
                         if root.dialog-kind == "dedupe": Button { label: "Remove"; danger: true; clicked => { root.dialog-accepted("dedupe", root.dialog-target, ""); root.dialog-open = false; } }

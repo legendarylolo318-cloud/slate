@@ -41,6 +41,8 @@ pub enum Route {
     Artist(u64),
     Mix(String),
     Smart(String),
+    /// A personal tag (its name).
+    Tag(String),
     Search(String),
     /// A TIDAL editorial page (`pages/explore`, a genre, a mood…) and its title.
     Page(String, String),
@@ -78,6 +80,7 @@ impl Route {
             Self::Loved => "loved".into(),
             Self::Playlist(u) => u.clone(),
             Self::Smart(id) => format!("smart:{id}"),
+            Self::Tag(t) => format!("tag:{t}"),
             Self::Settings => "settings".into(),
             Self::Profile => "profile".into(),
             Self::Dj => "dj".into(),
@@ -511,6 +514,7 @@ impl Backend {
             Route::Album(id) => self.open(SourceKind::Album(id), String::new()),
             Route::Mix(id) => self.open(SourceKind::Mix(id), String::new()),
             Route::Smart(id) => self.open(SourceKind::Smart(id.clone()), format!("smart:{id}")),
+            Route::Tag(t) => self.open(SourceKind::Tag(t.clone()), format!("tag:{t}")),
             Route::Profile => {
                 self.load_profile();
                 self.ui(|w| w.set_view("profile".into()));
@@ -524,6 +528,10 @@ impl Backend {
     }
 
     pub fn open_playlist(&self, uuid: &str) {
+        if let Some(t) = uuid.strip_prefix("tag:") {
+            self.navigate(Route::Tag(t.to_string()));
+            return;
+        }
         if let Some(id) = uuid.strip_prefix("smart:") {
             self.navigate(Route::Smart(id.to_string()));
             return;
@@ -1307,12 +1315,17 @@ pub(crate) async fn fetch_all(
                 let n = tracks.len();
                 (tracks, n)
             }
+            SourceKind::Tag(t) => {
+                let (_, tracks) = this.tag_tracks(t);
+                let n = tracks.len();
+                (tracks, n)
+            }
         };
         let got = items.len();
         out.extend(items.iter().filter_map(Track::from_serialized));
         if got == 0
             || out.len() >= total
-            || matches!(kind, SourceKind::Mix(_) | SourceKind::Smart(_))
+            || matches!(kind, SourceKind::Mix(_) | SourceKind::Smart(_) | SourceKind::Tag(_))
         {
             break;
         }

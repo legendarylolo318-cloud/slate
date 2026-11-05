@@ -79,6 +79,31 @@ component CoverTile inherits Rectangle {
     }
 }
 
+component TagItem inherits Rectangle {
+    in property <PlaylistEntry> entry;
+    in property <bool> collapsed: false;
+    in property <bool> active;
+    callback clicked();
+    callback action(string);
+    height: 36px;
+    border-radius: 6px;
+    background: root.active ? Theme.surface-raised : (tt.has-hover ? Theme.background : transparent);
+    HorizontalLayout {
+        padding-left: 22px;
+        padding-right: 8px;
+        spacing: 8px;
+        Text { text: root.entry.title; color: Theme.text; font-weight: root.active ? 700 : 500; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+        if !root.collapsed: Text { text: root.entry.subtitle; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
+    }
+    tt := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+    ContextMenuArea {
+        Menu {
+            MenuItem { title: "Rename…"; activated => { root.action("rename"); } }
+            MenuItem { title: "Delete"; activated => { root.action("delete"); } }
+        }
+    }
+}
+
 component SmartItem inherits Rectangle {
     in property <PlaylistEntry> entry;
     in property <bool> collapsed: false;
@@ -178,6 +203,9 @@ export component Sidebar inherits Rectangle {
     callback open-playlist(string);
     callback new-playlist();
     in property <[PlaylistEntry]> smart-lists;
+    in property <[PlaylistEntry]> tag-lists;
+    callback tags-toggled(bool);
+    property <bool> tags-open: false;
     callback new-smart();
     callback smart-action(string, string);
     callback entry-action(string, string);
@@ -287,6 +315,21 @@ export component Sidebar inherits Rectangle {
             action(a) => { root.smart-action(s.uuid, a); }
         }
         NavItem {
+            icon: @image-url("icons/mixes.svg");
+            collapsed: root.collapsed;
+            label: root.tags-open ? "Tags ▾" : "Tags ▸";
+            active: root.selected.starts-with("tag:");
+            clicked => { root.tags-open = !root.tags-open; root.tags-toggled(root.tags-open); }
+        }
+        if root.tags-open && !root.collapsed && root.tag-lists.length == 0: Text { text: "No tags yet. Right-click a track → Tags…"; color: Theme.text-muted; font-size: 11px; wrap: word-wrap; }
+        for t in root.tag-lists: TagItem {
+            entry: t;
+            collapsed: root.collapsed;
+            active: root.selected == t.uuid;
+            clicked => { root.open-playlist(t.uuid); }
+            action(a) => { root.entry-action(t.uuid, a); }
+        }
+        NavItem {
             icon: @image-url("icons/settings.svg");
             collapsed: root.collapsed;
             label: "Settings";
@@ -368,6 +411,7 @@ component Row inherits Rectangle {
             if root.multi: MenuItem { title: "Add " + root.selected-count + " tracks to playlist…"; activated => { root.action("sel-playlist"); } }
             if root.multi && PartyState.can-suggest: MenuItem { title: "Suggest to party"; activated => { root.action("sel-suggest"); } }
             if root.multi && root.can-remove: MenuItem { title: "Remove " + root.selected-count + " tracks from this playlist"; activated => { root.action("sel-remove"); } }
+            if root.multi: MenuItem { title: "Tags… (" + root.selected-count + " tracks)"; activated => { root.action("sel-tags"); } }
             if root.multi: MenuItem { title: "Clear selection"; activated => { root.action("sel-clear"); } }
             if !root.multi: MenuItem { title: "Play"; activated => { root.play(); } }
             if !root.multi: MenuItem { title: root.item.favorite ? "Remove from Loved Tracks" : "Add to Loved Tracks"; activated => { root.action("favorite"); } }
@@ -380,6 +424,7 @@ component Row inherits Rectangle {
             if !root.multi: MenuItem { title: "Other versions…"; activated => { root.action("versions"); } }
             if !root.multi: MenuItem { title: "Credits"; activated => { root.action("credits"); } }
             if !root.multi && PartyState.can-suggest: MenuItem { title: "Suggest to party"; activated => { root.action("suggest"); } }
+            if !root.multi: MenuItem { title: "Tags…"; activated => { root.action("tags"); } }
             if !root.multi: MenuItem { title: "Copy link"; activated => { root.action("copy-link"); } }
             if !root.multi: MenuItem { title: "Copy share card"; activated => { root.action("share-card"); } }
         }

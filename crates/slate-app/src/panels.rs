@@ -321,6 +321,7 @@ impl Backend {
                 "artist" => this.go_artist(&track),
                 "copy-link" => this.copy_link(&track).await,
                 "share-card" => this.copy_share_card(&track).await,
+                "tags" => this.tags_open_dialog(&[track]),
                 "credits" => this.show_credits(&track),
                 "suggest" => this.party_suggest(track.id),
                 "versions" => this.show_track_versions(track, index, None),
@@ -362,7 +363,7 @@ impl Backend {
             "album" => self.go_album(track),
             "artist" => self.go_artist(track),
             "credits" => self.show_credits(track),
-            "copy-link" | "share-card" => self.track_action(track.clone(), None, kind),
+            "copy-link" | "share-card" | "tags" => self.track_action(track.clone(), None, kind),
             _ => {}
         }
     }

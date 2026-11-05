@@ -61,6 +61,7 @@ fn page_key(kind: &SourceKind) -> &'static str {
         SourceKind::Album(_) => "album",
         SourceKind::Mix(_) => "mix",
         SourceKind::Smart(_) => "smart",
+        SourceKind::Tag(_) => "tag",
     }
 }
 

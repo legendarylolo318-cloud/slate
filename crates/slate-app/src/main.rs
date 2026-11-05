@@ -56,6 +56,7 @@ mod signal;
 mod smart;
 mod sort;
 mod suggest;
+mod tags;
 mod textutil;
 mod themes;
 #[cfg(test)]

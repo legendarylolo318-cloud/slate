@@ -271,11 +271,13 @@ export component QueuePanel inherits Rectangle {
                         if r.selected && root.selection-size > 1: MenuItem { title: "Play " + root.selection-size + " tracks next"; activated => { root.sel-action("sel-next"); } }
                         if r.selected && root.selection-size > 1: MenuItem { title: "Add " + root.selection-size + " tracks to playlist…"; activated => { root.sel-action("sel-playlist"); } }
                         if r.selected && root.selection-size > 1 && PartyState.can-suggest: MenuItem { title: "Suggest to party"; activated => { root.sel-action("sel-suggest"); } }
+                        if r.selected && root.selection-size > 1: MenuItem { title: "Tags… (" + root.selection-size + " tracks)"; activated => { root.sel-action("sel-tags"); } }
                         if r.selected && root.selection-size > 1: MenuItem { title: "Clear selection"; activated => { root.sel-action("sel-clear"); } }
                         if !(r.selected && root.selection-size > 1): MenuItem { title: "Play"; activated => { root.play(i); } }
                         if !(r.selected && root.selection-size > 1): MenuItem { title: "Other versions…"; activated => { root.go(i, "versions"); } }
                         if !(r.selected && root.selection-size > 1): MenuItem { title: "Go to album"; activated => { root.go(i, "album"); } }
                         if !(r.selected && root.selection-size > 1): MenuItem { title: "Go to artist"; activated => { root.go(i, "artist"); } }
+                        if !(r.selected && root.selection-size > 1): MenuItem { title: "Tags…"; activated => { root.go(i, "tags"); } }
                         if !(r.selected && root.selection-size > 1): MenuItem { title: "Copy link"; activated => { root.go(i, "copy-link"); } }
                         if !(r.selected && root.selection-size > 1): MenuItem { title: "Copy share card"; activated => { root.go(i, "share-card"); } }
                         if !(r.selected && root.selection-size > 1): MenuItem { title: "Remove from queue"; activated => { root.remove(i); } }

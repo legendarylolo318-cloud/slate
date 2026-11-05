@@ -32,6 +32,8 @@ pub enum SourceKind {
     Mix(String),
     /// A smart playlist (its id); the tracks are computed when it opens.
     Smart(String),
+    /// A personal tag (its name); the tracks come from `tags.json`.
+    Tag(String),
 }
 
 /// What the page header shows.
@@ -442,7 +444,10 @@ impl Backend {
         let list = match kind {
             SourceKind::Loved => Some(crate::sort::List::Loved),
             SourceKind::Playlist(_) => Some(crate::sort::List::Playlist),
-            SourceKind::Album(_) | SourceKind::Mix(_) | SourceKind::Smart(_) => None,
+            SourceKind::Album(_)
+            | SourceKind::Mix(_)
+            | SourceKind::Smart(_)
+            | SourceKind::Tag(_) => None,
         };
         let prefs = crate::uiprefs::UiPrefs::load();
         if let Ok(mut a) = self.lib.active.lock() {
@@ -685,6 +690,21 @@ impl Backend {
                     none("SMART PLAYLIST", "Smart playlist")
                 }
             },
+            SourceKind::Tag(tag) => {
+                let (name, tracks) = self.tag_tracks(tag);
+                let count = tracks.len();
+                if let Ok(mut s) = self.lib.static_tracks.lock() {
+                    *s = tracks;
+                }
+                Header {
+                    label: "TAG",
+                    title: name,
+                    subtitle: format!("{count} tracks"),
+                    cover: None,
+                    loved: false,
+                    badges: Default::default(),
+                }
+            }
             SourceKind::Mix(id) => match pages::get_mix_items(&state, id.clone()).await {
                 Ok(m) => {
                     let count = m.tracks.len();
@@ -944,7 +964,7 @@ impl Backend {
                 .await
             }
             SourceKind::Album(id) => pages::get_album_tracks(&state, *id, offset, limit).await,
-            SourceKind::Mix(_) | SourceKind::Smart(_) => {
+            SourceKind::Mix(_) | SourceKind::Smart(_) | SourceKind::Tag(_) => {
                 // Served from the single response stashed when the header loaded.
                 let all = self
                     .lib
@@ -1067,6 +1087,7 @@ impl Backend {
             SourceKind::Album(a) => ("album", serde_json::Value::from(a.to_string())),
             SourceKind::Mix(m) => ("mix", serde_json::Value::from(m.as_str())),
             SourceKind::Smart(s) => ("smart", serde_json::Value::from(s.as_str())),
+            SourceKind::Tag(t) => ("tag", serde_json::Value::from(t.as_str())),
         };
         Source {
             kind: kind.into(),

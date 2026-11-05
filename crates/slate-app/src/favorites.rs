@@ -426,6 +426,12 @@ impl Backend {
     /// Rename / delete / move from the sidebar dialog. `target` is a playlist
     /// uuid, or `folder:ID` for a folder.
     pub fn dialog_accepted(&self, kind: &str, target: &str, text: &str) {
+        if let Some(name) = target.strip_prefix("tag:") {
+            if matches!(kind, "rename" | "delete") {
+                self.tag_manage(kind, name, text.trim());
+                return;
+            }
+        }
         if kind == "party-set" {
             self.party_save_set(text);
             return;

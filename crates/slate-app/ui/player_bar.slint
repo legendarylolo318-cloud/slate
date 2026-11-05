@@ -184,6 +184,7 @@ export component PlayerBar inherits Rectangle {
         height: root.height;
         enabled: root.has-track && !root.video-mini;
         Menu {
+            MenuItem { title: "Tags…"; activated => { root.now-action("tags"); } }
             MenuItem { title: "Copy link"; activated => { root.now-action("copy-link"); } }
             MenuItem { title: "Copy share card"; activated => { root.now-action("share-card"); } }
         }

@@ -139,6 +139,10 @@ impl Backend {
                         format!("{n} tracks will play next")
                     });
                 }
+                "sel-tags" => {
+                    let tracks: Vec<Track> = picked.into_iter().map(|(_, t)| t).collect();
+                    this.tags_open_dialog(&tracks);
+                }
                 "sel-suggest" => {
                     for (_, t) in picked.iter().take(SUGGEST_AT_ONCE) {
                         this.party_suggest(t.id);
