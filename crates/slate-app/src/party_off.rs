@@ -51,7 +51,11 @@ impl Backend {
 
     pub fn party_pref_bool(&self, _key: &str, _on: bool) {}
 
-    pub(crate) fn party_track_changed(&self, _id: u64) {}
+    pub(crate) fn party_track_changed(&self, _track: &slate_core::queue::Track) {}
+
+    pub fn party_offer_save_set(&self) {}
+
+    pub fn party_save_set(&self, _name: &str) {}
 
     pub(crate) fn party_state_changed(&self, _position_secs: f32, _playing: bool) {}
 

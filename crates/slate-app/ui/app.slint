@@ -990,7 +990,7 @@ export component AppWindow inherits Window {
                     padding: 16px;
                     spacing: 10px;
                     Text {
-                        text: root.dialog-kind == "snapshots" ? "Queue snapshots" : root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : root.dialog-kind == "compare" ? "Compare with…" : root.dialog-kind == "dup" ? "Already in playlist" : "Move to folder";
+                        text: root.dialog-kind == "snapshots" ? "Queue snapshots" : root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : root.dialog-kind == "compare" ? "Compare with…" : root.dialog-kind == "dup" ? "Already in playlist" : root.dialog-kind == "party-set" ? "Save set as playlist" : "Move to folder";
                         font-size: 18px; font-weight: 700; color: Theme.text;
                     }
                     if root.dialog-kind == "delete": Text {
@@ -1034,6 +1034,12 @@ export component AppWindow inherits Window {
                         placeholder: "New name";
                         field-width: 340px;
                         accepted(t) => { root.dialog-accepted("rename", root.dialog-target, t); root.dialog-open = false; }
+                    }
+                    if root.dialog-kind == "party-set": TextField {
+                        text <=> root.dialog-text;
+                        placeholder: "Playlist name";
+                        field-width: 340px;
+                        accepted(t) => { root.dialog-accepted("party-set", "", t); root.dialog-open = false; }
                     }
                     if root.dialog-kind == "snapshots": HorizontalLayout {
                         spacing: 8px;
@@ -1087,6 +1093,7 @@ export component AppWindow inherits Window {
                         spacing: 8px;
                         Button { label: "Cancel"; clicked => { root.dialog-open = false; } }
                         if root.dialog-kind == "rename": Button { label: "Rename"; primary: true; enabled: root.dialog-text != ""; clicked => { root.dialog-accepted("rename", root.dialog-target, root.dialog-text); root.dialog-open = false; } }
+                        if root.dialog-kind == "party-set": Button { label: "Save"; primary: true; clicked => { root.dialog-accepted("party-set", "", root.dialog-text); root.dialog-open = false; } }
                         if root.dialog-kind == "dup": Button { label: "Add anyway"; primary: true; clicked => { root.dialog-accepted("dup", root.dialog-target, ""); root.dialog-open = false; } }
                         if root.dialog-kind == "dedupe": Button { label: "Remove"; danger: true; clicked => { root.dialog-accepted("dedupe", root.dialog-target, ""); root.dialog-open = false; } }
                         if root.dialog-kind == "delete": Button { label: "Delete"; danger: true; clicked => { root.dialog-accepted("delete", root.dialog-target, ""); root.dialog-open = false; } }

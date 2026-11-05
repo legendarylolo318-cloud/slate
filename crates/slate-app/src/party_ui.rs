@@ -244,6 +244,8 @@ impl Backend {
                     let link = host.link();
                     *lock(&ROLE) = Some(Role::Host(host));
                     HOSTING.store(true, Ordering::Relaxed);
+                    crate::party_set::reset();
+                    this.party_set_count_shown();
                     this.party_show("host", link, Vec::new());
                     this.party_status("Party started. Share the link.");
                     this.party_mirror(true, "host", 0);
@@ -540,8 +542,10 @@ impl Backend {
         self.rt.spawn(async move { this.publish_queue().await });
     }
 
-    pub(crate) fn party_track_changed(&self, id: u64) {
+    pub(crate) fn party_track_changed(&self, track: &Track) {
+        let id = track.id;
         if hosting() {
+            self.party_set_record(track);
             lock(&OWNERS).retain(|o| o.0 != id);
             with_host(|h| h.track_changed(id, 0, true));
             // The counts belong to the track that just ended.
@@ -1214,6 +1218,10 @@ impl Backend {
         HOSTING.store(false, Ordering::Relaxed);
         lock(&OWNERS).clear();
         lock(&PENDING).clear();
+        // The set outlives the party so it can be saved from here or from the Party tab.
+        if matches!(role, Some(Role::Host(_))) {
+            self.party_offer_save_set();
+        }
         self.party_show("", String::new(), Vec::new());
         self.party_mirror(false, "", 0);
         let this = self.clone();

@@ -36,6 +36,8 @@ mod models;
 mod mpd_host;
 mod pages;
 mod panels;
+#[cfg(feature = "party")]
+mod party_set;
 #[cfg_attr(not(feature = "party"), path = "party_off.rs")]
 mod party_ui;
 mod pkce;

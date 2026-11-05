@@ -131,6 +131,8 @@ export global SettingsState {
     in-out property <string> eq-status;
     // Listening party
     in-out property <string> party-role;
+    // Tracks played while hosting, kept for "Save set as playlist".
+    in-out property <int> party-set-count: 0;
     in-out property <string> party-link;
     in-out property <[PartyGuest]> party-guests;
     in-out property <string> party-chat-draft;
@@ -905,6 +907,11 @@ export component SettingsPage inherits Rectangle {
                             if SettingsState.party-role == "": Button { label: "Start a party"; primary: true; clicked => { SettingsState.action("party-start"); } }
                             if SettingsState.party-role != "": Button { label: SettingsState.party-role == "host" ? "End party" : "Leave"; danger: true; clicked => { SettingsState.action("party-end"); } }
                         }
+                    }
+                    if SettingsState.party-role == "" && SettingsState.party-set-count > 0: Row {
+                        label: "Last party's set";
+                        hint: SettingsState.party-set-count + " tracks played. Kept until the next party starts.";
+                        Button { label: "Save set as playlist"; clicked => { SettingsState.action("party-save-set"); } }
                     }
                     if SettingsState.party-status != "": Text { text: SettingsState.party-status; color: Theme.text-muted; wrap: word-wrap; font-size: 12px; }
                     if SettingsState.party-offer: Row {

@@ -514,6 +514,7 @@ impl Backend {
                     this.party_cohost(&n["party-uncohost:".len()..], false)
                 }
                 "party-end" => this.party_end(),
+                "party-save-set" => this.party_offer_save_set(),
                 "party-join" => {
                     let t = this
                         .read_ui(|w| w.global::<SettingsState>().get_party_ticket().to_string())
