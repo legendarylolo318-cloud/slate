@@ -162,7 +162,7 @@ impl Track {
         self
     }
 
-    fn restamped(mut self) -> Self {
+    pub(crate) fn restamped(mut self) -> Self {
         self.qid = Some(next_qid());
         self
     }
