@@ -43,7 +43,13 @@ interprocess = "2"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control", "image-data"] }
 # The share card (share_card.rs): SVG text shaping and rasterising. Already built for Slint's
 # own SVG support; only the system-fonts switch is new.
-resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts"] }
+resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+# Already built for resvg (same version and features): the share card's font fallback asks it
+# whether a face has a character.
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+# Already built for Slint (same version and features): finds the few font files a share card
+# needs through the system's font index instead of opening every font file.
+fontique = "0.11"
 dirs = "5"
 
 [target.'cfg(target_os = "linux")'.dependencies]

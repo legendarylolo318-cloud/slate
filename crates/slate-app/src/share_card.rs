@@ -23,6 +23,43 @@ const COVER: f32 = 240.0;
 const TEXT_X: f32 = 300.0;
 const TEXT_W: f32 = W as f32 - TEXT_X - PAD;
 const FONTS: &str = "Inter, Segoe UI, Noto Sans, DejaVu Sans, Arial, sans-serif";
+/// Emoji runs get their own span in a colour emoji font (the text font has none, and a
+/// joined emoji such as 👩‍👩‍👧‍👦 only shapes as one glyph in a font that has it).
+const EMOJI_FONTS: &str =
+    "Noto Color Emoji, Apple Color Emoji, Segoe UI Emoji, Twemoji Mozilla, Segoe UI Symbol";
+/// Where a character the text font lacks is looked up first, in this order. Without this
+/// usvg takes the first face on the system that has the character, which on a machine with
+/// programming fonts was a monospaced one, and re-shapes the whole line in it (seen: Hebrew
+/// and mixed lines in Cascadia Code, Arabic letters left unjoined, emoji as boxes).
+const FALLBACK: &[&str] = &[
+    "Noto Sans",
+    "Noto Sans Arabic",
+    "Noto Naskh Arabic",
+    "Noto Sans Hebrew",
+    "Noto Sans CJK JP",
+    "Noto Sans CJK KR",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC",
+    "Noto Sans JP",
+    "Noto Sans KR",
+    "Noto Sans SC",
+    "Source Han Sans",
+    "Segoe UI",
+    "Microsoft YaHei UI",
+    "Yu Gothic UI",
+    "Malgun Gothic",
+    "Nirmala UI",
+    "Leelawadee UI",
+    "Tahoma",
+    "DejaVu Sans",
+    "Droid Sans Fallback",
+    "Arial",
+    "Noto Color Emoji",
+    "Segoe UI Emoji",
+    "Segoe UI Symbol",
+    "Noto Sans Symbols",
+    "Noto Sans Symbols 2",
+];
 
 /// Where a track lives on tidal.com.
 pub fn track_link(id: u64) -> String {
@@ -169,6 +206,118 @@ fn escape(s: &str) -> String {
     o
 }
 
+/// Starts or continues an emoji: pictographs, symbols drawn as emoji, flags, keycaps, and the
+/// joiners, selectors, skin tones and tags inside a sequence.
+/// (Flags, U+1F1E6–1F1FF, are inside the first range.)
+fn is_emoji(c: char, in_emoji: bool) -> bool {
+    let u = c as u32;
+    matches!(u, 0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x2B00..=0x2BFF)
+        || (in_emoji && matches!(u, 0x200D | 0xFE0F | 0x20E3 | 0xE0020..=0xE007F))
+}
+
+/// What a run of text is shaped as: one script, emoji, or the closing ellipsis.
+#[derive(Clone, Copy, PartialEq)]
+enum Run {
+    Text(Option<[u8; 4]>),
+    Emoji,
+    Ellipsis,
+}
+
+/// `text` as escaped SVG content, cut into `<tspan>`s so that each is shaped with one font:
+/// emoji in an emoji font, each script on its own, and the "…" that ends a cut line apart.
+/// usvg shapes a span with its first font and patches missing glyphs from a fallback only
+/// when both give the same number of glyphs; Arabic ligatures (or emoji sequences) next to a
+/// character the fallback lacks broke that, and the whole line came out as boxes.
+fn spans(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 32);
+    let mut run = String::new();
+    let mut kind = Run::Text(None);
+    let flush = |out: &mut String, run: &mut String, kind: Run| {
+        if run.is_empty() {
+            return;
+        }
+        match kind {
+            Run::Emoji => out.push_str(&format!(
+                r#"<tspan font-family="{EMOJI_FONTS}">{}</tspan>"#,
+                escape(run)
+            )),
+            _ => out.push_str(&format!("<tspan>{}</tspan>", escape(run))),
+        }
+        run.clear();
+    };
+    for c in text.chars() {
+        let next = if c == '…' {
+            Run::Ellipsis
+        } else if is_emoji(c, kind == Run::Emoji) {
+            Run::Emoji
+        } else {
+            match (script_of(c), kind) {
+                // Spaces, digits and punctuation stay with the run they are in.
+                (None, Run::Text(k)) => Run::Text(k),
+                (s, _) => Run::Text(s),
+            }
+        };
+        let same = match (next, kind) {
+            (Run::Text(None), Run::Text(_)) | (Run::Text(_), Run::Text(None)) => true,
+            (a, b) => a == b,
+        };
+        if !same {
+            flush(&mut out, &mut run, kind);
+        }
+        if !same || matches!(next, Run::Text(Some(_))) {
+            kind = next;
+        }
+        run.push(c);
+    }
+    flush(&mut out, &mut run, kind);
+    out
+}
+
+fn has_char(db: &usvg::fontdb::Database, id: usvg::fontdb::ID, c: char) -> bool {
+    use skrifa::MetadataProvider;
+    db.with_face_data(id, |data, index| {
+        skrifa::FontRef::from_index(data, index)
+            .ok()
+            .and_then(|f| f.charmap().map(c))
+            .is_some()
+    })
+    .unwrap_or(false)
+}
+
+/// The face for a character the line's font lacks (see [`FALLBACK`]): the first preferred
+/// family that has it, in the line's weight if there is one; then any proportional face; then
+/// any face at all.
+fn fallback(
+    c: char,
+    used: &[usvg::fontdb::ID],
+    db: &mut Arc<usvg::fontdb::Database>,
+) -> Option<usvg::fontdb::ID> {
+    let weight = used.first().and_then(|id| db.face(*id)).map(|f| f.weight);
+    let usable = |f: &usvg::fontdb::FaceInfo| !used.contains(&f.id) && has_char(db, f.id, c);
+    for name in FALLBACK {
+        let mut any = None;
+        for f in db
+            .faces()
+            .filter(|f| f.families.iter().any(|(n, _)| n == name))
+        {
+            if f.style != usvg::fontdb::Style::Normal || !usable(f) {
+                continue;
+            }
+            if Some(f.weight) == weight {
+                return Some(f.id);
+            }
+            any.get_or_insert(f.id);
+        }
+        if any.is_some() {
+            return any;
+        }
+    }
+    db.faces()
+        .find(|f| !f.monospaced && usable(f))
+        .or_else(|| db.faces().find(|f| usable(f)))
+        .map(|f| f.id)
+}
+
 fn text_el(l: &Line, y: f32, weight: u32, fill: &str) -> String {
     if l.text.is_empty() {
         return String::new();
@@ -181,7 +330,7 @@ fn text_el(l: &Line, y: f32, weight: u32, fill: &str) -> String {
     format!(
         r#"<text x="{x}" y="{y}" font-family="{FONTS}" font-size="{}" font-weight="{weight}" fill="{fill}" text-anchor="{anchor}" direction="{dir}">{}</text>"#,
         l.size,
-        escape(&l.text)
+        spans(&l.text)
     )
 }
 
@@ -202,17 +351,108 @@ fn measurer<'a>(opt: &'a usvg::Options<'a>) -> impl Fn(&str, f32, bool) -> f32 +
         let s = format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="200"><text x="0" y="100" font-family="{FONTS}" font-size="{size}" font-weight="{}">{}</text></svg>"#,
             if bold { 700 } else { 400 },
-            escape(text)
+            spans(text)
         );
         usvg::Tree::from_str(&s, opt).map_or(f32::MAX, |t| t.root().abs_bounding_box().width())
     }
 }
 
-fn options() -> usvg::Options<'static> {
+/// The script fontique keys system fallbacks on, for the scripts a title is likely to use.
+fn script_of(c: char) -> Option<[u8; 4]> {
+    Some(match c as u32 {
+        0x0370..=0x03FF => *b"Grek",
+        0x0400..=0x052F => *b"Cyrl",
+        0x0530..=0x058F => *b"Armn",
+        0x0590..=0x05FF | 0xFB1D..=0xFB4F => *b"Hebr",
+        0x0600..=0x06FF | 0x0750..=0x077F | 0x08A0..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF => {
+            *b"Arab"
+        }
+        0x0900..=0x097F => *b"Deva",
+        0x0980..=0x09FF => *b"Beng",
+        0x0B80..=0x0BFF => *b"Taml",
+        0x0E00..=0x0E7F => *b"Thai",
+        0x10A0..=0x10FF => *b"Geor",
+        0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7AF => *b"Hang",
+        0x3040..=0x309F => *b"Hira",
+        0x30A0..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F => *b"Kana",
+        0x2E80..=0x2FDF
+        | 0x3000..=0x303F
+        | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF
+        | 0xF900..=0xFAFF
+        | 0xFF00..=0xFF65
+        | 0x20000..=0x3FFFF => *b"Hani",
+        _ => return None,
+    })
+}
+
+/// Family names in a CSS-style list.
+fn names(list: &str) -> impl Iterator<Item = &str> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && *n != "sans-serif")
+}
+
+/// A font database holding only what `texts` can need: the card's own fonts, the emoji fonts,
+/// the system's fallback fonts for every script in the texts, and [`FALLBACK`]. The files are
+/// found through the system font index (fontconfig, DirectWrite) and memory-mapped, so a
+/// machine with thousands of fonts does not open every one (loading all system fonts took
+/// 12 s here, with 10,007 faces in 14 GB).
+fn font_db(texts: &[&str]) -> usvg::fontdb::Database {
+    let mut coll = fontique::Collection::new(fontique::CollectionOptions {
+        shared: false,
+        system_fonts: true,
+    });
+    let mut families: Vec<fontique::FamilyId> = Vec::new();
+    for name in names(FONTS)
+        .chain(names(EMOJI_FONTS))
+        .chain(FALLBACK.iter().copied())
+    {
+        if let Some(id) = coll.family_id(name) {
+            families.push(id);
+        }
+    }
+    let mut scripts: Vec<[u8; 4]> = texts
+        .iter()
+        .flat_map(|t| t.chars())
+        .filter_map(script_of)
+        .collect();
+    scripts.sort_unstable();
+    scripts.dedup();
+    for sc in scripts {
+        let key = fontique::FallbackKey::from(fontique::Script::from_bytes(sc));
+        families.extend(coll.fallback_families(key).take(2));
+    }
     let mut db = usvg::fontdb::Database::new();
-    db.load_system_fonts();
+    let mut seen: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    for id in families {
+        let Some(fam) = coll.family(id) else { continue };
+        for font in fam.fonts() {
+            match &font.source().kind {
+                fontique::SourceKind::Path(p) => {
+                    if seen.insert(p.to_path_buf()) {
+                        let _ = db.load_font_file(p);
+                    }
+                }
+                fontique::SourceKind::Memory(blob) => db.load_font_data(blob.as_ref().to_vec()),
+            }
+        }
+    }
+    if let Some(first) =
+        names(FONTS).find(|n| db.faces().any(|f| f.families.iter().any(|(m, _)| m == n)))
+    {
+        db.set_sans_serif_family(first);
+    }
+    db
+}
+
+fn options(texts: &[&str]) -> usvg::Options<'static> {
     usvg::Options {
-        fontdb: Arc::new(db),
+        fontdb: Arc::new(font_db(texts)),
+        font_resolver: usvg::FontResolver {
+            select_font: usvg::FontResolver::default_font_selector(),
+            select_fallback: Box::new(fallback),
+        },
         ..usvg::Options::default()
     }
 }
@@ -229,7 +469,7 @@ fn cover_pixmap(px: &SharedPixelBuffer<Rgba8Pixel>) -> Option<tiny_skia::Pixmap>
 /// Draws the card. `cover` is scaled to the cover square; without one the square stays a plain
 /// rounded rectangle. Returns straight RGBA (the card is opaque).
 pub fn render(card: &Card, cover: Option<&SharedPixelBuffer<Rgba8Pixel>>) -> Option<Vec<u8>> {
-    let opt = options();
+    let opt = options(&[&card.title, &card.artist, &card.album]);
     let measure = measurer(&opt);
     let lay = layout(card, &measure);
     let tree = usvg::Tree::from_str(&svg(&lay), &opt).ok()?;
@@ -451,18 +691,16 @@ mod tests {
         assert_eq!(&with[at..at + 3], &[200, 30, 30]);
     }
 
-    /// On demand: `SLATE_CARD_OUT=/tmp/card.png cargo test -p slate --release write_sample -- --ignored`.
+    /// On demand: `SLATE_CARD_DIR=/tmp/cards cargo test -p slate --release write_samples -- --ignored`
+    /// writes one card per hard case (long, CJK, emoji, right-to-left, mixed, no cover).
     #[test]
     #[ignore]
-    fn write_sample() {
-        let Ok(out) = std::env::var("SLATE_CARD_OUT") else {
+    fn write_samples() {
+        let Ok(dir) = std::env::var("SLATE_CARD_DIR") else {
             return;
         };
-        let c = card(
-            "Nights in White Satin (Extended Anniversary Remaster)",
-            "The Moody Blues",
-            "Days of Future Passed",
-        );
+        let dir = std::path::PathBuf::from(dir);
+        let _ = std::fs::create_dir_all(&dir);
         let mut cover = SharedPixelBuffer::<Rgba8Pixel>::new(160, 160);
         for (i, p) in cover.make_mut_slice().iter_mut().enumerate() {
             *p = Rgba8Pixel {
@@ -472,10 +710,21 @@ mod tests {
                 a: 255,
             };
         }
-        let rgba = render(&c, Some(&cover)).expect("card");
-        image::RgbaImage::from_raw(W, H, rgba)
-            .expect("size")
-            .save(out)
-            .expect("save");
+        let cases: [(&str, Card, bool); 7] = [
+            ("long", card("Nights in White Satin (Extended Anniversary Remaster) [Live at the Royal Albert Hall, 1969]", "The Moody Blues & The London Festival Orchestra", "Days of Future Passed (Deluxe Edition)"), true),
+            ("cjk", card("残酷な天使のテーゼ (Director's Edit Version)", "高橋洋子", "新世紀エヴァンゲリオン"), true),
+            ("korean", card("봄날 (Spring Day)", "방탄소년단", "YOU NEVER WALK ALONE"), true),
+            ("emoji", card("🔥 Fire 🔥 👩‍👩‍👧‍👦", "Artist 🎧", "Album ✨"), true),
+            ("rtl-hebrew", card("שיר לשלום", "להקת הנח\"ל", "שירים"), true),
+            ("rtl-arabic", card("أنا لحبيبي وحبيبي إلي يا عصفورة بيضا", "فيروز", "أنا لحبيبي"), true),
+            ("no-cover", card(&clean_line("Mixed English עברית 123 \u{202E}override"), "Somebody", ""), false),
+        ];
+        for (name, c, with_cover) in cases {
+            let rgba = render(&c, with_cover.then_some(&cover)).expect("card");
+            image::RgbaImage::from_raw(W, H, rgba)
+                .expect("size")
+                .save(dir.join(format!("{name}.png")))
+                .expect("save");
+        }
     }
 }

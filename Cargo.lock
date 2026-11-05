@@ -2058,6 +2058,7 @@ checksum = "2660c5e9157bf76d2db1294e4a9feba604ef610819a3b591088d0d8392a3290f"
 dependencies = [
  "fontconfig-parser",
  "log",
+ "memmap2",
  "slotmap",
  "tinyvec",
 ]
@@ -7052,6 +7053,7 @@ dependencies = [
  "base64 0.22.1",
  "blocking",
  "dirs",
+ "fontique",
  "futures-util",
  "global-hotkey",
  "gstreamer",
@@ -7068,6 +7070,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "skrifa",
  "slate-core",
  "slint",
  "slint-build",
