@@ -109,6 +109,32 @@ fn ui_shots() {
         app.set_dialog_kind(kind.into());
         app.set_dialog_open(true);
     }
+    // `lyrics-full`: the full-screen lyrics over a gradient cover (`lyrics-full-plain`: unsynced).
+    if which.starts_with("lyrics-full") {
+        let lines: Vec<crate::bootstrap::LyricLine> = (0..14)
+            .map(|i| crate::bootstrap::LyricLine {
+                text: if i == 3 {
+                    "A much longer line that has to wrap onto a second row when the window is narrow".into()
+                } else {
+                    format!("Sample lyric line number {i}").into()
+                },
+                active: i == 5,
+            })
+            .collect();
+        app.set_lyric_lines(slint::ModelRc::new(slint::VecModel::from(lines)));
+        app.set_lyrics_synced(which == "lyrics-full");
+        app.set_lyric_current(5);
+        app.set_track_title("Sample title".into());
+        app.set_track_artist("Sample artist".into());
+        let mut cover = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(320, 320);
+        for (i, p) in cover.make_mut_slice().iter_mut().enumerate() {
+            *p = slint::Rgba8Pixel { r: (i % 320 * 255 / 320) as u8, g: (i / 320 * 255 / 320) as u8, b: 160, a: 255 };
+        }
+        if let Some(b) = crate::lyrics_full::backdrop(&cover) {
+            app.set_lyrics_backdrop(slint::Image::from_rgba8(b));
+        }
+        app.set_lyrics_full(true);
+    }
     // Settings tabs, or the plain track page.
     let pages: Vec<(String, Option<i32>)> = if which == "settings" {
         (0..9).map(|t| (format!("settings{t}"), Some(t))).collect()
@@ -128,7 +154,7 @@ fn ui_shots() {
                         app.set_view("settings".into());
                         app.global::<SettingsState>().set_tab(*t);
                     }
-                    None if which.starts_with("dialog-") => {}
+                    None if which.starts_with("dialog-") || which.starts_with("lyrics-full") => {}
                     None => app.set_view(which.as_str().into()),
                 }
                 save(

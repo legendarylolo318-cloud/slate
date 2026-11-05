@@ -31,6 +31,7 @@ mod import;
 mod ipc;
 mod keys;
 mod library;
+mod lyrics_full;
 mod mini;
 mod models;
 mod mpd_host;

@@ -194,6 +194,7 @@ impl Backend {
         if let Ok(mut slot) = self.shared.cover_px.lock() {
             *slot = Some(px.clone());
         }
+        self.lyrics_full_cover(&px);
         if !self.shared.tint_enabled.load(Ordering::Relaxed) {
             return;
         }

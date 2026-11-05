@@ -559,6 +559,7 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_queue_select, |b, i, c, s| b.queue_select(i, c, s));
     bind!(on_queue_sel_action, |b, a| b.queue_selection_action(&a));
     bind!(on_lyrics_visible, |b, v| b.lyrics_visible(v));
+    bind!(on_lyrics_full_changed, |b, v| b.lyrics_full_changed(v));
     bind!(on_toggle_page_favorite, |b| b.toggle_page_favorite());
     bind!(on_export_list, |b, f| b.export_list(&f));
     bind!(on_remove_duplicates, |b| b.scan_duplicates());

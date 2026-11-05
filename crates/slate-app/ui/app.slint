@@ -4,6 +4,7 @@ import { PlayerBar } from "player_bar.slint";
 import { Sidebar, TrackPage } from "library.slint";
 import { CardsPage, QueuePanel, LyricsPanel } from "pages.slint";
 import { FullscreenPlayer } from "fullscreen.slint";
+import { LyricsFullscreen } from "lyrics_full.slint";
 import { MiniPlayerWindow } from "mini.slint";
 import { VideoView } from "video.slint";
 import { SettingsPage, SettingsState } from "settings.slint";
@@ -26,7 +27,7 @@ export component AppWindow inherits Window {
     min-width: 360px;
     min-height: 420px;
     background: Theme.background;
-    full-screen: root.fullscreen;
+    full-screen: root.fullscreen || root.lyrics-full;
 
     in property <Screen> screen: Screen.loading;
 
@@ -96,6 +97,11 @@ export component AppWindow inherits Window {
     callback capture-key(string, bool, bool, bool, bool);
     // Playlist picker: -1 = just create, -2 = current track, >=0 = list row.
     in-out property <bool> fullscreen: false;
+    // Full-screen lyrics (F11 by default).
+    in-out property <bool> lyrics-full: false;
+    in property <image> lyrics-backdrop;
+    callback lyrics-full-changed(bool);
+    changed lyrics-full => { root.lyrics-full-changed(root.lyrics-full); }
     in-out property <bool> video-open: false;
     in property <image> video-frame;
     in property <string> video-title;
@@ -240,7 +246,7 @@ export component AppWindow inherits Window {
     callback party-react(int);
     callback lyrics-visible(bool);
     // True while any lyrics view is open; the saved offset is read only then.
-    property <bool> lyrics-shown: (root.panel == "lyrics" && !root.compact) || root.fullscreen;
+    property <bool> lyrics-shown: (root.panel == "lyrics" && !root.compact) || root.fullscreen || root.lyrics-full;
     changed lyrics-shown => { root.lyrics-visible(root.lyrics-shown); }
     in property <int> lyric-current: -1;
     callback queue-play(int);
@@ -305,6 +311,7 @@ export component AppWindow inherits Window {
             if (e.text == Key.Escape && root.shortcuts-open) { root.shortcuts-open = false; return accept; }
             if (e.text == Key.Escape && root.selection-count > 0) { root.select-clear(); return accept; }
             if (e.text == Key.Escape && root.queue-selection > 0 && root.panel == "queue") { root.queue-sel-action("sel-clear"); return accept; }
+            if (e.text == Key.Escape && root.lyrics-full) { root.lyrics-full = false; return accept; }
             if (e.text == Key.Escape && root.fullscreen) { root.fullscreen = false; return accept; }
             if (SettingsState.capturing != "") { return reject; }
             let a = root.resolve-key(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta);
@@ -320,6 +327,7 @@ export component AppWindow inherits Window {
             if (a == "repeat") { root.cycle-repeat(); return accept; }
             if (a == "queue") { root.panel = root.panel == "queue" ? "" : "queue"; return accept; }
             if (a == "lyrics") { root.panel = root.panel == "lyrics" ? "" : "lyrics"; return accept; }
+            if (a == "lyrics-fullscreen") { root.lyrics-full = !root.lyrics-full; return accept; }
             if (a == "lyrics-earlier") { root.lyrics-nudge(-100); return accept; }
             if (a == "lyrics-later") { root.lyrics-nudge(100); return accept; }
             if (a == "select-all" && root.view == "tracks") { root.select-all(); return accept; }
@@ -559,6 +567,7 @@ export component AppWindow inherits Window {
                     offset-ms: root.lyric-offset;
                     seek(i) => { root.lyric-seek(i); }
                     nudge(d) => { root.lyrics-nudge(d); }
+                    expand => { root.lyrics-full = true; }
                     close => { root.panel = ""; }
                 }
             }
@@ -636,6 +645,19 @@ export component AppWindow inherits Window {
                 toggle-queue => { root.panel = root.panel == "queue" ? "" : "queue"; }
                 toggle-lyrics => { root.panel = root.panel == "lyrics" ? "" : "lyrics"; }
             }
+        }
+
+        if root.lyrics-full && root.screen == Screen.main: LyricsFullscreen {
+            title: root.track-title;
+            artist: root.track-artist;
+            backdrop: root.lyrics-backdrop;
+            lines: root.lyric-lines;
+            synced: root.lyrics-synced;
+            current: root.lyric-current;
+            status: root.lyrics-status;
+            scale: root.lyrics-scale;
+            close => { root.lyrics-full = false; }
+            seek(i) => { root.lyric-seek(i); }
         }
 
         if root.fullscreen && root.screen == Screen.main: FullscreenPlayer {

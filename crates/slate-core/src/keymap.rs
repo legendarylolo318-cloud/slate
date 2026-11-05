@@ -50,6 +50,7 @@ pub const ACTIONS: &[Action] = &[
     app("queue", "Queue panel", "Q"),
     app("lyrics", "Lyrics panel", "L"),
     app("fullscreen", "Full-screen player", "F"),
+    app("lyrics-fullscreen", "Full-screen lyrics", "F11"),
     app("search", "Search", "/"),
     app("shortcuts", "Show the shortcut sheet", "?"),
     app("filter", "Filter this page", "Ctrl+F"),

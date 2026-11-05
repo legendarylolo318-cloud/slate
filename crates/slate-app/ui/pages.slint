@@ -297,6 +297,7 @@ export component LyricsPanel inherits Rectangle {
     in property <int> offset-ms;
     callback seek(int);
     callback nudge(int);
+    callback expand();
     callback close();
     background: Theme.surface;
     VerticalLayout {
@@ -304,6 +305,7 @@ export component LyricsPanel inherits Rectangle {
         spacing: 8px;
         HorizontalLayout {
             Text { text: "Lyrics"; font-size: 20px * root.scale; font-weight: 700; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; }
+            IconButton { tip: "Full-screen lyrics"; icon: @image-url("icons/fullscreen.svg"); side: 28px; clicked => { root.expand(); } }
             IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close(); } }
         }
         if root.synced: HorizontalLayout {

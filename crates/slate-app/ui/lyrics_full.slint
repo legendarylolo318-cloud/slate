@@ -1,0 +1,119 @@
+import { Theme } from "theme.slint";
+import { IconButton } from "widgets.slint";
+import { LyricLine } from "types.slint";
+
+/// Full-window lyrics over a blurred, darkened cover. The backdrop is one small image made
+/// once per track and scaled up by the renderer; nothing here animates except the short
+/// scroll that brings a new line into place, so the view redraws only when the line changes.
+export component LyricsFullscreen inherits Rectangle {
+    in property <string> title;
+    in property <string> artist;
+    in property <image> backdrop;
+    in property <[LyricLine]> lines;
+    in property <bool> synced;
+    in property <int> current: -1;
+    in property <string> status;
+    // Settings → General: lyrics size.
+    in property <float> scale: 1.0;
+    callback close();
+    callback seek(int);
+    property <length> size: clamp(root.height / 18, 26px, 54px) * root.scale;
+    // Middle of the current line inside the column, kept by the rows as they lay out.
+    property <length> target: 0px;
+    background: #101014;
+    clip: true;
+
+    if root.backdrop.width > 0: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.backdrop;
+        image-fit: ImageFit.cover;
+    }
+    Rectangle { background: #000000a0; }
+
+    if root.lines.length == 0: Text {
+        text: root.status != "" ? root.status : "No lyrics";
+        color: #ffffffb0;
+        font-size: root.size;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    // Plain (unsynced) lyrics: a normal scrolling page.
+    if root.lines.length > 0 && !root.synced: Flickable {
+        x: 0px;
+        y: 72px;
+        width: parent.width;
+        height: parent.height - 72px - 24px;
+        content-width: self.width;
+        content-height: plain.preferred-height + 48px;
+        plain := VerticalLayout {
+            y: 0px;
+            padding-left: max(24px, parent.width * 0.1);
+            padding-right: max(24px, parent.width * 0.1);
+            spacing: root.size * 0.35;
+            for l in root.lines: Text {
+                text: l.text;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+                color: #ffffff;
+                font-size: root.size * 0.8;
+                font-weight: 500;
+            }
+        }
+    }
+    // Synced lyrics: the current line sits in the middle; a change of line slides the column.
+    if root.lines.length > 0 && root.synced: Rectangle {
+        x: 0px;
+        y: 72px;
+        width: parent.width;
+        height: parent.height - 72px - 24px;
+        clip: true;
+        Rectangle {
+            width: parent.width;
+            height: col.preferred-height;
+            y: parent.height / 2 - root.target;
+            animate y { duration: 280ms; easing: ease-in-out; }
+            col := VerticalLayout {
+                padding-left: max(24px, parent.width * 0.1);
+                padding-right: max(24px, parent.width * 0.1);
+                spacing: root.size * 0.5;
+                for l[i] in root.lines: Rectangle {
+                    property <bool> act: l.active;
+                    height: line.preferred-height;
+                    init => { if (l.active) { root.target = self.y + self.height / 2; } }
+                    changed act => { if (self.act) { root.target = self.y + self.height / 2; } }
+                    changed y => { if (self.act) { root.target = self.y + self.height / 2; } }
+                    changed height => { if (self.act) { root.target = self.y + self.height / 2; } }
+                    TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.seek(i); } }
+                    line := Text {
+                        width: parent.width;
+                        text: l.text;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                        color: l.active ? #ffffff : #ffffff70;
+                        font-size: root.size;
+                        font-weight: l.active ? 800 : 600;
+                    }
+                }
+            }
+        }
+    }
+
+    Text {
+        x: 24px;
+        y: 20px;
+        width: parent.width - 96px;
+        text: root.title == "" ? "" : root.title + (root.artist == "" ? "" : " — " + root.artist);
+        color: #ffffffa0;
+        font-size: 14px;
+        overflow: elide;
+    }
+    Rectangle {
+        x: parent.width - 52px;
+        y: 12px;
+        width: 40px;
+        height: 40px;
+        IconButton { icon: @image-url("icons/close.svg"); clicked => { root.close(); } }
+    }
+}
