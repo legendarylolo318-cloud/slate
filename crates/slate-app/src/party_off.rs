@@ -55,7 +55,7 @@ impl Backend {
 
     pub fn party_pref_bool(&self, _key: &str, _on: bool) {}
 
-    pub(crate) fn party_track_changed(&self, _track: &slate_core::queue::Track) {}
+    pub(crate) fn party_track_changed(&self, _track: &slate_core::queue::Track, _heard: f32) {}
 
     pub fn party_offer_save_set(&self) {}
 

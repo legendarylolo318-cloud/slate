@@ -630,7 +630,7 @@ impl Backend {
             );
         }
         self.shared.current_id.store(track.id, Ordering::Relaxed);
-        self.party_track_changed(track);
+        self.party_track_changed(track, last_position);
         self.refresh_favorite_ui();
         self.load_lyrics(track.id);
         let title = track.title().to_string();
