@@ -1071,12 +1071,14 @@ export component AppWindow inherits Window {
                         dedupe-text := Text { width: parent.width; text: root.dialog-text; color: Theme.text-muted; wrap: word-wrap; }
                     }
                     if root.dialog-kind == "rename": TextField {
+                        autofocus: true;
                         text <=> root.dialog-text;
                         placeholder: "New name";
                         field-width: 340px;
                         accepted(t) => { root.dialog-accepted("rename", root.dialog-target, t); root.dialog-open = false; }
                     }
                     if root.dialog-kind == "tags": TextField {
+                        autofocus: true;
                         text <=> root.dialog-text;
                         placeholder: "Add a tag";
                         field-width: 340px;
@@ -1112,6 +1114,7 @@ export component AppWindow inherits Window {
                     // The list is only as tall as its rows: the rest goes below it, not above the field.
                     if root.dialog-kind == "tags": Rectangle { vertical-stretch: 1; }
                     if root.dialog-kind == "party-set": TextField {
+                        autofocus: true;
                         text <=> root.dialog-text;
                         placeholder: "Playlist name";
                         field-width: 340px;
@@ -1120,7 +1123,7 @@ export component AppWindow inherits Window {
                     if root.dialog-kind == "snapshots": HorizontalLayout {
                         spacing: 8px;
                         vertical-stretch: 0;
-                        TextField { text <=> root.dialog-text; placeholder: "Name (optional)"; field-width: max(96px, dlg.width - 32px - 216px); accepted(t) => { root.snapshot-action("save", "", t); } }
+                        TextField { autofocus: true; text <=> root.dialog-text; placeholder: "Name (optional)"; field-width: max(96px, dlg.width - 32px - 216px); accepted(t) => { root.snapshot-action("save", "", t); } }
                         Button { label: "Save queue"; primary: true; clicked => { root.snapshot-action("save", "", root.dialog-text); } }
                         Button { label: "Rename"; enabled: root.dialog-target != "" && root.dialog-text != ""; clicked => { root.snapshot-action("rename", root.dialog-target, root.dialog-text); } }
                     }

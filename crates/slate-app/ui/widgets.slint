@@ -186,6 +186,10 @@ export component TextField inherits Rectangle {
     /// Bump to move keyboard focus into the field.
     in property <int> focus-request: 0;
     changed focus-request => { ti.focus(); }
+    /// Take keyboard focus when created (fields in dialogs, which appear when the dialog opens:
+    /// otherwise typing went to the field behind the dialog, such as the search box).
+    in property <bool> autofocus: false;
+    init => { if (root.autofocus) { ti.focus(); } }
     callback edited(string);
     callback accepted(string);
     width: root.field-width;
