@@ -5,6 +5,8 @@ import { SettingsState } from "settings.slint";
 export component PlayerBar inherits Rectangle {
     callback go-album();
     callback go-artist();
+    // Right-click on the track info: "copy-link", "share-card".
+    callback now-action(string);
     in property <string> title;
     in property <string> artist;
     in property <bool> tint-on;
@@ -173,6 +175,17 @@ export component PlayerBar inherits Rectangle {
             Text { text: root.position-text; color: Theme.text-muted; font-size: 11.5px * root.scale; vertical-alignment: center; }
             Bar { horizontal-stretch: 1; height: 18px * root.scale; thickness: 4px * root.scale; fraction: root.progress; picked(f) => { root.seek(f); } }
             Text { text: root.duration-text; color: Theme.text-muted; font-size: 11.5px * root.scale; vertical-alignment: center; }
+        }
+    }
+    ContextMenuArea {
+        x: 0px;
+        y: 0px;
+        width: root.compact ? root.width : root.side-w;
+        height: root.height;
+        enabled: root.has-track && !root.video-mini;
+        Menu {
+            MenuItem { title: "Copy link"; activated => { root.now-action("copy-link"); } }
+            MenuItem { title: "Copy share card"; activated => { root.now-action("share-card"); } }
         }
     }
 }

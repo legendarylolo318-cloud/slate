@@ -49,11 +49,13 @@ mod remote;
 mod selection_ui;
 mod selftest;
 mod settings;
+mod share_card;
 mod settings_search;
 mod signal;
 mod smart;
 mod sort;
 mod suggest;
+mod textutil;
 mod themes;
 #[cfg(test)]
 mod ui_shots;

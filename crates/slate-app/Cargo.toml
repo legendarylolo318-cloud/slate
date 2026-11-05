@@ -40,7 +40,11 @@ open = "5"
 base64 = "0.22"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 interprocess = "2"
-arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+arboard = { version = "3", default-features = false, features = ["wayland-data-control", "image-data"] }
+# The share card (share_card.rs): SVG text shaping and rasterising. Already built for Slint's
+# own SVG support; only the system-fonts switch is new.
+resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts"] }
+dirs = "5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 slint = { version = "1.18", default-features = false, features = ["renderer-skia-vulkan"] }
@@ -48,7 +52,6 @@ slint = { version = "1.18", default-features = false, features = ["renderer-skia
 ash = "0.38"
 mpris-server = "0.9"
 ksni = "0.3"
-dirs = "5"
 # XDG GlobalShortcuts portal (platform/global_keys.rs); already in the tree via rfd.
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
 # Not used directly: pins zbus's thread pool. From 1.7.0 its idle thread never exits and wakes

@@ -320,6 +320,7 @@ impl Backend {
                 "album" => this.go_album(&track),
                 "artist" => this.go_artist(&track),
                 "copy-link" => this.copy_link(&track).await,
+                "share-card" => this.copy_share_card(&track).await,
                 "credits" => this.show_credits(&track),
                 "suggest" => this.party_suggest(track.id),
                 "versions" => this.show_track_versions(track, index, None),
@@ -361,6 +362,7 @@ impl Backend {
             "album" => self.go_album(track),
             "artist" => self.go_artist(track),
             "credits" => self.show_credits(track),
+            "copy-link" | "share-card" => self.track_action(track.clone(), None, kind),
             _ => {}
         }
     }
@@ -398,7 +400,7 @@ impl Backend {
     }
 
     async fn copy_link(&self, track: &Track) {
-        let url = format!("https://tidal.com/track/{}", track.id);
+        let url = crate::share_card::track_link(track.id);
         let result = tokio::task::spawn_blocking(move || {
             arboard::Clipboard::new().and_then(|mut c| c.set_text(url))
         })

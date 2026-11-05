@@ -380,7 +380,8 @@ component Row inherits Rectangle {
             if !root.multi: MenuItem { title: "Other versions…"; activated => { root.action("versions"); } }
             if !root.multi: MenuItem { title: "Credits"; activated => { root.action("credits"); } }
             if !root.multi && PartyState.can-suggest: MenuItem { title: "Suggest to party"; activated => { root.action("suggest"); } }
-            if !root.multi: MenuItem { title: "Copy TIDAL link"; activated => { root.action("copy-link"); } }
+            if !root.multi: MenuItem { title: "Copy link"; activated => { root.action("copy-link"); } }
+            if !root.multi: MenuItem { title: "Copy share card"; activated => { root.action("share-card"); } }
         }
     }
     HorizontalLayout {

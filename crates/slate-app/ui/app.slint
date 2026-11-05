@@ -631,6 +631,7 @@ export component AppWindow inherits Window {
                 open-miniplayer => { root.open-miniplayer(); }
                 go-album => { root.go-current("album"); }
                 go-artist => { root.go-current("artist"); }
+                now-action(a) => { root.go-current(a); }
                 toggle-fullscreen => { root.fullscreen = true; }
                 toggle-queue => { root.panel = root.panel == "queue" ? "" : "queue"; }
                 toggle-lyrics => { root.panel = root.panel == "lyrics" ? "" : "lyrics"; }
