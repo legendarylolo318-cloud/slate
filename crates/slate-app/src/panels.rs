@@ -432,10 +432,7 @@ impl Backend {
 
     async fn copy_link(&self, track: &Track) {
         let url = crate::share_card::track_link(track.id);
-        let result = tokio::task::spawn_blocking(move || {
-            arboard::Clipboard::new().and_then(|mut c| c.set_text(url))
-        })
-        .await;
+        let result = tokio::task::spawn_blocking(move || crate::clipboard::set_text(url)).await;
         match result {
             Ok(Ok(())) => self.notify("Link copied"),
             _ => self.ui(|w| w.set_error("Could not access the clipboard.".into())),

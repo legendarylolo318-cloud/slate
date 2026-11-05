@@ -173,10 +173,7 @@ impl Backend {
     fn copy_text(&self, text: String, done: &'static str) {
         let this = self.clone();
         self.rt.spawn(async move {
-            let r = tokio::task::spawn_blocking(move || {
-                arboard::Clipboard::new().and_then(|mut c| c.set_text(text))
-            })
-            .await;
+            let r = tokio::task::spawn_blocking(move || crate::clipboard::set_text(text)).await;
             match r {
                 Ok(Ok(())) => this.settings_status(done),
                 _ => this.settings_status("Could not access the clipboard."),

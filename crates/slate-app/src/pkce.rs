@@ -93,10 +93,7 @@ impl Backend {
         let Some(url) = self.pkce_url().await else {
             return self.pkce_status("Start the browser sign-in first.");
         };
-        let result = tokio::task::spawn_blocking(move || {
-            arboard::Clipboard::new().and_then(|mut c| c.set_text(url))
-        })
-        .await;
+        let result = tokio::task::spawn_blocking(move || crate::clipboard::set_text(url)).await;
         match result {
             Ok(Ok(())) => self.pkce_status("Link copied. Paste it into your browser and sign in."),
             _ => self.pkce_status("Could not access the clipboard."),

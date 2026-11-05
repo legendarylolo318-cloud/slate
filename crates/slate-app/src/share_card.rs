@@ -528,13 +528,7 @@ pub enum Delivered {
 /// Puts the card on the clipboard; when the clipboard cannot hold an image, saves a PNG in the
 /// Pictures folder instead.
 fn deliver(id: u64, rgba: Vec<u8>) -> Delivered {
-    let set = arboard::Clipboard::new().and_then(|mut c| {
-        c.set_image(arboard::ImageData {
-            width: W as usize,
-            height: H as usize,
-            bytes: std::borrow::Cow::Borrowed(&rgba),
-        })
-    });
+    let set = crate::clipboard::set_image(W as usize, H as usize, &rgba);
     if set.is_ok() {
         return Delivered::Clipboard;
     }

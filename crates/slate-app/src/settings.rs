@@ -765,10 +765,7 @@ impl Backend {
         let Some(url) = url.filter(|u| !u.is_empty()) else {
             return self.settings_status(format!("{what} is not available; is the server on?"));
         };
-        let copied = tokio::task::spawn_blocking(move || {
-            arboard::Clipboard::new().and_then(|mut c| c.set_text(url))
-        })
-        .await;
+        let copied = tokio::task::spawn_blocking(move || crate::clipboard::set_text(url)).await;
         match copied {
             Ok(Ok(())) => self.settings_status(format!("{what} copied.")),
             _ => self.settings_status("Could not access the clipboard."),
