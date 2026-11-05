@@ -910,7 +910,7 @@ export component SettingsPage inherits Rectangle {
                     }
                     if SettingsState.party-role == "" && SettingsState.party-set-count > 0: Row {
                         label: "Last party's set";
-                        hint: SettingsState.party-set-count + " tracks played. Kept until the next party starts.";
+                        hint: SettingsState.party-set-count + (SettingsState.party-set-count == 1 ? " track" : " tracks") + " played. Kept until the next party starts.";
                         Button { label: "Save set as playlist"; clicked => { SettingsState.action("party-save-set"); } }
                     }
                     if SettingsState.party-status != "": Text { text: SettingsState.party-status; color: Theme.text-muted; wrap: word-wrap; font-size: 12px; }

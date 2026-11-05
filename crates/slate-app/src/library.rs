@@ -699,7 +699,7 @@ impl Backend {
                 Header {
                     label: "TAG",
                     title: name,
-                    subtitle: format!("{count} tracks"),
+                    subtitle: format!("{count} {}", if count == 1 { "track" } else { "tracks" }),
                     cover: None,
                     loved: false,
                     badges: Default::default(),
