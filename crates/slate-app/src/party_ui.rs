@@ -14,9 +14,7 @@ use slate_core::party::requests::{
     self, Handoff, Placement, Policy, RequestMode, RequestTrack, Submitted, HANDOFF_GRACE,
 };
 use slate_core::queue::Track;
-use slint::{
-    ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
-};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use tokio::sync::mpsc;
 
 use crate::backend::Backend;
@@ -57,8 +55,6 @@ static PLAY_GEN: AtomicU64 = AtomicU64::new(0);
 static PREFETCH_GEN: AtomicU64 = AtomicU64::new(0);
 /// Guest: tracks already reported as unavailable to this host (each is sent once).
 static REPORTED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
-/// The QR code of the current invite link; it changes only after a kick.
-static QR: Mutex<Option<(String, SharedPixelBuffer<Rgba8Pixel>)>> = Mutex::new(None);
 /// Most request owners remembered (oldest are forgotten first).
 const MAX_OWNERS: usize = 500;
 
@@ -152,20 +148,6 @@ impl Backend {
     }
 
     fn party_show(&self, role: &'static str, link: String, guests: Vec<(String, bool)>) {
-        let qr = if link.is_empty() {
-            *lock(&QR) = None;
-            None
-        } else {
-            let mut cache = lock(&QR);
-            match cache.as_ref() {
-                Some((l, img)) if *l == link => Some(img.clone()),
-                _ => {
-                    let img = crate::images::qr(&link);
-                    *cache = img.clone().map(|i| (link.clone(), i));
-                    img
-                }
-            }
-        };
         let muted = with_host(Host::chat_muted_names).unwrap_or_default();
         if role.is_empty() {
             lock(&CHAT).clear();
@@ -176,7 +158,6 @@ impl Backend {
             let s = w.global::<SettingsState>();
             s.set_party_role(role.into());
             s.set_party_link(link.into());
-            s.set_party_qr(qr.map(Image::from_rgba8).unwrap_or_default());
             s.set_party_cohost(cohost);
             let rows: Vec<PartyGuest> = guests
                 .into_iter()
@@ -264,7 +245,7 @@ impl Backend {
                     *lock(&ROLE) = Some(Role::Host(host));
                     HOSTING.store(true, Ordering::Relaxed);
                     this.party_show("host", link, Vec::new());
-                    this.party_status("Party started. Share the link or QR code.");
+                    this.party_status("Party started. Share the link.");
                     this.party_mirror(true, "host", 0);
                     this.host_sync_now();
                     this.party_publish_queue_soon();

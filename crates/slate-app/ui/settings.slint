@@ -132,7 +132,6 @@ export global SettingsState {
     // Listening party
     in-out property <string> party-role;
     in-out property <string> party-link;
-    in-out property <image> party-qr;
     in-out property <[PartyGuest]> party-guests;
     in-out property <string> party-chat-draft;
     in-out property <[PartyRequest]> party-requests;
@@ -978,7 +977,7 @@ export component SettingsPage inherits Rectangle {
                         hint: "Valid until you end the party.";
                         HorizontalLayout {
                             spacing: 12px;
-                            Image { source: SettingsState.party-qr; width: 120px; height: 120px; image-rendering: pixelated; }
+                            Text { text: SettingsState.party-link; color: Theme.text-muted; width: 220px; overflow: elide; vertical-alignment: center; }
                             Button { label: "Copy link"; clicked => { SettingsState.action("party-copy"); } }
                         }
                     }

@@ -69,7 +69,7 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 
 ## Listening party
 
-Settings → Party → Host gives you a `slate://party/…` link and a QR code. Friends open the
+Settings → Party → Host gives you a `slate://party/…` link to copy. Friends open the
 link (or paste it under Join) and their Slate follows yours: track, play / pause, seek and
 the next few tracks. Guests can suggest tracks for you to approve.
 
