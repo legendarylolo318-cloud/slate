@@ -173,6 +173,7 @@ Last updated 2026-11-05. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | RUSTSEC-2024-0436 | paste | Unmaintained proc-macro, via gstreamer-rs |
 | RUSTSEC-2026-0192 | ttf-parser | Unmaintained, via winit's Wayland decorations |
 | RUSTSEC-2026-0370/0371/0372 | zvariant, zbus_names, zvariant_derive | Unmaintained, via accesskit/zbus |
+| RUSTSEC-2026-0441 | pin-utils | Unmaintained (published 2026-11), no known vulnerability; only via `spin_on` 0.1.1, which Slint 1.18 uses. Found when the 1.6.0 push ran `cargo deny` |
 | RUSTSEC-2025-0141 | bincode | Unmaintained; in the lockfile, not in the built graph |
 
 ## Release profile (0.3.0)

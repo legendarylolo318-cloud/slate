@@ -7,4 +7,5 @@ ignore = [
     "RUSTSEC-2026-0370", # zvariant, unmaintained
     "RUSTSEC-2026-0371", # zbus_names, unmaintained
     "RUSTSEC-2026-0372", # zvariant_derive, unmaintained
+    "RUSTSEC-2026-0441", # pin-utils, unmaintained
 ]

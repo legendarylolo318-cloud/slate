@@ -13,6 +13,7 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained, via accesskit/zbus" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained, via accesskit/zbus" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained, via accesskit/zbus" },
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils: unmaintained, via spin_on (Slint)" },
 ]
 
 [licenses]
