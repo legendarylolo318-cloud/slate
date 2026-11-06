@@ -1090,14 +1090,15 @@ impl Controller {
         }
     }
 
-    /// Steps the user's last queue edit back (`redo` false) or forward again. False when there
-    /// is nothing to do. What plays now is left alone; the caller refreshes the views.
-    pub async fn undo_queue(&self, redo: bool) -> bool {
+    /// Steps the user's last queue edit back (`redo` false) or forward again. `None` when there
+    /// is nothing to do, else the shuffle flag afterwards (a step can switch it). What plays now
+    /// is left alone; the caller refreshes the views.
+    pub async fn undo_queue(&self, redo: bool) -> Option<bool> {
         let mut q = self.lock_queue().await;
         let Ok(mut u) = self.undo.lock() else {
-            return false;
+            return None;
         };
-        u.step(&mut q, redo)
+        u.step(&mut q, redo).then_some(q.shuffle)
     }
 
     /// Sign-out: the next account must not undo into this one's queue.

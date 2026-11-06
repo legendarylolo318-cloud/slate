@@ -66,13 +66,21 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(ctl) = this.controller() else { return };
-            if !ctl.undo_queue(redo).await {
+            let Some(shuffle) = ctl.undo_queue(redo).await else {
                 this.notify(if redo {
                     "Nothing to redo"
                 } else {
                     "Nothing to undo"
                 });
                 return;
+            };
+            // Undoing "shuffle on" turns it off: the button, MPRIS and MPD must say so too.
+            if this.shared.shuffle.swap(shuffle, Ordering::Relaxed) != shuffle {
+                this.mpd_changed();
+                this.ui(move |w| w.set_shuffle(shuffle));
+                if let Some(state) = this.state() {
+                    let _ = slate_core::commands::playback::update_mpris_shuffle(&state, shuffle);
+                }
             }
             this.refresh_queue_info().await;
             this.save().await;
