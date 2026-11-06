@@ -134,6 +134,9 @@ export component AppWindow inherits Window {
     callback open-miniplayer();
     // Generic dialog: kind = rename | delete | move; target = playlist uuid or "folder:ID".
     in-out property <bool> dialog-open: false;
+    // A dialog's field takes focus (autofocus) and disappears with the dialog: give the focus back
+    // to the shortcut scope, or no shortcut works until something is clicked.
+    changed dialog-open => { if (!root.dialog-open) { fs.focus(); } }
     in-out property <string> dialog-kind;
     in-out property <string> dialog-target;
     in-out property <string> dialog-text;
