@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [1.6.1] - 2026-11-05
+
+One change on top of 1.6.0; nothing else in the app or the audio path changed.
 
 ### Added
 - Start at half volume (Settings → General, **on by default**): every launch starts at 50 % volume
@@ -10,6 +12,11 @@
 
 ### Notes
 - Settings key `start_half_volume` in `ui.json`; a `ui.json` written before it existed counts as on.
+
+### Not tested before release
+- Windows: built and self-tested by the release workflow, not used on a Windows desktop.
+- A volume set through MPRIS (`playerctl volume`) was not kept across a restart in one test, in 1.6.0
+  as well; not investigated (the slider and keys are the normal path).
 
 ## [1.6.0] - 2026-11-05
 
