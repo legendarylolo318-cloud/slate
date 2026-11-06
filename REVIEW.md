@@ -7,7 +7,7 @@ Last updated 2026-11-05. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 |---|---|---|
 | `cargo fmt --all --check` | pass | pass (CI) |
 | `cargo clippy --workspace --all-targets -- -D warnings` | pass | pass (CI) |
-| `cargo test --workspace` | 1.4.0: 898 pass (165 app, 665 core unit, the rest integration), 0 fail, with GStreamer's soup/curl plugins installed. 1.3.0: 588 pass | pass (CI), plus Windows-only tests (keyring persistence, pipe ACL, `wasapi2sink`); 3 `curlhttpsrc` tests skipped, no curl plugin in GStreamer's Windows packages |
+| `cargo test --workspace` | 1.6.0 (after the review): 1,037 pass (195 app, 756 core unit, the rest integration), 0 fail. 1.4.0: 898 pass (165 app, 665 core unit, the rest integration), 0 fail, with GStreamer's soup/curl plugins installed. 1.3.0: 588 pass | pass (CI), plus Windows-only tests (keyring persistence, pipe ACL, `wasapi2sink`); 3 `curlhttpsrc` tests skipped, no curl plugin in GStreamer's Windows packages |
 | `cargo deny check` (advisories, bans, licenses, sources) | pass | n/a |
 | `cargo audit` | pass, with the exceptions below | n/a |
 | Release dry run (`workflow_dispatch`) | AppImage built and self-tested (host GStreamer/GIO/libsoup hidden; Fedora CA layout) | portable zip + installer built; self-test with a clean PATH; GUI launch; install/run/uninstall |

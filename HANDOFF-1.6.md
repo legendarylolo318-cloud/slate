@@ -26,7 +26,31 @@ commits used the existing "Slate dev" author through environment variables.
 ## Known issues / notes
 - `cargo check --no-default-features` (no `party` feature) already failed on 1.5.0: `party_off.rs` lacks
   `party_chat_send` / `party_chat_mute`. Not fixed.
-- The share_card tests scan system fonts and take about 15-40 s in debug.
+- The share_card tests load only the fonts they need (about 1 s; they scanned every system font before the review).
 - Edits made within 0.6 s of each other are one undo step (so a multi-select "add to queue" is one step).
-- Tags are written 0.7 s after the last edit; quitting inside that window loses the last edit.
-- Not pushed, no tag, no PR.
+- Tags are written 0.7 s after the last edit, and at quit (fixed in review, #127).
+- Not pushed, no tag, no PR (still true after the review until the release step).
+
+## 1.6 review (2026-11-05)
+Findings and fixes: REVIEW.md #121–138; measured numbers and what was not tested: CHANGELOG 1.6.0.
+Everything listed above as "NOT tested in the running app" was clicked through on a signed-in profile
+copy except saving the party set (it would create a playlist on the real account) and anything with a
+second party member.
+
+- Queue undo (`queue_undo.rs`): the stack keeps the queue as the last edit left it ("settled") and,
+  before every edit/undo/redo, replays what changed meanwhile (played, autoplay, party requests) onto
+  every stored state; an epoch change that is not an edit clears it. Captures share `Arc<Track>`s with
+  the settled state — never capture with `None`, that copied the whole queue (85 MB per undo).
+- Share card: never call `fontdb::Database::load_system_fonts` (12 s and every font file on a machine
+  with many fonts); `font_db` asks fontique for the few families needed. Text is split into per-script
+  and emoji `<tspan>`s because usvg drops fallback glyphs when glyph counts differ.
+- Clipboard: always go through `clipboard.rs` (one kept handle); dropping an `arboard::Clipboard`
+  loses the copy on X11.
+- Dialog text fields use `autofocus: true`; closing a dialog refocuses `fs` (the shortcut scope).
+- Driving the UI (as in 1.5): headless `kwin_wayland --virtual` + rootful `Xwayland :88`, keep the
+  runtime-dir path short (Wayland socket paths are limited to 108 bytes), python-xlib XTEST, and set the
+  input focus on the Slate window explicitly (no window manager, so winit drops keys otherwise).
+  `SLINT_BACKEND=winit-software` for screenshots (Vulkan frames on the nested X server can be stale).
+  Profile copies for measurements: clear every setting but the sign-in (`Settings { auth_tokens,
+  client_id, client_secret, auth_method, ..Default }`) and delete each copy after its run (the 1.6
+  review filled /tmp once).

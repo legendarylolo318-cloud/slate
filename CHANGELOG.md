@@ -3,59 +3,181 @@
 ## [1.6.0] - 2026-11-05
 
 Resource rule for the whole release: with default settings nothing new is allocated, spawned, polled or
-redrawn. Every feature below is off or idle until it is used: the party set is recorded only while hosting,
+redrawn. Every feature below is off or idle until it is used: the party set is kept only while hosting,
 the share card and the lyrics backdrop exist only while they are made, `tags.json` is read on first use,
 and the undo stack holds shared track handles only. Audio path, buffers, gapless and bit-perfect/exclusive
 behaviour are unchanged.
 
 ### Added
-- Save party set: while hosting, the ids of the tracks that played are kept in memory (at most 500, no
-  repeats, videos and tracks hidden by the content filter skipped, nothing for guests). "End party" offers
-  "Save set as playlist" (default name "Party – <date>"), and the Party tab offers it until the next party
-  starts. It makes an unlisted TIDAL playlist through the existing playlist code.
+- Save party set: while hosting, the tracks that played are kept in memory (a track counts once it has
+  played 30 s or half its length, so tracks skipped through do not; the track already playing when the
+  party starts counts too; at most 500, no repeats, no videos or tracks hidden by the content filter,
+  nothing for guests). "End party" offers "Save set as playlist" (default name "Party – <date>"), and the
+  Party tab offers it until the next party starts or you sign out. It makes an unlisted TIDAL playlist
+  through the existing playlist code.
 - Share card: right-click a track, a queue row or the now-playing area → "Copy share card". A 600×300 PNG
-  (cached cover, title, artist, album, `https://tidal.com/browse/track/<id>`) is drawn once, copied as an
-  image and then every buffer is dropped. The cover is the cached thumbnail only, nothing is fetched. Without
-  image clipboard support the PNG is saved in the Pictures folder and the notice says where. Long titles
-  shrink and end in "…"; right-to-left titles are right-aligned.
-- Full-screen lyrics: a button on the lyrics panel and a shortcut (default F11, rebindable). Big centred lyrics,
-  current line highlighted, over the cover blurred and darkened once per track from a thumbnail of at most
-  128 px on a worker thread. The only redraw trigger is a line change (a 280 ms slide). Esc leaves; a
-  "No lyrics" state; follows the lyrics size setting; click a line to seek.
-- Personal tags: right-click track(s) → "Tags…" (works on a multi-selection) adds or removes free-text tags with
-  autocomplete from your existing ones. A "Tags" sidebar entry lists them with counts; a tag opens as a track
-  page (Play, Shuffle, queue actions, Ctrl+F filter) that needs no API call. Tags can be renamed (renaming to
-  an existing tag merges them) or deleted from the sidebar.
+  (cached cover, title, artist, album, `https://tidal.com/browse/track/<id>`) is drawn on a worker thread
+  in about a quarter of a second and copied as an image; then every buffer is dropped. The cover is the
+  cached thumbnail only, nothing is fetched. Only the fonts the card needs are loaded, found through the
+  system font index. Emoji are drawn in colour; Japanese, Chinese, Korean and Hebrew use the system's
+  font for that script; right-to-left titles are right-aligned; long titles shrink and end in "…".
+  Without image clipboard support the PNG is saved in the Pictures folder and the notice says where.
+- Full-screen lyrics: a button on the lyrics panel and a shortcut (default F11, rebindable; also works
+  from the full-screen player, Esc goes back). Big centred lyrics, current line highlighted, over the cover
+  blurred and darkened once per track from a thumbnail of at most 128 px on a worker thread. The only
+  redraw trigger is a line change (a 280 ms slide). "No lyrics" state; follows the lyrics size setting;
+  click a line to seek.
+- Personal tags: right-click track(s) → "Tags…" (works on a multi-selection) adds or removes free-text tags
+  with autocomplete from your existing ones. A "Tags" sidebar entry lists them with counts; a tag opens as
+  a track page (Play, Shuffle, queue actions, Ctrl+F filter) that needs no API call. Tags can be renamed
+  (renaming to an existing tag merges them) or deleted from the sidebar.
 - Queue undo / redo: Ctrl+Z and Ctrl+Shift+Z (rebindable) and ↶ ↷ buttons in the queue panel step through
   your edits: remove, clear, move, shuffle on/off, add, play next, load snapshot, DJ this playlist. The last
-  20 states are kept as shared track handles; a new edit clears redo; edits within 0.6 s count as one step.
+  20 states are kept; a new edit clears redo; edits within 0.6 s count as one step. Undo never interrupts
+  playback and never brings back a track that has already played; tracks that arrived meanwhile (autoplay,
+  party requests, DJ blocks) stay. Playing a new album or playlist, or autoplay starting a radio, starts a
+  new history.
 
 ### Changed
 - "Copy TIDAL link" is now "Copy link" and copies `https://tidal.com/browse/track/<id>`.
 - The sidebar has a Tags entry.
 
 ### Removed
-- The party QR code. The `slate://party/…` link is shown as text with its Copy button. The `qrcode` crate
-  stays: the device-code sign-in still draws its QR code with it.
+- The party QR code. The `slate://party/…` link is shown as text with its Copy link button. The `qrcode`
+  crate stays: the device-code sign-in still draws its QR code with it.
 
 ### Fixed
-- Nothing outside the new features.
+- Older bugs found in the 1.6 review: on X11 without a clipboard manager every copy (Copy link, party,
+  MCP and overlay links, the sign-in link) was gone before it could be pasted (since 1.0); the text field
+  of a dialog (rename, queue snapshots) never took the keyboard focus, so typing went to the field behind
+  it.
+
+### Found in review before release
+Each was fixed in its own commit (#125–127 and #131–132 share one, being one code path); details in
+REVIEW.md #121–138.
+- The handed-over tree failed `cargo fmt --check` and `clippy -D warnings`: CI and the release workflow
+  would have refused it.
+- Queue undo: each Ctrl+Z kept a full copy of the queue: 85 MB per undo of a 9,408-track queue, 1.7 GB
+  after 20.
+- Queue undo: undoing after tracks had played put them back (and the playing one), and dropped autoplay
+  tracks and guests' requests that had arrived since; undoing a shuffle toggle left the shuffle button
+  (and MPRIS, MPD) saying "on".
+- Sign-out kept the undo history and the party set, so the next account could undo into the previous
+  one's queue or save its party.
+- Tags: an unreadable `tags.json` was taken as empty and the next edit wrote over it, losing every tag.
+  It is now kept as `tags.json.damaged-<time>` and you are told. Writes are ordered (two could
+  interleave), owner-only like the other state files, and a quit within 0.7 s of an edit no longer
+  loses it.
+- Share card: one card took 12–29 s here (every system font was loaded, 10,007 faces, and font files were
+  re-read for every measurement); now about 0.25 s. Emoji drew as boxes, and Hebrew, Korean and mixed
+  titles came out in a monospaced or serif font.
+- Full-screen lyrics: F11 from the full-screen player opened them underneath it; a track without a cover
+  kept the previous track's backdrop.
+- Party set: every skipped track was saved; the track playing when the party started was not.
+- Tags dialog: a big gap above the field; typing went to the search box behind it, and after closing
+  it (or any dialog) no shortcut worked until something was clicked.
+- "1 tracks" on a tag page and under the party set.
 
 ### Notes
-- New file: `tags.json` (next to `ui.json`): `{"tracks": {"<id>": {title, artist, artist_id, album, album_id,
-  cover, duration, tags: [...]}}}`. Written through a temporary file, 0.7 s after the last edit, on a
-  blocking thread. Tags are one line of at most 40 characters; control and bidirectional-override characters
-  are stripped (as in party chat); "Jazz" and "jazz" are one tag.
+- New file: `tags.json` (next to `ui.json`, owner-only): `{"tracks": {"<id>": {title, artist, artist_id,
+  album, album_id, cover, duration, tags: [...]}}}`. Written through a temporary file, 0.7 s after the last
+  edit (and at quit), on a blocking thread. Tags are one line of at most 40 characters; control and
+  bidirectional-override characters are stripped (as in party chat); "Jazz" and "jazz" are one tag.
 - New shortcut actions (Settings → Shortcuts): `lyrics-fullscreen` (F11), `queue-undo` (Ctrl+Z),
   `queue-redo` (Ctrl+Shift+Z). No new settings keys.
-- Undo never touches the playing track or the history. Autoplay, radio, DJ blocks and party request
-  placements are not undo steps. A guest cannot undo the host's queue.
-- Dependencies: text for the share card is laid out by `resvg`, which Slint already links (its
-  `system-fonts` switch adds `fontconfig-parser`); `arboard` gets `image-data` (adds the macOS-only `fax`);
-  `dirs` moved from Linux-only to all platforms. No new direct crate.
+- Dependencies: no new crate. The share card uses `resvg` (already linked by Slint) with its
+  `system-fonts` and `memmap-fonts` switches, and `fontique` and `skrifa` (already built for Slint and
+  resvg, same versions and features) as direct dependencies; `arboard` gets `image-data`; `dirs` moved
+  from Linux-only to all platforms.
+- After the first copy Slate keeps one clipboard connection for the session, so on X11 the copy stays
+  pasteable until another application copies something.
+
+### Performance (measured)
+Measured in the 1.6 review on this machine (16 cores, NVIDIA, PipeWire 1.6), with the 1.5 method:
+release builds of 1.5.0, 1.6.0 as handed to review (`a658880`) and the final tree, each started 12 s
+before a 60 s window, on a copy of a signed-in profile reset to default settings (only the sign-in kept),
+headless KWin with a nested Xwayland, Skia/Vulkan. Playing = TOTO "Africa" (track 539204), FLAC
+24-bit/192 kHz, into a null PipeWire sink at s24le/192 kHz. Wakeups are voluntary context switches over
+all threads. Two interleaved runs each. The numbers are not comparable with the 1.5 notes' (another
+day, another profile copy); compare the columns.
+
+| Default settings | 1.5.0 | 1.6.0 as handed over | 1.6.0 |
+|---|---|---|---|
+| Idle main screen: threads, wakeups/s, CPU ticks in 60 s | 21, 0.1, 0 | 21, 0.1, 0 | 21, 0.1, 0 |
+| Idle main screen: anonymous / total PSS | 79.0 / 230.0, 79.0 / 230.2 MB | 78.1 / 229.7, 78.4 / 230.2 MB | 78.7 / 230.7, 77.7 / 228.9 MB |
+| Playing: threads (start / end of window) | 47 / 43, 44 / 40 | 44 / 40, 45 / 41 | 44 / 40, 48 / 44 |
+| Playing: wakeups/s | 442, 449 | 442, 438 | 440, 429 |
+| Playing: CPU ticks in 60 s | 115, 114 | 118, 116 | 118, 115 |
+| Playing: anonymous / total PSS | 131.4 / 294.2, 123.0 / 285.4 MB | 125.7 / 290.2, 120.0 / 284.5 MB | 126.2 / 290.7, 132.8 / 297.9 MB |
+| Window mapped (7 launches, median and range) | 450 ms (446–457) | 460 ms (454–470) | 449 ms (446–453) |
+| Binary | 76,773,512 B | 78,202,648 B | 78,121,368 B |
+
+Default settings are within run-to-run noise of 1.5.0: same idle threads, no idle wakeups, playing memory
+inside the spread of repeated runs (two more runs of the final binary: 129.3 and 130.6 MB anonymous,
+437 and 438 wakeups/s, 111 and 115 ticks). The binary is 1,347,856 bytes (1.8 %) larger than 1.5.0. VRAM:
+`nvidia-smi` gives no per-process figure here and the nested display hides the driver's own number, so
+no VRAM figure is claimed.
+
+| 1.6 features in use (final 1.6.0, playing) | Anonymous / total PSS | Wakeups/s | CPU ticks |
+|---|---|---|---|
+| None (same session type) | 122.9 / 286.6 MB | 429 | 126 |
+| Share card copied | 125.6 / 290.5 MB | 444 | 125 |
+| Tag added, tag page open | 124.8 / 291.2 MB | 432 | 126 |
+| Shuffle toggled and undone | 124.7 / 289.7 MB | 423 | 131 |
+| Full-screen lyrics open | 131.9 / 284.7 MB | 420 | 132 |
+| Hosting a party (1.3 feature; the 1.6 set adds a list of ids) | 151.8 / 327.0 MB | 413 | 157 |
+| All of the above at once | 163.2 / 340.3 MB | 432 | 190 |
+
+Each new 1.6 feature is inside the +10 MB budget on its own (full-screen lyrics +9.0 MB, the most:
+the renderer's full-window layers and large glyphs; the backdrop itself is one ≤128 px image). All
+four together on top of a party are about +11 MB, at the edge of the budget and within the ±5 MB
+spread of single runs; this was one run each, not repeated. The party's own cost (+29 MB here, 23 MB in
+the 1.5 review) is not new in 1.6. CPU: unchanged except while hosting a party (ticks 157 vs 126, the
+party's sync work, as in 1.5) and with everything on at once (190, one run; the full-screen lyrics view
+redraws each line change at full-window size).
+
+Where the ~430 wakeups/s while playing come from (per thread, 20 s, final 1.6.0): `souphttpsrc` 144 and
+its pad task 29, GStreamer queues and multiqueues 119, PipeWire's `threaded-ml` 64, Vulkan swapchain
+threads 20, the tokio runtime 17, the UI thread 15, MPRIS 2. About 360 of them are GStreamer and
+PipeWire; the UI tick is 2 Hz and runs only while playing.
+
+### Optimizations kept
+- The share card's font loading (#131): 12–29 s → about 0.25 s per card, measured on seven sample cards.
+  Kept as a bug fix, not as a tweak.
+
+### Considered, not done
+- Slowing the UI progress tick when unfocused, stopping it when minimized or in the tray: it is already
+  2 Hz and only while playing, and the UI thread accounts for 15 of ~430 wakeups/s; most of those come
+  from the same tick's position, lyrics, crossfade and MPRIS work, which must keep running. Not worth a
+  behaviour change.
+- `malloc_trim(0)` after the share card and when hiding to the tray: measured after a share card,
+  131.5 vs 132.2 MB anonymous PSS (with and without), inside noise. Removed.
+- A 32 KiB `blocksize` on the HTTP source (4 KiB default) to cut `souphttpsrc` wakeups: `souphttpsrc`
+  still woke 154 times a second (libsoup paces on socket readiness, not on the read size); total
+  420–439 vs 437–438 wakeups/s. Removed.
+- Not tried in this review, no numbers: decode-once cover cache with an LRU byte budget, capping Skia's
+  GPU resource cache and glyph atlas, lazy CJK/fallback fonts in the UI, `Arc<str>` track metadata and
+  in-place `VecModel` updates, a ListView audit of long lists, tokio blocking-pool limits, reqwest client
+  reuse and gzip, GStreamer pipeline reuse between tracks and queue limits, prefetching the next stream
+  URL 20 s before the end, debouncing encrypted-settings writes during slider drags (volume already is,
+  #8), checking iroh and MPD sockets are fully dormant without peers, caching the Vulkan probe per GPU and
+  driver, and the release profile A/B (`lto = "fat"`, `panic = "abort"`, `opt-level`). Left for 1.7.
 
 ### Not tested before release
-- See HANDOFF-1.6.md for what was and was not run in the real app.
+- Windows: not built or run in this review; the release workflow builds and self-tests it. The new
+  clipboard handle, the share card's font lookup (DirectWrite through fontique) and the dialog focus
+  change have not been used on Windows.
+- Saving the party set as a playlist was not run (it would create a playlist on the reviewer's real
+  account); the dialog, the default name and the count were checked live. A playlist API failure was
+  checked by reading the code (the message is shown and the set kept), not by forcing one.
+- Handing a party over to a new host, guests at all, multi-monitor, mixed DPI, a real Wayland compositor
+  session (the click-through ran on X11; Wayland clipboard checked with a small test program on headless
+  KWin), real clipboard managers, interface scale 1.5 and 2 in the running app (offscreen renders only),
+  the mini player open with full-screen lyrics, 5,000 tagged tracks in the running app (the store was
+  timed in a unit test: adding a tag to 5,000 selected tracks 1.6 ms, a 1.2 MB file in 6 ms), and long
+  sessions.
+- Known: a **bold** Arabic title on a share card is drawn as boxes (the artist and album lines are
+  fine); resvg drops fallback glyphs when the ligature count differs. Not fixed.
 
 ## [1.5.0] - 2026-11-03
 
