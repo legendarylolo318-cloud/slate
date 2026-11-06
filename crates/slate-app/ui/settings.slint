@@ -39,6 +39,7 @@ export global SettingsState {
     in-out property <bool> hide-explicit;
     in-out property <bool> hide-ai;
     in-out property <bool> start-minimized;
+    in-out property <bool> start-half-volume;
     in-out property <bool> remember-window;
     in-out property <bool> gapless-supported: true;
     in-out property <int> crossfade-index: 0;
@@ -331,6 +332,11 @@ export component SettingsPage inherits Rectangle {
                         label: "Start minimized to tray";
                         hint: "Open hidden in the system tray. The window opens normally if there is no tray.";
                         Toggle { checked: SettingsState.start-minimized; toggled(v) => { SettingsState.start-minimized = v; SettingsState.changed-bool("start-minimized", v); } }
+                    }
+                    Row {
+                        label: "Start at half volume";
+                        hint: "Every launch starts at 50 % instead of where you left it. Changing the volume afterwards works as usual.";
+                        Toggle { checked: SettingsState.start-half-volume; toggled(v) => { SettingsState.start-half-volume = v; SettingsState.changed-bool("start-half-volume", v); } }
                     }
                     Row {
                         label: "Remember window size and position";

@@ -121,6 +121,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_hide_explicit(s.content_filter.0);
     g.set_hide_ai(s.content_filter.1);
     g.set_start_minimized(prefs.start_minimized);
+    g.set_start_half_volume(prefs.start_half_volume);
     g.set_remember_window(prefs.remember_window);
     g.set_crossfade_index(
         CROSSFADE_SECS
@@ -319,6 +320,11 @@ impl Backend {
                 "start-minimized" => {
                     let mut prefs = crate::uiprefs::UiPrefs::load();
                     prefs.start_minimized = v;
+                    prefs.save().map_err(|e| e.to_string())
+                }
+                "start-half-volume" => {
+                    let mut prefs = crate::uiprefs::UiPrefs::load();
+                    prefs.start_half_volume = v;
                     prefs.save().map_err(|e| e.to_string())
                 }
                 "dj-enabled" => {

@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Start at half volume (Settings → General, **on by default**): every launch starts at 50 % volume
+  instead of the last level, set once at start-up before anything plays. Changing the volume afterwards
+  (slider, keys, MPRIS, MPD) works as before for the rest of the session. Turn it off to keep the last
+  level as in 1.6.0 and earlier.
+
+### Notes
+- Settings key `start_half_volume` in `ui.json`; a `ui.json` written before it existed counts as on.
+
 ## [1.6.0] - 2026-11-05
 
 Resource rule for the whole release: with default settings nothing new is allocated, spawned, polled or

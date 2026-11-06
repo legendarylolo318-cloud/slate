@@ -283,6 +283,11 @@ impl Backend {
                 .volume
                 .store(volume.to_bits(), Ordering::Relaxed);
             this.ui(move |w| w.set_volume(volume));
+            // Settings → General "Start at half volume": set once here, before anything plays;
+            // later changes (slider, keys, MPRIS, MPD) are left alone for the session.
+            if crate::uiprefs::UiPrefs::load().start_half_volume {
+                this.set_volume(START_VOLUME);
+            }
 
             // Decide the screen first, from the saved settings alone: no
             // network, and nothing below has to finish before it shows.
@@ -1346,6 +1351,9 @@ mod tests {
 }
 
 /// Volume after `notches` scroll steps of 5 %, kept in 0..=1.
+/// The level "Start at half volume" opens at.
+pub(crate) const START_VOLUME: f32 = 0.5;
+
 pub(crate) fn volume_after_steps(level: f32, notches: i32) -> f32 {
     // Round to the step grid so repeated scrolling does not drift (0.1 + 0.05 + ...).
     (((level + notches as f32 * 0.05) * 100.0).round() / 100.0).clamp(0.0, 1.0)

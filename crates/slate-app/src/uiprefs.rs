@@ -51,6 +51,10 @@ pub struct UiPrefs {
     /// Open hidden in the tray (off by default; the window shows if there is no tray).
     #[serde(default)]
     pub start_minimized: bool,
+    /// Every launch starts at 50 % volume instead of the last level (on by default, also for a
+    /// `ui.json` written before the setting existed).
+    #[serde(default = "default_true")]
+    pub start_half_volume: bool,
     /// Remember window size, position and maximized state (on by default).
     #[serde(default = "default_true")]
     pub remember_window: bool,
@@ -120,6 +124,7 @@ impl Default for UiPrefs {
             global_shortcuts: false,
             cover_colors: false,
             start_minimized: false,
+            start_half_volume: true,
             remember_window: true,
             check_updates: true,
             last_update_check: 0,
@@ -198,6 +203,15 @@ impl UiPrefs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn half_volume_at_start_is_on_by_default_and_for_older_files() {
+        assert!(UiPrefs::default().start_half_volume);
+        let older: UiPrefs = serde_json::from_str(r#"{"start_minimized": false}"#).expect("parse");
+        assert!(older.start_half_volume);
+        let off: UiPrefs = serde_json::from_str(r#"{"start_half_volume": false}"#).expect("parse");
+        assert!(!off.start_half_volume);
+    }
 
     #[test]
     fn remembered_renderer_round_trips_and_is_optional() {
