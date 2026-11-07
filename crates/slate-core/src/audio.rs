@@ -771,7 +771,9 @@ const BRANCH_BUFFER_SIZE_BYTES: i32 = 20 * 1024 * 1024;
 /// Which pipeline a stream decodebin feeds (sets how much compressed lookahead it holds).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Lookahead {
-    /// The exclusive / bit-perfect writer path: unchanged since 1.4.
+    /// The exclusive / bit-perfect writer path: unchanged since 1.4. That path (the ALSA
+    /// writer) exists on Linux only; Windows exclusive output goes through `wasapi2sink`.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Direct,
     /// A gapless branch with a [`DECODED_RESERVOIR_NS`] queue behind it.
     Branch,
