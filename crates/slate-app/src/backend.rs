@@ -514,6 +514,12 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
+            // A queue write still waiting (debounced) or under way must not land after
+            // `auth::logout` deletes this account's queue file.
+            QUEUE_SAVE.cancel();
+            if let Some(ctl) = this.controller() {
+                ctl.stop_saving().await;
+            }
             if let Err(e) = auth::logout(&state).await {
                 tracing::warn!("logout: {}", e.log_safe());
             }
@@ -1006,6 +1012,9 @@ impl Backend {
         self.load_library();
         self.check_for_update();
         self.in_main.store(true, Ordering::Relaxed);
+        if let Some(ctl) = self.controller() {
+            ctl.resume_saving();
+        }
         let pending = self.pending_link.lock().ok().and_then(|mut p| p.take());
         match pending {
             Some(link) => self.open_link(&link),

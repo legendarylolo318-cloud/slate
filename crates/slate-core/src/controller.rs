@@ -144,6 +144,9 @@ pub struct Controller {
     undo: std::sync::Mutex<crate::queue_undo::UndoStack>,
     /// Held from taking a snapshot until it is on disk, so two saves cannot land out of order.
     save_gate: Mutex<()>,
+    /// Off from sign-out until the next sign-in: no queue or modes write may land then (a
+    /// debounced save firing after sign-out would put the old account's queue back on disk).
+    persist: std::sync::atomic::AtomicBool,
 }
 
 /// A DJ move and the TIDAL tracks found for it.
@@ -232,6 +235,7 @@ impl Controller {
             dj_ready: std::sync::Mutex::new(None),
             undo: std::sync::Mutex::new(crate::queue_undo::UndoStack::new()),
             save_gate: Mutex::new(()),
+            persist: std::sync::atomic::AtomicBool::new(true),
         }
     }
 
@@ -1067,6 +1071,20 @@ impl Controller {
     }
 
     /// Sign-out: the next account must not undo into this one's queue.
+    /// Sign-out: waits for a queue or modes write in progress, then refuses every write until
+    /// [`Controller::resume_saving`], so nothing lands after the account's files are deleted.
+    pub async fn stop_saving(&self) {
+        let _gate = self.save_gate.lock().await;
+        self.persist
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Signed in again: queue and modes are written as before.
+    pub fn resume_saving(&self) {
+        self.persist
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
     pub fn forget_undo(&self) {
         if let Ok(mut u) = self.undo.lock() {
             u.clear();
@@ -1314,6 +1332,9 @@ impl Controller {
     /// Shuffle / repeat / autoplay survive restarts too.
     pub async fn save_modes(&self) -> Result<(), SlateError> {
         let _gate = self.save_gate.lock().await;
+        if !self.persist.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(());
+        }
         let (shuffle, repeat, autoplay) = {
             let q = self.lock_queue().await;
             (q.shuffle, q.repeat.as_u8(), q.autoplay)
@@ -1348,6 +1369,9 @@ impl Controller {
     /// the old one) happen on a blocking thread.
     pub async fn save(&self) -> Result<(), SlateError> {
         let _gate = self.save_gate.lock().await;
+        if !self.persist.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(());
+        }
         let snapshot = self.lock_queue().await.snapshot();
         let state = Arc::clone(&self.state);
         tokio::task::spawn_blocking(move || {

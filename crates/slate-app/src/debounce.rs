@@ -17,6 +17,11 @@ impl Debounce {
         }
     }
 
+    /// Drops the request that is waiting, if any.
+    pub fn cancel(&self) {
+        self.latest.fetch_add(1, Ordering::AcqRel);
+    }
+
     /// Runs `job` on `rt` after `delay`, unless another `run_later` came in meanwhile.
     pub fn run_later<F>(&'static self, rt: &tokio::runtime::Handle, delay: Duration, job: F)
     where
@@ -60,5 +65,19 @@ mod tests {
         });
         std::thread::sleep(Duration::from_millis(150));
         assert_eq!(runs.load(Ordering::SeqCst), 2, "the next burst runs too");
+    }
+
+    #[test]
+    fn a_cancelled_request_never_runs() {
+        static C: Debounce = Debounce::new();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let runs = Arc::new(AtomicUsize::new(0));
+        let r = Arc::clone(&runs);
+        C.run_later(rt.handle(), Duration::from_millis(30), async move {
+            r.fetch_add(1, Ordering::SeqCst);
+        });
+        C.cancel();
+        std::thread::sleep(Duration::from_millis(120));
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
     }
 }
