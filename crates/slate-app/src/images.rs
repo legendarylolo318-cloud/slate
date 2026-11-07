@@ -1,7 +1,105 @@
 //! Off-thread-safe image helpers. Everything here returns plain pixel buffers
 //! (which are `Send`); the `slint::Image` is built on the UI thread.
 
-use slint::{Rgba8Pixel, SharedPixelBuffer};
+use slint::{Rgb8Pixel, Rgba8Pixel, SharedPixelBuffer};
+
+/// A decoded cover. Opaque images (every JPEG, PNG without alpha) are kept as RGB, 3 bytes a
+/// pixel instead of 4; images with alpha stay RGBA. Cheap to clone and `Send`.
+#[derive(Clone)]
+pub enum Pixels {
+    Rgb(SharedPixelBuffer<Rgb8Pixel>),
+    Rgba(SharedPixelBuffer<Rgba8Pixel>),
+}
+
+impl Pixels {
+    pub fn width(&self) -> u32 {
+        match self {
+            Self::Rgb(b) => b.width(),
+            Self::Rgba(b) => b.width(),
+        }
+    }
+
+    pub fn height(&self) -> u32 {
+        match self {
+            Self::Rgb(b) => b.height(),
+            Self::Rgba(b) => b.height(),
+        }
+    }
+
+    /// Bytes the pixels occupy (what the cache's budget counts).
+    pub fn byte_size(&self) -> usize {
+        let bpp = match self {
+            Self::Rgb(_) => 3,
+            Self::Rgba(_) => 4,
+        };
+        self.width() as usize * self.height() as usize * bpp
+    }
+
+    /// The `slint::Image` (UI thread). Slint uploads either layout to the same GPU format.
+    pub fn into_image(self) -> slint::Image {
+        match self {
+            Self::Rgb(b) => slint::Image::from_rgb8(b),
+            Self::Rgba(b) => slint::Image::from_rgba8(b),
+        }
+    }
+
+    /// The pixels as RGBA, for code that works on that layout (colour pick, blur, share card).
+    /// A copy for RGB; a shared handle for RGBA.
+    pub fn to_rgba(&self) -> SharedPixelBuffer<Rgba8Pixel> {
+        match self {
+            Self::Rgba(b) => b.clone(),
+            Self::Rgb(rgb) => {
+                let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(rgb.width(), rgb.height());
+                for (dst, src) in buf.make_mut_slice().iter_mut().zip(rgb.as_slice()) {
+                    *dst = Rgba8Pixel {
+                        r: src.r,
+                        g: src.g,
+                        b: src.b,
+                        a: 255,
+                    };
+                }
+                buf
+            }
+        }
+    }
+
+    /// Shrunk to fit `max_edge` pixels on the longer side (the filter and size rule of
+    /// [`decode_fit`]); `self` when it already fits.
+    pub fn fit(&self, max_edge: u32) -> Self {
+        use image::DynamicImage;
+        if max_edge == 0 || self.width().max(self.height()) <= max_edge {
+            return self.clone();
+        }
+        let shrunk = match self {
+            Self::Rgb(b) => image::RgbImage::from_raw(b.width(), b.height(), b.as_bytes().to_vec())
+                .map(|i| {
+                    Self::Rgb(rgb_buffer(
+                        &DynamicImage::ImageRgb8(i)
+                            .thumbnail(max_edge, max_edge)
+                            .into_rgb8(),
+                    ))
+                }),
+            Self::Rgba(b) => {
+                image::RgbaImage::from_raw(b.width(), b.height(), b.as_bytes().to_vec()).map(|i| {
+                    Self::Rgba(rgba_buffer(
+                        &DynamicImage::ImageRgba8(i)
+                            .thumbnail(max_edge, max_edge)
+                            .into_rgba8(),
+                    ))
+                })
+            }
+        };
+        shrunk.unwrap_or_else(|| self.clone())
+    }
+}
+
+fn rgb_buffer(img: &image::RgbImage) -> SharedPixelBuffer<Rgb8Pixel> {
+    SharedPixelBuffer::clone_from_slice(img.as_raw(), img.width(), img.height())
+}
+
+fn rgba_buffer(img: &image::RgbaImage) -> SharedPixelBuffer<Rgba8Pixel> {
+    SharedPixelBuffer::clone_from_slice(img.as_raw(), img.width(), img.height())
+}
 
 /// Decodes encoded image bytes (JPEG/PNG) into an RGBA buffer at full size.
 #[cfg(test)]
@@ -19,6 +117,23 @@ pub fn decode_fit(bytes: &[u8], max_edge: u32) -> Option<SharedPixelBuffer<Rgba8
         return Some(to_buffer(img));
     }
     Some(to_buffer(img.thumbnail(max_edge, max_edge)))
+}
+
+/// [`decode_fit`] for the image cache: opaque images stay RGB (no alpha byte), images with
+/// alpha stay RGBA.
+pub fn decode_pixels(bytes: &[u8], max_edge: u32) -> Option<Pixels> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let img = if max_edge == 0 || img.width().max(img.height()) <= max_edge {
+        img
+    } else {
+        img.thumbnail(max_edge, max_edge)
+    };
+    Some(if img.color().has_alpha() {
+        Pixels::Rgba(to_buffer(img))
+    } else {
+        let rgb = img.into_rgb8();
+        Pixels::Rgb(rgb_buffer(&rgb))
+    })
 }
 
 /// The pixels are written straight into the final buffer, so a JPEG (RGB) is
@@ -215,6 +330,65 @@ mod tests {
         let full = decode_fit(&jpeg, 0).expect("decode");
         assert_eq!((full.width(), full.height()), (320, 160));
         let same = decode_fit(&jpeg, 1000).expect("decode");
+        assert_eq!((same.width(), same.height()), (320, 160));
+    }
+
+    #[test]
+    fn opaque_covers_stay_rgb_and_alpha_ones_rgba() {
+        let rgba = gradient(37, 23);
+        let rgb = image::DynamicImage::ImageRgba8(rgba.clone()).to_rgb8();
+        let jpeg = encoded(
+            image::DynamicImage::ImageRgb8(rgb.clone()),
+            image::ImageFormat::Jpeg,
+        );
+        let png_rgb = encoded(image::DynamicImage::ImageRgb8(rgb), image::ImageFormat::Png);
+        let png_rgba = encoded(
+            image::DynamicImage::ImageRgba8(rgba),
+            image::ImageFormat::Png,
+        );
+        let grey = encoded(
+            image::DynamicImage::ImageLuma8(
+                image::DynamicImage::ImageRgba8(gradient(8, 8)).to_luma8(),
+            ),
+            image::ImageFormat::Png,
+        );
+        for (bytes, want_rgb) in [
+            (&jpeg, true),
+            (&png_rgb, true),
+            (&png_rgba, false),
+            (&grey, true),
+        ] {
+            let px = decode_pixels(bytes, 0).expect("decode");
+            assert_eq!(matches!(px, Pixels::Rgb(_)), want_rgb);
+            assert_eq!(
+                px.byte_size(),
+                (px.width() * px.height()) as usize * if want_rgb { 3 } else { 4 }
+            );
+            // The same pixels as the RGBA path, whatever the layout.
+            let reference = decode(bytes).expect("reference");
+            assert_eq!(px.to_rgba().as_bytes(), reference.as_bytes());
+        }
+        assert!(decode_pixels(b"nope", 0).is_none());
+    }
+
+    #[test]
+    fn cutting_a_decoded_cover_matches_decoding_it_small() {
+        let rgb = image::DynamicImage::ImageRgba8(gradient(320, 160)).to_rgb8();
+        let jpeg = encoded(
+            image::DynamicImage::ImageRgb8(rgb),
+            image::ImageFormat::Jpeg,
+        );
+        let full = decode_pixels(&jpeg, 0).expect("full");
+        for edge in [80, 100, 33] {
+            let cut = full.fit(edge);
+            let direct = decode_pixels(&jpeg, edge).expect("direct");
+            assert_eq!(
+                (cut.width(), cut.height()),
+                (direct.width(), direct.height())
+            );
+            assert_eq!(cut.to_rgba().as_bytes(), direct.to_rgba().as_bytes());
+        }
+        let same = full.fit(1000);
         assert_eq!((same.width(), same.height()), (320, 160));
     }
 

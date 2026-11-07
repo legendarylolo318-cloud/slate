@@ -20,7 +20,8 @@ const KEEP: f32 = 0.55;
 static OPEN: AtomicBool = AtomicBool::new(false);
 
 /// A small, blurred, darkened copy of `cover`; `None` for an empty image.
-pub fn backdrop(cover: &Pixels) -> Option<Pixels> {
+pub fn backdrop(cover: &Pixels) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+    let cover = cover.to_rgba();
     let (w, h) = (cover.width(), cover.height());
     if w == 0 || h == 0 {
         return None;
@@ -108,7 +109,7 @@ mod tests {
                 a: c[3],
             };
         }
-        b
+        Pixels::Rgba(b)
     }
 
     #[test]
@@ -130,6 +131,6 @@ mod tests {
 
     #[test]
     fn an_empty_cover_gives_nothing() {
-        assert!(backdrop(&SharedPixelBuffer::<Rgba8Pixel>::new(0, 0)).is_none());
+        assert!(backdrop(&Pixels::Rgba(SharedPixelBuffer::<Rgba8Pixel>::new(0, 0))).is_none());
     }
 }

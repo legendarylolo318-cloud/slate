@@ -194,7 +194,7 @@ impl Backend {
                     continue;
                 };
                 this.ui(move |w| {
-                    let img = Image::from_rgba8(px);
+                    let img = px.into_image();
                     let model = w.get_suggestions();
                     let Some(list) = model.as_any().downcast_ref::<VecModel<TrackRow>>() else {
                         return;

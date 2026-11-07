@@ -200,7 +200,7 @@ impl Backend {
         }
         let this = self.clone();
         self.rt.spawn(async move {
-            let found = tokio::task::spawn_blocking(move || dominant(&px))
+            let found = tokio::task::spawn_blocking(move || dominant(&px.to_rgba()))
                 .await
                 .ok()
                 .flatten();

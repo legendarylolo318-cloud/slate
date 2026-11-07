@@ -333,10 +333,11 @@ impl Backend {
         };
         let this = self.clone();
         self.rt.spawn(async move {
-            let found = tokio::task::spawn_blocking(move || crate::cover_tint::dominant(&px))
-                .await
-                .ok()
-                .flatten();
+            let found =
+                tokio::task::spawn_blocking(move || crate::cover_tint::dominant(&px.to_rgba()))
+                    .await
+                    .ok()
+                    .flatten();
             let Some(rgb) = found else {
                 this.settings_status("Could not read a colour from this cover.");
                 return;

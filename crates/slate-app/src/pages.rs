@@ -743,7 +743,7 @@ impl Backend {
                     let lib = Arc::clone(&this.lib);
                     this.ui(move |w| {
                         if lib.cards_generation() == generation {
-                            w.set_hero_image(Image::from_rgba8(px));
+                            w.set_hero_image(px.into_image());
                         }
                     });
                 }
@@ -776,9 +776,7 @@ impl Backend {
                         let lib = Arc::clone(&this.lib);
                         this.ui(move |w| {
                             if lib.cards_generation() == generation {
-                                with_card_rows(&w, |m| {
-                                    m.set_cover(epoch, s, c, Image::from_rgba8(px))
-                                });
+                                with_card_rows(&w, |m| m.set_cover(epoch, s, c, px.into_image()));
                             }
                         });
                     }

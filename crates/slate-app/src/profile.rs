@@ -136,7 +136,7 @@ impl Backend {
                         if let Some(px) = this.images.get(&state, &tidal_image_url(&url, 320)).await
                         {
                             this.ui(move |w| {
-                                w.global::<ProfileState>().set_avatar(Image::from_rgba8(px))
+                                w.global::<ProfileState>().set_avatar(px.into_image())
                             });
                         }
                     }

@@ -139,7 +139,7 @@ fn ui_shots() {
                 a: 255,
             };
         }
-        if let Some(b) = crate::lyrics_full::backdrop(&cover) {
+        if let Some(b) = crate::lyrics_full::backdrop(&crate::imgcache::Pixels::Rgba(cover)) {
             app.set_lyrics_backdrop(slint::Image::from_rgba8(b));
         }
         // `SLATE_SHOTS_OVER_PLAYER`: opened (F11) from the full-screen player.

@@ -747,7 +747,7 @@ impl Backend {
         match self.images.get(&state, &url).await {
             Some(px) => {
                 self.cover_arrived(track_id, px.clone());
-                self.ui(move |w| w.set_track_cover(Image::from_rgba8(px)));
+                self.ui(move |w| w.set_track_cover(px.into_image()));
             }
             None => self.clear_tint(track_id),
         }

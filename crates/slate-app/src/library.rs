@@ -409,7 +409,7 @@ impl Backend {
                     else {
                         return;
                     };
-                    self.ui(move |w| set_playlist_cover(&w, i, &uuid, Image::from_rgba8(px)));
+                    self.ui(move |w| set_playlist_cover(&w, i, &uuid, px.into_image()));
                 }
             })
             .await;
@@ -521,7 +521,7 @@ impl Backend {
                         let lib = Arc::clone(&this2.lib);
                         this2.ui(move |w| {
                             if lib.generation.load(Ordering::SeqCst) == generation {
-                                w.set_page_cover(Image::from_rgba8(px));
+                                w.set_page_cover(px.into_image());
                             }
                         });
                     }
@@ -904,7 +904,7 @@ impl Backend {
                             if lib.generation.load(Ordering::SeqCst) != generation {
                                 return;
                             }
-                            let img = Image::from_rgba8(px);
+                            let img = px.into_image();
                             with_tracks(&w, |m| m.set_cover(&indices, &img));
                         });
                     }
