@@ -6,6 +6,7 @@ import { CardsPage, QueuePanel, LyricsPanel } from "pages.slint";
 import { FullscreenPlayer } from "fullscreen.slint";
 import { LyricsFullscreen } from "lyrics_full.slint";
 import { MiniPlayerWindow } from "mini.slint";
+import { StripWindow } from "strip.slint";
 import { VideoView } from "video.slint";
 import { SettingsPage, SettingsState } from "settings.slint";
 import { ProfilePage, ProfileState } from "profile.slint";
@@ -15,7 +16,7 @@ import { ShortcutOverlay, Shortcut, Shortcuts } from "shortcuts.slint";
 import { ListView } from "std-widgets.slint";
 import { Dnd } from "dnd.slint";
 import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyState, PartyRequest, PartyGuest, CreditLine, EqBand } from "types.slint";
-export { MiniPlayerWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyRequest, PartyGuest, CreditLine, EqBand, Shortcut, Shortcuts, Dnd, SettingsState, PartyState, ProfileState, DjState, Theme }
+export { MiniPlayerWindow, StripWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyRequest, PartyGuest, CreditLine, EqBand, Shortcut, Shortcuts, Dnd, SettingsState, PartyState, ProfileState, DjState, Theme }
 
 export enum Screen { loading, login, main }
 
@@ -280,6 +281,7 @@ export component AppWindow inherits Window {
     in property <string> quality-text;
     in property <string> resume-text;
     callback resume();
+    callback toggle-strip();
     in property <int> track-badge;
     in property <bool> track-atmos;
     in property <image> track-cover;
@@ -632,6 +634,7 @@ export component AppWindow inherits Window {
                 quality: root.quality-text;
                 resume-text: root.resume-text;
                 resume => { root.resume(); }
+                toggle-strip => { root.toggle-strip(); }
                 badge: root.track-badge;
                 atmos: root.track-atmos;
                 cover: root.track-cover;

@@ -54,6 +54,7 @@ export component PlayerBar inherits Rectangle {
     // "Resume at 12:34" offer for a long track that was left part-way; empty = none.
     in property <string> resume-text;
     callback resume();
+    callback toggle-strip();
 
     // Side columns are equal so the transport sits exactly in the middle; stretch
     // factors would add to each column's own content width and push it off-centre.
@@ -141,7 +142,7 @@ export component PlayerBar inherits Rectangle {
                 IconButton { tip: "Favourite"; side: root.btn; icon: root.favorite ? @image-url("icons/heart-filled.svg") : @image-url("icons/heart.svg"); active: root.favorite; enabled: root.has-track; clicked => { root.toggle-favorite(); } }
                 if !root.compact || !root.narrow: IconButton { tip: "Add to playlist"; side: root.btn; icon: @image-url("icons/plus.svg"); enabled: root.has-track; clicked => { root.add-to-playlist(); } }
                 IconButton { tip: "Lyrics"; side: root.btn; icon: @image-url("icons/lyrics.svg"); active: root.lyrics-open; enabled: root.has-track; clicked => { root.toggle-lyrics(); } }
-                if !root.compact || !root.narrow: IconButton { tip: "Mini player"; side: root.btn; icon: @image-url("icons/miniplayer.svg"); clicked => { root.open-miniplayer(); } }
+                if !root.compact || !root.narrow: IconButton { tip: "Mini player"; menu-a: "Compact strip (open / close)"; menu-picked(i) => { root.toggle-strip(); } side: root.btn; icon: @image-url("icons/miniplayer.svg"); clicked => { root.open-miniplayer(); } }
                 if !root.compact || !root.narrow: IconButton { tip: "Signal path"; side: root.btn; icon: @image-url("icons/signal.svg"); clicked => { root.open-signal-path(); } }
                 if !root.compact || !root.narrow: IconButton { tip: "Full screen"; side: root.btn; icon: @image-url("icons/fullscreen.svg"); enabled: root.has-track; clicked => { root.toggle-fullscreen(); } }
                 IconButton { tip: "Queue"; side: root.btn; icon: @image-url("icons/queue.svg"); active: root.queue-open; clicked => { root.toggle-queue(); } }

@@ -1,0 +1,64 @@
+import { Theme } from "theme.slint";
+import { IconButton, Bar } from "widgets.slint";
+
+/// A thin now-playing strip in its own frameless window: title – artist, a progress line,
+/// play / pause, next and close. Dragged by its body; kept on top where the platform
+/// allows it (not on Wayland).
+export component StripWindow inherits Window {
+    icon: @image-url("../../../assets/icons/128x128.png");
+    title: "Slate — now playing";
+    no-frame: true;
+    always-on-top: root.on-top;
+    preferred-width: 380px;
+    preferred-height: 46px;
+    min-width: 380px;
+    max-width: 380px;
+    min-height: 46px;
+    max-height: 46px;
+    background: Theme.surface;
+
+    in property <string> track-title;
+    in property <string> track-artist;
+    in property <bool> playing;
+    in property <bool> has-track;
+    in property <float> progress;
+    /// Kept above other windows (false on Wayland, where it cannot be).
+    in property <bool> on-top: true;
+    callback toggle-play();
+    callback next();
+    callback close-strip();
+    callback drag();
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Theme.text-muted.with-alpha(0.25);
+        border-radius: 8px;
+        clip: true;
+        Text {
+            x: 12px;
+            y: 6px;
+            width: root.width - 12px - 12px - 3 * 30px - 8px;
+            height: 22px;
+            text: root.has-track ? root.track-title + " – " + root.track-artist : "Nothing playing";
+            color: Theme.text;
+            font-size: 13px;
+            font-weight: 600;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+        // Body: dragging moves the window.
+        TouchArea {
+            x: 0px;
+            y: 0px;
+            width: root.width - 3 * 30px - 12px;
+            height: root.height;
+            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.drag(); } }
+        }
+        IconButton { x: root.width - 3 * 30px - 8px; y: 5px; side: 28px; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); enabled: root.has-track; clicked => { root.toggle-play(); } }
+        IconButton { x: root.width - 2 * 30px - 8px; y: 5px; side: 28px; icon: @image-url("icons/next.svg"); enabled: root.has-track; clicked => { root.next(); } }
+        IconButton { x: root.width - 1 * 30px - 8px; y: 5px; side: 28px; icon: @image-url("icons/close.svg"); clicked => { root.close-strip(); } }
+        // The thin progress line along the bottom.
+        Rectangle { x: 12px; y: root.height - 9px; width: root.width - 24px; height: 3px; border-radius: 1.5px; background: Theme.text-muted.with-alpha(0.3); }
+        Rectangle { x: 12px; y: root.height - 9px; width: (root.width - 24px) * clamp(root.progress, 0, 1); height: 3px; border-radius: 1.5px; background: Theme.accent; }
+    }
+}

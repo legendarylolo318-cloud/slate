@@ -85,6 +85,33 @@ fn ui_shots() {
         });
     let _ = std::fs::create_dir_all(&dir);
     let which = std::env::var("SLATE_SHOTS").unwrap_or_else(|_| "settings".into());
+    // `strip`: the compact now-playing strip (the offscreen platform has one window, so it
+    // is shown in place of the main one).
+    if which == "strip" {
+        let Ok(strip) = crate::bootstrap::StripWindow::new() else {
+            return;
+        };
+        strip.set_track_title("Essential Mix – a very long live set title".into());
+        strip.set_track_artist("Sample artist".into());
+        strip.set_has_track(true);
+        strip.set_playing(true);
+        strip.set_progress(0.35);
+        let _ = strip.show();
+        for &scale in SCALES {
+            window.dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+            let (w, h) = ((380.0 * scale) as u32, (46.0 * scale) as u32);
+            window.set_size(PhysicalSize::new(w, h));
+            save(
+                &window,
+                w,
+                h,
+                &dir.join(format!("strip-380x46@{scale}.png")),
+            );
+        }
+        return;
+    }
     app.set_screen(Screen::Main);
     let _ = app.show();
     // `SLATE_SHOTS_ERROR`: the error bar with that text.

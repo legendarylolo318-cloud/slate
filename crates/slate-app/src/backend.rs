@@ -244,6 +244,7 @@ impl Backend {
             let handle = w.clone_strong();
             f(w);
             crate::mini::sync(&handle);
+            crate::strip::sync(&handle);
         };
         if self.ui.upgrade_in_event_loop(with_sync).is_err() {
             tracing::debug!("UI already closed; dropping update");

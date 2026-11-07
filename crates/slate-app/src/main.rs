@@ -59,6 +59,7 @@ mod share_card;
 mod signal;
 mod smart;
 mod sort;
+mod strip;
 mod suggest;
 mod tags;
 mod textutil;
