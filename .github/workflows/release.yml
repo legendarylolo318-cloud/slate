@@ -94,17 +94,28 @@ jobs:
         run: |
           $v = (Select-String -Path Cargo.toml -Pattern '^version' | Select-Object -First 1).Line.Split('"')[1]
           "VERSION=$v" >> $env:GITHUB_ENV
+      - name: Cache GStreamer installers
+        uses: actions/cache@v4
+        with:
+          path: C:\gst-msi
+          key: gst-msi-${{ env.GST_VERSION }}
       - name: Install GStreamer
         shell: pwsh
         run: |
           choco install pkgconfiglite innosetup -y --no-progress
           $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GST_VERSION/msvc"
-          foreach ($f in "gstreamer-1.0-msvc-x86_64-$env:GST_VERSION.msi", "gstreamer-1.0-devel-msvc-x86_64-$env:GST_VERSION.msi") {
-            # gstreamer.freedesktop.org sometimes drops the connection mid-download: retry.
-            for ($i = 1; $i -le 5; $i++) {
-              try { Invoke-WebRequest "$base/$f" -OutFile $f; break }
-              catch { if ($i -eq 5) { throw }; Write-Host "download failed ($i/5): $_"; Start-Sleep -Seconds (15 * $i) }
+          New-Item -ItemType Directory -Force C:\gst-msi | Out-Null
+          foreach ($name in "gstreamer-1.0-msvc-x86_64-$env:GST_VERSION.msi", "gstreamer-1.0-devel-msvc-x86_64-$env:GST_VERSION.msi") {
+            $f = "C:\gst-msi\$name"
+            # gstreamer.freedesktop.org can be slow and resets long downloads (the devel MSI is
+            # 724 MB): resume where it stopped instead of starting over, and keep the MSIs cached.
+            $want = [int64](curl.exe -sSIL "$base/$name" | Select-String -Pattern '^content-length:\s*(\d+)' | Select-Object -Last 1).Matches[0].Groups[1].Value
+            for ($i = 1; $i -le 40; $i++) {
+              if ((Test-Path $f) -and (Get-Item $f).Length -eq $want) { break }
+              curl.exe -fL -sS --connect-timeout 30 -C - -o $f "$base/$name"
+              if ($LASTEXITCODE -ne 0) { Write-Host "download interrupted ($i/40) at $((Get-Item $f -ErrorAction SilentlyContinue).Length) of $want bytes"; Start-Sleep -Seconds 5 }
             }
+            if ((Get-Item $f).Length -ne $want) { throw "could not download $name" }
             Start-Process msiexec.exe -Wait -ArgumentList "/i $f /qn /norestart ADDLOCAL=ALL INSTALLDIR=C:\gstreamer"
           }
           $root = "C:\gstreamer\1.0\msvc_x86_64"
