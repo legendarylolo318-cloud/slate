@@ -292,6 +292,14 @@ fn vulkan_usable() -> bool {
 /// Async worker threads at most (fewer on a machine with fewer cores).
 const RUNTIME_WORKERS: usize = 4;
 
+/// Blocking-pool threads at most. The busiest moment is a page of covers: up to
+/// `imgcache::MAX_FETCHES` (8) decodes at once, plus a cache write, a pipeline teardown and a
+/// share card or two; 16 leaves room for all of them, and a job past the cap waits its turn.
+const BLOCKING_THREADS: usize = 16;
+
+/// How long an idle blocking-pool thread lives (tokio's default is 10 s).
+const BLOCKING_KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(2);
+
 fn launch(
     forced: Option<&str>,
     index: usize,
@@ -329,6 +337,12 @@ fn launch(
             RUNTIME_WORKERS
                 .min(std::thread::available_parallelism().map_or(RUNTIME_WORKERS, |n| n.get())),
         )
+        // The blocking pool runs short jobs only (image decode, disk and cache writes, share
+        // card, GStreamer build and teardown; nothing waits on another blocking job). Its
+        // default keeps up to 512 threads and an idle one for 10 s, so a burst of cover
+        // decodes left a dozen threads (and their stacks) around until the next burst.
+        .max_blocking_threads(BLOCKING_THREADS)
+        .thread_keep_alive(BLOCKING_KEEP_ALIVE)
         .enable_all()
         .thread_name("slate-rt")
         .build()
