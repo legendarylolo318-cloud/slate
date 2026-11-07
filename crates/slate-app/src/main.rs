@@ -61,7 +61,8 @@ mod suggest;
 mod tags;
 mod textutil;
 mod themes;
-#[cfg(test)]
+// Offscreen screenshots need the software renderer.
+#[cfg(all(test, feature = "renderer-software"))]
 mod ui_shots;
 mod uiprefs;
 mod updates;

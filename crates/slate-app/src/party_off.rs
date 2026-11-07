@@ -51,6 +51,10 @@ impl Backend {
 
     pub fn party_react(&self, _index: i32) {}
 
+    pub fn party_chat_send(&self, _text: String) {}
+
+    pub fn party_chat_mute(&self, _name: &str, _muted: bool) {}
+
     pub fn party_pref_int(&self, _key: &str, _value: i32) {}
 
     pub fn party_pref_bool(&self, _key: &str, _on: bool) {}

@@ -37,6 +37,15 @@ impl std::error::Error for NoFirstFrame {}
 const INDEX_ENV: &str = "SLATE_RENDERER_INDEX";
 
 #[derive(Clone, Copy, Debug)]
+// A build with no renderer feature (`--no-default-features`) compiles but has nothing to pick.
+#[cfg_attr(
+    not(any(
+        feature = "renderer-skia",
+        feature = "renderer-femtovg",
+        feature = "renderer-software"
+    )),
+    allow(dead_code)
+)]
 enum Renderer {
     #[cfg(target_os = "linux")]
     SkiaVulkan,
