@@ -73,7 +73,24 @@ mod versions_ui;
 mod video;
 mod window_state;
 
+/// glibc gives each thread that allocates its own arena (up to 8 x cores), and the app runs
+/// 40 threads while playing (GStreamer, the runtime, the renderer): the arenas' free space is
+/// never shared and the process holds 7-8 MB more than with two arenas. Measured: anonymous
+/// PSS while playing 112.7 MB (mean of four runs) vs 105.2 MB with two, CPU and wakeups the
+/// same. `MALLOC_ARENA_MAX` in the environment still wins.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn limit_malloc_arenas() {
+    if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
+        // SAFETY: mallopt has no preconditions; this runs first in main, before any thread.
+        unsafe {
+            libc::mallopt(libc::M_ARENA_MAX, 2);
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    limit_malloc_arenas();
     // Environment surgery must happen before any thread exists: `set_var` and
     // `remove_var` are unsound once other threads may read the environment.
     #[cfg(target_os = "linux")]

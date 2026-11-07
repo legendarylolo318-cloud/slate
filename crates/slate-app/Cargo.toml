@@ -60,6 +60,8 @@ mpris-server = "0.9"
 ksni = "0.3"
 # XDG GlobalShortcuts portal (platform/global_keys.rs); already in the tree via rfd.
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+# mallopt (main.rs); already in the tree through slate-core, same version.
+libc = "0.2"
 # Not used directly: pins zbus's thread pool. From 1.7.0 its idle thread never exits and wakes
 # twice a second for the whole session (AccessKit's AT-SPI connection starts it).
 blocking = "=1.6.2"

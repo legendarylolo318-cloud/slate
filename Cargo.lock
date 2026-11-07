@@ -7061,6 +7061,7 @@ dependencies = [
  "image",
  "interprocess",
  "ksni",
+ "libc",
  "lru 0.19.0",
  "mpris-server",
  "open",
