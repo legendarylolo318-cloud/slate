@@ -61,22 +61,37 @@ impl Lru {
         }
     }
 
-    /// The entry for `url` at exactly `rank`, else the smallest bigger one.
+    /// The entry for `url` at exactly `rank`, else the smallest bigger one that holds the source
+    /// at full resolution (see [`is_source`]): cutting from an entry that was itself shrunk
+    /// would resample twice and give a softer cover than decoding at the size asked for.
     fn find(&mut self, url: &str, rank: u32) -> Option<(Pixels, bool)> {
         if let Some(px) = self.map.get(&(url.to_string(), rank)) {
             return Some((px.clone(), true));
         }
-        let best = self
+        let mut bigger: Vec<u32> = self
             .sizes
             .get(url)?
             .iter()
             .copied()
             .filter(|r| *r > rank)
-            .min()?;
-        self.map
-            .get(&(url.to_string(), best))
-            .map(|px| (px.clone(), false))
+            .collect();
+        bigger.sort_unstable();
+        for r in bigger {
+            if let Some(px) = self.map.get(&(url.to_string(), r)) {
+                if is_source(r, px) {
+                    return Some((px.clone(), false));
+                }
+            }
+        }
+        None
     }
+}
+
+/// Whether `px`, decoded for `rank`, is the source image at its own resolution (decoded at
+/// original size, or the source was smaller than the size asked for), so any smaller size can
+/// be cut from it exactly as if it had been decoded at that size.
+fn is_source(rank: u32, px: &Pixels) -> bool {
+    rank == u32::MAX || px.width().max(px.height()) < rank
 }
 
 pub struct ImageCache {
@@ -126,8 +141,8 @@ impl ImageCache {
     /// `max_edge` 0 = original size.
     ///
     /// A cover is read from the disk cache and decoded once per URL and size *class*: a size
-    /// is cut from a bigger one that is already decoded (or being decoded) instead of reading
-    /// and decoding the file again.
+    /// is cut from a bigger one that is already decoded (or being decoded) at the source's own
+    /// resolution, instead of reading and decoding the file again.
     async fn fetch(&self, state: &Arc<AppState>, url: &str, max_edge: u32) -> Option<Pixels> {
         if url.is_empty() {
             return None;
@@ -139,43 +154,52 @@ impl ImageCache {
             Some((big, false)) => return self.cut(url, max_edge, big).await,
             None => {}
         }
-        let (pending, exact) = {
-            let mut inflight = self.inflight.lock().ok()?;
-            let key = (url.to_string(), want);
-            let bigger = inflight
-                .iter()
-                .filter(|((u, r), _)| u == url && *r > want)
-                .min_by_key(|((_, r), _)| *r)
-                .map(|(_, p)| p.clone());
-            match (inflight.get(&key).cloned(), bigger) {
-                (Some(p), _) => (p, true),
-                (None, Some(p)) => (p, false),
-                (None, None) => {
-                    let (state, url, net) =
-                        (Arc::clone(state), url.to_string(), Arc::clone(&self.net));
-                    let p: Pending = async move {
-                        let _permit = net.acquire().await.ok()?;
-                        let bytes = utility::get_image_bytes(&state, url).await.ok()?;
-                        tokio::task::spawn_blocking(move || images::decode_pixels(&bytes, max_edge))
+        // A bigger decode in flight is waited for and cut from, unless it turns out to have
+        // been shrunk itself; then this size gets its own decode.
+        let mut share_bigger = true;
+        let (pending, result) = loop {
+            let (pending, bigger_rank) = {
+                let mut inflight = self.inflight.lock().ok()?;
+                let key = (url.to_string(), want);
+                let bigger = inflight
+                    .iter()
+                    .filter(|((u, r), _)| share_bigger && u == url && *r > want)
+                    .min_by_key(|((_, r), _)| *r)
+                    .map(|((_, r), p)| (*r, p.clone()));
+                match (inflight.get(&key).cloned(), bigger) {
+                    (Some(p), _) => (p, None),
+                    (None, Some((r, p))) => (p, Some(r)),
+                    (None, None) => {
+                        let (state, url, net) =
+                            (Arc::clone(state), url.to_string(), Arc::clone(&self.net));
+                        let p: Pending = async move {
+                            let _permit = net.acquire().await.ok()?;
+                            let bytes = utility::get_image_bytes(&state, url).await.ok()?;
+                            tokio::task::spawn_blocking(move || {
+                                images::decode_pixels(&bytes, max_edge)
+                            })
                             .await
                             .ok()
                             .flatten()
+                        }
+                        .boxed()
+                        .shared();
+                        inflight.insert(key, p.clone());
+                        (p, None)
                     }
-                    .boxed()
-                    .shared();
-                    inflight.insert(key, p.clone());
-                    (p, true)
                 }
+            };
+            let result = pending.clone().await;
+            let Some(r) = bigger_rank else {
+                break (pending, result);
+            };
+            // Someone else's bigger fetch: cut ours from its result if it is the source.
+            match result {
+                Some(big) if is_source(r, &big) => return self.cut(url, max_edge, big).await,
+                Some(_) => share_bigger = false,
+                None => return None,
             }
         };
-        let result = pending.clone().await;
-        if !exact {
-            // Someone else's bigger fetch: cut ours from its result.
-            return match result {
-                Some(big) => self.cut(url, max_edge, big).await,
-                None => None,
-            };
-        }
         // Cache before leaving the in-flight map, so a request arriving in between
         // finds the pixels instead of starting a second fetch; and only remove our
         // own entry, not a newer fetch for the same URL.
@@ -287,13 +311,14 @@ mod tests {
     #[test]
     fn a_smaller_size_is_found_in_a_bigger_cached_one() {
         let cache = ImageCache::default();
-        cache.insert("u", 320, rgb(320, 320));
-        cache.insert("u", 640, rgb(640, 640));
+        // A 300 px source decoded for 320 and for 640: both hold the source as it is.
+        cache.insert("u", 320, rgb(300, 300));
+        cache.insert("u", 640, rgb(300, 300));
         cache.insert("other", 640, rgb(640, 640));
         let mut l = cache.lru.lock().expect("lock");
         let (px, exact) = l.find("u", rank(160)).expect("a bigger one");
         assert!(!exact);
-        assert_eq!(px.width(), 320, "the smallest bigger entry is cut from");
+        assert_eq!(px.width(), 300, "the smallest bigger entry is cut from");
         assert!(l.find("u", rank(320)).is_some_and(|(_, e)| e));
         assert!(
             l.find("u", rank(0)).is_none(),
@@ -301,6 +326,22 @@ mod tests {
         );
         assert!(l.find("u", rank(700)).is_none());
         assert!(l.find("nope", rank(10)).is_none());
+    }
+
+    #[test]
+    fn a_shrunk_entry_is_never_cut_from_again() {
+        let cache = ImageCache::default();
+        // A big source shrunk to 200 for one request: a 160 request must decode on its own
+        // (cutting 200 -> 160 would resample a resampled image).
+        cache.insert("u", 200, rgb(200, 200));
+        let mut l = cache.lru.lock().expect("lock");
+        assert!(l.find("u", rank(160)).is_none());
+        drop(l);
+        // The original size is always the source.
+        cache.insert("u", rank(0), rgb(1280, 1280));
+        let mut l = cache.lru.lock().expect("lock");
+        let (px, exact) = l.find("u", rank(160)).expect("from the original");
+        assert!(!exact && px.width() == 1280);
     }
 
     #[tokio::test]
