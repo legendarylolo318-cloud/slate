@@ -8,7 +8,6 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use serde_json::Value;
 use slate_core::queue::Track;
 
 use crate::backend::Backend;
@@ -63,24 +62,14 @@ fn track_url(id: u64) -> String {
 }
 
 fn title_of(t: &Track) -> String {
-    match t.extra.get("version").and_then(Value::as_str) {
-        Some(v) if !v.is_empty() => format!("{} ({v})", t.title()),
-        _ => t.title().to_string(),
+    match t.version() {
+        "" => t.title().to_string(),
+        v => format!("{} ({v})", t.title()),
     }
 }
 
 fn artists_of(t: &Track) -> Vec<String> {
-    let names: Vec<String> = t
-        .extra
-        .get("artists")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.get("name").and_then(Value::as_str))
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
+    let names: Vec<String> = t.artists.iter().map(|a| a.name.to_string()).collect();
     if names.is_empty() {
         vec![t.artist_name().to_string()]
     } else {
@@ -89,11 +78,7 @@ fn artists_of(t: &Track) -> Vec<String> {
 }
 
 fn album_of(t: &Track) -> &str {
-    t.extra
-        .get("album")
-        .and_then(|a| a.get("title"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
+    t.album_title()
 }
 
 fn seconds_of(t: &Track) -> u64 {
@@ -114,7 +99,7 @@ fn csv_field(s: &str) -> String {
 pub fn csv(tracks: &[Track]) -> String {
     let mut out = String::from("\u{feff}Title,Artists,Album,Duration (seconds),ISRC,TIDAL URL\r\n");
     for t in tracks {
-        let isrc = t.extra.get("isrc").and_then(Value::as_str).unwrap_or("");
+        let isrc = t.isrc.as_deref().unwrap_or("");
         let fields = [
             title_of(t),
             artists_of(t).join("; "),
@@ -312,12 +297,12 @@ fn write_atomically(path: &Path, body: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     fn track(id: u64, v: Value) -> Track {
         let mut t = Track::new(id);
         if let Value::Object(m) = v {
-            t.extra = m;
+            t.fill_from(m);
         }
         t
     }

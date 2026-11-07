@@ -16,14 +16,7 @@ use crate::models::with_tracks;
 static LATEST: AtomicU64 = AtomicU64::new(0);
 
 fn artists_text(t: &Track) -> String {
-    let names: Vec<&str> = t
-        .extra
-        .get("artists")
-        .and_then(|a| a.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|a| a.get("name")?.as_str())
-        .collect();
+    let names: Vec<&str> = t.artists.iter().map(|a| &*a.name).collect();
     if names.is_empty() {
         t.artist_name().to_string()
     } else {
@@ -41,13 +34,7 @@ pub fn view_for(cache: &BTreeMap<usize, Track>, query: &str, quality: QualityFil
             if !quality.accepts(b.tier, b.atmos) {
                 return false;
             }
-            let album = t
-                .extra
-                .get("album")
-                .and_then(|a| a.get("title"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            text_matches(&q, t.title(), &artists_text(t), album)
+            text_matches(&q, t.title(), &artists_text(t), t.album_title())
         })
         .map(|(i, _)| *i)
         .collect()
@@ -197,7 +184,7 @@ mod tests {
             "album": {"title": album},
             "audioQuality": quality,
         }) {
-            t.extra = m;
+            t.fill_from(m);
         }
         (id as usize, t)
     }

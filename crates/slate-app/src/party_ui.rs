@@ -121,13 +121,8 @@ fn request_track(t: &Track) -> RequestTrack {
         id: t.id,
         title: t.title().to_string(),
         artist: t.artist_name().to_string(),
-        quality: t
-            .extra
-            .get("audioQuality")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        explicit: t.extra.get("explicit").and_then(|v| v.as_bool()) == Some(true),
+        quality: t.audio_quality.as_deref().unwrap_or("").to_string(),
+        explicit: t.explicit == Some(true),
     }
 }
 
@@ -253,7 +248,7 @@ impl Backend {
                         Some(ctl) => ctl.with_queue(|q| q.current.clone()).await,
                         None => None,
                     };
-                    this.party_set_begin(current.as_ref());
+                    this.party_set_begin(current.as_deref());
                     this.party_set_count_shown();
                     this.party_show("host", link, Vec::new());
                     this.party_status("Party started. Share the link.");

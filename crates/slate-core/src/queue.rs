@@ -11,10 +11,11 @@
 //! stay compatible with the ones the original app wrote.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 pub const MAX_HISTORY_TRACKS: usize = 500;
 /// Seconds into a track after which "previous" restarts it instead of going back.
@@ -27,7 +28,7 @@ fn next_qid() -> String {
 }
 
 /// Make sure freshly minted ids never collide with restored ones.
-fn advance_counter_past(tracks: &[Track]) {
+fn advance_counter_past(tracks: &[TrackRef]) {
     for t in tracks {
         let n = t
             .qid
@@ -40,121 +41,9 @@ fn advance_counter_past(tracks: &[Track]) {
     }
 }
 
-/// A queued item (audio track or video). Unknown fields round-trip untouched.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Track {
-    pub id: u64,
-    #[serde(rename = "_qid", default, skip_serializing_if = "Option::is_none")]
-    pub qid: Option<String>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
+pub use crate::track::{PlayingFrom, Track};
 
 impl Track {
-    pub fn new(id: u64) -> Self {
-        Self {
-            id,
-            qid: None,
-            extra: Map::new(),
-        }
-    }
-
-    /// Builds a queue entry from any serializable item (a `TidalTrack`, a
-    /// video). Takes the serialized object as the field map directly instead of
-    /// deserializing it again, which `#[serde(flatten)]` makes expensive.
-    /// `None` when it does not serialize to an object with a numeric `id`.
-    pub fn from_serialized<T: Serialize>(item: &T) -> Option<Self> {
-        let Value::Object(mut extra) = serde_json::to_value(item).ok()? else {
-            return None;
-        };
-        let id = extra.remove("id")?.as_u64()?;
-        let qid = match extra.remove("_qid") {
-            Some(Value::String(q)) => Some(q),
-            Some(Value::Null) | None => None,
-            Some(_) => return None,
-        };
-        Some(Self { id, qid, extra })
-    }
-
-    pub fn is_video(&self) -> bool {
-        self.extra.get("itemType").and_then(Value::as_str) == Some("video")
-    }
-
-    /// All credited artists, for scrobblers that take a combined string.
-    pub fn artist_display(&self) -> String {
-        let names: Vec<&str> = self
-            .extra
-            .get("artists")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x.get("name").and_then(Value::as_str))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if names.is_empty() {
-            self.artist_name().to_string()
-        } else {
-            names.join(", ")
-        }
-    }
-
-    pub fn artist_name(&self) -> &str {
-        self.extra
-            .get("artist")
-            .and_then(|a| a.get("name"))
-            .and_then(Value::as_str)
-            .or_else(|| {
-                self.extra
-                    .get("artists")
-                    .and_then(|a| a.get(0))
-                    .and_then(|a| a.get("name"))
-                    .and_then(Value::as_str)
-            })
-            .unwrap_or("")
-    }
-
-    /// TIDAL image id of the cover (album cover, or the video's own image).
-    pub fn cover_id(&self) -> Option<&str> {
-        self.extra
-            .get("album")
-            .and_then(|a| a.get("cover"))
-            .and_then(Value::as_str)
-            .or_else(|| self.extra.get("imageId").and_then(Value::as_str))
-    }
-
-    pub fn duration_secs(&self) -> f32 {
-        self.extra
-            .get("duration")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0) as f32
-    }
-
-    pub fn title(&self) -> &str {
-        self.extra
-            .get("title")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-    }
-
-    /// Metadata says the track cannot be streamed right now. Missing flags mean
-    /// "available" so sparse responses do not grey everything out.
-    pub fn is_unavailable(&self, now_epoch_secs: i64) -> bool {
-        if self.is_video() {
-            return false;
-        }
-        if self.extra.get("streamReady").and_then(Value::as_bool) == Some(false)
-            || self.extra.get("allowStreaming").and_then(Value::as_bool) == Some(false)
-        {
-            return true;
-        }
-        self.extra
-            .get("streamStartDate")
-            .and_then(Value::as_str)
-            .and_then(parse_rfc3339_secs)
-            .is_some_and(|ts| ts > now_epoch_secs)
-    }
-
     fn stamped(mut self) -> Self {
         if self.qid.is_none() {
             self.qid = Some(next_qid());
@@ -167,22 +56,45 @@ impl Track {
         self
     }
 
-    fn source_tag(&self) -> Option<Source> {
-        self.extra
-            .get("_source")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    fn source_tag(&self) -> Option<&Source> {
+        self.source.as_deref()
     }
 
     fn strip_runtime(mut self) -> Self {
-        self.extra.remove("_playingFrom");
-        self.extra.remove("_contextFrom");
+        self.playing_from = None;
         self
+    }
+}
+
+/// A shared queue entry. Queues, histories and snapshots hold handles, so copying a list
+/// costs a pointer per track.
+pub type TrackRef = Arc<Track>;
+
+/// A source's track list, for a [`Source`] built from owned tracks.
+pub fn source_tracks(all: &[Track]) -> Arc<[TrackRef]> {
+    all.iter().cloned().map(Arc::new).collect()
+}
+
+fn stamped_ref(mut t: TrackRef) -> TrackRef {
+    if t.qid.is_none() {
+        Arc::make_mut(&mut t).qid = Some(next_qid());
+    }
+    t
+}
+
+fn stripped(t: &TrackRef) -> TrackRef {
+    if t.playing_from.is_some() {
+        let mut c = Track::clone(t);
+        c.playing_from = None;
+        Arc::new(c)
+    } else {
+        Arc::clone(t)
     }
 }
 
 /// Minimal RFC 3339 → epoch seconds (`YYYY-MM-DDTHH:MM:SS` with optional
 /// fraction and zone offset). Enough for TIDAL's `streamStartDate`.
-fn parse_rfc3339_secs(s: &str) -> Option<i64> {
+pub(crate) fn parse_rfc3339_secs(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() < 19 {
         return None;
@@ -227,13 +139,13 @@ pub struct Source {
     pub mix_type: Option<String>,
     /// Every track of the source, used to rebuild the queue for repeat-all.
     #[serde(default)]
-    pub tracks: Vec<Track>,
+    pub tracks: Arc<[TrackRef]>,
 }
 
 impl Source {
     fn tag(&self) -> Self {
         Self {
-            tracks: Vec::new(),
+            tracks: Arc::default(),
             ..self.clone()
         }
     }
@@ -288,7 +200,10 @@ pub enum Next {
     /// Repeat-one: replay the current track in place.
     ReplayCurrent,
     /// Start this track. `chosen_by_user` is false for autoplay radio.
-    Play { track: Track, chosen_by_user: bool },
+    Play {
+        track: TrackRef,
+        chosen_by_user: bool,
+    },
     /// Queue exhausted and autoplay is enabled: fetch radio for `current`,
     /// then call [`Queue::install_autoplay`].
     NeedAutoplay,
@@ -300,20 +215,20 @@ pub enum Next {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Previous {
     Restart,
-    Play(Track),
+    Play(TrackRef),
     /// No history and the track just started: nothing to do.
     Nothing,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct Queue {
-    pub current: Option<Track>,
+    pub current: Option<TrackRef>,
     /// Context queue (after the manual queue).
-    pub queue: Vec<Track>,
-    pub manual: Vec<Track>,
-    pub history: Vec<Track>,
+    pub queue: Vec<TrackRef>,
+    pub manual: Vec<TrackRef>,
+    pub history: Vec<TrackRef>,
     /// Pre-shuffle order of `queue`; `Some` only while shuffle is on.
-    pub original: Option<Vec<Track>>,
+    pub original: Option<Vec<TrackRef>>,
     pub shuffle: bool,
     /// Smarter shuffle (Settings → Playback): spread artists and albums.
     pub spread: bool,
@@ -330,8 +245,23 @@ pub struct Queue {
     autoplay_ids: Vec<u64>,
 }
 
-fn stamp_all(tracks: Vec<Track>) -> Vec<Track> {
-    tracks.into_iter().map(Track::restamped).collect()
+fn stamp_all(tracks: Vec<Track>) -> Vec<TrackRef> {
+    tracks
+        .into_iter()
+        .map(|t| Arc::new(t.restamped()))
+        .collect()
+}
+
+/// Fresh queue ids for tracks that are already shared: a copy of each, so the originals keep theirs.
+fn restamp_refs<'a>(tracks: impl IntoIterator<Item = &'a TrackRef>) -> Vec<TrackRef> {
+    tracks
+        .into_iter()
+        .map(|t| {
+            let mut c = Track::clone(t);
+            c.qid = Some(next_qid());
+            Arc::new(c)
+        })
+        .collect()
 }
 
 impl Queue {
@@ -353,7 +283,7 @@ impl Queue {
         self.original = None;
         self.context_source = None;
         self.playback_source = source.map(|s| Source {
-            tracks: stamp_all(s.tracks),
+            tracks: restamp_refs(s.tracks.iter()).into(),
             ..s
         });
         self.queue = stamp_all(tracks);
@@ -376,7 +306,7 @@ impl Queue {
         let ordered = self.queue.clone();
         self.original = self.shuffle.then(|| ordered.clone());
         let mut q = std::mem::take(&mut self.queue);
-        self.shuffle_vec(&mut q, first.or(self.current.as_ref()), rng);
+        self.shuffle_vec(&mut q, first.or(self.current.as_deref()), rng);
         self.queue = q;
     }
 
@@ -404,7 +334,7 @@ impl Queue {
         source: Option<Source>,
         album_mode: bool,
         rng: &mut impl rand::Rng,
-    ) -> Track {
+    ) -> TrackRef {
         let idx = all.iter().position(|t| t.id == track.id);
         let rest: Vec<Track> = match idx {
             Some(i) => all[i + 1..]
@@ -419,7 +349,7 @@ impl Queue {
         } else {
             self.set_tracks(rest, source, album_mode);
         }
-        track
+        Arc::new(track)
     }
 
     /// The full list of the playing source arrived after playback already started
@@ -431,7 +361,7 @@ impl Queue {
             return;
         };
         if let Some(src) = self.playback_source.as_mut() {
-            src.tracks = stamp_all(all.clone());
+            src.tracks = stamp_all(all.clone()).into();
         }
         if self.shuffle {
             let seen: std::collections::HashSet<u64> = self
@@ -466,7 +396,7 @@ impl Queue {
         album_mode: bool,
         shuffle: bool,
         rng: &mut impl rand::Rng,
-    ) -> Option<Track> {
+    ) -> Option<TrackRef> {
         if all.is_empty() {
             return None;
         }
@@ -483,23 +413,25 @@ impl Queue {
             };
             let first = all.remove(pick);
             self.set_shuffled_tracks(all, source, album_mode, Some(&first), rng);
-            Some(first)
+            Some(Arc::new(first))
         } else {
             let mut it = all.into_iter();
             let first = it.next();
             self.set_tracks(it.collect(), source, album_mode);
-            first
+            first.map(Arc::new)
         }
     }
 
     /// Append to the manual queue (plays before the context queue).
     pub fn add_to_queue(&mut self, track: Track, source: Option<&Source>) {
-        self.manual.push(Self::tagged(track, source).stamped());
+        self.manual
+            .push(Arc::new(Self::tagged(track, source).stamped()));
     }
 
     /// Insert at the head of the manual queue ("play next").
     pub fn play_next_in_queue(&mut self, track: Track, source: Option<&Source>) {
-        self.manual.insert(0, Self::tagged(track, source).stamped());
+        self.manual
+            .insert(0, Arc::new(Self::tagged(track, source).stamped()));
     }
 
     /// Insert into the manual queue at `index` (clamped to its end): where a party request
@@ -507,14 +439,12 @@ impl Queue {
     pub fn insert_manual(&mut self, index: usize, track: Track, source: Option<&Source>) {
         let at = index.min(self.manual.len());
         self.manual
-            .insert(at, Self::tagged(track, source).stamped());
+            .insert(at, Arc::new(Self::tagged(track, source).stamped()));
     }
 
     fn tagged(mut track: Track, source: Option<&Source>) -> Track {
         if let Some(s) = source {
-            if let Ok(v) = serde_json::to_value(s.tag()) {
-                track.extra.insert("_source".into(), v);
-            }
+            track.source = Some(Arc::new(s.tag()));
         }
         track
     }
@@ -526,13 +456,13 @@ impl Queue {
             orig.extend(fresh.iter().cloned());
         }
         if shuffle {
-            self.shuffle_vec(&mut fresh, self.queue.last(), rng);
+            self.shuffle_vec(&mut fresh, self.queue.last().map(|t| &**t), rng);
         }
         self.queue.extend(fresh);
     }
 
     /// Remove by position in the combined list (manual first, then context).
-    pub fn remove_at(&mut self, index: usize) -> Option<Track> {
+    pub fn remove_at(&mut self, index: usize) -> Option<TrackRef> {
         if index < self.manual.len() {
             return Some(self.manual.remove(index));
         }
@@ -546,7 +476,7 @@ impl Queue {
     }
 
     /// Take the track at `index` of the combined list so the caller can play it.
-    pub fn take_at(&mut self, index: usize) -> Option<Track> {
+    pub fn take_at(&mut self, index: usize) -> Option<TrackRef> {
         self.remove_at(index)
     }
 
@@ -561,11 +491,11 @@ impl Queue {
     }
 
     /// Replace both queues after a drag-and-drop reorder, keeping queue ids.
-    pub fn reorder(&mut self, tracks: Vec<Track>, manual_count: usize) {
-        let stamped: Vec<Track> = tracks.into_iter().map(Track::stamped).collect();
+    pub fn reorder(&mut self, tracks: Vec<TrackRef>, manual_count: usize) {
+        let mut stamped: Vec<TrackRef> = tracks.into_iter().map(stamped_ref).collect();
         let mc = manual_count.min(stamped.len());
-        self.manual = stamped[..mc].to_vec();
-        self.queue = stamped[mc..].to_vec();
+        self.queue = stamped.split_off(mc);
+        self.manual = stamped;
     }
 
     /// Moves the upcoming track at `from` to position `to` of the combined list (manual first,
@@ -573,7 +503,7 @@ impl Queue {
     /// front part plays next. Returns false when either index is out of range.
     pub fn move_upcoming(&mut self, from: usize, to: usize) -> bool {
         let manual = self.manual.len();
-        let mut all: Vec<Track> = self
+        let mut all: Vec<TrackRef> = self
             .manual
             .iter()
             .chain(self.queue.iter())
@@ -584,8 +514,8 @@ impl Queue {
         }
         let item = all.remove(from);
         all.insert(to, item);
-        self.manual = all[..manual].to_vec();
-        self.queue = all[manual..].to_vec();
+        self.queue = all.split_off(manual);
+        self.manual = all;
         true
     }
 
@@ -599,7 +529,7 @@ impl Queue {
 
     /// Shuffles `v` (plain, or spread when the setting is on); `prev` is the track
     /// that comes before it.
-    fn shuffle_vec(&self, v: &mut Vec<Track>, prev: Option<&Track>, rng: &mut impl rand::Rng) {
+    fn shuffle_vec(&self, v: &mut Vec<TrackRef>, prev: Option<&Track>, rng: &mut impl rand::Rng) {
         if self.album_shuffle {
             crate::shuffle::album_shuffle(v, prev, self.spread, rng);
         } else if self.spread {
@@ -611,7 +541,7 @@ impl Queue {
 
     fn shuffle_queue(&mut self, rng: &mut impl rand::Rng) {
         let mut q = std::mem::take(&mut self.queue);
-        self.shuffle_vec(&mut q, self.current.as_ref(), rng);
+        self.shuffle_vec(&mut q, self.current.as_deref(), rng);
         self.queue = q;
     }
 
@@ -661,7 +591,7 @@ impl Queue {
     // ---------- starting a track ----------
 
     /// Record `track` as now playing; the previous one goes to history.
-    pub fn begin(&mut self, track: Track, skip_history_push: bool) {
+    pub fn begin(&mut self, track: impl Into<TrackRef>, skip_history_push: bool) {
         if let Some(prev) = self.current.take() {
             if !skip_history_push {
                 self.history.push(prev);
@@ -671,14 +601,12 @@ impl Queue {
                 }
             }
         }
-        let mut track = track.stamped();
+        let mut track = stamped_ref(track.into());
         // Remember where this was playing from so Previous can restore it.
-        if let Ok(v) = serde_json::to_value(&self.playback_source) {
-            track.extra.insert("_playingFrom".into(), v);
-        }
-        if let Ok(v) = serde_json::to_value(&self.context_source) {
-            track.extra.insert("_contextFrom".into(), v);
-        }
+        Arc::make_mut(&mut track).playing_from = Some(Arc::new(PlayingFrom {
+            playback: self.playback_source.clone(),
+            context: self.context_source.clone(),
+        }));
         self.current = Some(track);
     }
 
@@ -688,18 +616,20 @@ impl Queue {
     /// It goes to the head of the manual queue: with the manual queue now surviving
     /// a click, the context head would be played after everything queued by hand
     /// and the track the user picked (or was about to hear) would be skipped.
-    pub fn requeue_head(&mut self, track: Track) {
-        let mut track = track;
-        track.extra.remove("_source");
-        self.manual.insert(0, track.stamped());
+    pub fn requeue_head(&mut self, track: impl Into<TrackRef>) {
+        let mut track = track.into();
+        if track.source.is_some() {
+            Arc::make_mut(&mut track).source = None;
+        }
+        self.manual.insert(0, stamped_ref(track));
     }
 
     /// For a clicked track that turned out dead: takes the manual queue out of the
     /// way so the next track comes from the track's own album or playlist. Returns
     /// it (empty when the context has nothing `playable`, so the manual queue
     /// plays as before). Give it back with [`Queue::release_manual`].
-    pub fn hold_manual_for_context(&mut self, playable: impl Fn(&Track) -> bool) -> Vec<Track> {
-        if self.queue.iter().any(playable) {
+    pub fn hold_manual_for_context(&mut self, playable: impl Fn(&Track) -> bool) -> Vec<TrackRef> {
+        if self.queue.iter().any(|t| playable(t)) {
             std::mem::take(&mut self.manual)
         } else {
             Vec::new()
@@ -708,7 +638,7 @@ impl Queue {
 
     /// Puts tracks held by [`Queue::hold_manual_for_context`] back behind anything
     /// that was queued to play next in the meantime (a rate-limited retry).
-    pub fn release_manual(&mut self, held: Vec<Track>) {
+    pub fn release_manual(&mut self, held: Vec<TrackRef>) {
         self.manual.extend(held);
     }
 
@@ -725,7 +655,7 @@ impl Queue {
         explicit: bool,
         rng: &mut impl rand::Rng,
         mut skip: impl FnMut(&Track) -> Option<Skip>,
-    ) -> (Next, Vec<Track>) {
+    ) -> (Next, Vec<TrackRef>) {
         let mut dropped = Vec::new();
 
         if self.repeat == Repeat::One && !explicit && self.current.is_some() {
@@ -747,10 +677,12 @@ impl Queue {
                 if self.context_source.is_none() {
                     self.context_source = self.playback_source.clone();
                 }
-                self.playback_source = Some(tag);
+                self.playback_source = Some(tag.clone());
             }
             let mut track = track;
-            track.extra.remove("_source");
+            if track.source.is_some() {
+                Arc::make_mut(&mut track).source = None;
+            }
             return (
                 Next::Play {
                     track,
@@ -823,29 +755,23 @@ impl Queue {
         &mut self,
         rng: &mut impl rand::Rng,
         skip: &mut impl FnMut(&Track) -> Option<Skip>,
-    ) -> Option<Track> {
+    ) -> Option<TrackRef> {
         let source = self
             .context_source
             .as_ref()
             .or(self.playback_source.as_ref());
         let from_source = source.map(|s| s.tracks.clone()).filter(|t| !t.is_empty());
         let has_source = from_source.is_some();
-        let raw = from_source.unwrap_or_else(|| {
-            self.history
-                .iter()
-                .cloned()
-                .chain(self.current.clone())
-                .collect()
-        });
-        let mut all: Vec<Track> = stamp_all(raw)
-            .into_iter()
-            .filter(|t| skip(t).is_none())
-            .collect();
+        let raw: Vec<TrackRef> = match from_source {
+            Some(t) => restamp_refs(t.iter()),
+            None => restamp_refs(self.history.iter().chain(self.current.iter())),
+        };
+        let mut all: Vec<TrackRef> = raw.into_iter().filter(|t| skip(t).is_none()).collect();
         if all.is_empty() {
             return None;
         }
         if self.shuffle {
-            self.shuffle_vec(&mut all, self.current.as_ref(), rng);
+            self.shuffle_vec(&mut all, self.current.as_deref(), rng);
         }
         let first = all.remove(0);
         self.original = self.shuffle.then(|| {
@@ -867,7 +793,7 @@ impl Queue {
         &mut self,
         radio: Vec<Track>,
         mut skip: impl FnMut(&Track) -> Option<Skip>,
-    ) -> Option<Track> {
+    ) -> Option<TrackRef> {
         let mut heard: std::collections::HashSet<u64> = self.history.iter().map(|t| t.id).collect();
         if let Some(c) = &self.current {
             heard.insert(c.id);
@@ -879,7 +805,7 @@ impl Queue {
         if fresh.is_empty() {
             return None;
         }
-        let first = fresh.remove(0);
+        let first = Arc::new(fresh.remove(0));
         self.epoch += 1;
         self.autoplay_ids = fresh.iter().map(|t| t.id).collect();
         self.queue = stamp_all(fresh);
@@ -890,9 +816,10 @@ impl Queue {
 
     /// Puts `track` back at the head of an installed autoplay block, so the block plays
     /// after the current track instead of interrupting it (a DJ steered mid-song).
-    pub fn unshift_autoplay(&mut self, track: Track) {
+    pub fn unshift_autoplay(&mut self, track: impl Into<TrackRef>) {
+        let track: TrackRef = track.into();
         self.autoplay_ids.insert(0, track.id);
-        self.queue.insert(0, track.restamped());
+        self.queue.insert(0, restamp_refs([&track]).remove(0));
     }
 
     /// Decide what "previous" does at `position_secs` into the current track.
@@ -906,19 +833,15 @@ impl Queue {
         // The track we are leaving goes to the head of the manual queue, tagged
         // with its source so going forward restores "Playing from".
         if let Some(cur) = self.current.take() {
-            let cur = cur.strip_runtime();
+            let cur = Track::clone(&cur).strip_runtime();
             let tagged = Self::tagged(cur, self.playback_source.as_ref());
-            self.manual.insert(0, tagged);
+            self.manual.insert(0, Arc::new(tagged));
         }
-        if let Some(from) = prev.extra.get("_playingFrom") {
-            self.playback_source = serde_json::from_value(from.clone()).ok().flatten();
-            self.context_source = prev
-                .extra
-                .get("_contextFrom")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .flatten();
+        if let Some(from) = prev.playing_from.clone() {
+            self.playback_source = from.playback.clone();
+            self.context_source = from.context.clone();
+            Arc::make_mut(&mut prev).playing_from = None;
         }
-        prev = prev.strip_runtime();
         Previous::Play(prev)
     }
 
@@ -950,8 +873,8 @@ impl Queue {
     /// The engine already switched to a pre-armed track: reconcile the queues and
     /// make it current. Removes exactly one entry, matched by `qid` (falling back
     /// to the track id), so duplicates elsewhere in the list survive.
-    pub fn adopt_advanced(&mut self, track_id: u64, qid: &str) -> Option<Track> {
-        let by_qid = |t: &Track| t.qid.as_deref() == Some(qid);
+    pub fn adopt_advanced(&mut self, track_id: u64, qid: &str) -> Option<TrackRef> {
+        let by_qid = |t: &TrackRef| t.qid.as_deref() == Some(qid);
         let track = if let Some(i) = self.manual.iter().position(by_qid) {
             self.manual.remove(i)
         } else {
@@ -966,34 +889,34 @@ impl Queue {
             t
         };
         let mut track = track;
-        track.extra.remove("_source");
-        self.begin(track.clone(), false);
-        Some(track)
+        if track.source.is_some() {
+            Arc::make_mut(&mut track).source = None;
+        }
+        self.begin(Arc::clone(&track), false);
+        // `begin` marks its own copy, which is what `current` holds.
+        self.current.clone()
     }
 
     /// Everything currently queued, manual first (what the queue view shows).
-    pub fn upcoming(&self) -> impl Iterator<Item = &Track> {
+    pub fn upcoming(&self) -> impl Iterator<Item = &TrackRef> {
         self.manual.iter().chain(self.queue.iter())
     }
 
     // ---------- persistence ----------
 
     pub fn snapshot(&self) -> Snapshot {
-        let strip = |v: &[Track]| {
-            v.iter()
-                .cloned()
-                .map(Track::strip_runtime)
-                .collect::<Vec<_>>()
-        };
+        // Handles, not copies; only tracks carrying a runtime mark (history, the current track)
+        // are copied, to leave the mark out.
+        let strip = |v: &[TrackRef]| v.iter().map(stripped).collect::<Vec<_>>();
         let start = self.history.len().saturating_sub(MAX_HISTORY_TRACKS);
         let strip_src = |s: &Option<Source>| {
             s.as_ref().map(|s| Source {
-                tracks: strip(&s.tracks),
+                tracks: s.tracks.iter().map(stripped).collect(),
                 ..s.clone()
             })
         };
         Snapshot {
-            current_track: self.current.clone().map(Track::strip_runtime),
+            current_track: self.current.as_ref().map(stripped),
             queue: strip(&self.queue),
             history: strip(&self.history[start..]),
             original_queue: self.original.as_deref().map(strip),
@@ -1006,7 +929,7 @@ impl Queue {
     /// Restore a snapshot. `keep` filters out tracks that should not come back
     /// (content preferences, no longer playable).
     pub fn restore(&mut self, snap: Snapshot, keep: impl Fn(&Track) -> bool) {
-        let filt = |v: Vec<Track>| v.into_iter().filter(|t| keep(t)).collect::<Vec<_>>();
+        let filt = |v: Vec<TrackRef>| v.into_iter().filter(|t| keep(t)).collect::<Vec<_>>();
         let queue = filt(snap.queue);
         let history = filt(snap.history);
         let manual = filt(snap.manual_queue);
@@ -1018,8 +941,8 @@ impl Queue {
             advance_counter_past(o);
         }
         self.current = snap.current_track;
-        self.queue = queue.into_iter().map(Track::stamped).collect();
-        self.manual = manual.into_iter().map(Track::stamped).collect();
+        self.queue = queue.into_iter().map(stamped_ref).collect();
+        self.manual = manual.into_iter().map(stamped_ref).collect();
         self.history = history;
         self.original = original.filter(|_| self.shuffle);
         self.playback_source = snap.playback_source;
@@ -1031,10 +954,15 @@ impl Queue {
 /// Index in `all` of the first track (in album order) of a randomly chosen album.
 fn first_of_random_album(all: &[Track], rng: &mut impl rand::Rng) -> usize {
     // Tag copies with their index, so the pick is found again even among duplicates.
-    let mut tracks: Vec<Track> = all.to_vec();
-    for (i, t) in tracks.iter_mut().enumerate() {
-        t.qid = Some(i.to_string());
-    }
+    let mut tracks: Vec<TrackRef> = all
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let mut c = Track::clone(t);
+            c.qid = Some(i.to_string());
+            Arc::new(c)
+        })
+        .collect();
     crate::shuffle::album_shuffle(&mut tracks, None, false, rng);
     tracks
         .first()
@@ -1053,15 +981,15 @@ fn rng_index(rng: &mut impl rand::Rng, len: usize) -> usize {
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     #[serde(default)]
-    pub current_track: Option<Track>,
+    pub current_track: Option<TrackRef>,
     #[serde(default)]
-    pub queue: Vec<Track>,
+    pub queue: Vec<TrackRef>,
     #[serde(default)]
-    pub history: Vec<Track>,
+    pub history: Vec<TrackRef>,
     #[serde(default)]
-    pub original_queue: Option<Vec<Track>>,
+    pub original_queue: Option<Vec<TrackRef>>,
     #[serde(default)]
-    pub manual_queue: Vec<Track>,
+    pub manual_queue: Vec<TrackRef>,
     #[serde(default)]
     pub playback_source: Option<Source>,
     #[serde(default)]
@@ -1094,7 +1022,7 @@ mod tests {
     #[test]
     fn a_party_request_can_be_inserted_anywhere_in_next_up() {
         let mut q = Queue::new();
-        q.manual = vec![Track::new(1), Track::new(2)];
+        q.manual = vec![Arc::new(Track::new(1)), Arc::new(Track::new(2))];
         q.insert_manual(0, Track::new(7), None);
         q.insert_manual(2, Track::new(8), None);
         q.insert_manual(99, Track::new(9), None);
@@ -1104,8 +1032,12 @@ mod tests {
     #[test]
     fn moving_an_upcoming_track_keeps_the_next_up_count() {
         let mut q = Queue::new();
-        q.manual = vec![Track::new(1), Track::new(2)];
-        q.queue = vec![Track::new(3), Track::new(4), Track::new(5)];
+        q.manual = vec![Arc::new(Track::new(1)), Arc::new(Track::new(2))];
+        q.queue = vec![
+            Arc::new(Track::new(3)),
+            Arc::new(Track::new(4)),
+            Arc::new(Track::new(5)),
+        ];
         // From the context part to the front: it becomes the first next-up track.
         assert!(q.move_upcoming(3, 0));
         assert_eq!(split_ids(&q), (vec![4, 1], vec![2, 3, 5]));
@@ -1145,7 +1077,7 @@ mod tests {
         Track::new(id)
     }
 
-    fn ids(v: &[Track]) -> Vec<u64> {
+    fn ids(v: &[TrackRef]) -> Vec<u64> {
         v.iter().map(|t| t.id).collect()
     }
 
@@ -1161,7 +1093,7 @@ mod tests {
             image: None,
             subtitle: None,
             mix_type: None,
-            tracks,
+            tracks: tracks.into_iter().map(Arc::new).collect(),
         }
     }
 
@@ -1471,7 +1403,7 @@ mod tests {
     fn snapshot_round_trips_and_matches_original_field_names() {
         let mut q = Queue::new();
         let mut tr = t(1);
-        tr.extra.insert("title".into(), Value::from("Song"));
+        tr.title = "Song".into();
         q.set_tracks(vec![tr, t(2)], Some(src("A", vec![t(1), t(2)])), false);
         q.begin(t(7), false);
         let json = q.snapshot().to_json().expect("json");
@@ -1542,8 +1474,8 @@ mod tests {
         // video heads are not gapless
         q.manual.clear();
         let mut v = t(8);
-        v.extra.insert("itemType".into(), Value::from("video"));
-        q.manual.push(v.stamped());
+        v.item_type = Some("video".into());
+        q.manual.push(Arc::new(v.stamped()));
         assert!(q.pick_gapless_next(now, |_| false).is_none());
     }
 
@@ -1610,18 +1542,15 @@ mod tests {
     fn unavailability_rules() {
         let mut a = t(1);
         assert!(!a.is_unavailable(0));
-        a.extra.insert("allowStreaming".into(), Value::Bool(false));
+        a.allow_streaming = Some(false);
         assert!(a.is_unavailable(0));
         let mut b = t(2);
-        b.extra.insert(
-            "streamStartDate".into(),
-            Value::from("2030-01-01T00:00:00.000+0000"),
-        );
+        b.stream_start_date = Some("2030-01-01T00:00:00.000+0000".into());
         assert!(b.is_unavailable(1_700_000_000));
         assert!(!b.is_unavailable(2_000_000_000));
         let mut v = t(3);
-        v.extra.insert("itemType".into(), Value::from("video"));
-        v.extra.insert("streamReady".into(), Value::Bool(false));
+        v.item_type = Some("video".into());
+        v.stream_ready = Some(false);
         assert!(!v.is_unavailable(0));
     }
 

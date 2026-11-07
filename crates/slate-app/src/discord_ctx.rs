@@ -88,10 +88,9 @@ impl Backend {
     /// Year of a track's album, for `{year}`.
     pub(crate) fn year_of(track: &Track) -> String {
         track
-            .extra
-            .get("album")
-            .and_then(|a| a.get("releaseDate"))
-            .and_then(|v| v.as_str())
+            .album
+            .as_ref()
+            .and_then(|a| a.release_date.as_deref())
             .and_then(|d| d.get(..4))
             .unwrap_or("")
             .to_string()

@@ -422,7 +422,10 @@ impl Backend {
         let (this, kind) = (self.clone(), kind.to_string());
         self.rt.spawn(async move {
             let Some(ctl) = this.controller() else { return };
-            if let Some(t) = ctl.with_queue(|q| q.upcoming().nth(index).cloned()).await {
+            if let Some(t) = ctl
+                .with_queue(|q| q.upcoming().nth(index).map(|t| Track::clone(t)))
+                .await
+            {
                 if kind == "versions" {
                     this.show_track_versions(t, None, Some(index));
                 } else {
@@ -461,23 +464,15 @@ impl Backend {
 
 /// TIDAL album id of a queue track.
 pub(crate) fn album_id(t: &Track) -> Option<u64> {
-    t.extra.get("album")?.get("id")?.as_u64()
+    t.album_id()
 }
 
 /// Every credited artist with a page, primary first, without repeats.
 pub(crate) fn artists_of(t: &Track) -> Vec<(u64, String)> {
     let mut out: Vec<(u64, String)> = Vec::new();
-    let one = |v: &serde_json::Value| {
-        Some((v.get("id")?.as_u64()?, v.get("name")?.as_str()?.to_string()))
-    };
-    let primary = t.extra.get("artist").and_then(one);
-    let all = t
-        .extra
-        .get("artists")
-        .and_then(|a| a.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(one);
+    let one = |a: &slate_core::track::Artist| Some((a.id?, a.name.to_string()));
+    let primary = t.artist.as_deref().and_then(one);
+    let all = t.artists.iter().filter_map(|a| one(a));
     for a in primary.into_iter().chain(all) {
         if !out.iter().any(|(id, _)| *id == a.0) {
             out.push(a);
@@ -494,7 +489,7 @@ mod goto_tests {
     fn track(v: serde_json::Value) -> Track {
         let mut t = Track::new(1);
         if let serde_json::Value::Object(m) = v {
-            t.extra = m;
+            t.fill_from(m);
         }
         t
     }

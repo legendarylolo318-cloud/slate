@@ -40,13 +40,7 @@ impl NowInfo {
             id: track.id,
             title: track.title().to_string(),
             artist: track.artist_name().to_string(),
-            album: track
-                .extra
-                .get("album")
-                .and_then(|a| a.get("title"))
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
+            album: track.album_title().to_string(),
             cover_url: track
                 .cover_id()
                 .map(|c| crate::images::tidal_image_url(c, 320)),
@@ -270,7 +264,7 @@ impl Backend {
                 image: None,
                 subtitle: None,
                 mix_type: None,
-                tracks: all.clone(),
+                tracks: slate_core::queue::source_tracks(&all),
             };
             let album = kind == "album" && !shuffle;
             let outcome = ctl.play_all(all, Some(source), album, shuffle).await;
@@ -356,7 +350,7 @@ impl Backend {
         if !state.mcp_active.load(Ordering::Relaxed) {
             return;
         }
-        let snap = |t: &Track| {
+        let snap = |t: &std::sync::Arc<Track>| {
             slate_core::mcp::hooks::snapshot(
                 t.id,
                 t.title(),
@@ -412,7 +406,7 @@ mod tests {
             "artist": {"name": "Band"},
             "album": {"title": "Record", "cover": "ab-cd"},
         }) {
-            t.extra = m;
+            t.fill_from(m);
         }
         let n = NowInfo::of(&t);
         assert_eq!(

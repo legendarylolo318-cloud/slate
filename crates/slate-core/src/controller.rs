@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use crate::commands::{pages, playback, scrobble, utility};
-use crate::queue::{Next, Previous, Queue, Repeat, Skip, Snapshot, Source, Track};
+use crate::queue::{Next, Previous, Queue, Repeat, Skip, Snapshot, Source, Track, TrackRef};
 use crate::sync::LockExt;
 use crate::tidal_api::StreamInfo;
 use crate::{AppState, SlateError};
@@ -58,9 +58,7 @@ impl ContentPrefs {
     }
 
     pub fn blocks(&self, t: &Track) -> bool {
-        let flag = |k: &str| t.extra.get(k).and_then(serde_json::Value::as_bool);
-        (!self.allow_explicit && flag("explicit") == Some(true))
-            || (!self.allow_ai && flag("ai") == Some(true))
+        (!self.allow_explicit && t.explicit == Some(true)) || (!self.allow_ai && t.ai == Some(true))
     }
 }
 
@@ -98,7 +96,7 @@ impl PlayFailure {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
     /// A track is now playing.
-    Playing(Track),
+    Playing(TrackRef),
     /// The current track restarted from 0.
     Restarted,
     /// Nothing left to play; playback stopped.
@@ -166,13 +164,7 @@ fn by_artist(t: &Track, name: &str) -> bool {
     if name.is_empty() {
         return false;
     }
-    let listed = t
-        .extra
-        .get("artists")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|a| a.get("name").and_then(serde_json::Value::as_str));
+    let listed = t.artists.iter().map(|a| &*a.name);
     listed
         .chain(std::iter::once(t.artist_name()))
         .any(|a| a.trim().to_lowercase() == name)
@@ -272,7 +264,7 @@ impl Controller {
     async fn start(
         &self,
         q: &mut Queue,
-        track: Track,
+        track: TrackRef,
         chosen_by_user: bool,
     ) -> Result<(), PlayFailure> {
         let use_gain = q.track_gain();
@@ -317,13 +309,7 @@ impl Controller {
     /// Tells scrobblers and TIDAL play reporting a track began.
     async fn notify_started(&self, q: &Queue, track: &Track, chosen_by_user: bool) {
         let source = q.playback_source.as_ref();
-        let album = track
-            .extra
-            .get("album")
-            .and_then(|a| a.get("title"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string)
-            .filter(|s| !s.is_empty());
+        let album = Some(track.album_title().to_string()).filter(|s| !s.is_empty());
         let payload = scrobble::TrackStartedPayload {
             artist: track.artist_display(),
             artist_primary: track.artist_name().to_string(),
@@ -331,17 +317,9 @@ impl Controller {
             album,
             album_artist: None,
             duration_secs: track.duration_secs() as u32,
-            track_number: track
-                .extra
-                .get("trackNumber")
-                .and_then(serde_json::Value::as_u64)
-                .map(|n| n as u32),
+            track_number: track.track_number,
             chosen_by_user,
-            isrc: track
-                .extra
-                .get("isrc")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string),
+            isrc: track.isrc.as_deref().map(str::to_string),
             track_id: Some(track.id),
             source_type: source.map(|s| s.kind.clone()),
             source_id: source.map(|s| match &s.id {
@@ -375,7 +353,7 @@ impl Controller {
             return Outcome::Failed(PlayFailure::Filtered);
         }
         q.set_tracks(Vec::new(), None, false);
-        self.finish_start(&mut q, track, true).await
+        self.finish_start(&mut q, Arc::new(track), true).await
     }
 
     /// Play `track` from `all`, queueing the remainder.
@@ -419,7 +397,7 @@ impl Controller {
     }
 
     /// Start `track`; if it turns out to be unplayable, continue down the queue.
-    async fn finish_start(&self, q: &mut Queue, track: Track, chosen: bool) -> Outcome {
+    async fn finish_start(&self, q: &mut Queue, track: TrackRef, chosen: bool) -> Outcome {
         match self.start(q, track.clone(), chosen).await {
             Ok(()) => Outcome::Playing(track),
             Err(PlayFailure::Unplayable) => self.advance_context_first(q).await,
@@ -508,12 +486,7 @@ impl Controller {
             return None;
         }
         let next = q.manual.first().or_else(|| q.queue.first())?;
-        let album = |t: &Track| {
-            t.extra
-                .get("album")
-                .and_then(|a| a.get("id"))
-                .and_then(serde_json::Value::as_u64)
-        };
+        let album = |t: &Track| t.album_id();
         let s = self.state.load_settings().unwrap_or_default();
         let boundary = crate::crossfade::Boundary {
             exclusive_or_bit_perfect: s.exclusive_mode || s.bit_perfect,
@@ -622,14 +595,9 @@ impl Controller {
         }
     }
 
-    async fn autoplay(&self, q: &mut Queue) -> Option<Track> {
+    async fn autoplay(&self, q: &mut Queue) -> Option<TrackRef> {
         let current = q.current.as_ref()?;
-        let mix_id = current
-            .extra
-            .get("mixes")
-            .and_then(|m| m.get("TRACK_MIX"))
-            .and_then(serde_json::Value::as_str)?
-            .to_string();
+        let mix_id = current.track_mix.as_deref()?.to_string();
         let result = pages::get_mix_items(&self.state, mix_id).await.ok()?;
         let radio: Vec<Track> = result
             .tracks
@@ -677,13 +645,7 @@ impl Controller {
 
     /// What the DJ's model is told about the session (titles and artists only).
     fn dj_context(&self, q: &Queue) -> crate::dj::DjContext {
-        let title = |t: &Track| {
-            t.extra
-                .get("title")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("")
-                .to_string()
-        };
+        let title = |t: &Track| t.title().to_string();
         let artist = |t: &Track| t.artist_display();
         crate::dj::DjContext {
             current: q.current.as_ref().map(|t| (title(t), artist(t))),
@@ -807,7 +769,7 @@ impl Controller {
     }
 
     /// Installs a fetched block as the autoplay queue and announces it.
-    fn dj_install(&self, q: &mut Queue, pick: DjPick) -> Option<Track> {
+    fn dj_install(&self, q: &mut Queue, pick: DjPick) -> Option<TrackRef> {
         let DjPick { move_, tracks } = pick;
         let prefs = self.prefs();
         let first = match q.install_autoplay(tracks, |t| {
@@ -976,7 +938,7 @@ impl Controller {
     /// DJ autoplay: uses the block [`Self::dj_prepare`] fetched for this queue, if any,
     /// otherwise asks the model now (a dead clicked track that ends a collection).
     /// `None` = DJ unavailable/disabled → caller falls back to `autoplay`.
-    async fn dj_autoplay(&self, q: &mut Queue) -> Option<Track> {
+    async fn dj_autoplay(&self, q: &mut Queue) -> Option<TrackRef> {
         let ready = self.dj_ready.lock_safe().take();
         let pick = match ready {
             Some((key, pick)) if key == dj_key(q) => pick,
@@ -996,7 +958,7 @@ impl Controller {
     }
 
     /// DJ if available, else the usual TRACK_MIX radio. Drop-in for `autoplay`.
-    async fn autoplay_or_dj(&self, q: &mut Queue) -> Option<Track> {
+    async fn autoplay_or_dj(&self, q: &mut Queue) -> Option<TrackRef> {
         if let Some(first) = self.dj_autoplay(q).await {
             return Some(first);
         }
@@ -1248,7 +1210,7 @@ impl Controller {
         let wanted = {
             let q = self.lock_queue().await;
             let prefs = self.prefs();
-            if !self.gapless_enabled() || q.current.as_ref().is_none_or(Track::is_video) {
+            if !self.gapless_enabled() || q.current.as_ref().is_none_or(|t| t.is_video()) {
                 None
             } else {
                 q.pick_gapless_next(now_secs(), |t| prefs.blocks(t))
@@ -1300,7 +1262,7 @@ impl Controller {
 
     /// The engine switched to the armed track by itself (`track-advanced`).
     /// Audio reality wins: reconcile the queue and adopt it. Returns the track now playing.
-    pub async fn on_track_advanced(&self, payload: &serde_json::Value) -> Option<Track> {
+    pub async fn on_track_advanced(&self, payload: &serde_json::Value) -> Option<TrackRef> {
         use std::sync::atomic::Ordering::Relaxed;
         crate::dj_voice::track_changed();
         let track_id = payload.get("trackId").and_then(serde_json::Value::as_u64)?;
@@ -1335,8 +1297,8 @@ impl Controller {
                 let meta = crate::commands::metadata::get_track(&self.state, track_id)
                     .await
                     .ok()?;
-                let t: Track = serde_json::from_value(meta).ok()?;
-                q.begin(t.clone(), false);
+                let t: TrackRef = Arc::new(serde_json::from_value::<Track>(meta).ok()?);
+                q.begin(Arc::clone(&t), false);
                 t
             }
         };
@@ -1389,7 +1351,7 @@ impl Controller {
 
     /// Restore the saved queue. The current track is returned (not started) so
     /// the UI can show it paused, as the original app does.
-    pub async fn restore(&self) -> Result<Option<Track>, SlateError> {
+    pub async fn restore(&self) -> Result<Option<TrackRef>, SlateError> {
         let state = Arc::clone(&self.state);
         let raw = tokio::task::spawn_blocking(move || playback::load_playback_queue(&state))
             .await
@@ -1408,17 +1370,14 @@ mod tests {
     use super::*;
 
     fn track(id: u64, artists: &[&str]) -> Track {
-        let mut t = Track::new(id);
-        t.extra.insert(
-            "artists".into(),
-            serde_json::Value::Array(
-                artists
-                    .iter()
-                    .map(|a| serde_json::json!({ "name": a }))
-                    .collect(),
-            ),
-        );
-        t
+        Track::from_serialized(&serde_json::json!({
+            "id": id,
+            "artists": artists
+                .iter()
+                .map(|a| serde_json::json!({ "name": a }))
+                .collect::<Vec<_>>(),
+        }))
+        .expect("track")
     }
 
     #[test]
@@ -1484,7 +1443,7 @@ mod tests {
     #[test]
     fn content_prefs_block_flagged_tracks() {
         let mut t = Track::new(1);
-        t.extra.insert("explicit".into(), true.into());
+        t.explicit = Some(true);
         assert!(!ContentPrefs::default().blocks(&t));
         for (e, a) in [(false, false), (true, false), (false, true), (true, true)] {
             let p = ContentPrefs::hiding(e, a);

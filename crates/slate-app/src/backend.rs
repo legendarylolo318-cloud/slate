@@ -651,13 +651,7 @@ impl Backend {
         self.set_now(Some(crate::remote::NowInfo::of(track)));
 
         if let Some(state) = self.state() {
-            let album = track
-                .extra
-                .get("album")
-                .and_then(|a| a.get("title"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let album = track.album_title().to_string();
             let badges = crate::quality::track_badges(track);
             let year = Self::year_of(track);
             let mut meta = playback::MprisMetadata {

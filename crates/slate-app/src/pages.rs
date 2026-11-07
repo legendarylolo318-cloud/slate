@@ -645,7 +645,7 @@ impl Backend {
                 image: None,
                 subtitle: None,
                 mix_type: None,
-                tracks: all.clone(),
+                tracks: slate_core::queue::source_tracks(&all),
             };
             let album = kind == "album";
             let outcome = ctl.play_all(all, Some(source), album, false).await;
@@ -1264,7 +1264,7 @@ impl Backend {
                 image: None,
                 subtitle: None,
                 mix_type: None,
-                tracks: all.clone(),
+                tracks: slate_core::queue::source_tracks(&all),
             };
             let outcome = ctl.play_all(all, Some(source), false, shuffle).await;
             this.apply(outcome).await;

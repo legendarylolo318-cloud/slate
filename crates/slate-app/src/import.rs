@@ -421,7 +421,7 @@ mod tests {
             "album": {"title": "Line1\nLine2"},
             "duration": 215,
         }) {
-            t.extra = m;
+            t.fill_from(m);
         }
         let file = crate::export::csv(&[t]);
         let entries = parse(&file);
@@ -436,7 +436,7 @@ mod tests {
         if let serde_json::Value::Object(m) =
             serde_json::json!({"title": "One", "artist": {"name": "Ann"}, "duration": 180})
         {
-            t.extra = m;
+            t.fill_from(m);
         }
         let entries = parse(&crate::export::m3u(&[t]));
         assert_eq!(

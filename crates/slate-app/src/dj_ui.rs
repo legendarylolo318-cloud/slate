@@ -282,7 +282,7 @@ impl Backend {
                 image: None,
                 subtitle: None,
                 mix_type: None,
-                tracks: all.clone(),
+                tracks: slate_core::queue::source_tracks(&all),
             };
             let (outcome, shuffle_off, status) = ctl.dj_playlist(all, Some(source)).await;
             if shuffle_off {

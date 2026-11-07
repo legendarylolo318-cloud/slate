@@ -77,12 +77,7 @@ pub struct Card {
 
 impl Card {
     pub fn of(t: &Track) -> Self {
-        let album = t
-            .extra
-            .get("album")
-            .and_then(|a| a.get("title"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let album = t.album_title();
         Self {
             id: t.id,
             title: clean_line(t.title()),

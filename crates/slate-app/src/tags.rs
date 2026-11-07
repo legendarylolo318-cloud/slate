@@ -231,25 +231,13 @@ impl TagStore {
 
 impl Snapshot {
     pub fn of(t: &Track) -> Self {
-        let id_of = |k: &str| {
-            t.extra
-                .get(k)
-                .and_then(|a| a.get("id"))
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0)
-        };
+        let artist_id = t.artist.as_ref().and_then(|a| a.id).unwrap_or(0);
         Self {
             title: clean_line(t.title()),
             artist: clean_line(t.artist_name()),
-            artist_id: id_of("artist"),
-            album: clean_line(
-                t.extra
-                    .get("album")
-                    .and_then(|a| a.get("title"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(""),
-            ),
-            album_id: id_of("album"),
+            artist_id,
+            album: clean_line(t.album_title()),
+            album_id: t.album_id().unwrap_or(0),
             cover: t.cover_id().map(str::to_string),
             duration: t.duration_secs() as u32,
         }

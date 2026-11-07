@@ -63,9 +63,8 @@ pub fn parse_target(text: &str) -> Option<Target> {
 /// Whether `track` is already in a playlist whose keys are `existing`.
 pub fn already_in(track: &Track, existing: &std::collections::HashSet<TrackKey>) -> bool {
     let isrc = track
-        .extra
-        .get("isrc")
-        .and_then(|v| v.as_str())
+        .isrc
+        .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
     let key = match isrc {
@@ -307,7 +306,7 @@ mod tests {
     #[test]
     fn duplicates_are_found_by_isrc_then_id() {
         let mut t = Track::new(7);
-        t.extra.insert("isrc".into(), "usabc1234567".into());
+        t.isrc = Some("usabc1234567".into());
         let by_isrc = slate_core::playlist_tools::keys_of(&[]);
         assert!(!already_in(&t, &by_isrc));
         let mut with = std::collections::HashSet::new();

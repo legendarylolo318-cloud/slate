@@ -135,29 +135,20 @@ fn hidden_by_filter(t: &Track) -> bool {
 }
 
 pub(crate) fn row_of(t: &Track) -> RowData {
-    let version = t
-        .extra
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let version = t.version();
     let title = if version.is_empty() {
         t.title().to_string()
     } else {
         format!("{} ({version})", t.title())
     };
-    let album = t
-        .extra
-        .get("album")
-        .and_then(|a| a.get("title"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let album = t.album_title();
     RowData {
         id: t.id.to_string(),
         title,
         artist: t.artist_name().to_string(),
         album: album.to_string(),
         duration: format_time(t.duration_secs()),
-        explicit: t.extra.get("explicit").and_then(|v| v.as_bool()) == Some(true),
+        explicit: t.explicit == Some(true),
         favorite: false,
         quality: crate::quality::track_badges(t).tier,
         atmos: crate::quality::track_badges(t).atmos,
@@ -1096,7 +1087,7 @@ impl Backend {
             image: None,
             subtitle: None,
             mix_type: None,
-            tracks: all,
+            tracks: slate_core::queue::source_tracks(&all),
         }
     }
 
@@ -1110,7 +1101,7 @@ impl Backend {
                 return;
             };
             if let Some(list) = this.filtered_tracks() {
-                source.tracks = list.clone();
+                source.tracks = slate_core::queue::source_tracks(&list);
                 all = list;
             }
             let album = source.kind == "album" && !shuffle && this.filtered_tracks().is_none();

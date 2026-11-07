@@ -8,7 +8,6 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use serde_json::Value;
 use slate_core::commands::{library as lib_cmds, metadata, playback, search, utility};
 use slate_core::mpd::{proto, Action, BoxFut, Host, HostError, PlayState, Song, Status};
 use slate_core::queue::{Repeat, Track};
@@ -35,8 +34,7 @@ impl AppMpd {
 }
 
 pub(crate) fn song_of(t: &Track) -> Song {
-    let extra = |k: &str| t.extra.get(k);
-    let version = extra("version").and_then(Value::as_str).unwrap_or("");
+    let version = t.version();
     Song {
         id: t.id,
         title: if version.is_empty() {
@@ -45,16 +43,10 @@ pub(crate) fn song_of(t: &Track) -> Song {
             format!("{} ({version})", t.title())
         },
         artist: t.artist_name().to_string(),
-        album: extra("album")
-            .and_then(|a| a.get("title"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
+        album: t.album_title().to_string(),
         album_artist: String::new(),
         duration: f64::from(t.duration_secs()),
-        track: extra("trackNumber")
-            .and_then(Value::as_u64)
-            .and_then(|n| u32::try_from(n).ok()),
+        track: t.track_number,
         date: String::new(),
     }
 }
@@ -70,8 +62,13 @@ impl AppMpd {
     async fn queue_tracks(&self) -> (Option<Track>, Vec<Track>) {
         match self.backend.controller() {
             Some(ctl) => {
-                ctl.with_queue(|q| (q.current.clone(), q.upcoming().cloned().collect()))
-                    .await
+                ctl.with_queue(|q| {
+                    (
+                        q.current.as_deref().cloned(),
+                        q.upcoming().map(|t| Track::clone(t)).collect(),
+                    )
+                })
+                .await
             }
             None => (None, Vec::new()),
         }

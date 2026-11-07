@@ -47,11 +47,11 @@ pub struct QueueState {
     epoch: u64,
 }
 
-fn share(list: &[Track], pool: &HashMap<Key<'_>, &Arc<Track>>) -> Tracks {
+fn share(list: &[Arc<Track>], pool: &HashMap<Key<'_>, &Arc<Track>>) -> Tracks {
     list.iter()
         .map(|t| {
             pool.get(&key(t))
-                .map_or_else(|| Arc::new(t.clone()), |a| Arc::clone(a))
+                .map_or_else(|| Arc::clone(t), |a| Arc::clone(a))
         })
         .collect()
 }
@@ -90,7 +90,7 @@ impl QueueState {
 
     /// Puts this state back into `q`; the playing track and the history stay as they are.
     pub fn apply(&self, q: &mut Queue) {
-        let own = |l: &Tracks| -> Vec<Track> { l.iter().map(|t| (**t).clone()).collect() };
+        let own = |l: &Tracks| -> Vec<Arc<Track>> { l.to_vec() };
         q.manual = own(&self.manual);
         q.queue = own(&self.queue);
         q.original = self.original.as_ref().map(own);
@@ -368,8 +368,8 @@ pub struct Pending {
 mod tests {
     use super::*;
 
-    fn t(id: u64) -> Track {
-        Track::new(id).restamped()
+    fn t(id: u64) -> Arc<Track> {
+        Arc::new(Track::new(id).restamped())
     }
 
     fn q_of(manual: &[u64], queue: &[u64]) -> Queue {
@@ -531,7 +531,7 @@ mod tests {
         let mut q = q_of(&[], &[1, 2]);
         let mut u = UndoStack::new();
         u.edit(&mut q, at(t0, 0), |q| q.queue.pop());
-        q.set_tracks(vec![t(10), t(11)], None, true);
+        q.set_tracks(vec![Track::new(10), Track::new(11)], None, true);
         assert!(!u.step(&mut q, false));
         assert_eq!(ids_of(&q).1, vec![10, 11]);
         assert!(!u.can_undo() && !u.can_redo());
@@ -543,7 +543,7 @@ mod tests {
         let mut q = q_of(&[], &[1, 2]);
         let mut u = UndoStack::new();
         let p = u.begin(&q, at(t0, 0));
-        q.set_tracks(vec![t(5), t(6)], None, false);
+        q.set_tracks(vec![Track::new(5), Track::new(6)], None, false);
         u.settle(&q, p, at(t0, 0));
         assert!(u.step(&mut q, false));
         assert_eq!(ids_of(&q).1, vec![1, 2]);

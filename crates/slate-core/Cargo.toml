@@ -12,7 +12,7 @@ publish.workspace = true
 [dependencies]
 # Profile pictures: the picker offers PNG, JPEG and WebP (`normalize_square_jpeg`).
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 semver = "1.0.28"
 gstreamer = "0.23"

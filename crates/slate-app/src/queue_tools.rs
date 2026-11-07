@@ -29,7 +29,7 @@ impl Backend {
                 .iter()
                 .filter(|t| !t.is_video())
                 .chain(q.upcoming().filter(|t| !t.is_video()))
-                .cloned()
+                .map(|t| Track::clone(t))
                 .collect()
         })
         .await

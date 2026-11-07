@@ -26,6 +26,7 @@ pub mod queue;
 pub mod startup;
 pub mod sync;
 pub mod theme;
+pub mod track;
 pub use events::{AppHandle, EventSink, Events};
 pub mod cache;
 pub mod commands;

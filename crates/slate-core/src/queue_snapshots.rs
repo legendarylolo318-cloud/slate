@@ -209,8 +209,8 @@ mod tests {
 
     fn track(id: u64, secs: u32) -> Track {
         let mut t = Track::new(id);
-        t.extra.insert("title".into(), format!("T{id}").into());
-        t.extra.insert("duration".into(), secs.into());
+        t.title = format!("T{id}").into();
+        t.duration = secs as f32;
         t
     }
 

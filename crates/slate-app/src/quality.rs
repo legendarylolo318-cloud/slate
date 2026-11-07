@@ -1,6 +1,5 @@
 //! Human-readable description of how a track is being streamed.
 
-use serde_json::Value;
 use slate_core::queue::Track;
 use slate_core::tidal_api::{MediaMetadata, StreamInfo};
 
@@ -32,21 +31,15 @@ fn badges_of(audio_quality: Option<&str>, tags: &[&str], modes: &[&str]) -> Badg
     Badges { tier, atmos }
 }
 
-fn strings(v: Option<&Value>) -> Vec<&str> {
-    v.and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default()
-}
-
 /// Badges for a track row or the player bar. Videos have none.
 pub fn track_badges(t: &Track) -> Badges {
     if t.is_video() {
         return Badges::default();
     }
     badges_of(
-        t.extra.get("audioQuality").and_then(Value::as_str),
-        &strings(t.extra.get("mediaMetadata").and_then(|m| m.get("tags"))),
-        &strings(t.extra.get("audioModes")),
+        t.audio_quality.as_deref(),
+        &t.media_tags.iter().map(|s| &**s).collect::<Vec<_>>(),
+        &t.audio_modes.iter().map(|s| &**s).collect::<Vec<_>>(),
     )
 }
 
@@ -163,7 +156,7 @@ mod tests {
     fn track_with(v: serde_json::Value) -> Track {
         let mut t = Track::new(1);
         if let serde_json::Value::Object(m) = v {
-            t.extra = m;
+            t.fill_from(m);
         }
         t
     }

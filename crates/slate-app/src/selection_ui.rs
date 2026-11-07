@@ -96,7 +96,7 @@ impl Backend {
         };
         let picked = QUEUE_SEL.lock().map(|s| s.indices()).unwrap_or_default();
         ctl.with_queue(|q| {
-            let upcoming: Vec<&Track> = q.upcoming().collect();
+            let upcoming: Vec<&Track> = q.upcoming().map(|t| &**t).collect();
             picked
                 .into_iter()
                 .filter_map(|i| upcoming.get(i).map(|t| (i, (*t).clone())))

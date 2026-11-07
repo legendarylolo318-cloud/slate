@@ -4,9 +4,8 @@
 //! while playing. Off by default, in which case the plain shuffle is used.
 
 use rand::seq::SliceRandom;
-use serde_json::Value;
 
-use crate::queue::Track;
+use crate::queue::{Track, TrackRef};
 
 /// How far ahead of the next slot a better neighbour is looked for. Bounds the
 /// pass at `n * WINDOW` steps, so a 5000-track queue costs well under a millisecond.
@@ -16,25 +15,25 @@ fn artist_key(t: &Track) -> &str {
     t.artist_name()
 }
 
-fn album_key(t: &Track) -> Option<&Value> {
-    t.extra.get("album").and_then(|a| a.get("id"))
+fn album_key(t: &Track) -> Option<u64> {
+    t.album_id()
 }
 
 /// Shuffles `tracks`, then reorders greedily so that, where the list allows it,
 /// neither the artist nor the album of the previous track (`prev` for the first
 /// slot: the track that is playing) repeats. A track with no artist is never
 /// treated as a repeat.
-pub fn spread_shuffle(tracks: &mut Vec<Track>, prev: Option<&Track>, rng: &mut impl rand::Rng) {
+pub fn spread_shuffle(tracks: &mut Vec<TrackRef>, prev: Option<&Track>, rng: &mut impl rand::Rng) {
     tracks.shuffle(rng);
     spread(tracks, prev);
 }
 
 /// The reordering step of [`spread_shuffle`] alone (deterministic).
-pub fn spread(tracks: &mut Vec<Track>, prev: Option<&Track>) {
-    let mut pool: std::collections::VecDeque<Track> = std::mem::take(tracks).into();
-    let mut out: Vec<Track> = Vec::with_capacity(pool.len());
+pub fn spread(tracks: &mut Vec<TrackRef>, prev: Option<&Track>) {
+    let mut pool: std::collections::VecDeque<TrackRef> = std::mem::take(tracks).into();
+    let mut out: Vec<TrackRef> = Vec::with_capacity(pool.len());
     while !pool.is_empty() {
-        let last = out.last().or(prev);
+        let last = out.last().map(|t| &**t).or(prev);
         let pick = last.and_then(|l| best_neighbour(&pool, l)).unwrap_or(0);
         if let Some(t) = pool.remove(pick) {
             out.push(t);
@@ -45,10 +44,10 @@ pub fn spread(tracks: &mut Vec<Track>, prev: Option<&Track>) {
 
 /// Index (within the window) of the first track that differs from `last` in artist
 /// and album, else in artist, else in album. `None` when nothing differs.
-fn best_neighbour(pool: &std::collections::VecDeque<Track>, last: &Track) -> Option<usize> {
+fn best_neighbour(pool: &std::collections::VecDeque<TrackRef>, last: &Track) -> Option<usize> {
     let (la, lb) = (artist_key(last), album_key(last));
-    let same_artist = |t: &Track| !la.is_empty() && artist_key(t) == la;
-    let same_album = |t: &Track| lb.is_some() && album_key(t) == lb;
+    let same_artist = |t: &TrackRef| !la.is_empty() && artist_key(t) == la;
+    let same_album = |t: &TrackRef| lb.is_some() && album_key(t) == lb;
     let window = pool.iter().take(WINDOW);
     let mut artist_only = None;
     let mut album_only = None;
@@ -69,8 +68,10 @@ fn best_neighbour(pool: &std::collections::VecDeque<Track>, last: &Track) -> Opt
 
 /// (disc, track number) of a track on its album, when it has a track number.
 fn album_place(t: &Track) -> Option<(u64, u64)> {
-    let num = |k: &str| t.extra.get(k).and_then(Value::as_u64);
-    Some((num("volumeNumber").unwrap_or(1), num("trackNumber")?))
+    Some((
+        u64::from(t.volume_number.unwrap_or(1)),
+        u64::from(t.track_number?),
+    ))
 }
 
 /// "Album shuffle": shuffles the albums, not the tracks. Every album's tracks stay together in
@@ -79,15 +80,15 @@ fn album_place(t: &Track) -> Option<(u64, u64)> {
 /// one. The album of `prev` (the playing track) goes first so it plays on to its end. With
 /// `spread_artists`, consecutive albums by the same artist are avoided when the list allows.
 pub fn album_shuffle(
-    tracks: &mut Vec<Track>,
+    tracks: &mut Vec<TrackRef>,
     prev: Option<&Track>,
     spread_artists: bool,
     rng: &mut impl rand::Rng,
 ) {
-    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut groups: Vec<Vec<Track>> = Vec::new();
+    let mut index: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    let mut groups: Vec<Vec<TrackRef>> = Vec::new();
     for t in std::mem::take(tracks) {
-        match album_key(&t).map(Value::to_string) {
+        match album_key(&t) {
             Some(k) => {
                 let i = *index.entry(k).or_insert_with(|| {
                     groups.push(Vec::new());
@@ -100,23 +101,23 @@ pub fn album_shuffle(
     }
     for g in &mut groups {
         if g.len() > 1 && g.iter().all(|t| album_place(t).is_some()) {
-            g.sort_by_key(album_place);
+            g.sort_by_key(|t| album_place(t));
         }
     }
     // The playing album goes first and carries on after the playing track; its tracks that
     // come before it (playing started mid-album) become a group of their own.
-    let mut out: Vec<Track> = Vec::new();
+    let mut out: Vec<TrackRef> = Vec::new();
     let playing_album = prev.and_then(album_key);
     if let Some(pos) = playing_album.and_then(|a| {
         groups
             .iter()
-            .position(|g| g.first().and_then(album_key) == Some(a))
+            .position(|g| g.first().and_then(|t| album_key(t)) == Some(a))
     }) {
         let mut group = groups.remove(pos);
         if let Some(at) = prev.and_then(album_place) {
             if group.iter().all(|t| album_place(t).is_some()) {
-                let earlier: Vec<Track> = {
-                    let (before, after): (Vec<Track>, Vec<Track>) =
+                let earlier: Vec<TrackRef> = {
+                    let (before, after): (Vec<TrackRef>, Vec<TrackRef>) =
                         group.into_iter().partition(|t| album_place(t) < Some(at));
                     group = after;
                     before
@@ -129,13 +130,13 @@ pub fn album_shuffle(
         out.extend(group);
     }
     groups.shuffle(rng);
-    let mut pool: std::collections::VecDeque<Vec<Track>> = groups.into();
+    let mut pool: std::collections::VecDeque<Vec<TrackRef>> = groups.into();
     while !pool.is_empty() {
         let pick = if spread_artists {
-            let last = out.last().or(prev);
+            let last = out.last().map(|t| &**t).or(prev);
             last.and_then(|l| {
                 pool.iter().take(WINDOW).position(|g| {
-                    let a = g.first().map_or("", artist_key);
+                    let a = g.first().map_or("", |t| artist_key(t));
                     a.is_empty() || a != artist_key(l)
                 })
             })
@@ -155,16 +156,18 @@ mod tests {
     use super::*;
     use rand::SeedableRng;
 
-    fn tr(id: u64, artist: &str, album: u64) -> Track {
-        let mut t = Track::new(id);
-        t.extra
-            .insert("artist".into(), serde_json::json!({ "name": artist }));
-        t.extra
-            .insert("album".into(), serde_json::json!({ "id": album }));
-        t
+    fn tr(id: u64, artist: &str, album: u64) -> TrackRef {
+        std::sync::Arc::new(
+            Track::from_serialized(&serde_json::json!({
+                "id": id,
+                "artist": { "name": artist },
+                "album": { "id": album },
+            }))
+            .expect("track"),
+        )
     }
 
-    fn adjacent_same_artist(v: &[Track]) -> usize {
+    fn adjacent_same_artist(v: &[TrackRef]) -> usize {
         v.windows(2)
             .filter(|w| w[0].artist_name() == w[1].artist_name())
             .count()
@@ -172,7 +175,7 @@ mod tests {
 
     #[test]
     fn two_artists_alternate() {
-        let mut v: Vec<Track> = (0..6)
+        let mut v: Vec<TrackRef> = (0..6)
             .map(|i| tr(i, if i < 3 { "A" } else { "B" }, i))
             .collect();
         spread(&mut v, None);
@@ -191,7 +194,7 @@ mod tests {
     #[test]
     fn nothing_is_lost_or_duplicated() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
-        let mut v: Vec<Track> = (0..200)
+        let mut v: Vec<TrackRef> = (0..200)
             .map(|i| tr(i, &format!("a{}", i % 7), i % 13))
             .collect();
         spread_shuffle(&mut v, None, &mut rng);
@@ -207,7 +210,7 @@ mod tests {
 
     #[test]
     fn one_artist_keeps_working() {
-        let mut v: Vec<Track> = (0..5).map(|i| tr(i, "A", i)).collect();
+        let mut v: Vec<TrackRef> = (0..5).map(|i| tr(i, "A", i)).collect();
         spread(&mut v, None);
         assert_eq!(v.len(), 5);
     }
@@ -226,21 +229,25 @@ mod tests {
 
     #[test]
     fn unknown_artists_are_not_repeats_of_each_other() {
-        let mut v = vec![Track::new(1), Track::new(2), tr(3, "A", 1)];
+        let mut v = vec![
+            std::sync::Arc::new(Track::new(1)),
+            std::sync::Arc::new(Track::new(2)),
+            tr(3, "A", 1),
+        ];
         spread(&mut v, None);
         assert_eq!(v.iter().map(|t| t.id).collect::<Vec<_>>(), vec![1, 2, 3]);
     }
 
-    fn numbered(id: u64, artist: &str, album: u64, n: u64) -> Track {
+    fn numbered(id: u64, artist: &str, album: u64, n: u64) -> TrackRef {
         let mut t = tr(id, artist, album);
-        t.extra.insert("trackNumber".into(), n.into());
+        std::sync::Arc::make_mut(&mut t).track_number = Some(n as u32);
         t
     }
 
-    fn album_runs(v: &[Track]) -> Vec<u64> {
+    fn album_runs(v: &[TrackRef]) -> Vec<u64> {
         let mut runs = Vec::new();
         for t in v {
-            let a = album_key(t).and_then(Value::as_u64).unwrap_or(0);
+            let a = album_key(t).unwrap_or(0);
             if runs.last() != Some(&a) {
                 runs.push(a);
             }
@@ -286,7 +293,9 @@ mod tests {
     #[test]
     fn tracks_without_an_album_are_their_own_group_and_nothing_is_lost() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(9);
-        let mut v: Vec<Track> = (0..50).map(Track::new).collect();
+        let mut v: Vec<TrackRef> = (0..50)
+            .map(|i| std::sync::Arc::new(Track::new(i)))
+            .collect();
         v.push(tr(100, "A", 1));
         album_shuffle(&mut v, None, true, &mut rng);
         let mut ids: Vec<u64> = v.iter().map(|t| t.id).collect();
@@ -336,7 +345,7 @@ mod tests {
     #[test]
     fn a_single_artist_still_shuffles() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(2);
-        let mut v: Vec<Track> = (1..=4).map(|a| numbered(a, "A", a, 1)).collect();
+        let mut v: Vec<TrackRef> = (1..=4).map(|a| numbered(a, "A", a, 1)).collect();
         album_shuffle(&mut v, None, true, &mut rng);
         assert_eq!(v.len(), 4);
     }
@@ -368,7 +377,7 @@ mod tests {
         q.upcoming().map(|t| t.id).collect()
     }
 
-    fn two_albums() -> Vec<Track> {
+    fn two_albums() -> Vec<TrackRef> {
         (1..=4)
             .map(|n| numbered(10 + n, "A", 1, n))
             .chain((1..=4).map(|n| numbered(20 + n, "B", 2, n)))
@@ -383,6 +392,7 @@ mod tests {
             q.shuffle = true;
             q.album_shuffle = true;
             let all = two_albums();
+            let all: Vec<Track> = all.iter().map(|t| Track::clone(t)).collect();
             let first = q.play_from_source(all[5].clone(), all, None, false, &mut rng);
             assert_eq!(first.id, 22);
             let ids = queue_ids(&q);
@@ -398,7 +408,13 @@ mod tests {
             let mut q = crate::queue::Queue::new();
             q.album_shuffle = true;
             let first = q
-                .play_all(two_albums(), None, false, true, &mut rng)
+                .play_all(
+                    two_albums().iter().map(|t| Track::clone(t)).collect(),
+                    None,
+                    false,
+                    true,
+                    &mut rng,
+                )
                 .expect("a track");
             firsts.insert(first.id);
             let ids = queue_ids(&q);
@@ -417,7 +433,11 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(8);
         let mut q = crate::queue::Queue::new();
         q.album_shuffle = true;
-        q.set_tracks(two_albums(), None, false);
+        q.set_tracks(
+            two_albums().iter().map(|t| Track::clone(t)).collect(),
+            None,
+            false,
+        );
         let before = queue_ids(&q);
         q.toggle_shuffle(&mut rng);
         q.toggle_shuffle(&mut rng);
@@ -428,7 +448,11 @@ mod tests {
     fn album_shuffle_plays_each_album_at_its_album_gain() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(1);
         let mut q = crate::queue::Queue::new();
-        q.set_tracks(two_albums(), None, false);
+        q.set_tracks(
+            two_albums().iter().map(|t| Track::clone(t)).collect(),
+            None,
+            false,
+        );
         assert!(q.track_gain(), "a playlist in order: track gain");
         q.toggle_shuffle(&mut rng);
         assert!(q.track_gain(), "shuffled by track: track gain");
@@ -437,7 +461,11 @@ mod tests {
         assert!(!q.track_gain(), "shuffled by album: album gain");
         q.toggle_shuffle(&mut rng);
         assert!(q.track_gain());
-        q.set_tracks(two_albums(), None, true);
+        q.set_tracks(
+            two_albums().iter().map(|t| Track::clone(t)).collect(),
+            None,
+            true,
+        );
         assert!(!q.track_gain(), "an album: album gain");
     }
 }
