@@ -147,6 +147,11 @@ fn compact_tracks_are_far_smaller_than_the_json_they_replace() {
         snapshot_bytes < queue_bytes / 20,
         "a snapshot must share the tracks, not copy them ({snapshot_bytes} B)"
     );
+    let json = snap.to_json().expect("json");
+    println!(
+        "that snapshot as the queue file: {:.1} MB of JSON for 10,000 tracks (a 1.6 file held the full objects)",
+        json.len() as f64 / 1e6
+    );
     drop(snap);
     let _ = Arc::new(q);
 }

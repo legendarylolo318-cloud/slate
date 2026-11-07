@@ -14,7 +14,12 @@ use slint::{ComponentHandle, Image, Weak};
 
 use crate::bootstrap::{AppWindow, Screen};
 use crate::control::{Control, ControlFn, PositionFn};
+use crate::debounce::Debounce;
 use crate::images;
+
+/// How long the queue file waits for further changes (see [`Backend::save`]).
+const QUEUE_SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
+static QUEUE_SAVE: Debounce = Debounce::new();
 
 /// Playback facts the ticker needs without touching the UI thread.
 /// Carries out an `mcp:*` event: its name and payload.
@@ -760,8 +765,18 @@ impl Backend {
         }
     }
 
-    /// Queue + modes to disk, off the UI thread.
+    /// Queue + modes to disk once the changes have been quiet for [`QUEUE_SAVE_DEBOUNCE`]
+    /// (a track change, a shuffle and a few queue edits in a row are one write); a quit
+    /// writes what is still waiting ([`Backend::save_now`]).
     pub(crate) async fn save(&self) {
+        let this = self.clone();
+        QUEUE_SAVE.run_later(&self.rt, QUEUE_SAVE_DEBOUNCE, async move {
+            this.save_now().await;
+        });
+    }
+
+    /// Queue + modes to disk now (off the UI thread: the write is a blocking job).
+    pub(crate) async fn save_now(&self) {
         let Some(ctl) = self.controller() else { return };
         if let Err(e) = ctl.save().await {
             tracing::warn!("could not save queue: {}", e.log_safe());
@@ -1239,7 +1254,7 @@ impl Backend {
         crate::tags::flush();
         let this = self.clone();
         self.rt.block_on(async move {
-            this.save().await;
+            this.save_now().await;
             if let Some(state) = this.state() {
                 let _ = playback::stop_track(&state).await;
             }

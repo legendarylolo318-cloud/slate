@@ -17,6 +17,7 @@ mod control;
 mod cover_tint;
 mod credits;
 mod custom_themes;
+mod debounce;
 mod dedupe;
 mod deeplink;
 mod discord_ctx;

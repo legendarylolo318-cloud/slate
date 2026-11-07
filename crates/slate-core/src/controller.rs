@@ -142,6 +142,8 @@ pub struct Controller {
     dj_ready: std::sync::Mutex<Option<(DjKey, Option<DjPick>)>>,
     /// Undo / redo of the user's queue edits (see `queue_undo`).
     undo: std::sync::Mutex<crate::queue_undo::UndoStack>,
+    /// Held from taking a snapshot until it is on disk, so two saves cannot land out of order.
+    save_gate: Mutex<()>,
 }
 
 /// A DJ move and the TIDAL tracks found for it.
@@ -229,6 +231,7 @@ impl Controller {
             dj_status: std::sync::Mutex::new(None),
             dj_ready: std::sync::Mutex::new(None),
             undo: std::sync::Mutex::new(crate::queue_undo::UndoStack::new()),
+            save_gate: Mutex::new(()),
         }
     }
 
@@ -1310,6 +1313,7 @@ impl Controller {
 
     /// Shuffle / repeat / autoplay survive restarts too.
     pub async fn save_modes(&self) -> Result<(), SlateError> {
+        let _gate = self.save_gate.lock().await;
         let (shuffle, repeat, autoplay) = {
             let q = self.lock_queue().await;
             (q.shuffle, q.repeat.as_u8(), q.autoplay)
@@ -1339,14 +1343,18 @@ impl Controller {
         )
     }
 
-    /// Write the queue to the encrypted state file. Blocking disk I/O: call
-    /// from a blocking-safe context or accept the small write.
+    /// Write the queue to the encrypted state file. The snapshot only copies track handles
+    /// under the queue lock; serializing, encrypting and writing it (a temp file renamed over
+    /// the old one) happen on a blocking thread.
     pub async fn save(&self) -> Result<(), SlateError> {
-        let json = self.lock_queue().await.snapshot().to_json()?;
+        let _gate = self.save_gate.lock().await;
+        let snapshot = self.lock_queue().await.snapshot();
         let state = Arc::clone(&self.state);
-        tokio::task::spawn_blocking(move || playback::save_playback_queue(&state, json))
-            .await
-            .map_err(|e| SlateError::Io(e.to_string()))?
+        tokio::task::spawn_blocking(move || {
+            playback::save_playback_queue(&state, snapshot.to_json()?)
+        })
+        .await
+        .map_err(|e| SlateError::Io(e.to_string()))?
     }
 
     /// Restore the saved queue. The current track is returned (not started) so
