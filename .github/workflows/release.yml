@@ -100,7 +100,11 @@ jobs:
           choco install pkgconfiglite innosetup -y --no-progress
           $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GST_VERSION/msvc"
           foreach ($f in "gstreamer-1.0-msvc-x86_64-$env:GST_VERSION.msi", "gstreamer-1.0-devel-msvc-x86_64-$env:GST_VERSION.msi") {
-            Invoke-WebRequest "$base/$f" -OutFile $f
+            # gstreamer.freedesktop.org sometimes drops the connection mid-download: retry.
+            for ($i = 1; $i -le 5; $i++) {
+              try { Invoke-WebRequest "$base/$f" -OutFile $f; break }
+              catch { if ($i -eq 5) { throw }; Write-Host "download failed ($i/5): $_"; Start-Sleep -Seconds (15 * $i) }
+            }
             Start-Process msiexec.exe -Wait -ArgumentList "/i $f /qn /norestart ADDLOCAL=ALL INSTALLDIR=C:\gstreamer"
           }
           $root = "C:\gstreamer\1.0\msvc_x86_64"
