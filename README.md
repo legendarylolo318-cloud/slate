@@ -199,4 +199,4 @@ cargo test --workspace
 ```
 
 Layout: `crates/slate-core` (all non-UI logic, no Slint) and `crates/slate-app` (Slint UI and
-platform glue). See [HANDOFF.md](HANDOFF.md) for the architecture and threading model.
+platform glue).

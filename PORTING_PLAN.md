@@ -90,7 +90,7 @@ Events the core emits (now through `EventSink`): `audio-error`, `audio-resampled
 | Discord Rich Presence | `discord*.rs` | same | done |
 | Proxy HTTP/HTTPS/SOCKS5 | `proxy*.rs` | same | done (tests exist) |
 | MCP server 127.0.0.1:5577, token, default off | `mcp/*` (rmcp+axum) | same | done; `ensure_mcp_started` now `pub` |
-| OBS overlay 127.0.0.1:5578, default off | `overlay/*` | same + embedded HTML asset | done; **open question:** the embedded overlay page (`overlay/server.rs`) contains an inline `<script>` (live updates). The brief allows only static HTML/CSS; a JS-free alternative (meta-refresh / SSE-less polling is not possible in pure CSS) needs a decision — see HANDOFF |
+| OBS overlay 127.0.0.1:5578, default off | `overlay/*` | same + embedded HTML asset | done; **open question:** the embedded overlay page (`overlay/server.rs`) contains an inline `<script>` (live updates). The brief allows only static HTML/CSS; a JS-free alternative (meta-refresh / SSE-less polling is not possible in pure CSS) needs a decision |
 | Signal path probing | `signal_path.rs`, `pipeline_probe.rs` | same | done |
 | `theme.json` read/write/validate + watcher | `theme_config.rs` (file IO) + `lib/themeFile.ts` (validation) | `slate-core::theme` | IO done; **validation + 15 presets are TS → todo with rejection-case tests** |
 | Lyrics fetch + LRC timing | `get_track_lyrics` + `lib/lrc.ts` | `slate-core::lyrics` | fetch done; **LRC parse/seek todo** |
@@ -164,7 +164,7 @@ All UI work is **todo**. Original line counts shown to indicate size.
 
 - [x] delete `src/`, `package.json`, `pnpm-*`, `vite.config.*`, `tsconfig*`, `eslint*`, `index.html`, `sync-version.mjs`, `knip*` (done)
 - [x] `data/io.github.legendarylolo318_cloud.slate.desktop` and CI workflow updated; [ ] `build-scripts/`, `flake.nix`, `data/*.metainfo.xml` and screenshots are still upstream's (Tauri/pnpm) and **stale**
-- [x] README, CHANGELOG, HANDOFF
+- [x] README, CHANGELOG
 
 ## 9. Status after the "scalable UI / pages / settings" pass
 
