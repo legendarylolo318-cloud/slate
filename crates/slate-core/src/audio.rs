@@ -743,21 +743,65 @@ fn apply_normalization_gain(
 /// 3-5 s of its 15 s window. 6 MiB lets 24/96 fill the window and 24/192 hold
 /// ~8 s, and bounds the cost: the playing and the prerolled next stream hold at
 /// most 12 MiB, 8 MiB more than the default did, and only at hi-res.
+///
+/// Used by the direct (exclusive / bit-perfect ALSA) path, whose decoded buffering is
+/// the writer's and is unchanged. The gapless branches use [`BRANCH_BUFFER_SIZE_BYTES`].
 const STREAM_BUFFER_SIZE_BYTES: i32 = 6 * 1024 * 1024;
 
-fn stream_buffer_duration_ns(is_dash: bool) -> i64 {
-    if is_dash {
+/// Decoded PCM each gapless branch holds between its decoder and `concat` (the main branch
+/// and the prerolled next one). Until 1.6 this was 15 s, which is ~23 MB at 24-bit/192 kHz
+/// (and twice that while the next track prerolls) of data that costs nothing to decode again.
+/// The lookahead now lives *compressed* inside `uridecodebin` (see [`BRANCH_LOOKAHEAD_EXTRA_NS`]),
+/// which is 3-8x smaller. 3 s is what `concat` needs at a gapless handover: the next
+/// branch's queue is full, so the switch finds PCM waiting.
+const DECODED_RESERVOIR_NS: u64 = 3_000_000_000;
+
+/// What the decoded reservoir gave up (15 s - [`DECODED_RESERVOIR_NS`]), added to
+/// `buffer-duration` of the branches' `uridecodebin` so the total lookahead against a slow
+/// connection stays what it was: 20 s for progressive streams (5 s compressed + 15 s decoded
+/// before; 17 s + 3 s now), 30 s for DASH and for the prerolled next track.
+const BRANCH_LOOKAHEAD_EXTRA_NS: i64 = 12_000_000_000;
+
+/// Byte cap of the branches' compressed buffer. It has to hold [`BRANCH_LOOKAHEAD_EXTRA_NS`]
+/// more at hi-res (24/192 FLAC ~0.75-1 MB/s: 17 s is 13-17 MB), so 20 MiB. The worst case
+/// held per stream is then ~20 MiB + 3 s of 24/192 PCM (4.6 MB), against 6 MiB + 23 MB before;
+/// at CD quality the whole lookahead is ~2.5 MB instead of ~4-6 MB.
+const BRANCH_BUFFER_SIZE_BYTES: i32 = 20 * 1024 * 1024;
+
+/// Which pipeline a stream decodebin feeds (sets how much compressed lookahead it holds).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Lookahead {
+    /// The exclusive / bit-perfect writer path: unchanged since 1.4.
+    Direct,
+    /// A gapless branch with a [`DECODED_RESERVOIR_NS`] queue behind it.
+    Branch,
+}
+
+fn stream_buffer_duration_ns(is_dash: bool, mode: Lookahead) -> i64 {
+    let base = if is_dash {
         15_000_000_000
     } else {
         5_000_000_000
+    };
+    match mode {
+        Lookahead::Direct => base,
+        Lookahead::Branch => base + BRANCH_LOOKAHEAD_EXTRA_NS,
     }
 }
 
-fn make_stream_decodebin(uri: &str, is_dash: bool) -> Result<gst::Element, String> {
+fn make_stream_decodebin(
+    uri: &str,
+    is_dash: bool,
+    mode: Lookahead,
+) -> Result<gst::Element, String> {
+    let size = match mode {
+        Lookahead::Direct => STREAM_BUFFER_SIZE_BYTES,
+        Lookahead::Branch => BRANCH_BUFFER_SIZE_BYTES,
+    };
     gst::ElementFactory::make("uridecodebin")
         .property("uri", uri)
-        .property("buffer-duration", stream_buffer_duration_ns(is_dash))
-        .property("buffer-size", STREAM_BUFFER_SIZE_BYTES)
+        .property("buffer-duration", stream_buffer_duration_ns(is_dash, mode))
+        .property("buffer-size", size)
         .property("use-buffering", true)
         .build()
         .map_err(|e| format!("Failed to create uridecodebin: {e}"))
@@ -780,13 +824,12 @@ fn attach_next_bin(
     uri: &str,
     is_dash: bool,
 ) -> Result<(gst::Element, gst::Element), String> {
-    let udb = make_stream_decodebin(uri, true)?;
+    let udb = make_stream_decodebin(uri, true, Lookahead::Branch)?;
     // No route here: this bin joins a pipeline whose `watch_pipeline_sources`
     // hook already configures every HTTP source that appears under it.
-    // Same props as the first branch's queue: 15s of decoded reservoir ahead of
-    // concat — comfortable cushion against slow-internet rebuffering.
+    // Same props as the first branch's queue: the decoded reservoir ahead of concat.
     let branch_queue = gst::ElementFactory::make("queue")
-        .property("max-size-time", 15_000_000_000u64)
+        .property("max-size-time", DECODED_RESERVOIR_NS)
         .property("max-size-buffers", 0u32)
         .property("max-size-bytes", 0u32)
         .build()
@@ -2828,13 +2871,15 @@ impl AudioPlayer {
                                 // about-to-finish. Legacy uridecodebin handles Tidal
                                 // `data:application/dash+xml` URIs and works on GStreamer
                                 // < 1.24.
-                                let uridecodebin = make_stream_decodebin(&uri, is_dash)?;
+                                let uridecodebin =
+                                    make_stream_decodebin(&uri, is_dash, Lookahead::Branch)?;
                                 // Per-branch upstream queue (C1): decouples the decoder from
                                 // concat's gate so the next branch can pre-buffer ahead while
                                 // the current track plays. With one branch it's a passthrough.
-                                // 15s of decoded reservoir for slow-internet cushion.
+                                // A short decoded reservoir; the slow-internet cushion is
+                                // compressed upstream (DECODED_RESERVOIR_NS).
                                 let branch_queue = gst::ElementFactory::make("queue")
-                                    .property("max-size-time", 15_000_000_000u64)
+                                    .property("max-size-time", DECODED_RESERVOIR_NS)
                                     .property("max-size-buffers", 0u32)
                                     .property("max-size-bytes", 0u32)
                                     .build()
@@ -4656,7 +4701,7 @@ fn build_appsink_pipeline(
 
     let pipe = gst::Pipeline::new();
     watch_pipeline_sources(&pipe, route);
-    let uridecodebin = make_stream_decodebin(uri, is_dash)?;
+    let uridecodebin = make_stream_decodebin(uri, is_dash, Lookahead::Direct)?;
     let device_channels = negotiated_fmt.channels;
     let audioconvert = gst::ElementFactory::make("audioconvert")
         .build()
@@ -5288,14 +5333,45 @@ mod proxy_source_tests {
             .expect("still blocked past the limit")
     }
 
-    // Beyond the old 2 MB default, and the playing plus the prerolled next stream stay
-    // inside the release's 10 MB RAM budget.
+    // The direct path keeps its 1.4 limits: beyond the old 2 MB default, and the playing plus
+    // the prerolled next stream stay inside that release's 10 MB RAM budget.
     const _: () = assert!(STREAM_BUFFER_SIZE_BYTES > 2 * 1024 * 1024);
     const _: () = assert!(2 * (STREAM_BUFFER_SIZE_BYTES - 2 * 1024 * 1024) <= 10 * 1024 * 1024);
 
+    // The branches: the worst held per stream (byte cap + the decoded reservoir at 24-bit/192 kHz
+    // stereo, 4 bytes a sample) is below what 1.6 held (6 MiB + 15 s of the same PCM).
+    const PCM_24_192_BYTES_PER_S: u64 = 192_000 * 2 * 4;
+    const _: () = assert!(
+        BRANCH_BUFFER_SIZE_BYTES as u64
+            + DECODED_RESERVOIR_NS / 1_000_000_000 * PCM_24_192_BYTES_PER_S
+            < STREAM_BUFFER_SIZE_BYTES as u64 + 15 * PCM_24_192_BYTES_PER_S
+    );
+
     #[test]
     fn dash_streams_buffer_longer_than_progressive_ones() {
-        assert!(stream_buffer_duration_ns(true) > stream_buffer_duration_ns(false));
+        for mode in [Lookahead::Direct, Lookahead::Branch] {
+            assert!(stream_buffer_duration_ns(true, mode) > stream_buffer_duration_ns(false, mode));
+        }
+    }
+
+    #[test]
+    fn the_branches_keep_the_total_lookahead_the_decoded_queue_used_to_give() {
+        let old_decoded = 15_000_000_000i64;
+        for dash in [false, true] {
+            let before = stream_buffer_duration_ns(dash, Lookahead::Direct) + old_decoded;
+            let after =
+                stream_buffer_duration_ns(dash, Lookahead::Branch) + DECODED_RESERVOIR_NS as i64;
+            assert_eq!(before, after, "dash={dash}");
+        }
+        // The direct path (exclusive / bit-perfect) is untouched.
+        assert_eq!(
+            stream_buffer_duration_ns(false, Lookahead::Direct),
+            5_000_000_000
+        );
+        assert_eq!(
+            stream_buffer_duration_ns(true, Lookahead::Direct),
+            15_000_000_000
+        );
     }
 
     #[test]
