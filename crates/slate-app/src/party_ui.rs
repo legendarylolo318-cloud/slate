@@ -23,6 +23,8 @@ use crate::uiprefs::UiPrefs;
 
 /// One atomic read on the playback paths; true only while hosting.
 static HOSTING: AtomicBool = AtomicBool::new(false);
+/// "Host's own picks play first" while hosting: read on every queue change.
+static HOST_FIRST: AtomicBool = AtomicBool::new(false);
 
 enum Role {
     Host(Host),
@@ -89,6 +91,8 @@ fn relay_pref() -> Option<String> {
 
 /// Pending-request caps offered in Settings → Party.
 const CAPS: [usize; 5] = [1, 2, 3, 5, 10];
+/// Per-party request allowances offered in Settings → Party: Off, then these.
+const LIMITS: [usize; 6] = [0, 1, 2, 3, 5, 10];
 /// Vote-skip shares: Off, 25 %, 50 %, 75 %.
 const VOTES: [u8; 4] = [0, 25, 50, 75];
 
@@ -101,6 +105,8 @@ fn policy_of(p: &UiPrefs) -> Policy {
             p.party_cap
         },
         no_explicit: p.party_no_explicit,
+        per_guest_limit: p.party_limit.min(10),
+        host_first: p.party_host_first,
     }
 }
 
@@ -230,6 +236,7 @@ impl Backend {
         self.party_status("Starting the party…");
         let prefs = UiPrefs::load();
         let (policy, vote) = (policy_of(&prefs), vote_of(&prefs));
+        HOST_FIRST.store(prefs.party_host_first, Ordering::Relaxed);
         let (tx, rx) = mpsc::unbounded_channel();
         let session = SESSION.load(Ordering::Acquire);
         let this = self.clone();
@@ -457,7 +464,11 @@ impl Backend {
                         .collect()
                 })
                 .await;
-            let at = requests::insert_index(placement, &owners, guest_id);
+            let at = if HOST_FIRST.load(Ordering::Relaxed) {
+                requests::insert_index_host_first(placement, &owners, guest_id)
+            } else {
+                requests::insert_index(placement, &owners, guest_id)
+            };
             {
                 let mut own = lock(&OWNERS);
                 own.push((id, guest_id, guest.clone()));
@@ -475,6 +486,7 @@ impl Backend {
     /// The host's request settings changed (Settings → Party).
     fn host_policy_changed(&self) {
         let prefs = UiPrefs::load();
+        HOST_FIRST.store(prefs.party_host_first, Ordering::Relaxed);
         with_host(|h| {
             h.set_policy(policy_of(&prefs));
             h.set_vote_percent(vote_of(&prefs));
@@ -511,6 +523,7 @@ impl Backend {
                     .into()
             }
             "party-cap" => p.party_cap = CAPS.get(i).copied().unwrap_or(3),
+            "party-limit" => p.party_limit = LIMITS.get(i).copied().unwrap_or(0),
             "party-vote" => p.party_vote = VOTES.get(i).copied().unwrap_or(0),
             _ => return,
         }
@@ -521,12 +534,14 @@ impl Backend {
     }
 
     pub fn party_pref_bool(&self, key: &str, on: bool) {
-        if key == "party-no-explicit" {
-            let mut p = UiPrefs::load();
-            p.party_no_explicit = on;
-            let _ = p.save();
-            self.host_policy_changed();
+        let mut p = UiPrefs::load();
+        match key {
+            "party-no-explicit" => p.party_no_explicit = on,
+            "party-host-first" => p.party_host_first = on,
+            _ => return,
         }
+        let _ = p.save();
+        self.host_policy_changed();
     }
 
     // ---- hooks from playback (host) ----
@@ -561,6 +576,20 @@ impl Backend {
         if hosting() {
             with_host(|h| h.state_changed((position_secs.max(0.0) * 1000.0) as u64, playing));
         }
+    }
+
+    /// "Host's own picks play first": the host's entries in "next up" go ahead of guests'
+    /// requests. A no-op unless hosting with that setting on (one atomic read).
+    pub(crate) async fn party_order_queue(&self, ctl: &slate_core::controller::Controller) {
+        if !hosting() || !HOST_FIRST.load(Ordering::Relaxed) {
+            return;
+        }
+        let guests: Vec<u64> = lock(&OWNERS).iter().map(|o| o.0).collect();
+        if guests.is_empty() {
+            return;
+        }
+        ctl.reorder_manual(|manual| requests::host_first_order(manual, |t| guests.contains(&t.id)))
+            .await;
     }
 
     pub(crate) fn party_queue_changed(&self, upcoming: &[u64]) {
@@ -1220,6 +1249,7 @@ impl Backend {
         *lock(&GUEST) = None;
         lock(&REPORTED).clear();
         HOSTING.store(false, Ordering::Relaxed);
+        HOST_FIRST.store(false, Ordering::Relaxed);
         lock(&OWNERS).clear();
         lock(&PENDING).clear();
         // The set outlives the party so it can be saved from here or from the Party tab. The
@@ -1322,6 +1352,13 @@ pub fn fill(w: &AppWindow) {
             .unwrap_or(2) as i32,
     );
     s.set_party_no_explicit(prefs.party_no_explicit);
+    s.set_party_limit_index(
+        LIMITS
+            .iter()
+            .position(|l| *l == policy_of(&prefs).per_guest_limit)
+            .unwrap_or(0) as i32,
+    );
+    s.set_party_host_first(prefs.party_host_first);
     s.set_party_vote_index(
         VOTES
             .iter()
@@ -1358,6 +1395,18 @@ mod tests {
         assert_eq!(policy.mode, RequestMode::Auto);
         assert_eq!((policy.cap, policy.no_explicit), (5, true));
         assert_eq!(vote_of(&p), Some(50));
+        assert_eq!((policy.per_guest_limit, policy.host_first), (0, false));
+        p.party_limit = 3;
+        p.party_host_first = true;
+        let policy = policy_of(&p);
+        assert_eq!((policy.per_guest_limit, policy.host_first), (3, true));
+        p.party_limit = 999;
+        assert_eq!(
+            policy_of(&p).per_guest_limit,
+            10,
+            "a hand-edited value is bounded"
+        );
+        assert_eq!(LIMITS[0], 0, "the first option is Off");
         assert_eq!(CAPS[2], requests::DEFAULT_PENDING_CAP);
     }
 

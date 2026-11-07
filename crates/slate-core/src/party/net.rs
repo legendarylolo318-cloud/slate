@@ -692,14 +692,30 @@ impl Host {
 
     /// Approve or deny one request. On approve the caller places the returned request.
     pub fn decide(&self, request_id: u64, approve: bool) -> Option<Request> {
-        let r = self.inner.lock().book.take(request_id)?;
+        let r = {
+            let mut s = self.inner.lock();
+            let r = s.book.take(request_id)?;
+            if !approve {
+                s.book.give_back(&r.guest);
+            }
+            r
+        };
         self.tell_decision(&r, approve);
         self.inner.push_requests();
         Some(r)
     }
 
     pub fn decide_all(&self, approve: bool) -> Vec<Request> {
-        let all = self.inner.lock().book.take_all();
+        let all = {
+            let mut s = self.inner.lock();
+            let all = s.book.take_all();
+            if !approve {
+                for r in &all {
+                    s.book.give_back(&r.guest);
+                }
+            }
+            all
+        };
         for r in &all {
             self.tell_decision(r, approve);
         }

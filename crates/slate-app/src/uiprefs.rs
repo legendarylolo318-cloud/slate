@@ -96,6 +96,12 @@ pub struct UiPrefs {
     pub party_cap: usize,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub party_no_explicit: bool,
+    /// Host: requests one guest may make in the whole party (0 = no limit).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub party_limit: usize,
+    /// Host: the host's own picks play before guests' requests.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub party_host_first: bool,
     /// Host: share of guests that makes a vote skip pass (0 = vote skip off).
     #[serde(default, skip_serializing_if = "is_zero_u8")]
     pub party_vote: u8,
@@ -139,6 +145,8 @@ impl Default for UiPrefs {
             party_placement: String::new(),
             party_cap: 0,
             party_no_explicit: false,
+            party_limit: 0,
+            party_host_first: false,
             party_vote: 0,
             sorts: Default::default(),
         }

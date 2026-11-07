@@ -67,6 +67,8 @@ impl Backend {
 
     pub(crate) fn party_state_changed(&self, _position_secs: f32, _playing: bool) {}
 
+    pub(crate) async fn party_order_queue(&self, _ctl: &slate_core::controller::Controller) {}
+
     pub(crate) fn party_queue_changed(&self, _upcoming: &[u64]) {}
 
     pub fn party_link_opened(&self, _ticket: String) {

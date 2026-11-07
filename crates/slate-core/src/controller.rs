@@ -1216,6 +1216,13 @@ impl Controller {
         }
     }
 
+    /// Lets `f` reorder the manual ("next up") queue in place; not an undo step (it is the
+    /// party host's ordering rule, not an edit). Returns what `f` returned.
+    pub async fn reorder_manual(&self, f: impl FnOnce(&mut Vec<TrackRef>) -> bool) -> bool {
+        let mut q = self.lock_queue().await;
+        f(&mut q.manual)
+    }
+
     /// Inserts into the "next up" list at `index`.
     pub async fn insert_in_queue(&self, index: usize, track: Track) {
         self.lock_queue().await.insert_manual(index, track, None);

@@ -149,6 +149,8 @@ export global SettingsState {
     in-out property <int> party-mode: 0;
     in-out property <int> party-placement: 2;
     in-out property <int> party-cap-index: 2;
+    in-out property <int> party-limit-index: 0;
+    in-out property <bool> party-host-first: false;
     in-out property <bool> party-no-explicit;
     in-out property <int> party-vote-index: 0;
     // Guest: the host allows vote skip / this guest is a co-host.
@@ -964,6 +966,20 @@ export component SettingsPage inherits Rectangle {
                             index: SettingsState.party-cap-index;
                             picked(i) => { SettingsState.party-cap-index = i; SettingsState.changed-int("party-cap", i); }
                         }
+                    }
+                    if SettingsState.party-role != "guest": Row {
+                        label: "Requests per guest";
+                        hint: "The most requests one guest can make in the whole party. A request you turn down does not count. Off means no limit.";
+                        Segmented {
+                            options: ["Off", "1", "2", "3", "5", "10"];
+                            index: SettingsState.party-limit-index;
+                            picked(i) => { SettingsState.party-limit-index = i; SettingsState.changed-int("party-limit", i); }
+                        }
+                    }
+                    if SettingsState.party-role != "guest": Row {
+                        label: "My picks play first";
+                        hint: "Tracks you queue yourself play before guests' requests, wherever the requests are placed.";
+                        Toggle { checked: SettingsState.party-host-first; toggled(v) => { SettingsState.party-host-first = v; SettingsState.changed-bool("party-host-first", v); } }
                     }
                     if SettingsState.party-role != "guest": Row {
                         label: "No explicit tracks";

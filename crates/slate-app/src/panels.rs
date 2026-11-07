@@ -22,6 +22,7 @@ impl Backend {
         self.mpd_changed();
         let Some(ctl) = self.controller() else { return };
         if crate::party_ui::hosting() {
+            self.party_order_queue(&ctl).await;
             let ids: Vec<u64> = ctl
                 .with_queue(|q| q.upcoming().take(300).map(|t| t.id).collect())
                 .await;

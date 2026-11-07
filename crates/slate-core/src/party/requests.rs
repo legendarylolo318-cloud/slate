@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 
 /// Default pending requests one guest may have at once.
 pub const DEFAULT_PENDING_CAP: usize = 3;
+/// Most guest names whose request counts are kept for a party (bounds memory).
+pub const MAX_COUNTED_GUESTS: usize = 200;
 /// Most requests the host can hold at once, over all guests.
 pub const MAX_PENDING_TOTAL: usize = 30;
 /// A track played within this many entries of history counts as a recent duplicate.
@@ -108,6 +110,8 @@ pub enum Reject {
     AlreadyQueued,
     RecentlyPlayed,
     Explicit,
+    /// The guest has used the host's per-party request allowance.
+    PartyLimit(usize),
 }
 
 impl Reject {
@@ -120,6 +124,10 @@ impl Reject {
             Self::AlreadyQueued => "That track is already in the queue.".into(),
             Self::RecentlyPlayed => "That track was played a moment ago.".into(),
             Self::Explicit => "The host does not allow explicit tracks.".into(),
+            Self::PartyLimit(n) => format!(
+                "You have used your {n} {} for this party.",
+                if *n == 1 { "request" } else { "requests" }
+            ),
         }
     }
 }
@@ -129,6 +137,10 @@ pub struct Policy {
     pub mode: RequestMode,
     pub cap: usize,
     pub no_explicit: bool,
+    /// Requests one guest may make in the whole party (0 = no limit).
+    pub per_guest_limit: usize,
+    /// The host's own queued picks play before guests' requests.
+    pub host_first: bool,
 }
 
 impl Default for Policy {
@@ -137,6 +149,8 @@ impl Default for Policy {
             mode: RequestMode::Approval,
             cap: DEFAULT_PENDING_CAP,
             no_explicit: false,
+            per_guest_limit: 0,
+            host_first: false,
         }
     }
 }
@@ -163,6 +177,8 @@ pub struct RequestBook {
     next_id: u64,
     /// Guests who could not play a track (region, plan), by track.
     unavailable: HashMap<u64, HashSet<u64>>,
+    /// Requests made by each guest name in this party (a denied request is given back).
+    made: HashMap<String, usize>,
 }
 
 impl RequestBook {
@@ -205,6 +221,11 @@ impl RequestBook {
         {
             return Err(Reject::RecentlyPlayed);
         }
+        let key = guest.to_lowercase();
+        let limit = self.policy.per_guest_limit;
+        if limit > 0 && self.made.get(&key).copied().unwrap_or(0) >= limit {
+            return Err(Reject::PartyLimit(limit));
+        }
         let mine = self
             .pending
             .iter()
@@ -217,6 +238,9 @@ impl RequestBook {
             if self.pending.len() >= MAX_PENDING_TOTAL {
                 return Err(Reject::Full);
             }
+        }
+        if limit > 0 && (self.made.contains_key(&key) || self.made.len() < MAX_COUNTED_GUESTS) {
+            *self.made.entry(key).or_default() += 1;
         }
         self.next_id += 1;
         let req = Request {
@@ -231,6 +255,17 @@ impl RequestBook {
         let id = req.id;
         self.pending.push(req);
         Ok(Submitted::Pending(id))
+    }
+
+    /// A request the host turned down does not count against the guest's allowance.
+    pub fn give_back(&mut self, guest: &str) {
+        let key = guest.to_lowercase();
+        if let Some(n) = self.made.get_mut(&key) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                self.made.remove(&key);
+            }
+        }
     }
 
     /// Removes and returns a request (approved or denied by the caller).
@@ -311,6 +346,39 @@ pub fn insert_index(placement: Placement, owners: &[Option<u64>], guest_id: u64)
             at
         }
     }
+}
+
+/// [`insert_index`] with the host's own picks first: a guest's request goes behind every
+/// entry the host queued itself (`owners[i]` is `None` for those).
+pub fn insert_index_host_first(
+    placement: Placement,
+    owners: &[Option<u64>],
+    guest_id: u64,
+) -> usize {
+    let base = owners
+        .iter()
+        .rposition(Option::is_none)
+        .map_or(0, |i| i + 1);
+    base + insert_index(placement, &owners[base..], guest_id)
+}
+
+/// Stable order with the host's own entries (`is_guest` false) before guests' requests.
+/// Returns whether anything moved.
+pub fn host_first_order<T>(items: &mut Vec<T>, is_guest: impl Fn(&T) -> bool) -> bool {
+    let sorted = items
+        .iter()
+        .map(&is_guest)
+        .collect::<Vec<_>>()
+        .windows(2)
+        .all(|w| !w[0] || w[1]);
+    if sorted {
+        return false;
+    }
+    let all = std::mem::take(items);
+    let (guests, host): (Vec<T>, Vec<T>) = all.into_iter().partition(|t| is_guest(t));
+    items.extend(host);
+    items.extend(guests);
+    true
 }
 
 // ---- vote skip ----
@@ -655,5 +723,71 @@ mod tests {
         assert_eq!(handoff_state(Some(g), g, 2, s), Handoff::OfferToMe);
         assert_eq!(handoff_state(Some(g), g, 3, s), Handoff::OfferToOther);
         assert_eq!(handoff_state(Some(g), g, 3, None), Handoff::Over);
+    }
+
+    #[test]
+    fn the_per_party_allowance_counts_every_request_and_names_the_limit() {
+        let mut b = RequestBook::new(Policy {
+            mode: RequestMode::Auto,
+            per_guest_limit: 2,
+            ..Policy::default()
+        });
+        assert!(b.submit(1, "Ann", track(1), view(&[], &[])).is_ok());
+        assert!(b.submit(1, "Ann", track(2), view(&[], &[])).is_ok());
+        let e = b.submit(1, "Ann", track(3), view(&[], &[])).unwrap_err();
+        assert_eq!(e, Reject::PartyLimit(2));
+        assert_eq!(e.message(), "You have used your 2 requests for this party.");
+        // Another guest has their own allowance; the same name on a new connection shares it.
+        assert!(b.submit(2, "Bo", track(3), view(&[], &[])).is_ok());
+        assert!(b.submit(9, "ann", track(4), view(&[], &[])).is_err());
+        assert_eq!(
+            Reject::PartyLimit(1).message(),
+            "You have used your 1 request for this party."
+        );
+    }
+
+    #[test]
+    fn a_denied_request_is_given_back_and_zero_means_no_limit() {
+        let mut b = RequestBook::new(Policy {
+            per_guest_limit: 1,
+            ..Policy::default()
+        });
+        let Ok(Submitted::Pending(id)) = b.submit(1, "Ann", track(1), view(&[], &[])) else {
+            panic!("pending");
+        };
+        let denied = b.take(id).expect("request");
+        b.give_back(&denied.guest);
+        assert!(b.submit(1, "Ann", track(2), view(&[], &[])).is_ok());
+        let mut free = RequestBook::new(Policy::default());
+        for i in 0..20 {
+            free.take_all();
+            assert!(free.submit(1, "Ann", track(i), view(&[], &[])).is_ok());
+        }
+    }
+
+    #[test]
+    fn host_first_puts_guest_requests_behind_the_hosts_own_picks() {
+        // host, guest 1, host, guest 2
+        let owners = [None, Some(1), None, Some(2)];
+        assert_eq!(insert_index_host_first(Placement::PlayNext, &owners, 3), 3);
+        assert_eq!(insert_index_host_first(Placement::AddToEnd, &owners, 3), 4);
+        assert_eq!(
+            insert_index_host_first(Placement::Fair, &[None, None], 1),
+            2
+        );
+        assert_eq!(insert_index_host_first(Placement::PlayNext, &[], 1), 0);
+        // Without host-first the same request jumps the line.
+        assert_eq!(insert_index(Placement::PlayNext, &owners, 3), 0);
+    }
+
+    #[test]
+    fn the_order_puts_the_host_first_and_keeps_each_side_in_order() {
+        // (id, guest?)
+        let mut v = vec![(1, true), (2, false), (3, true), (4, false)];
+        assert!(host_first_order(&mut v, |t| t.1));
+        assert_eq!(v, vec![(2, false), (4, false), (1, true), (3, true)]);
+        assert!(!host_first_order(&mut v, |t| t.1), "already in order");
+        let mut e: Vec<(i32, bool)> = Vec::new();
+        assert!(!host_first_order(&mut e, |t| t.1));
     }
 }
