@@ -23,19 +23,13 @@ export component LyricsFullscreen inherits Rectangle {
     background: #101014;
     clip: true;
 
-    // The backdrop and its dimming are one cached layer: it changes only with the cover, so a
-    // change of line redraws the text over a stored picture instead of scaling the small
-    // blurred image up to the window again (the software renderer ignores the hint).
-    Rectangle {
-        cache-rendering-hint: true;
-        if root.backdrop.width > 0: Image {
-            width: parent.width;
-            height: parent.height;
-            source: root.backdrop;
-            image-fit: ImageFit.cover;
-        }
-        Rectangle { background: #000000a0; }
+    if root.backdrop.width > 0: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.backdrop;
+        image-fit: ImageFit.cover;
     }
+    Rectangle { background: #000000a0; }
 
     if root.lines.length == 0: Text {
         text: root.status != "" ? root.status : "No lyrics";
