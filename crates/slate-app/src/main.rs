@@ -49,6 +49,7 @@ mod profile;
 mod quality;
 mod queue_tools;
 mod remote;
+mod resume;
 mod selection_ui;
 mod selftest;
 mod settings;

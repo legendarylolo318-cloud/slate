@@ -621,6 +621,7 @@ fn wire(window: &AppWindow, backend: &Backend) {
     bind!(on_cycle_repeat, |b| b.cycle_repeat());
     bind!(on_toggle_mute, |b| b.toggle_mute());
     bind!(on_seek, |b, f| b.seek(f));
+    bind!(on_resume, |b| b.resume_accept());
     bind!(on_seek_relative, |b, d| b.seek_relative(d));
     bind!(on_set_volume, |b, v| b.set_volume(v));
 

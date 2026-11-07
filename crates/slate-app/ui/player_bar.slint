@@ -51,6 +51,9 @@ export component PlayerBar inherits Rectangle {
     callback toggle-fullscreen();
     callback toggle-queue();
     callback toggle-lyrics();
+    // "Resume at 12:34" offer for a long track that was left part-way; empty = none.
+    in property <string> resume-text;
+    callback resume();
 
     // Side columns are equal so the transport sits exactly in the middle; stretch
     // factors would add to each column's own content width and push it off-centre.
@@ -176,6 +179,17 @@ export component PlayerBar inherits Rectangle {
             Bar { horizontal-stretch: 1; height: 18px * root.scale; thickness: 4px * root.scale; fraction: root.progress; picked(f) => { root.seek(f); } }
             Text { text: root.duration-text; color: Theme.text-muted; font-size: 11.5px * root.scale; vertical-alignment: center; }
         }
+    }
+    if root.resume-text != "": Rectangle {
+        // A small pill floating just above the bar, centred over the transport.
+        x: (root.width - self.width) / 2;
+        y: -self.height - 8px * root.scale;
+        width: rt.preferred-width + 28px * root.scale;
+        height: 30px * root.scale;
+        border-radius: self.height / 2;
+        background: Theme.accent;
+        rt := Text { text: root.resume-text; color: Theme.on-accent; font-size: 12.5px * root.scale; font-weight: 600; vertical-alignment: center; horizontal-alignment: center; }
+        TouchArea { mouse-cursor: pointer; clicked => { root.resume(); } }
     }
     ContextMenuArea {
         x: 0px;

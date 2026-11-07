@@ -278,6 +278,8 @@ export component AppWindow inherits Window {
     in property <bool> tint-on;
     in property <color> tint;
     in property <string> quality-text;
+    in property <string> resume-text;
+    callback resume();
     in property <int> track-badge;
     in property <bool> track-atmos;
     in property <image> track-cover;
@@ -628,6 +630,8 @@ export component AppWindow inherits Window {
                 tint-on: root.tint-on;
                 tint: root.tint;
                 quality: root.quality-text;
+                resume-text: root.resume-text;
+                resume => { root.resume(); }
                 badge: root.track-badge;
                 atmos: root.track-atmos;
                 cover: root.track-cover;

@@ -113,6 +113,16 @@ fn ui_shots() {
         app.set_dialog_kind(kind.into());
         app.set_dialog_open(true);
     }
+    // `resume`: the player bar with a long track and its "Resume at" offer.
+    if which == "resume" {
+        app.set_view("home".into());
+        app.set_has_track(true);
+        app.set_track_title("Essential Mix – a very long live set title".into());
+        app.set_track_artist("Sample artist".into());
+        app.set_duration_text("2:03:41".into());
+        app.set_position_text("0:00".into());
+        app.set_resume_text("Resume at 47:12".into());
+    }
     // `lyrics-full`: the full-screen lyrics over a gradient cover (`lyrics-full-plain`: unsynced).
     if which.starts_with("lyrics-full") {
         let lines: Vec<crate::bootstrap::LyricLine> = (0..14)
@@ -167,7 +177,9 @@ fn ui_shots() {
                         app.set_view("settings".into());
                         app.global::<SettingsState>().set_tab(*t);
                     }
-                    None if which.starts_with("dialog-") || which.starts_with("lyrics-full") => {}
+                    None if which.starts_with("dialog-")
+                        || which.starts_with("lyrics-full")
+                        || which == "resume" => {}
                     None => app.set_view(which.as_str().into()),
                 }
                 save(

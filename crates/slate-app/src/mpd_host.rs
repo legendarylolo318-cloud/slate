@@ -117,6 +117,7 @@ impl AppMpd {
     /// Stops audio and waits for it, so a command that follows (`play` after `clear`) cannot
     /// be undone by a stop that was still queued.
     async fn stop_now(&self) {
+        self.backend.resume_leave_current();
         if let Some(state) = self.backend.state() {
             let _ = playback::stop_track(&state).await;
         }

@@ -34,7 +34,7 @@ pub(crate) struct Shared {
     /// Audio pipeline holds the current track (false for a restored, not yet started one).
     pub(crate) loaded: AtomicBool,
     pub(crate) shuffle: AtomicBool,
-    current_id: AtomicU64,
+    pub(crate) current_id: AtomicU64,
     /// Volume before muting, as `f32` bits; 0 when not muted.
     pre_mute: AtomicU32,
     /// Latest position in seconds, as `f32` bits.
@@ -52,7 +52,9 @@ pub(crate) struct Shared {
     #[cfg(target_os = "linux")]
     tray: tokio::sync::Mutex<Option<crate::platform::tray::TrayHandle>>,
     /// Track length in seconds, stored as `f32` bits.
-    duration: AtomicU32,
+    pub(crate) duration: AtomicU32,
+    /// Seconds of the "Resume at" offer on screen, 0 when there is none.
+    pub(crate) resume_secs: AtomicU32,
     login_url: Mutex<String>,
     /// Settings → "Colours from album art".
     pub(crate) tint_enabled: AtomicBool,
@@ -379,6 +381,7 @@ impl Backend {
                     continue;
                 };
                 this.shared.position.store(pos.to_bits(), Ordering::Relaxed);
+                this.resume_dismiss_if_past(pos);
                 // Crossfade: near the end of a track the next one may start as a fade.
                 if let Some(ctl) = this.controller() {
                     if let Some(outcome) = ctl.maybe_crossfade(pos, this.shared.duration()).await {
@@ -517,6 +520,7 @@ impl Backend {
             // A queue write still waiting (debounced) or under way must not land after
             // `auth::logout` deletes this account's queue file.
             QUEUE_SAVE.cancel();
+            crate::resume::forget();
             if let Some(ctl) = this.controller() {
                 ctl.stop_saving().await;
             }
@@ -634,6 +638,13 @@ impl Backend {
     fn show_track(&self, track: &Track, playing: bool) {
         let id = track.id.to_string();
         let last_position = f32::from_bits(self.shared.position.load(Ordering::Relaxed)).max(0.0);
+        let left = self.shared.has_track.load(Ordering::Relaxed).then(|| {
+            (
+                self.shared.current_id.load(Ordering::Relaxed),
+                self.shared.duration(),
+                last_position,
+            )
+        });
         if let Some(state) = self.state() {
             // One atomic check when the MCP server is off.
             slate_core::mcp::hooks::track_changed(
@@ -646,6 +657,7 @@ impl Backend {
             );
         }
         self.shared.current_id.store(track.id, Ordering::Relaxed);
+        self.resume_track_changed(left, (track.id, track.duration_secs()));
         self.party_track_changed(track, last_position);
         self.refresh_favorite_ui();
         self.load_lyrics(track.id);
@@ -926,6 +938,7 @@ impl Backend {
                 return;
             }
             slate_core::mcp::hooks::seeked(&state, secs as u32);
+            this.resume_dismiss_if_past(secs);
             this.party_state_changed(secs, this.shared.playing.load(Ordering::Relaxed));
             this.shared
                 .position
@@ -1100,6 +1113,7 @@ impl Backend {
             Control::PlayPause => self.toggle_play(),
             Control::Play | Control::Pause => {}
             Control::Stop => {
+                self.resume_leave_current();
                 let this = self.clone();
                 self.rt.spawn(async move {
                     if let Some(state) = this.state() {
@@ -1261,6 +1275,16 @@ impl Backend {
     /// Stops audio and flushes the queue; called once on shutdown.
     pub fn shutdown(&self) {
         crate::tags::flush();
+        if let Some(state) = self.state() {
+            if self.shared.has_track.load(Ordering::Relaxed) {
+                crate::resume::leave_at_quit(
+                    &state,
+                    self.shared.current_id.load(Ordering::Relaxed),
+                    self.shared.duration(),
+                    f32::from_bits(self.shared.position.load(Ordering::Relaxed)),
+                );
+            }
+        }
         let this = self.clone();
         self.rt.block_on(async move {
             this.save_now().await;
