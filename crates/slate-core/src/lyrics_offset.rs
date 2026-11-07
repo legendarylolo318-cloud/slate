@@ -61,6 +61,22 @@ impl Offsets {
         ms
     }
 
+    /// Every offset, oldest change first.
+    pub fn iter(&self) -> impl Iterator<Item = (u64, i32)> + '_ {
+        self.entries.iter().copied()
+    }
+
+    /// Sets the offset of `track_id` (clamped to ±[`MAX_MS`]); zero removes the entry.
+    pub fn set(&mut self, track_id: u64, ms: i32) {
+        let ms = ms.clamp(-MAX_MS, MAX_MS);
+        self.entries.retain(|(id, _)| *id != track_id);
+        if ms != 0 {
+            self.entries.push((track_id, ms));
+            let excess = self.entries.len().saturating_sub(MAX_ENTRIES);
+            self.entries.drain(..excess);
+        }
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".into())
     }
@@ -86,16 +102,23 @@ pub fn save(path: &Path, offsets: &Offsets) -> io::Result<()> {
 /// unserialised the second could read before the first wrote (a lost nudge) or report
 /// its value after the first's newer one. Blocking file I/O: call off the UI thread.
 pub fn nudge_saved(path: &Path, track_id: u64, delta_ms: i32, then: impl FnOnce(i32)) {
+    let ms = update_saved(path, |all| all.nudge(track_id, delta_ms));
+    then(ms);
+}
+
+/// Reads the saved offsets, lets `f` change them and writes them back, all under the
+/// one process-wide lock `nudge_saved` uses. Blocking file I/O: off the UI thread.
+pub fn update_saved<R>(path: &Path, f: impl FnOnce(&mut Offsets) -> R) -> R {
     static FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _held = FILE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut all = load(path);
-    let ms = all.nudge(track_id, delta_ms);
+    let r = f(&mut all);
     if let Err(e) = save(path, &all) {
-        log::warn!("could not save the lyrics offset: {e}");
+        log::warn!("could not save the lyrics offsets: {e}");
     }
-    then(ms);
+    r
 }
 
 /// The position to look the current line up at: lyrics shifted later by `offset_ms`
@@ -199,5 +222,18 @@ mod tests {
         assert_eq!(lookup_position(10.0, 500), 9.5);
         assert_eq!(lookup_position(10.0, -500), 10.5);
         assert_eq!(lookup_position(0.2, 500), 0.0);
+    }
+
+    #[test]
+    fn set_replaces_clamps_and_zero_removes() {
+        let mut o = Offsets::default();
+        o.set(1, 300);
+        o.set(2, 99_999);
+        o.set(1, -50);
+        assert_eq!(o.get(1), -50);
+        assert_eq!(o.get(2), MAX_MS);
+        assert_eq!(o.iter().collect::<Vec<_>>(), vec![(2, MAX_MS), (1, -50)]);
+        o.set(2, 0);
+        assert_eq!(o.get(2), 0);
     }
 }

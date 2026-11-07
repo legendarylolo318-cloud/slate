@@ -168,7 +168,13 @@ fn ui_shots() {
         window.dispatch_event(WindowEvent::ScaleFactorChanged {
             scale_factor: scale,
         });
-        for &(lw, lh) in SIZES {
+        // `SLATE_SHOTS_SIZE=1000x2400`: one tall window, to see a whole page.
+        let only: Option<(u32, u32)> = std::env::var("SLATE_SHOTS_SIZE").ok().and_then(|v| {
+            let (w, h) = v.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        });
+        let sizes: Vec<(u32, u32)> = only.map_or_else(|| SIZES.to_vec(), |o| vec![o]);
+        for &(lw, lh) in &sizes {
             let (w, h) = ((lw as f32 * scale) as u32, (lh as f32 * scale) as u32);
             window.set_size(PhysicalSize::new(w, h));
             for (name, tab) in &pages {

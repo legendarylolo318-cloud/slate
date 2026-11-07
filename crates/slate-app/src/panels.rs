@@ -220,6 +220,15 @@ impl Backend {
         slate_core::config_dir_for_env().map(|d| lyrics_offset::path_in(&d))
     }
 
+    /// The saved offset of the playing track, read again (after an import).
+    pub(crate) fn reload_lyric_offset(&self) {
+        if let Some(id) = self.current_track_id() {
+            let this = self.clone();
+            self.rt
+                .spawn(async move { this.read_lyric_offset(id).await });
+        }
+    }
+
     async fn read_lyric_offset(&self, track_id: u64) {
         let Some(path) = Self::offsets_path() else {
             return;

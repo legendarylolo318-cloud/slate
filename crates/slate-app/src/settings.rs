@@ -498,6 +498,8 @@ impl Backend {
             let Some(state) = this.state() else { return };
             match name.as_str() {
                 n if n.starts_with("theme-") => this.custom_theme_action(n),
+                "personal-export" => this.personal_data_export(),
+                "personal-import" => this.personal_data_import(),
                 "shortcuts-reset-all" => this.reset_shortcut(None),
                 n if n.starts_with("shortcut-rebind:") => {
                     this.begin_capture(&n["shortcut-rebind:".len()..]);

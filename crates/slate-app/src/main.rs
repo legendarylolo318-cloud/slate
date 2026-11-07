@@ -43,6 +43,7 @@ mod panels;
 mod party_set;
 #[cfg_attr(not(feature = "party"), path = "party_off.rs")]
 mod party_ui;
+mod personal_data;
 mod pkce;
 mod platform;
 mod profile;

@@ -122,6 +122,13 @@ impl TagStore {
         slate_core::write_atomic(path, self.to_json().as_bytes())
     }
 
+    /// Every tagged track: id, snapshot and tags (for the personal-data export).
+    pub fn entries(&self) -> impl Iterator<Item = (u64, &Snapshot, &[String])> {
+        self.tracks
+            .iter()
+            .map(|(id, e)| (*id, &e.snap, e.tags.as_slice()))
+    }
+
     /// Tags `id` (with a fresh snapshot). `false` when it already had the tag.
     pub fn add(&mut self, id: u64, snap: Snapshot, tag: &str) -> bool {
         let Some(tag) = normalize(tag) else {
@@ -355,7 +362,34 @@ fn entry((name, n): &(String, usize)) -> PlaylistEntry {
     }
 }
 
+/// Tagged tracks for the personal-data export.
+pub fn export_entries() -> Vec<(u64, Snapshot, Vec<String>)> {
+    with(|s| {
+        s.entries()
+            .map(|(id, snap, tags)| (id, snap.clone(), tags.to_vec()))
+            .collect()
+    })
+}
+
 impl Backend {
+    /// Merges imported tags into the store (nothing is removed); returns how many
+    /// tracks and tags were new, and saves after the usual quiet period.
+    pub(crate) fn tags_import(&self, items: Vec<(u64, Snapshot, Vec<String>)>) -> (usize, usize) {
+        let (mut tracks, mut added) = (0, 0);
+        with(|s| {
+            for (id, snap, tags) in items {
+                let known = s.tracks.contains_key(&id);
+                let n = tags.iter().filter(|t| s.add(id, snap.clone(), t)).count();
+                added += n;
+                tracks += usize::from(n > 0 && !known);
+            }
+        });
+        if added > 0 {
+            self.tags_changed();
+        }
+        (tracks, added)
+    }
+
     /// Writes the file after the edits have been quiet for a moment, on a blocking thread.
     fn tags_changed(&self) {
         DIRTY.store(true, Ordering::Release);

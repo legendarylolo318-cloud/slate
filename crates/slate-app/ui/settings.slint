@@ -374,6 +374,15 @@ export component SettingsPage inherits Rectangle {
                         Button { label: "Open"; clicked => { SettingsState.action("open-logs"); } }
                     }
                     Row {
+                        label: "Personal data";
+                        hint: "Lyrics timing offsets and tags in one file, to copy to another computer. Importing adds to what you have and removes nothing.";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { label: "Export…"; clicked => { SettingsState.action("personal-export"); } }
+                            Button { label: "Import…"; clicked => { SettingsState.action("personal-import"); } }
+                        }
+                    }
+                    Row {
                         label: "Image cache";
                         hint: "Cover art and metadata kept on disk.";
                         Button { label: "Clear"; clicked => { SettingsState.action("clear-cache"); } }
