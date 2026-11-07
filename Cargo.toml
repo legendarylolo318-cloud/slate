@@ -11,6 +11,6 @@ repository = "https://github.com/legendarylolo318-cloud/slate"
 publish = false
 
 [profile.release]
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 strip = true
