@@ -112,6 +112,20 @@ pub enum Outcome {
     WaitForAgent,
 }
 
+/// What "Fill queue to N minutes" did.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FillOutcome {
+    Added {
+        tracks: usize,
+        total_secs: f32,
+        /// From the context source (else the track radio).
+        from_source: bool,
+    },
+    AlreadyLongEnough,
+    /// No candidates: nothing left in the source and no radio for this track.
+    NothingToAdd,
+}
+
 pub struct Controller {
     state: Arc<AppState>,
     app_handle: crate::events::AppHandle,
@@ -1126,6 +1140,80 @@ impl Controller {
                 q.add_to_queue(t, None);
             }
         });
+    }
+
+    /// "Fill queue to N minutes": adds tracks after everything queued until the upcoming
+    /// time reaches `target_secs` (see `queue_fill::select` for where it stops). They come
+    /// from the context source (what has not been queued or played yet), else from the
+    /// radio of the track playing. One undo step.
+    pub async fn fill_queue(&self, target_secs: f32) -> FillOutcome {
+        let (have, seen, source_tracks, mix_id) = {
+            let q = self.lock_queue().await;
+            let have: f32 = q.upcoming().map(|t| t.duration_secs()).sum();
+            let seen: std::collections::HashSet<u64> = q
+                .current
+                .iter()
+                .chain(q.history.iter())
+                .chain(q.upcoming())
+                .map(|t| t.id)
+                .collect();
+            let source: Vec<TrackRef> = q
+                .playback_source
+                .as_ref()
+                .map(|s| s.tracks.iter().cloned().collect())
+                .unwrap_or_default();
+            let mix = q.current.as_ref().and_then(|t| t.track_mix.clone());
+            (have, seen, source, mix)
+        };
+        if have >= target_secs {
+            return FillOutcome::AlreadyLongEnough;
+        }
+        let usable = |t: &TrackRef| !t.is_video() && self.classify(t).is_none();
+        let mut from_source = true;
+        let mut picked = crate::queue_fill::select(
+            have,
+            &seen,
+            source_tracks.into_iter().filter(usable),
+            target_secs,
+        );
+        if picked.is_empty() {
+            from_source = false;
+            // The radio: a network call, made without the queue locked.
+            let Some(mix_id) = mix_id else {
+                return FillOutcome::NothingToAdd;
+            };
+            let Ok(result) = pages::get_mix_items(&self.state, mix_id.to_string()).await else {
+                return FillOutcome::NothingToAdd;
+            };
+            let radio: Vec<TrackRef> = result
+                .tracks
+                .iter()
+                .filter_map(Track::from_serialized)
+                .map(Arc::new)
+                .collect();
+            picked = crate::queue_fill::select(
+                have,
+                &seen,
+                radio.into_iter().filter(usable),
+                target_secs,
+            );
+        }
+        if picked.is_empty() {
+            return FillOutcome::NothingToAdd;
+        }
+        let mut q = self.lock_queue().await;
+        let added = picked.len();
+        self.edit(&mut q, |q| {
+            for t in picked {
+                q.add_to_queue(Track::clone(&t), None);
+            }
+        });
+        let total: f32 = q.upcoming().map(|t| t.duration_secs()).sum();
+        FillOutcome::Added {
+            tracks: added,
+            total_secs: total,
+            from_source,
+        }
     }
 
     /// Inserts into the "next up" list at `index`.

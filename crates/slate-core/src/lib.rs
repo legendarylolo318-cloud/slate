@@ -61,6 +61,7 @@ pub mod pipeline_probe;
 pub mod playlist_tools;
 pub mod proxy;
 pub mod proxy_http;
+pub mod queue_fill;
 pub mod queue_snapshots;
 pub mod queue_undo;
 pub mod rate_gate;

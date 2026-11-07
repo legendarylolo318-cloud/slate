@@ -1038,7 +1038,7 @@ export component AppWindow inherits Window {
                     padding: 16px;
                     spacing: 10px;
                     Text {
-                        text: root.dialog-kind == "snapshots" ? "Queue snapshots" : root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : root.dialog-kind == "compare" ? "Compare with…" : root.dialog-kind == "dup" ? "Already in playlist" : root.dialog-kind == "party-set" ? "Save set as playlist" : root.dialog-kind == "tags" ? (root.dialog-count > 1 ? "Tags (" + root.dialog-count + " tracks)" : "Tags") : "Move to folder";
+                        text: root.dialog-kind == "snapshots" ? "Queue snapshots" : root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : root.dialog-kind == "compare" ? "Compare with…" : root.dialog-kind == "dup" ? "Already in playlist" : root.dialog-kind == "party-set" ? "Save set as playlist" : root.dialog-kind == "fill" ? "Fill queue to…" : root.dialog-kind == "tags" ? (root.dialog-count > 1 ? "Tags (" + root.dialog-count + " tracks)" : "Tags") : "Move to folder";
                         font-size: 18px; font-weight: 700; color: Theme.text;
                     }
                     if root.dialog-kind == "delete": Text {
@@ -1083,6 +1083,13 @@ export component AppWindow inherits Window {
                         placeholder: "New name";
                         field-width: 340px;
                         accepted(t) => { root.dialog-accepted("rename", root.dialog-target, t); root.dialog-open = false; }
+                    }
+                    if root.dialog-kind == "fill": TextField {
+                        autofocus: true;
+                        text <=> root.dialog-text;
+                        placeholder: "Minutes (1–600)";
+                        field-width: 340px;
+                        accepted(t) => { root.dialog-accepted("fill", "", t); root.dialog-open = false; }
                     }
                     if root.dialog-kind == "tags": TextField {
                         autofocus: true;
@@ -1180,6 +1187,7 @@ export component AppWindow inherits Window {
                         Button { label: root.dialog-kind == "tags" ? "Done" : "Cancel"; clicked => { root.dialog-open = false; } }
                         if root.dialog-kind == "rename": Button { label: "Rename"; primary: true; enabled: root.dialog-text != ""; clicked => { root.dialog-accepted("rename", root.dialog-target, root.dialog-text); root.dialog-open = false; } }
                         if root.dialog-kind == "tags": Button { label: "Add"; primary: true; enabled: root.dialog-text != ""; clicked => { root.tag-dialog("add", root.dialog-text); } }
+                        if root.dialog-kind == "fill": Button { label: "Fill"; primary: true; enabled: root.dialog-text != ""; clicked => { root.dialog-accepted("fill", "", root.dialog-text); root.dialog-open = false; } }
                         if root.dialog-kind == "party-set": Button { label: "Save"; primary: true; clicked => { root.dialog-accepted("party-set", "", root.dialog-text); root.dialog-open = false; } }
                         if root.dialog-kind == "dup": Button { label: "Add anyway"; primary: true; clicked => { root.dialog-accepted("dup", root.dialog-target, ""); root.dialog-open = false; } }
                         if root.dialog-kind == "dedupe": Button { label: "Remove"; danger: true; clicked => { root.dialog-accepted("dedupe", root.dialog-target, ""); root.dialog-open = false; } }

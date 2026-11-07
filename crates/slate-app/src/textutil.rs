@@ -45,3 +45,25 @@ mod tests {
         assert_eq!(clean_line("\u{202E}\u{2066}"), "");
     }
 }
+
+/// "47 min" / "1 h 05 min": a length for a notice.
+pub fn minutes_text(secs: f32) -> String {
+    let m = (secs.max(0.0) / 60.0).round() as u32;
+    if m >= 60 {
+        format!("{} h {:02} min", m / 60, m % 60)
+    } else {
+        format!("{m} min")
+    }
+}
+
+#[cfg(test)]
+mod minutes_tests {
+    use super::minutes_text;
+
+    #[test]
+    fn lengths_read_as_minutes_or_hours() {
+        assert_eq!(minutes_text(47.0 * 60.0 + 20.0), "47 min");
+        assert_eq!(minutes_text(3900.0), "1 h 05 min");
+        assert_eq!(minutes_text(-5.0), "0 min");
+    }
+}

@@ -432,6 +432,10 @@ impl Backend {
                 return;
             }
         }
+        if kind == "fill" {
+            self.fill_custom(text);
+            return;
+        }
         if kind == "party-set" {
             self.party_save_set(text);
             return;

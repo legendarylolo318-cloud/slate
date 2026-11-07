@@ -40,7 +40,55 @@ impl Backend {
         match action {
             "save-playlist" => self.save_queue_as_playlist(),
             "snapshots" => self.open_snapshots(),
-            _ => {}
+            "fill-custom" => self.ui(|w| {
+                w.set_dialog_text("".into());
+                w.set_dialog_target("".into());
+                w.set_dialog_kind("fill".into());
+                w.set_dialog_open(true);
+            }),
+            a => {
+                if let Some(min) = a.strip_prefix("fill-").and_then(|m| m.parse().ok()) {
+                    self.fill_queue(min);
+                }
+            }
+        }
+    }
+
+    /// "Fill queue to N minutes" (one undo step).
+    pub(crate) fn fill_queue(&self, minutes: u32) {
+        use slate_core::controller::FillOutcome;
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let Some(ctl) = this.controller() else { return };
+            let msg = match ctl.fill_queue(minutes as f32 * 60.0).await {
+                FillOutcome::Added {
+                    tracks,
+                    total_secs,
+                    from_source,
+                } => {
+                    this.refresh_queue_info().await;
+                    this.save().await;
+                    format!(
+                        "Added {tracks} {} from the {}; the queue is now {}",
+                        if tracks == 1 { "track" } else { "tracks" },
+                        if from_source { "source" } else { "radio" },
+                        crate::textutil::minutes_text(total_secs)
+                    )
+                }
+                FillOutcome::AlreadyLongEnough => {
+                    format!("The queue already holds {minutes} minutes or more")
+                }
+                FillOutcome::NothingToAdd => "No more tracks to fill the queue with".to_string(),
+            };
+            this.notify(&msg);
+        });
+    }
+
+    /// The custom-minutes dialog.
+    pub(crate) fn fill_custom(&self, text: &str) {
+        match slate_core::queue_fill::parse_minutes(text) {
+            Some(m) => self.fill_queue(m),
+            None => self.notify("Enter a number of minutes from 1 to 600"),
         }
     }
 

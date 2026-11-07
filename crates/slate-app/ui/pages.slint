@@ -225,6 +225,15 @@ export component QueuePanel inherits Rectangle {
                 clicked => { qmenu.show({ x: qmore.absolute-position.x, y: qmore.absolute-position.y + qmore.height }); }
                 qmenu := ContextMenuArea {
                     Menu {
+                        Menu {
+                            title: "Fill queue to…";
+                            MenuItem { title: "15 minutes"; activated => { root.menu("fill-15"); } }
+                            MenuItem { title: "30 minutes"; activated => { root.menu("fill-30"); } }
+                            MenuItem { title: "45 minutes"; activated => { root.menu("fill-45"); } }
+                            MenuItem { title: "60 minutes"; activated => { root.menu("fill-60"); } }
+                            MenuItem { title: "90 minutes"; activated => { root.menu("fill-90"); } }
+                            MenuItem { title: "Custom…"; activated => { root.menu("fill-custom"); } }
+                        }
                         MenuItem { title: "Save queue as playlist"; activated => { root.menu("save-playlist"); } }
                         MenuItem { title: "Queue snapshots…"; activated => { root.menu("snapshots"); } }
                     }
