@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use slate_core::commands::{library as lib_cmds, metadata, playback, search, utility};
 use slate_core::mpd::{proto, Action, BoxFut, Host, HostError, PlayState, Song, Status};
-use slate_core::queue::{Repeat, Track};
+use slate_core::queue::{Repeat, Track, TrackRef};
 
 use crate::backend::Backend;
 use crate::control::Control;
@@ -59,16 +59,13 @@ fn queue_hash(ids: impl Iterator<Item = u64>) -> u64 {
 }
 
 impl AppMpd {
-    async fn queue_tracks(&self) -> (Option<Track>, Vec<Track>) {
+    /// The playing track and what follows, as shared handles: every `status` asks for this,
+    /// so copying the tracks would copy the whole queue on each poll.
+    async fn queue_tracks(&self) -> (Option<TrackRef>, Vec<TrackRef>) {
         match self.backend.controller() {
             Some(ctl) => {
-                ctl.with_queue(|q| {
-                    (
-                        q.current.as_deref().cloned(),
-                        q.upcoming().map(|t| Track::clone(t)).collect(),
-                    )
-                })
-                .await
+                ctl.with_queue(|q| (q.current.clone(), q.upcoming().cloned().collect()))
+                    .await
             }
             None => (None, Vec::new()),
         }
@@ -281,7 +278,7 @@ impl Host for AppMpd {
                 queue_hash: queue_hash(current.iter().chain(&upcoming).map(|t| t.id)),
                 pos: current.as_ref().map(|_| 0),
                 next: upcoming.first().map(|t| (off, t.id)),
-                current: current.as_ref().map(song_of),
+                current: current.as_deref().map(song_of),
             }
         })
     }
@@ -289,7 +286,11 @@ impl Host for AppMpd {
     fn queue(&self) -> BoxFut<'_, Vec<Song>> {
         Box::pin(async move {
             let (current, upcoming) = self.queue_tracks().await;
-            current.iter().chain(&upcoming).map(song_of).collect()
+            current
+                .iter()
+                .chain(&upcoming)
+                .map(|t| song_of(t))
+                .collect()
         })
     }
 
