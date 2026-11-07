@@ -295,6 +295,13 @@ export component QueuePanel inherits Rectangle {
                         if !(r.selected && root.selection-size > 1): MenuItem { title: "Tags…"; activated => { root.go(i, "tags"); } }
                         if !(r.selected && root.selection-size > 1): MenuItem { title: "Copy link"; activated => { root.go(i, "copy-link"); } }
                         if !(r.selected && root.selection-size > 1): MenuItem { title: "Copy share card"; activated => { root.go(i, "share-card"); } }
+                        if !(r.selected && root.selection-size > 1): Menu {
+                            title: "Share card theme";
+                            MenuItem { title: "Dark"; activated => { root.go(i, "share-card:dark"); } }
+                            MenuItem { title: "Light"; activated => { root.go(i, "share-card:light"); } }
+                            MenuItem { title: "Album colour"; activated => { root.go(i, "share-card:album"); } }
+                            MenuItem { title: "Minimal"; activated => { root.go(i, "share-card:minimal"); } }
+                        }
                         if !(r.selected && root.selection-size > 1): MenuItem { title: "Remove from queue"; activated => { root.remove(i); } }
                     }
                 }

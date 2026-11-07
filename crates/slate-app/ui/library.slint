@@ -427,6 +427,13 @@ component Row inherits Rectangle {
             if !root.multi: MenuItem { title: "Tags…"; activated => { root.action("tags"); } }
             if !root.multi: MenuItem { title: "Copy link"; activated => { root.action("copy-link"); } }
             if !root.multi: MenuItem { title: "Copy share card"; activated => { root.action("share-card"); } }
+            if !root.multi: Menu {
+                title: "Share card theme";
+                MenuItem { title: "Dark"; activated => { root.action("share-card:dark"); } }
+                MenuItem { title: "Light"; activated => { root.action("share-card:light"); } }
+                MenuItem { title: "Album colour"; activated => { root.action("share-card:album"); } }
+                MenuItem { title: "Minimal"; activated => { root.action("share-card:minimal"); } }
+            }
         }
     }
     HorizontalLayout {

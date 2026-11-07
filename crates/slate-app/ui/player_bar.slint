@@ -202,6 +202,13 @@ export component PlayerBar inherits Rectangle {
             MenuItem { title: "Tags…"; activated => { root.now-action("tags"); } }
             MenuItem { title: "Copy link"; activated => { root.now-action("copy-link"); } }
             MenuItem { title: "Copy share card"; activated => { root.now-action("share-card"); } }
+            Menu {
+                title: "Share card theme";
+                MenuItem { title: "Dark"; activated => { root.now-action("share-card:dark"); } }
+                MenuItem { title: "Light"; activated => { root.now-action("share-card:light"); } }
+                MenuItem { title: "Album colour"; activated => { root.now-action("share-card:album"); } }
+                MenuItem { title: "Minimal"; activated => { root.now-action("share-card:minimal"); } }
+            }
         }
     }
 }

@@ -14,6 +14,7 @@ use slate_core::queue::Track;
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 
 use crate::backend::Backend;
+use crate::cover_tint::{contrast, dominant, Rgb};
 use crate::textutil::clean_line;
 
 pub const W: u32 = 600;
@@ -64,6 +65,127 @@ const FALLBACK: &[&str] = &[
 /// Where a track lives on tidal.com.
 pub fn track_link(id: u64) -> String {
     format!("https://tidal.com/browse/track/{id}")
+}
+
+/// The look of a card: `Dark` is the original.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+    /// Tinted with the cover's main colour (plain dark when the cover has none).
+    Album,
+    /// A flat page with the title, artist and link only.
+    Minimal,
+}
+
+impl Theme {
+    #[cfg(test)]
+    pub const ALL: [Self; 4] = [Self::Dark, Self::Light, Self::Album, Self::Minimal];
+
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "light" => Self::Light,
+            "album" => Self::Album,
+            "minimal" => Self::Minimal,
+            _ => Self::Dark,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+            Self::Album => "album",
+            Self::Minimal => "minimal",
+        }
+    }
+}
+
+/// Colours (as `#rrggbb`) and which lines a theme shows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Palette {
+    /// Background at the top left and bottom right (equal: a flat page).
+    pub bg: (String, String),
+    pub cover_bg: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub link: String,
+    pub show_album: bool,
+}
+
+fn hex(c: Rgb) -> String {
+    format!("#{:02x}{:02x}{:02x}", c.0, c.1, c.2)
+}
+
+fn mix(a: Rgb, b: Rgb, t: f64) -> Rgb {
+    let m = |x: u8, y: u8| (f64::from(x) * (1.0 - t) + f64::from(y) * t).round() as u8;
+    Rgb(m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
+}
+
+/// `fg`, moved towards `toward` in tenths until it reads on `bg` (WCAG AA for text).
+fn readable_on(fg: Rgb, bg: Rgb, toward: Rgb) -> Rgb {
+    let mut c = fg;
+    for step in 1..=10 {
+        if contrast(c, bg) >= 4.5 {
+            break;
+        }
+        c = mix(fg, toward, f64::from(step) / 10.0);
+    }
+    c
+}
+
+pub fn palette(theme: Theme, accent: Option<Rgb>) -> Palette {
+    let flat = |c: &str| (c.to_string(), c.to_string());
+    match theme {
+        Theme::Dark => Palette {
+            bg: ("#1f1f26".into(), "#0d0d10".into()),
+            cover_bg: "#2a2a32".into(),
+            title: "#ffffff".into(),
+            artist: "#d0d0d8".into(),
+            album: "#9a9aa6".into(),
+            link: "#5fd1ff".into(),
+            show_album: true,
+        },
+        Theme::Light => Palette {
+            bg: ("#f7f7f9".into(), "#e4e4ea".into()),
+            cover_bg: "#d3d3da".into(),
+            title: "#111114".into(),
+            artist: "#33333b".into(),
+            album: "#55555f".into(),
+            link: "#075a93".into(),
+            show_album: true,
+        },
+        Theme::Minimal => Palette {
+            bg: flat("#fafafa"),
+            cover_bg: "#e8e8ec".into(),
+            title: "#111114".into(),
+            artist: "#4a4a52".into(),
+            album: "#4a4a52".into(),
+            link: "#5f5f68".into(),
+            show_album: false,
+        },
+        Theme::Album => {
+            let Some(dom) = accent else {
+                return palette(Theme::Dark, None);
+            };
+            let black = Rgb(0, 0, 0);
+            let white = Rgb(255, 255, 255);
+            let (top, bottom) = (mix(dom, black, 0.55), mix(dom, black, 0.82));
+            // Every text colour must read on the lighter end of the background.
+            let on = |c: Rgb| readable_on(c, top, white);
+            Palette {
+                bg: (hex(top), hex(bottom)),
+                cover_bg: hex(mix(top, white, 0.12)),
+                title: hex(white),
+                artist: hex(on(mix(dom, white, 0.82))),
+                album: hex(on(mix(dom, white, 0.65))),
+                link: hex(on(mix(dom, white, 0.55))),
+                show_album: true,
+            }
+        }
+    }
 }
 
 /// What the card says.
@@ -330,13 +452,21 @@ fn text_el(l: &Line, y: f32, weight: u32, fill: &str) -> String {
 }
 
 /// The card as SVG (the cover is drawn separately).
-pub fn svg(l: &Layout) -> String {
+pub fn svg(l: &Layout, p: &Palette) -> String {
+    let album = if p.show_album {
+        text_el(&l.album, 180.0, 400, &p.album)
+    } else {
+        String::new()
+    };
     format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1f1f26"/><stop offset="1" stop-color="#0d0d10"/></linearGradient></defs><rect width="{W}" height="{H}" fill="url(#g)"/><rect x="{PAD}" y="{PAD}" width="{COVER}" height="{COVER}" rx="8" fill="#2a2a32"/>{}{}{}{}</svg>"##,
-        text_el(&l.title, 112.0, 700, "#ffffff"),
-        text_el(&l.artist, 150.0, 400, "#d0d0d8"),
-        text_el(&l.album, 180.0, 400, "#9a9aa6"),
-        text_el(&l.link, 262.0, 400, "#5fd1ff"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{}"/><stop offset="1" stop-color="{}"/></linearGradient></defs><rect width="{W}" height="{H}" fill="url(#g)"/><rect x="{PAD}" y="{PAD}" width="{COVER}" height="{COVER}" rx="8" fill="{}"/>{}{}{}{}</svg>"##,
+        p.bg.0,
+        p.bg.1,
+        p.cover_bg,
+        text_el(&l.title, 112.0, 700, &p.title),
+        text_el(&l.artist, 150.0, 400, &p.artist),
+        album,
+        text_el(&l.link, 262.0, 400, &p.link),
     )
 }
 
@@ -463,11 +593,18 @@ fn cover_pixmap(px: &SharedPixelBuffer<Rgba8Pixel>) -> Option<tiny_skia::Pixmap>
 
 /// Draws the card. `cover` is scaled to the cover square; without one the square stays a plain
 /// rounded rectangle. Returns straight RGBA (the card is opaque).
-pub fn render(card: &Card, cover: Option<&SharedPixelBuffer<Rgba8Pixel>>) -> Option<Vec<u8>> {
+pub fn render(
+    card: &Card,
+    cover: Option<&SharedPixelBuffer<Rgba8Pixel>>,
+    theme: Theme,
+) -> Option<Vec<u8>> {
     let opt = options(&[&card.title, &card.artist, &card.album]);
     let measure = measurer(&opt);
     let lay = layout(card, &measure);
-    let tree = usvg::Tree::from_str(&svg(&lay), &opt).ok()?;
+    let accent = (theme == Theme::Album)
+        .then(|| cover.and_then(dominant))
+        .flatten();
+    let tree = usvg::Tree::from_str(&svg(&lay, &palette(theme, accent)), &opt).ok()?;
     let mut pixmap = tiny_skia::Pixmap::new(W, H)?;
     resvg::render(
         &tree,
@@ -567,12 +704,24 @@ impl Backend {
     }
 
     /// "Copy share card".
-    pub(crate) async fn copy_share_card(&self, track: &Track) {
+    /// `theme`: the one just picked in the menu (and remembered); `None` is the last choice.
+    pub(crate) async fn copy_share_card(&self, track: &Track, theme: Option<Theme>) {
+        let theme = match theme {
+            Some(t) => {
+                let mut prefs = crate::uiprefs::UiPrefs::load();
+                if prefs.share_theme != t.key() {
+                    prefs.share_theme = t.key().to_string();
+                    let _ = prefs.save();
+                }
+                t
+            }
+            None => Theme::parse(&crate::uiprefs::UiPrefs::load().share_theme),
+        };
         let card = Card::of(track);
         let cover = self.cached_cover(track).await;
         let id = card.id;
         let done = tokio::task::spawn_blocking(move || {
-            let rgba = render(&card, cover.as_ref())?;
+            let rgba = render(&card, cover.as_ref(), theme)?;
             drop(cover);
             Some(deliver(id, rgba))
         })
@@ -643,7 +792,7 @@ mod tests {
         ] {
             let c = card(&clean_line(&t), &clean_line(&t), &clean_line(&t));
             let lay = layout(&c, &fake);
-            let s = svg(&lay);
+            let s = svg(&lay, &palette(Theme::Dark, None));
             assert!(s.starts_with("<svg"));
         }
         assert!(is_rtl("שלום"));
@@ -654,7 +803,7 @@ mod tests {
     #[test]
     fn markup_in_titles_is_escaped() {
         let lay = layout(&card("</text><script>&", "a\"b", ""), &fake);
-        let s = svg(&lay);
+        let s = svg(&lay, &palette(Theme::Dark, None));
         assert!(!s.contains("<script>"));
         assert!(s.contains("&lt;/text&gt;"));
     }
@@ -662,7 +811,7 @@ mod tests {
     #[test]
     fn renders_a_png_sized_card_with_and_without_cover() {
         let c = card(&"Very long title ".repeat(20), "שלום עולם", "Album");
-        let plain = render(&c, None).expect("card");
+        let plain = render(&c, None, Theme::Dark).expect("card");
         assert_eq!(plain.len(), (W * H * 4) as usize);
         let mut cover = SharedPixelBuffer::<Rgba8Pixel>::new(160, 160);
         for p in cover.make_mut_slice() {
@@ -673,11 +822,133 @@ mod tests {
                 a: 255,
             };
         }
-        let with = render(&c, Some(&cover)).expect("card");
+        let with = render(&c, Some(&cover), Theme::Dark).expect("card");
         assert_ne!(plain, with);
         // The cover square shows the cover colour.
         let at = ((60 * W + 60) * 4) as usize;
         assert_eq!(&with[at..at + 3], &[200, 30, 30]);
+    }
+
+    #[test]
+    fn every_theme_reads_on_its_background() {
+        let accents = [
+            None,
+            Some(Rgb(255, 255, 0)),
+            Some(Rgb(255, 255, 255)),
+            Some(Rgb(0, 0, 255)),
+            Some(Rgb(230, 30, 30)),
+            Some(Rgb(30, 200, 90)),
+            Some(Rgb(120, 60, 200)),
+            Some(Rgb(250, 250, 210)),
+        ];
+        for theme in Theme::ALL {
+            for a in accents {
+                let p = palette(theme, a);
+                let hexc = |h: &str| Rgb::from_hex(h).expect("hex");
+                for bg in [hexc(&p.bg.0), hexc(&p.bg.1)] {
+                    let mut texts = vec![&p.title, &p.artist, &p.link];
+                    if p.show_album {
+                        texts.push(&p.album);
+                    }
+                    for t in texts {
+                        let c = contrast(hexc(t), bg);
+                        assert!(c >= 4.5, "{theme:?} {a:?}: {t} on {bg:?} is {c:.2}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn themes_have_keys_that_parse_back_and_the_default_is_dark() {
+        for t in Theme::ALL {
+            assert_eq!(Theme::parse(t.key()), t);
+        }
+        assert_eq!(Theme::parse(""), Theme::Dark);
+        assert_eq!(Theme::parse("garbage"), Theme::Dark);
+        assert_eq!(Theme::default(), Theme::Dark);
+    }
+
+    #[test]
+    fn the_album_theme_follows_the_cover_and_falls_back_to_dark() {
+        assert_eq!(palette(Theme::Album, None), palette(Theme::Dark, None));
+        let red = palette(Theme::Album, Some(Rgb(230, 30, 30)));
+        let blue = palette(Theme::Album, Some(Rgb(30, 30, 230)));
+        assert_ne!(red.bg, blue.bg);
+        assert_ne!(red.bg, palette(Theme::Dark, None).bg);
+    }
+
+    #[test]
+    fn minimal_hides_the_album_line_and_the_others_keep_it() {
+        let lay = layout(&card("T", "A", "Some Album"), &fake);
+        let minimal = svg(&lay, &palette(Theme::Minimal, None));
+        let dark = svg(&lay, &palette(Theme::Dark, None));
+        assert!(!minimal.contains("Some Album") && dark.contains("Some Album"));
+        assert!(svg(&lay, &palette(Theme::Light, None)).contains("Some Album"));
+    }
+
+    #[test]
+    fn every_theme_renders_the_same_sized_png_and_the_themes_differ() {
+        let c = card("Title", "Artist", "Album");
+        let mut cover = SharedPixelBuffer::<Rgba8Pixel>::new(64, 64);
+        for p in cover.make_mut_slice() {
+            *p = Rgba8Pixel {
+                r: 220,
+                g: 40,
+                b: 40,
+                a: 255,
+            };
+        }
+        let cards: Vec<Vec<u8>> = Theme::ALL
+            .iter()
+            .map(|t| render(&c, Some(&cover), *t).expect("card"))
+            .collect();
+        for card in &cards {
+            assert_eq!(card.len(), (W * H * 4) as usize);
+        }
+        for i in 0..cards.len() {
+            for j in i + 1..cards.len() {
+                assert_ne!(
+                    cards[i],
+                    cards[j],
+                    "{:?} vs {:?}",
+                    Theme::ALL[i],
+                    Theme::ALL[j]
+                );
+            }
+        }
+        // The corner shows each theme's own background; Light is light, Dark is dark.
+        let px = |c: &Vec<u8>| c[0] as u32 + c[1] as u32 + c[2] as u32;
+        assert!(px(&cards[1]) > 600 && px(&cards[0]) < 150);
+    }
+
+    /// On demand: `SLATE_CARD_DIR=/tmp/cards cargo test -p slate --release write_theme_samples -- --ignored`
+    /// writes one card per theme.
+    #[test]
+    #[ignore]
+    fn write_theme_samples() {
+        let Ok(dir) = std::env::var("SLATE_CARD_DIR") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let mut cover = SharedPixelBuffer::<Rgba8Pixel>::new(160, 160);
+        for (i, p) in cover.make_mut_slice().iter_mut().enumerate() {
+            *p = Rgba8Pixel {
+                r: 40 + (i % 160 / 3) as u8,
+                g: 60,
+                b: 170 - (i / 160 / 2) as u8,
+                a: 255,
+            };
+        }
+        let c = card("Africa", "TOTO", "Toto IV");
+        for t in Theme::ALL {
+            let rgba = render(&c, Some(&cover), t).expect("card");
+            image::RgbaImage::from_raw(W, H, rgba)
+                .expect("size")
+                .save(dir.join(format!("theme-{}.png", t.key())))
+                .expect("save");
+        }
     }
 
     /// On demand: `SLATE_CARD_DIR=/tmp/cards cargo test -p slate --release write_samples -- --ignored`
@@ -709,7 +980,7 @@ mod tests {
             ("no-cover", card(&clean_line("Mixed English עברית 123 \u{202E}override"), "Somebody", ""), false),
         ];
         for (name, c, with_cover) in cases {
-            let rgba = render(&c, with_cover.then_some(&cover)).expect("card");
+            let rgba = render(&c, with_cover.then_some(&cover), Theme::Dark).expect("card");
             image::RgbaImage::from_raw(W, H, rgba)
                 .expect("size")
                 .save(dir.join(format!("{name}.png")))

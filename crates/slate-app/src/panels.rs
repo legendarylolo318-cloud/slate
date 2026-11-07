@@ -368,7 +368,11 @@ impl Backend {
                 "album" => this.go_album(&track),
                 "artist" => this.go_artist(&track),
                 "copy-link" => this.copy_link(&track).await,
-                "share-card" => this.copy_share_card(&track).await,
+                "share-card" => this.copy_share_card(&track, None).await,
+                k if k.starts_with("share-card:") => {
+                    let theme = crate::share_card::Theme::parse(&k["share-card:".len()..]);
+                    this.copy_share_card(&track, Some(theme)).await;
+                }
                 "tags" => this.tags_open_dialog(&[track]),
                 "credits" => this.show_credits(&track),
                 "suggest" => this.party_suggest(track.id),
@@ -411,7 +415,8 @@ impl Backend {
             "album" => self.go_album(track),
             "artist" => self.go_artist(track),
             "credits" => self.show_credits(track),
-            "copy-link" | "share-card" | "tags" => self.track_action(track.clone(), None, kind),
+            "copy-link" | "tags" => self.track_action(track.clone(), None, kind),
+            k if k.starts_with("share-card") => self.track_action(track.clone(), None, kind),
             _ => {}
         }
     }

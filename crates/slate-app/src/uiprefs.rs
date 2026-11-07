@@ -96,6 +96,9 @@ pub struct UiPrefs {
     pub party_cap: usize,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub party_no_explicit: bool,
+    /// Share card theme: "dark" (default, written as empty), "light", "album" or "minimal".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub share_theme: String,
     /// Host: requests one guest may make in the whole party (0 = no limit).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub party_limit: usize,
@@ -145,6 +148,7 @@ impl Default for UiPrefs {
             party_placement: String::new(),
             party_cap: 0,
             party_no_explicit: false,
+            share_theme: String::new(),
             party_limit: 0,
             party_host_first: false,
             party_vote: 0,
