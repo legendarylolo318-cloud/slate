@@ -1,5 +1,114 @@
 # Changelog
 
+## [1.7.0] - 2026-11-07
+
+A resource release: less memory for long queues and while hi-res plays, with no change to audio output or
+to anything you see. No new settings or features.
+
+### Changed
+- The queue keeps a compact record of each track (the fields Slate reads, with artists, albums and repeated
+  strings shared) instead of the whole TIDAL object, and the queue, history, shuffle order, undo states and
+  playing source share one copy of each track. A 9,000-track queue now takes about 75 MB of memory instead
+  of about 410 MB, and editing and undoing it no longer copies it (1.6.1 grew past 1.2 GB after a shuffle,
+  two edits and three undos).
+- While a gapless stream plays, 3 s of decoded audio is held ahead (was 15 s); the rest of the lookahead is
+  kept compressed, so the total time buffered ahead is unchanged (20 s progressive, 30 s DASH). The
+  exclusive / bit-perfect output path is unchanged.
+- Covers without transparency are kept as RGB (3 bytes a pixel instead of 4), so the 64 MB cover cache
+  holds a third more; a smaller size of a cover already decoded at full resolution is cut from it instead of
+  being read and decoded again.
+- The background worker pool keeps at most 16 threads and lets idle ones go after 2 s (was 512 and 10 s).
+- The queue file is written 1 s after the last change, on a worker thread, instead of after every change on
+  the spot (a quit still writes it straight away). A crash or `kill -9` can lose the last second of queue
+  changes.
+
+### Fixed
+- `cargo check --no-default-features` (a build without the listening party) failed since 1.5.0.
+
+### Found in review before release
+Each was fixed in its own commit; details in REVIEW.md #139–142.
+- Signing out within about a second of a queue change could put the old account's queue file back on disk
+  after sign-out deleted it, and the next sign-in would restore it (from the delayed queue save).
+- A cover size cut from a cover that had itself been shrunk was resampled twice and came out softer than
+  1.6's, depending on the order covers were requested and the interface scale.
+- Every MPD `status` poll copied every track in the queue.
+- The full-screen lyrics backdrop was moved onto a cached layer; measured, it cost one window-sized
+  texture of VRAM (about 4.5 MB here) and saved no CPU, so it was reverted.
+
+### Performance (measured)
+Measured on this machine (24 cores, AMD Radeon RX 9070 with amdgpu, PipeWire 1.6.10, GStreamer 1.28.8),
+with the 1.6 method: release builds of 1.6.1, 1.7.0 as handed to review (`065396b`) and 1.7.0 before the
+lyrics revert, each started 12 s before a 60 s window, on a copy of a signed-in profile reset to default
+settings (only the sign-in kept), headless KWin with a nested Xwayland, Skia/Vulkan. Playing = TOTO
+"Africa" (track 539204), FLAC 24-bit/192 kHz (DASH), into a null PipeWire sink at s24le/192 kHz. Wakeups
+are voluntary context switches over all threads. Two interleaved runs each. VRAM is the process's
+`drm-memory-vram` from amdgpu's fdinfo. A different machine from the 1.6 notes: compare the columns, not
+with 1.6's numbers. The last variant build was linking on one core during the first runs.
+
+| Default settings | 1.6.1 | 1.7.0 as handed over | 1.7.0 |
+|---|---|---|---|
+| Idle main screen: threads, wakeups/s, CPU ticks in 60 s | 21, 0, 0 | 21, 0, 0–1 | 21, 0, 0 |
+| Idle main screen: anonymous / total PSS | 61.9 / 132.7, 64.0 / 135.5 MB | 62.9 / 134.1, 65.9 / 136.9 MB | 63.1 / 134.3, 64.2 / 135.7 MB |
+| Playing: threads (start / end of window) | 43 / 39, 43 / 39 | 42 / 38, 42 / 38 | 43 / 38, 42 / 38 |
+| Playing: wakeups/s | 281, 258 | 276, 274 | 279, 240 |
+| Playing: CPU ticks in 60 s | 97, 113 | 95, 141 | 167, 129 |
+| Playing: anonymous / total PSS | 114.6 / 194.4, 110.5 / 190.3 MB | 117.1 / 197.3, 106.0 / 185.9 MB | 115.8 / 196.2, 117.5 / 197.9 MB |
+| VRAM idle / playing | 102.6–103.9 / 103.8 MB | 102.6–106.5 / 103.8 MB | 102.6–103.9 / 103.8–106.4 MB |
+| Window mapped (7 launches, median and range) | 300 ms (294–311) | 296 ms (290–305) | 300 ms (290–305) |
+| Binary | 78,158,232 B | 78,181,912 B | 78,180,888 B |
+| 9,000-track queue restored: anonymous PSS | 409.2, 409.0 MB | 76.8, 77.2 MB | 74.6, 75.1 MB |
+| …after shuffle on, two edits (MPD) and three Ctrl+Z | 1,672.8, 1,290.6 MB | 122.8, 122.7 MB | 115.8, 120.4 MB |
+
+The big queue is a 1.6-format `queue.json` of 9,000 full TIDAL-shaped track objects restored at start-up
+(this account has no playlist that large); the edits went through MPD, the undos through the keyboard,
+and the queue state was checked after them (shuffle back off, the deleted track back).
+
+Default settings are within run-to-run noise of 1.6.1: same idle threads, no idle wakeups, playing memory
+and wakeups inside the spread of repeated runs, the same window-mapped time and VRAM. CPU ticks while
+playing vary from run to run (95–167 over all builds) with no pattern between them.
+
+Decoded reservoir, A/B in the app (1.7.0 vs the same tree with the reservoir change reverted), playing,
+30 s windows, two runs each, anonymous PSS:
+
+| | 1.7.0 | Reservoir reverted |
+|---|---|---|
+| 24/192 (DASH), fast connection | 106.4, 108.3 MB | 112.4, 106.2 MB |
+| 16/44 (progressive), fast connection | 70.1, 71.1 MB | 70.7, 71.6 MB |
+| 24/192 through a proxy throttled to 1 MB/s | 84.7, 84.8 MB | 94.5, 94.1 MB |
+| 16/44 through a proxy throttled to 250 kB/s | 68.9, 69.0 MB | 69.0, 69.5 MB |
+
+Wakeups and CPU are the same in every pair. Audio: a gapless pair (24/192 and 16/44, split mid-block)
+decoded through the gapless branch pipeline with the 1.6 and the 1.7 buffer settings is bit-identical to
+the source with no gap (md5 of the joined output equals the original). A `gst-launch` stand-in of a
+*progressive* 24/192 stream on a throttled connection held more with the 1.7 settings (58 vs 32 MB); the
+app's 24/192 streams are DASH and measured lower, as above.
+
+### Considered, not done
+- Burst download of the next track to a temporary file (handed over as not done): no measured wakeup
+  saving (a file source woke as often as the HTTP source in the stand-in), it would need its own copy of
+  the proxy and fail-closed routing, and it would put whole decrypted audio files on disk. Not done.
+- Full-screen lyrics backdrop on a cached layer: reverted (see Found in review). With lyrics open, VRAM
+  108.3 / 108.3 MB with it vs 103.8 / 106.4 MB without, CPU ticks 77 / 74 vs 73 / 78.
+- mimalloc as the global allocator: anonymous PSS idle 93.6 / 92.7 MB vs 65.3 / 63.7 MB, playing 140.0 /
+  142.4 MB vs 109.9 / 108.2 MB, CPU the same. About 30 MB more; not kept.
+- Release profile `lto = "fat"` with `panic = "abort"`: binary 63,218,072 B vs 78,180,888 B (−19 %), total
+  PSS about 7 MB lower (the smaller binary), anonymous memory and CPU the same. Not kept for this release:
+  with `panic = "abort"` a panic in any background task (a cover decode, a pipeline teardown), which today
+  fails that task alone, would end the whole app, and the two were not measured apart. `lto = "fat"` on its
+  own is worth its own A/B.
+
+### Not tested before release
+- Windows and macOS: not built in this review; the release workflow builds and self-tests Windows.
+- Underruns on a slow connection were not observed directly (the null sink does not report them); memory,
+  wakeups and CPU through the throttled proxy were the same as with the 1.6 buffer sizes.
+- A party between a 1.6.1 and a 1.7.0 instance was not run: the party messages carry track ids, not queue
+  tracks, and `party/` did not change (a test pins the wire format).
+- Signal Path in exclusive / bit-perfect mode was not checked live (that path's code is unchanged).
+- The cover change at interface scale 1.5 and 2 in the running app (unit tests only); a queue file written
+  by 1.7 loaded by 1.6.1 (downgrade).
+- Old named queue snapshots, `tags.json` and party sets from a real 1.6 profile (a synthetic 1.6 queue file
+  is tested).
+
 ## [1.6.1] - 2026-11-05
 
 One change on top of 1.6.0; nothing else in the app or the audio path changed.
