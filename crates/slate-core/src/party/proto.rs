@@ -535,6 +535,26 @@ pub fn prefetch_list(upcoming: &[u64]) -> Vec<u64> {
 mod tests {
     use super::*;
 
+    /// 1.8/1.9 party request limits add no message or field: a refusal is the
+    /// `RequestResult` a 1.7.0 guest already shows. These are the exact bytes (this file and
+    /// the ticket format are unchanged since 1.7.0, so a 1.7.0 peer encodes and decodes the
+    /// same way in both directions).
+    #[test]
+    fn a_request_limit_refusal_is_the_1_7_wire_message() {
+        let reason = crate::party::requests::Reject::PartyLimit(2).message();
+        let m = HostMsg::RequestResult {
+            track_id: 77,
+            ok: false,
+            reason,
+        };
+        let bytes = encode(&m).expect("encodes");
+        assert_eq!(
+            String::from_utf8(bytes.clone()).expect("utf8"),
+            r#"{"t":"request_result","track_id":77,"ok":false,"reason":"You have used your 2 requests for this party."}"#
+        );
+        assert_eq!(decode::<HostMsg>(&bytes).expect("decodes"), m);
+    }
+
     #[test]
     fn messages_round_trip_and_are_compact() {
         let m = HostMsg::Track {
