@@ -996,13 +996,165 @@ pub struct Snapshot {
     pub context_source: Option<Source>,
 }
 
+/// File format version written by [`Snapshot::to_json`]. 0 (no `v`) is every file up to 1.9,
+/// where each source repeated its tracks in full; 2 keeps a source's tracks that are also in
+/// the queue, history or current track as bare ids (about half the file).
+pub const FORMAT_VERSION: u32 = 2;
+
+/// One of a source's tracks in the file: an id found elsewhere in the same file, or the track.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum SrcRef {
+    Id(u64),
+    Full(TrackRef),
+}
+
+#[derive(Serialize, Deserialize)]
+struct WireSource {
+    #[serde(rename = "type")]
+    kind: String,
+    id: Value,
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subtitle: Option<String>,
+    #[serde(rename = "mixType", default, skip_serializing_if = "Option::is_none")]
+    mix_type: Option<String>,
+    /// Old files: every track in full.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    tracks: Arc<[TrackRef]>,
+    #[serde(rename = "trackRefs", default, skip_serializing_if = "Vec::is_empty")]
+    refs: Vec<SrcRef>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireSnapshot {
+    #[serde(default, skip_serializing_if = "is_zero")]
+    v: u32,
+    #[serde(default)]
+    current_track: Option<TrackRef>,
+    #[serde(default)]
+    queue: Vec<TrackRef>,
+    #[serde(default)]
+    history: Vec<TrackRef>,
+    #[serde(default)]
+    original_queue: Option<Vec<TrackRef>>,
+    #[serde(default)]
+    manual_queue: Vec<TrackRef>,
+    #[serde(default)]
+    playback_source: Option<WireSource>,
+    #[serde(default)]
+    context_source: Option<WireSource>,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+
+/// `t` without what differs between two copies of one track (the queue stamp and the runtime
+/// "playing from" mark).
+fn plain(t: &Track) -> Track {
+    let mut c = Track::clone(t);
+    c.qid = None;
+    c.playing_from = None;
+    c
+}
+
 impl Snapshot {
     pub fn to_json(&self) -> Result<String, crate::SlateError> {
-        Ok(serde_json::to_string(self)?)
+        // Where each id first appears in the lists that are written in full.
+        let mut pool: std::collections::HashMap<u64, &TrackRef> = std::collections::HashMap::new();
+        for t in self
+            .current_track
+            .iter()
+            .chain(&self.queue)
+            .chain(&self.manual_queue)
+            .chain(&self.history)
+            .chain(self.original_queue.iter().flatten())
+        {
+            pool.entry(t.id).or_insert(t);
+        }
+        let wire_src = |s: &Option<Source>| {
+            s.as_ref().map(|s| WireSource {
+                kind: s.kind.clone(),
+                id: s.id.clone(),
+                name: s.name.clone(),
+                image: s.image.clone(),
+                subtitle: s.subtitle.clone(),
+                mix_type: s.mix_type.clone(),
+                tracks: Arc::default(),
+                refs: s
+                    .tracks
+                    .iter()
+                    .map(|t| match pool.get(&t.id) {
+                        Some(p) if plain(p) == plain(t) => SrcRef::Id(t.id),
+                        _ => SrcRef::Full(Arc::clone(t)),
+                    })
+                    .collect(),
+            })
+        };
+        Ok(serde_json::to_string(&WireSnapshot {
+            v: FORMAT_VERSION,
+            current_track: self.current_track.clone(),
+            queue: self.queue.clone(),
+            history: self.history.clone(),
+            original_queue: self.original_queue.clone(),
+            manual_queue: self.manual_queue.clone(),
+            playback_source: wire_src(&self.playback_source),
+            context_source: wire_src(&self.context_source),
+        })?)
     }
 
     pub fn from_json(json: &str) -> Result<Self, crate::SlateError> {
-        Ok(serde_json::from_str(json)?)
+        let w: WireSnapshot = serde_json::from_str(json)?;
+        let mut pool: std::collections::HashMap<u64, &TrackRef> = std::collections::HashMap::new();
+        for t in w
+            .current_track
+            .iter()
+            .chain(&w.queue)
+            .chain(&w.manual_queue)
+            .chain(&w.history)
+            .chain(w.original_queue.iter().flatten())
+        {
+            pool.entry(t.id).or_insert(t);
+        }
+        let src = |s: &Option<WireSource>| -> Option<Source> {
+            s.as_ref().map(|s| {
+                let tracks: Arc<[TrackRef]> = if s.refs.is_empty() {
+                    Arc::clone(&s.tracks)
+                } else {
+                    s.refs
+                        .iter()
+                        // An id that is not in the file (a hand-edited or damaged one) is dropped.
+                        .filter_map(|r| match r {
+                            SrcRef::Id(id) => pool.get(id).map(|p| Arc::new(plain(p))),
+                            SrcRef::Full(t) => Some(Arc::clone(t)),
+                        })
+                        .collect()
+                };
+                Source {
+                    kind: s.kind.clone(),
+                    id: s.id.clone(),
+                    name: s.name.clone(),
+                    image: s.image.clone(),
+                    subtitle: s.subtitle.clone(),
+                    mix_type: s.mix_type.clone(),
+                    tracks,
+                }
+            })
+        };
+        let (playback_source, context_source) = (src(&w.playback_source), src(&w.context_source));
+        Ok(Self {
+            current_track: w.current_track,
+            queue: w.queue,
+            history: w.history,
+            original_queue: w.original_queue,
+            manual_queue: w.manual_queue,
+            playback_source,
+            context_source,
+        })
     }
 }
 
@@ -1424,6 +1576,106 @@ mod tests {
             r.playback_source.as_ref().map(|s| s.name.as_str()),
             Some("A")
         );
+    }
+
+    fn rich(id: u64) -> Track {
+        Track::from_serialized(&serde_json::json!({
+            "id": id, "title": format!("Song number {id}"), "duration": 200,
+            "artist": {"id": 1, "name": "Some Artist"},
+            "artists": [{"id": 1, "name": "Some Artist"}],
+            "album": {"id": 2, "title": "An Album Title", "cover": "ab-cd-ef-01"},
+            "audioQuality": "LOSSLESS", "isrc": format!("USSM1{id:07}"),
+        }))
+        .expect("track")
+    }
+
+    /// A queue the size of a big playlist, playing from it: the source holds every track.
+    fn big_queue(n: u64) -> Queue {
+        let all: Vec<Track> = (1..=n).map(rich).collect();
+        let mut q = Queue::new();
+        q.set_tracks(all.clone(), Some(src("Big", all)), false);
+        q.begin(rich(1), false);
+        q
+    }
+
+    #[test]
+    fn the_queue_file_is_about_half_the_size_with_source_tracks_as_references() {
+        let q = big_queue(2000);
+        let snap = q.snapshot();
+        let old = serde_json::to_string(&snap).expect("old format");
+        let new = snap.to_json().expect("json");
+        assert!(
+            new.len() * 10 < old.len() * 6,
+            "{} vs {}",
+            new.len(),
+            old.len()
+        );
+        assert!(new.contains("\"v\":2") && new.contains("trackRefs"));
+        // Same queue back.
+        let back = Snapshot::from_json(&new).expect("parse");
+        assert_eq!(back.queue.len(), snap.queue.len());
+        let (a, b) = (
+            back.playback_source.expect("src"),
+            snap.playback_source.expect("src"),
+        );
+        assert_eq!(a.tracks.len(), b.tracks.len());
+        for (x, y) in a.tracks.iter().zip(b.tracks.iter()) {
+            assert_eq!(plain(x), plain(y));
+        }
+    }
+
+    #[test]
+    fn files_from_1_6_1_7_and_1_9_still_load() {
+        // Sources written in full, with and without a version; unknown fields ignored.
+        let full = r#"{"currentTrack":{"id":7,"title":"Now"},"queue":[{"id":1,"title":"A","_qid":"q5"}],
+            "history":[{"id":2}],"manualQueue":[],
+            "playbackSource":{"type":"album","id":3,"name":"Alb","tracks":[{"id":1,"title":"A"},{"id":9,"title":"Only in source"}]},
+            "contextSource":null,"futureField":{"x":1}}"#;
+        let snap = Snapshot::from_json(full).expect("old format");
+        assert_eq!(ids(&snap.queue), vec![1]);
+        assert_eq!(
+            ids(&snap.playback_source.as_ref().expect("src").tracks),
+            vec![1, 9]
+        );
+        // An old file written back is the new format and reads the same.
+        let again = Snapshot::from_json(&snap.to_json().expect("json")).expect("new");
+        assert_eq!(
+            ids(&again.playback_source.as_ref().expect("src").tracks),
+            vec![1, 9]
+        );
+        assert_eq!(again.current_track.as_ref().map(|t| t.id), Some(7));
+        // A bare `{}` and the shape of the earliest versions.
+        assert!(Snapshot::from_json("{}").is_ok());
+        assert!(Snapshot::from_json(r#"{"currentTrack":null,"queue":[],"history":[]}"#).is_ok());
+    }
+
+    #[test]
+    fn a_reference_to_nothing_is_dropped_and_a_different_copy_stays_full() {
+        let bad = r#"{"v":2,"queue":[{"id":1}],"playbackSource":{"type":"album","id":3,"name":"A","trackRefs":[1,404,{"id":5,"title":"x"}]}}"#;
+        let snap = Snapshot::from_json(bad).expect("parse");
+        assert_eq!(ids(&snap.playback_source.expect("src").tracks), vec![1, 5]);
+        // The queue copy carries a "from the manual queue" tag the source's does not: full.
+        let mut q = Queue::new();
+        let mut tagged = t(1);
+        tagged.source = Some(Arc::new(src("Else", vec![])));
+        q.queue = vec![Arc::new(tagged)];
+        q.playback_source = Some(src("S", vec![t(1)]));
+        let json = q.snapshot().to_json().expect("json");
+        let back = Snapshot::from_json(&json).expect("parse");
+        assert!(back.playback_source.expect("src").tracks[0]
+            .source
+            .is_none());
+    }
+
+    #[test]
+    fn nine_thousand_tracks_save_and_load_quickly() {
+        let q = big_queue(9000);
+        let snap = q.snapshot();
+        let t0 = std::time::Instant::now();
+        let json = snap.to_json().expect("json");
+        let back = Snapshot::from_json(&json).expect("parse");
+        assert!(t0.elapsed().as_secs() < 5, "{:?}", t0.elapsed());
+        assert_eq!(back.queue.len(), snap.queue.len());
     }
 
     #[test]

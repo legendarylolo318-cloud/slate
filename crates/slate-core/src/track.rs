@@ -709,7 +709,29 @@ mod tests {
     fn what_is_written_loads_again_unchanged_and_is_a_subset_of_the_old_keys() {
         let snap = Snapshot::from_json(&old_file().to_string()).expect("old file loads");
         let json = snap.to_json().expect("json");
-        let again = Snapshot::from_json(&json).expect("new file loads");
+        let mut again = Snapshot::from_json(&json).expect("new file loads");
+        // A source's own track list is written as references to the same tracks elsewhere in
+        // the file, which carry no queue stamp of their own: the stamp (assigned afresh when a
+        // track is queued) is the one thing that does not survive there.
+        let mut expected = snap.clone();
+        for src in [&mut expected.playback_source, &mut expected.context_source]
+            .into_iter()
+            .flatten()
+        {
+            src.tracks = src
+                .tracks
+                .iter()
+                .map(|t| {
+                    let mut c = Track::clone(t);
+                    c.qid = None;
+                    std::sync::Arc::new(c)
+                })
+                .collect();
+        }
+        assert_eq!(expected, again);
+        // Everything outside the sources' track lists is exactly as before.
+        again.playback_source = snap.playback_source.clone();
+        again.context_source = snap.context_source.clone();
         assert_eq!(snap, again);
         let v: Value = serde_json::from_str(&json).expect("value");
         let t = &v["currentTrack"];
