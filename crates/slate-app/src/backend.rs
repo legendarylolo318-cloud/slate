@@ -1029,6 +1029,7 @@ impl Backend {
         if let Some(ctl) = self.controller() {
             ctl.resume_saving();
         }
+        crate::resume::allow();
         let pending = self.pending_link.lock().ok().and_then(|mut p| p.take());
         match pending {
             Some(link) => self.open_link(&link),

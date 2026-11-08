@@ -25,10 +25,17 @@ static STORE: Mutex<Option<ResumePoints>> = Mutex::new(None);
 static DIRTY: AtomicBool = AtomicBool::new(false);
 /// Bumped at sign-out: work that started before it must not touch the store afterwards.
 static EPOCH: AtomicU64 = AtomicU64::new(0);
+/// From sign-out until the next sign-in nothing is read, recorded or written: a track left
+/// while the sign-out is under way must not put `resume.json` back after `auth::logout`
+/// deleted it (the queue file's rule, #139).
+static SIGNED_OUT: AtomicBool = AtomicBool::new(false);
 static SAVE: Debounce = Debounce::new();
 
 fn with<R>(state: &AppState, f: impl FnOnce(&mut ResumePoints) -> R) -> R {
     let mut g = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    if SIGNED_OUT.load(Ordering::Acquire) {
+        return f(&mut ResumePoints::default());
+    }
     let store = g.get_or_insert_with(|| {
         state
             .read_state_file(resume::FILE)
@@ -43,6 +50,9 @@ fn with<R>(state: &AppState, f: impl FnOnce(&mut ResumePoints) -> R) -> R {
 fn write_now(state: &AppState) {
     let g = STORE.lock().unwrap_or_else(|e| e.into_inner());
     let Some(store) = g.as_ref() else { return };
+    if SIGNED_OUT.load(Ordering::Acquire) {
+        return;
+    }
     if !DIRTY.swap(false, Ordering::AcqRel) {
         return;
     }
@@ -61,11 +71,17 @@ pub fn flush(state: &AppState) {
 /// Sign-out: nothing of the old account stays in memory, and nothing waiting is written
 /// (the core deletes the file).
 pub fn forget() {
+    SIGNED_OUT.store(true, Ordering::Release);
     EPOCH.fetch_add(1, Ordering::AcqRel);
     SAVE.cancel();
     let mut g = STORE.lock().unwrap_or_else(|e| e.into_inner());
     *g = None;
     DIRTY.store(false, Ordering::Release);
+}
+
+/// Signed in (again): resume points are kept from here on.
+pub fn allow() {
+    SIGNED_OUT.store(false, Ordering::Release);
 }
 
 /// Records where a track was left. Called on the thread that leaves it; cheap and
@@ -75,7 +91,7 @@ fn leave_now(state: &Arc<AppState>, epoch: u64, id: u64, duration: f32, position
         return;
     }
     let mut g = STORE.lock().unwrap_or_else(|e| e.into_inner());
-    if EPOCH.load(Ordering::Acquire) != epoch {
+    if EPOCH.load(Ordering::Acquire) != epoch || SIGNED_OUT.load(Ordering::Acquire) {
         return;
     }
     let store = g.get_or_insert_with(|| {
