@@ -73,11 +73,15 @@ impl Backend {
             });
             let b = this.clone();
             mini.on_expand(move || {
-                MINI.with(|m| {
-                    if let Some(mini) = m.borrow_mut().take() {
-                        crate::window_state::save_now(&b.rt, mini.window(), Which::Mini);
-                    }
-                });
+                let mini = MINI.with(|m| m.borrow_mut().take());
+                if let Some(mini) = mini {
+                    crate::window_state::save_now(&b.rt, mini.window(), Which::Mini);
+                    // A shown window keeps itself alive until hidden: dropping the handle
+                    // alone left the mini player on screen, and the next open made a second
+                    // one (#149). Drop it after this click has been handled.
+                    let _ = mini.hide();
+                    slint::Timer::single_shot(std::time::Duration::ZERO, move || drop(mini));
+                }
                 b.ui(|w| {
                     let _ = w.show();
                 });
