@@ -1142,7 +1142,8 @@ impl Controller {
         });
     }
 
-    /// "Fill queue to N minutes": adds tracks after everything queued until the upcoming
+    /// "Fill queue to N minutes": adds tracks after everything queued (at the end of the
+    /// context queue) until the upcoming
     /// time reaches `target_secs` (see `queue_fill::select` for where it stops). They come
     /// from the context source (what has not been queued or played yet), else from the
     /// radio of the track playing. One undo step.
@@ -1203,10 +1204,11 @@ impl Controller {
         }
         let mut q = self.lock_queue().await;
         let added = picked.len();
+        // After everything queued: the end of the context queue, not "next up" (which
+        // plays before the rest of the album or playlist).
         self.edit(&mut q, |q| {
-            for t in picked {
-                q.add_to_queue(Track::clone(&t), None);
-            }
+            let tracks = picked.iter().map(|t| Track::clone(t)).collect();
+            q.append(tracks, false, &mut rand::rng());
         });
         let total: f32 = q.upcoming().map(|t| t.duration_secs()).sum();
         FillOutcome::Added {
