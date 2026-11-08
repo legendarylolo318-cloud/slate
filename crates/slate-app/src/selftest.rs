@@ -65,6 +65,16 @@ pub fn run() -> i32 {
             .any(|n| gst::ElementFactory::find(n).is_some()),
         "aac decoder",
     );
+    // Optional: the crossfeed setting hides itself without it. Said, never a failure, so the
+    // release logs show whether each bundle carries it.
+    println!(
+        "info crossfeed (bs2b): {}",
+        if gst::ElementFactory::find(slate_core::crossfeed::FACTORY).is_some() {
+            "available"
+        } else {
+            "not in this build's GStreamer"
+        }
+    );
     if std::env::args().any(|a| a == "--network") {
         report(
             https_fetch().is_ok(),
