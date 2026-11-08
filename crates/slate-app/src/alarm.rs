@@ -141,6 +141,10 @@ pub fn forget() {
             h.abort();
         }
     }
+    // The core deletes `alarm.json`; the next account starts with no alarm armed.
+    if ARMED_PREF.load(Ordering::Acquire) {
+        set_armed_pref(false);
+    }
 }
 
 pub fn allow() {
@@ -180,7 +184,17 @@ pub fn current(state: &AppState) -> Alarm {
         .clone()
 }
 
+/// `ui.json: alarm_armed` as last read or written. Start-up reads `ui.json` once already;
+/// sign-in asks this instead of reading the file again.
+static ARMED_PREF: AtomicBool = AtomicBool::new(false);
+
+/// Start-up: what the `ui.json` read at launch says.
+pub fn note_armed_pref(on: bool) {
+    ARMED_PREF.store(on, Ordering::Release);
+}
+
 fn set_armed_pref(on: bool) {
+    ARMED_PREF.store(on, Ordering::Release);
     let mut p = crate::uiprefs::UiPrefs::load();
     if p.alarm_armed != on {
         p.alarm_armed = on;
@@ -192,7 +206,7 @@ impl Backend {
     /// Start-up (after sign-in): arms the alarm if `ui.json` says one is set. Otherwise
     /// nothing at all happens here.
     pub(crate) fn alarm_start(&self) {
-        if !crate::uiprefs::UiPrefs::load().alarm_armed {
+        if !ARMED_PREF.load(Ordering::Acquire) {
             return;
         }
         let Some(state) = self.state() else { return };

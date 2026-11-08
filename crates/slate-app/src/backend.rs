@@ -298,6 +298,7 @@ impl Backend {
             // later changes (slider, keys, MPRIS, MPD) are left alone for the session.
             let prefs = crate::uiprefs::UiPrefs::load();
             crate::device_memory::set_enabled(prefs.device_memory);
+            crate::alarm::note_armed_pref(prefs.alarm_armed);
             // Off (the default) asks nothing and changes nothing.
             if prefs.reduce_motion != 0 {
                 this.apply_motion(prefs.reduce_motion);
