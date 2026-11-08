@@ -18,6 +18,7 @@ semver = "1.0.28"
 gstreamer = "0.23"
 gstreamer-app = "0.23"
 gstreamer-base = "0.23"
+flate2 = "1"
 crossbeam-channel = "0.5"
 reqwest = { version = "0.12", features = ["json", "socks"] }
 tokio = { version = "1", features = ["full"] }

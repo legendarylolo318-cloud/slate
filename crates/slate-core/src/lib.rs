@@ -23,6 +23,7 @@ pub mod lyrics;
 pub mod lyrics_offset;
 pub mod media;
 pub mod queue;
+pub mod queue_link;
 pub mod startup;
 pub mod sync;
 pub mod theme;

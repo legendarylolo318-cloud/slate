@@ -440,6 +440,10 @@ impl Backend {
             self.party_save_set(text);
             return;
         }
+        if kind == "queue-link" {
+            self.queue_link_accepted(target == "replace");
+            return;
+        }
         let (kind, target, text) = (
             kind.to_string(),
             target.to_string(),

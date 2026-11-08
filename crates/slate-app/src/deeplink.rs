@@ -10,6 +10,9 @@ pub enum DeepLink {
     Mix(String),
     /// `slate://party/<ticket>`
     Party(String),
+    /// `slate://queue/<payload>`: the whole link, read (and refused with a sentence) when
+    /// opened.
+    Queue(String),
 }
 
 fn is_uuid(s: &str) -> bool {
@@ -25,6 +28,14 @@ fn is_mix_id(s: &str) -> bool {
 /// `https://listen.tidal.com/track/1`, and similar.
 pub fn parse(link: &str) -> Option<DeepLink> {
     let link = link.trim();
+    if link.starts_with(slate_core::queue_link::PREFIX) {
+        // Longer than any real link: not worth carrying about; the opener says why.
+        return Some(DeepLink::Queue(
+            link.chars()
+                .take(slate_core::queue_link::MAX_LINK_BYTES + 1)
+                .collect(),
+        ));
+    }
     if let Some(t) = link.strip_prefix(slate_core::party::proto::TICKET_PREFIX) {
         return slate_core::party::proto::parse_ticket(t).map(DeepLink::Party);
     }
@@ -90,6 +101,19 @@ mod tests {
             parse("tidal://mix/0123abcDEF"),
             Some(DeepLink::Mix("0123abcDEF".into()))
         );
+    }
+
+    #[test]
+    fn queue_links_are_kept_whole_and_cut_when_huge() {
+        assert_eq!(
+            parse("slate://queue/eyJ2IjoxfQ"),
+            Some(DeepLink::Queue("slate://queue/eyJ2IjoxfQ".into()))
+        );
+        let huge = format!("slate://queue/{}", "A".repeat(1_000_000));
+        let Some(DeepLink::Queue(l)) = parse(&huge) else {
+            panic!("a huge queue link still parses, to be refused with a sentence");
+        };
+        assert!(l.len() <= slate_core::queue_link::MAX_LINK_BYTES + 1);
     }
 
     #[test]

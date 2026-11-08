@@ -7099,6 +7099,7 @@ dependencies = [
  "crossbeam-channel",
  "dirs",
  "discord-rich-presence",
+ "flate2",
  "futures-util",
  "gio",
  "gstreamer",

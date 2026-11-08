@@ -1083,6 +1083,7 @@ impl Backend {
             Some(DeepLink::Track(id)) => self.play_track_id(&id.to_string()),
             Some(DeepLink::Video(id)) => self.play_video(id),
             Some(DeepLink::Party(t)) => self.party_link_opened(t),
+            Some(DeepLink::Queue(l)) => self.queue_link_opened(&l),
             None => tracing::debug!("ignored an unrecognised link"),
         }
     }

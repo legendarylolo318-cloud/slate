@@ -273,6 +273,18 @@ impl Controller {
         }
     }
 
+    /// `tracks` without the ones the content filters hide or that cannot play, and how many
+    /// that was (for "skipped N").
+    pub fn playable(&self, tracks: Vec<Track>) -> (Vec<Track>, usize) {
+        let before = tracks.len();
+        let kept: Vec<Track> = tracks
+            .into_iter()
+            .filter(|t| self.classify(t).is_none())
+            .collect();
+        let skipped = before - kept.len();
+        (kept, skipped)
+    }
+
     /// Read-only access for rendering the queue view.
     pub async fn with_queue<R>(&self, f: impl FnOnce(&Queue) -> R) -> R {
         f(&*self.lock_queue().await)

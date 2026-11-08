@@ -48,6 +48,7 @@ mod pkce;
 mod platform;
 mod profile;
 mod quality;
+mod queue_link;
 mod queue_tools;
 mod remote;
 mod resume;

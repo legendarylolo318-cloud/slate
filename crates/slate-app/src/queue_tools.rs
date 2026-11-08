@@ -20,7 +20,7 @@ fn default_name() -> String {
 
 impl Backend {
     /// What is playing plus everything upcoming.
-    async fn whole_queue(&self) -> Vec<Track> {
+    pub(crate) async fn whole_queue(&self) -> Vec<Track> {
         let Some(ctl) = self.controller() else {
             return Vec::new();
         };
@@ -40,6 +40,7 @@ impl Backend {
         match action {
             "save-playlist" => self.save_queue_as_playlist(),
             "snapshots" => self.open_snapshots(),
+            "copy-link" => self.copy_queue_link(),
             "fill-custom" => self.ui(|w| {
                 w.set_dialog_text("".into());
                 w.set_dialog_target("".into());

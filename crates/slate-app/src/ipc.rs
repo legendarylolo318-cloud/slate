@@ -152,7 +152,10 @@ trait LimitedLine<R: std::io::Read> {
 
 impl<R: std::io::Read> LimitedLine<R> for BufReader<R> {
     fn take_line_limited(self) -> BufReader<std::io::Take<R>> {
-        BufReader::new(self.into_inner().take(2048))
+        BufReader::new(
+            self.into_inner()
+                .take(slate_core::queue_link::MAX_LINK_BYTES as u64 + 64),
+        )
     }
 }
 
