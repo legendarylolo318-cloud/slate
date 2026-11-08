@@ -109,10 +109,89 @@ pub fn check_caps(playlists: &[ImportPlaylist]) -> Result<(), String> {
 
 // ---------- Spotify account export (JSON) ----------
 
+thread_local! {
+    /// Elements the JSON being read may still hold, over all its lists (see [`Capped`]).
+    static JSON_BUDGET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Elements any one Spotify file may hold over all its lists: every track and playlist Slate
+/// would import, and a little over so the caps can say which was passed.
+const JSON_ELEMENTS: usize = MAX_TRACKS + MAX_PLAYLISTS + 2;
+
+/// A JSON list read against [`JSON_BUDGET`]: reading stops with an error once the file has
+/// more elements than an import can take. Without it a 48 MB file of `{}` became 16 million
+/// structs (about 800 MB) before the caps were checked.
+struct Capped<T>(Vec<T>);
+
+impl<T> Default for Capped<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Capped<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Seq<T>(std::marker::PhantomData<T>);
+        impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Seq<T> {
+            type Value = Capped<T>;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a list")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut a: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut out = Vec::new();
+                loop {
+                    // Taken before the element is read: an element's own lists (a
+                    // playlist's items) spend from the same budget meanwhile.
+                    let spent = JSON_BUDGET.with(|b| match b.get() {
+                        0 => false,
+                        n => {
+                            b.set(n - 1);
+                            true
+                        }
+                    });
+                    if !spent {
+                        return Err(serde::de::Error::custom(TOO_MANY));
+                    }
+                    match a.next_element()? {
+                        Some(v) => out.push(v),
+                        // The end of the list was not an element: give it back.
+                        None => {
+                            JSON_BUDGET.with(|b| b.set(b.get() + 1));
+                            return Ok(Capped(out));
+                        }
+                    }
+                }
+            }
+        }
+        d.deserialize_seq(Seq(std::marker::PhantomData))
+    }
+}
+
+/// The error a [`Capped`] list stops with.
+const TOO_MANY: &str = "slate: more elements than an import takes";
+
+/// Reads a Spotify file with the element budget; a file over it is refused with the caps'
+/// sentence, anything else unreadable with `unreadable`.
+fn read_capped<'a, T: Deserialize<'a>>(text: &'a str, unreadable: &str) -> Result<T, String> {
+    JSON_BUDGET.with(|b| b.set(JSON_ELEMENTS));
+    serde_json::from_str(text).map_err(|e| {
+        if e.to_string().contains(TOO_MANY) {
+            format!(
+                "That export holds more than {MAX_TRACKS} tracks or {MAX_PLAYLISTS} playlists. Slate imports at most that many at a time; split the export and import it in parts."
+            )
+        } else {
+            unreadable.to_string()
+        }
+    })
+}
+
 #[derive(Deserialize, Default)]
 struct SpLibrary {
     #[serde(default)]
-    tracks: Vec<SpLibTrack>,
+    tracks: Capped<SpLibTrack>,
 }
 
 #[derive(Deserialize, Default)]
@@ -126,7 +205,7 @@ struct SpLibTrack {
 #[derive(Deserialize, Default)]
 struct SpPlaylists {
     #[serde(default)]
-    playlists: Vec<SpPlaylist>,
+    playlists: Capped<SpPlaylist>,
 }
 
 #[derive(Deserialize, Default)]
@@ -134,7 +213,7 @@ struct SpPlaylist {
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
-    items: Vec<SpItem>,
+    items: Capped<SpItem>,
 }
 
 #[derive(Deserialize, Default)]
@@ -177,10 +256,13 @@ pub fn parse_spotify_library(
     clean: Clean,
     liked_name: &str,
 ) -> Result<Vec<ImportPlaylist>, String> {
-    let lib: SpLibrary = serde_json::from_str(text)
-        .map_err(|_| "That is not a Spotify YourLibrary.json (its JSON could not be read).")?;
+    let lib: SpLibrary = read_capped(
+        text,
+        "That is not a Spotify YourLibrary.json (its JSON could not be read).",
+    )?;
     let tracks: Vec<Want> = lib
         .tracks
+        .0
         .iter()
         .filter_map(|t| {
             let title = field(t.track.as_deref()?, clean);
@@ -205,19 +287,23 @@ pub fn parse_spotify_library(
 
 /// `Playlist1.json` and its numbered siblings.
 pub fn parse_spotify_playlists(text: &str, clean: Clean) -> Result<Vec<ImportPlaylist>, String> {
-    let p: SpPlaylists = serde_json::from_str(text)
-        .map_err(|_| "That is not a Spotify Playlist file (its JSON could not be read).")?;
-    if p.playlists.len() > MAX_PLAYLISTS {
-        return check_caps(&vec![ImportPlaylist::default(); p.playlists.len()])
+    let p: SpPlaylists = read_capped(
+        text,
+        "That is not a Spotify Playlist file (its JSON could not be read).",
+    )?;
+    if p.playlists.0.len() > MAX_PLAYLISTS {
+        return check_caps(&vec![ImportPlaylist::default(); MAX_PLAYLISTS + 1])
             .map(|()| Vec::new());
     }
     let out: Vec<ImportPlaylist> = p
         .playlists
+        .0
         .iter()
         .map(|pl| ImportPlaylist {
             name: name(pl.name.as_deref().unwrap_or(""), clean, "Imported playlist"),
             tracks: pl
                 .items
+                .0
                 .iter()
                 .filter_map(|i| {
                     let t = i.track.as_ref()?;
@@ -240,12 +326,32 @@ pub fn parse_spotify_playlists(text: &str, clean: Clean) -> Result<Vec<ImportPla
 
 /// RFC 4180 records; quoted fields hold commas, doubled quotes and line breaks. Stops with an
 /// error once `max_records` have been read, so a hostile file cannot make a huge list.
+/// Columns a CSV row may have (Exportify writes about 25, Apple's export about 40).
+const MAX_CSV_COLUMNS: usize = 500;
+/// Cells over the whole file: 20,000 rows of 50 columns. Each cell is a `String`; without
+/// a bound a 50 MB line of commas became 50 million of them (about 1.2 GB).
+const MAX_CSV_CELLS: usize = 1_000_000;
+
 fn csv_records(text: &str, max_records: usize) -> Result<Vec<Vec<String>>, String> {
     let mut records: Vec<Vec<String>> = Vec::new();
     let mut record = Vec::new();
     let mut field = String::new();
     let mut quoted = false;
+    let mut cells = 0usize;
     let mut chars = text.chars().peekable();
+    let mut end_field = |record: &mut Vec<String>, field: &mut String| -> Result<(), String> {
+        cells += 1;
+        if record.len() >= MAX_CSV_COLUMNS {
+            return Err(format!(
+                "That file has a row of more than {MAX_CSV_COLUMNS} columns, so it is not a Spotify or Apple Music export."
+            ));
+        }
+        if cells > MAX_CSV_CELLS {
+            return Err("That file is larger than Slate imports at once.".to_string());
+        }
+        record.push(std::mem::take(field));
+        Ok(())
+    };
     let push = |record: &mut Vec<String>, records: &mut Vec<Vec<String>>| -> Result<(), String> {
         let r = std::mem::take(record);
         if r.iter().any(|f| !f.trim().is_empty()) {
@@ -271,17 +377,17 @@ fn csv_records(text: &str, max_records: usize) -> Result<Vec<Vec<String>>, Strin
         }
         match c {
             '"' if field.is_empty() => quoted = true,
-            ',' => record.push(std::mem::take(&mut field)),
+            ',' => end_field(&mut record, &mut field)?,
             '\r' => {}
             '\n' => {
-                record.push(std::mem::take(&mut field));
+                end_field(&mut record, &mut field)?;
                 push(&mut record, &mut records)?;
             }
             _ => field.push(c),
         }
     }
     if !field.is_empty() || !record.is_empty() {
-        record.push(field);
+        end_field(&mut record, &mut field)?;
         push(&mut record, &mut records)?;
     }
     Ok(records)
@@ -902,6 +1008,49 @@ mod tests {
         assert_eq!(p[0].name.chars().count(), MAX_NAME_CHARS);
         assert_eq!(p[0].tracks[0].title, "Abc");
         assert_eq!(p[0].tracks[0].artist.chars().count(), MAX_FIELD_CHARS);
+    }
+
+    #[test]
+    fn a_file_of_empty_entries_is_refused_before_it_grows() {
+        // 48 MB of `{}` was 16 million structs (about 800 MB) before the caps looked at it;
+        // a line of commas 50 million strings (1.2 GB). Both now stop at the caps.
+        let many = |head: &str, tail: &str| format!("{head}{}{{}}{tail}", "{},".repeat(400_000));
+        let e = parse_spotify_library(&many("{\"tracks\":[", "]}"), &clean, "L").unwrap_err();
+        assert!(e.contains("more than"), "{e}");
+        let e = parse_spotify_playlists(&many("{\"playlists\":[{\"items\":[", "]}]}"), &clean)
+            .unwrap_err();
+        assert!(e.contains("more than"), "{e}");
+        // Spread over many playlists the budget is for the whole file.
+        let lists = format!(
+            "{{\"playlists\":[{}]}}",
+            vec![format!("{{\"items\":[{}]}}", vec!["{}"; 200].join(",")); 150].join(",")
+        );
+        assert!(parse_spotify_playlists(&lists, &clean)
+            .unwrap_err()
+            .contains("more than"));
+        // The most an import takes still reads: 200 playlists of 100 tracks.
+        let full = format!(
+            "{{\"playlists\":[{}]}}",
+            vec![
+                format!(
+                    "{{\"name\":\"p\",\"items\":[{}]}}",
+                    vec![r#"{"track":{"trackName":"t","artistName":"a"}}"#; 100].join(",")
+                );
+                MAX_PLAYLISTS
+            ]
+            .join(",")
+        );
+        let p = parse_spotify_playlists(&full, &clean).expect("at the caps");
+        assert_eq!(p.iter().map(|p| p.tracks.len()).sum::<usize>(), MAX_TRACKS);
+        let commas = format!("Track Name\n{}\n", ",".repeat(2_000_000));
+        assert!(parse_csv(&commas, &clean, "f")
+            .unwrap_err()
+            .contains("columns"));
+        let wide = format!("Track Name{}\n", ",x".repeat(400));
+        let rows = format!("{wide}{}", format!("{}\n", ",y".repeat(400)).repeat(3000));
+        assert!(parse_csv(&rows, &clean, "f")
+            .unwrap_err()
+            .contains("larger than"));
     }
 
     #[test]
