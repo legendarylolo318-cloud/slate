@@ -15,21 +15,14 @@ The original brief (hard rules, F1–F6, P1–P7, measurement method, final `HAN
 
 All four passed the full gate. F1's tests also passed 200 times pinned with `taskset -c 0`.
 
-## In progress, uncommitted: F5 import from Spotify / Apple Music
+## Later commits (F5, F6 done)
 
-Files (untracked or modified):
-- `crates/slate-core/src/import_lib.rs`: parsers (Spotify JSON, Exportify / Apple CSV, Apple `Library.xml` via `roxmltree`) and `judge()` matcher. 18 tests pass.
-- `crates/slate-app/src/service_import.rs`: file picker, paced ISRC-then-title matching, review dialog, creation of unlisted playlists.
-- Wiring: `settings.slint` (Import row), `app.slint` (dialog kind `import-review`), `settings.rs` (action `service-import`), `favorites.rs`, `backend.rs` (`service_import::forget()` at logout), `main.rs`, `Cargo.toml` (roxmltree 0.20; `Cargo.lock` changed).
+| Commit | Item | What it does |
+|---|---|---|
+| `0f09ba1` | F5 import | `core/import_lib.rs` (Spotify JSON, Exportify/Apple CSV, Apple `Library.xml` via roxmltree, `judge()` matcher; 18 tests incl. XXE, entity bomb, node cap, 20k-track linear time) and `app/service_import.rs` (picker, paced ISRC-then-title matching, review dialog, unlisted playlists). Matcher never run against real TIDAL results. |
+| `a86ae09` | F6 accessibility | Reduce motion Off/On/Follow system (`Motion.dur` on all animate sites; Linux follow via gsettings; **no Windows follow**). High Contrast preset. WCAG AA test over all presets found and fixed two real failures in `derive()` (error red on light themes; white on mid-tone accents). `IconButton` takes its label from `tip`; 33 buttons got `accessible-label`; a test scans the .slint sources. |
 
-**Next step: fix the 4 clippy errors in `import_lib.rs`** (found by `cargo clippy -p slate-core --all-targets -- -D warnings`):
-1. `fn cell<'r>(...)` at ~305: elide the lifetime.
-2. ~496 and ~504: `.map(|n| text_of(n))` → `.map(&text_of)`.
-3. ~567: `out.extend(fold(..).chars())` → `out.push_str(&fold(..))`.
-
-Then run the gate and commit F5. Two other things to check:
-- The slate-app crate was not yet clippy-checked with F5. `service_import.rs` has a test using `tempfile` (already a dev-dependency).
-- The matcher has not been run against real TIDAL results. Only unit-tested.
+All six features F1–F6 are committed and passed the full gate. Re-run F1's thread tests pinned to one core only if touched again; F4/F5 tests do not use threads or locks beyond what is described.
 
 ## Gate script
 
@@ -45,7 +38,7 @@ The script does not stop on failure. Read the output for `error`, not just the l
 
 ## Not started
 
-**F6 accessibility.** Plan:
+(F6 was done after this note's plan below, kept for reference.) **F6 accessibility.** Plan:
 - A `Motion` global in `theme.slint` with a `dur(d)` function, applied to the 13 `animate` sites (pages 1, fullscreen 4, video 2, lyrics_full 1, library 1, player_bar 1, widgets 2).
 - Reduce-motion setting as Off / On / Follow system, default Off. Follow on Linux via `gsettings get org.gnome.desktop.interface enable-animations`, queried only when "Follow" is chosen. Skip the Windows OS follow (can't compile-test it here) and say so in the handoff.
 - A High-contrast preset in `core/theme.rs`. `PRESETS` is `[_; 15]` and must match `theme_config::PRESET_NAMES`, so update both and the Settings grid.
