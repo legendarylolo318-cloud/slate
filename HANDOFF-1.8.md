@@ -166,10 +166,11 @@ Each was larger than a cheap A/B, and a wrong change touches audio or rendering:
 - **B** removing queues/multiqueues: the per-thread breakdown above makes it the biggest wakeup target (about 40 %), but
   the branch queues are what let the next track pre-buffer behind `concat`; it needs the md5 gapless check at 24/192
   and 16/44 and a lookahead redesign. Not started.
-- **C** Skia partial rendering, **H** Skia GPU cache/glyph-atlas caps, **I** freeing textures while minimized,
-  **J** two swapchain images: these need Slint/Skia internals (partial rendering and swapchain image count are not
-  exposed by Slint 1.18's public API as far as I looked; I did not dig into i-slint-renderer-skia) and VRAM/scrolling
-  measurements with a 9,000-row list.
+- **C** Skia partial rendering, **H** Skia GPU cache/glyph-atlas caps, **J** two swapchain images: checked in
+  `i-slint-renderer-skia 1.18.1`: partial rendering is decided by the surface (`use_partial_rendering()`; the only
+  env var, `SLINT_SKIA_PARTIAL_RENDERING`, is a debug visualiser), and there is no setting for the resource-cache
+  limit, glyph atlas or swapchain image count. Doing them means patching or forking Slint's renderer, which I did
+  not do. **I** (free textures while minimized) has no public hook either.
 - **F** lazy CJK/fallback UI fonts: fonts are loaded by Slint/fontique, not by Slate; no hook found.
 - **L** prefetch next stream URL 20 s before the end: `Controller` already arms the next track ahead of the end
   (`armed`, `attach_next_bin`); I did not measure skip latency, so I cannot say what is left to gain.
