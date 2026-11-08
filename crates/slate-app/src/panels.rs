@@ -18,11 +18,17 @@ impl Backend {
     // ---------- queue panel ----------
 
     pub async fn publish_queue(&self) {
+        let Some(ctl) = self.controller() else {
+            self.publish_queue_to_mcp().await;
+            self.mpd_changed();
+            return;
+        };
+        // The host's "my picks play first" order is applied before anyone is told, so
+        // MCP and MPD clients see the order that will play (#147).
+        self.party_order_queue(&ctl).await;
         self.publish_queue_to_mcp().await;
         self.mpd_changed();
-        let Some(ctl) = self.controller() else { return };
         if crate::party_ui::hosting() {
-            self.party_order_queue(&ctl).await;
             let ids: Vec<u64> = ctl
                 .with_queue(|q| q.upcoming().take(300).map(|t| t.id).collect())
                 .await;
