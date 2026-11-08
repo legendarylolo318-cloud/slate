@@ -1154,6 +1154,14 @@ impl Controller {
         });
     }
 
+    /// Adds `tracks` after everything queued: the end of the context queue, as "Fill queue"
+    /// does, not "next up" (which plays before the rest of the album or playlist). One undo
+    /// step.
+    pub async fn append_after_all(&self, tracks: Vec<Track>) {
+        let mut q = self.lock_queue().await;
+        self.edit(&mut q, |q| q.append(tracks, false, &mut rand::rng()));
+    }
+
     /// "Fill queue to N minutes": adds tracks after everything queued (at the end of the
     /// context queue) until the upcoming
     /// time reaches `target_secs` (see `queue_fill::select` for where it stops). They come

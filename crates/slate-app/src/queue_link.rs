@@ -149,7 +149,9 @@ impl Backend {
                 let outcome = ctl.play_all(tracks, None, false, false).await;
                 this.apply(outcome).await;
             } else {
-                ctl.append_upcoming(tracks).await;
+                // "Add it after what is queued", as the dialog says: after the rest of
+                // the playing album or playlist too, not in "next up" ahead of it.
+                ctl.append_after_all(tracks).await;
             }
             this.refresh_queue_info().await;
             this.save().await;
