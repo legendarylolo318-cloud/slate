@@ -2171,6 +2171,27 @@ fn pipeline_stages(
     (eq_on, cf_on)
 }
 
+/// Whether the settings now want an equalizer or crossfeed that the running pipeline was
+/// built without. Switching one on cannot add it to a playing pipeline, so the next track
+/// must start a new one instead of following on gaplessly (it gets the stage there).
+fn stage_missing(
+    pipeline: &gst::Pipeline,
+    eq: &crate::eq::Settings,
+    crossfeed: crate::crossfeed::Level,
+    exclusive: bool,
+    bit_perfect: bool,
+) -> bool {
+    use gst::prelude::*;
+    // A stage this GStreamer cannot make is never in a pipeline; that must not end gapless.
+    let eq_missing = eq.in_path(exclusive, bit_perfect)
+        && pipeline.by_name(EQ_NAME).is_none()
+        && gst::ElementFactory::find("equalizer-nbands").is_some();
+    let cf_missing = crossfeed.in_path(exclusive, bit_perfect)
+        && crate::crossfeed::available()
+        && pipeline.by_name(crate::crossfeed::ELEMENT_NAME).is_none();
+    eq_missing || cf_missing
+}
+
 /// The crossfeed element for `level`, or None when the level is Off or this GStreamer lacks
 /// the plugin (the track then plays without it).
 fn build_crossfeed_stage(level: crate::crossfeed::Level) -> Option<gst::Element> {
@@ -3053,8 +3074,9 @@ impl AudioPlayer {
                                 if let Some((preamp, eq)) = &eq_stage {
                                     chain.splice(3..3, [preamp, eq]);
                                 }
-                                // After the resampler (and the equalizer), before the volume
-                                // stages; audioconvert upstream makes it stereo if it is not.
+                                // After the resampler, before the equalizer's preamp and the
+                                // volume stages; audioconvert upstream makes it stereo if it is
+                                // not.
                                 if let Some(cf) = &crossfeed_stage {
                                     chain.insert(3, cf);
                                 }
@@ -3813,7 +3835,8 @@ impl AudioPlayer {
                         eq_setting = settings;
                         // Band edits reach a running equalizer at once; switching it on or
                         // off (a pipeline with or without the elements) applies from the
-                        // next track. A pipeline that has it and is now switched off is
+                        // next track, which then starts a new pipeline rather than following
+                        // on gaplessly. A pipeline that has it and is now switched off is
                         // flattened, which is the same as bypassing it.
                         let live = match backend.as_ref() {
                             Some(PlaybackBackend::Normal { pipeline, .. }) => {
@@ -3825,6 +3848,34 @@ impl AudioPlayer {
                         signal_path.set_equalizer(
                             live.then_some((eq_setting.bands.len() as u32, eq_setting.preamp_db)),
                         );
+                        // Switched on while this pipeline has no such stage: a next track
+                        // already prerolled into it would carry on without it, so let it go;
+                        // the next track then starts a pipeline that has the stage.
+                        if !next_active.load(Ordering::Acquire) {
+                            if let Some(PlaybackBackend::Normal {
+                                pipeline, concat, ..
+                            }) = backend.as_ref()
+                            {
+                                if stage_missing(
+                                    pipeline,
+                                    &eq_setting,
+                                    crossfeed_setting,
+                                    exclusive,
+                                    bit_perfect,
+                                ) {
+                                    if let Some(stale) =
+                                        next_bin.lock().ok().and_then(|mut g| g.take())
+                                    {
+                                        let _ = attach_tx.send(AttachJob::Detach {
+                                            pipeline: pipeline.clone(),
+                                            concat: concat.clone(),
+                                            bin: stale.bin,
+                                            branch_queue: stale.branch_queue,
+                                        });
+                                    }
+                                }
+                            }
+                        }
                         let _ = reply.send(Ok(()));
                     }
 
@@ -3841,6 +3892,34 @@ impl AudioPlayer {
                             _ => false,
                         };
                         signal_path.set_crossfeed(live.then_some(level));
+                        // Switched on while this pipeline has no such stage: a next track
+                        // already prerolled into it would carry on without it, so let it go;
+                        // the next track then starts a pipeline that has the stage.
+                        if !next_active.load(Ordering::Acquire) {
+                            if let Some(PlaybackBackend::Normal {
+                                pipeline, concat, ..
+                            }) = backend.as_ref()
+                            {
+                                if stage_missing(
+                                    pipeline,
+                                    &eq_setting,
+                                    crossfeed_setting,
+                                    exclusive,
+                                    bit_perfect,
+                                ) {
+                                    if let Some(stale) =
+                                        next_bin.lock().ok().and_then(|mut g| g.take())
+                                    {
+                                        let _ = attach_tx.send(AttachJob::Detach {
+                                            pipeline: pipeline.clone(),
+                                            concat: concat.clone(),
+                                            bin: stale.bin,
+                                            branch_queue: stale.branch_queue,
+                                        });
+                                    }
+                                }
+                            }
+                        }
                         let _ = reply.send(Ok(()));
                     }
 
@@ -4170,9 +4249,14 @@ impl AudioPlayer {
                             }) => Some((pipeline.clone(), concat.clone())),
                             _ => None,
                         };
-                        log::debug!("[gapless-diag] SetNextTrack track={track_id}: effective_gapless={effective_gapless} (setting={gapless_setting} excl={exclusive} bp={bit_perfect}), backend_normal={}", normal_clones.is_some());
+                        // An equalizer or crossfeed switched on during this pipeline is not in
+                        // it: the next track starts a new pipeline (with the stage) instead.
+                        let rebuild = normal_clones.as_ref().is_some_and(|(p, _)| {
+                            stage_missing(p, &eq_setting, crossfeed_setting, exclusive, bit_perfect)
+                        });
+                        log::debug!("[gapless-diag] SetNextTrack track={track_id}: effective_gapless={effective_gapless} (setting={gapless_setting} excl={exclusive} bp={bit_perfect}), backend_normal={}, rebuild_for_stage={rebuild}", normal_clones.is_some());
 
-                        if !effective_gapless || normal_clones.is_none() {
+                        if !effective_gapless || normal_clones.is_none() || rebuild {
                             // Gapless off / wrong mode: detach any existing next_bin
                             // (gated on !next_active per C5) and do nothing else.
                             if !next_active.load(Ordering::Acquire) {
@@ -6391,6 +6475,27 @@ mod proxy_source_tests {
             (false, false),
             "exclusive takes both out"
         );
+        // Switched on during a pipeline built without the stage: the next track must not
+        // follow on gaplessly. A pipeline that has both, or settings that want neither, may.
+        assert!(stage_missing(&bare, &eq_on, Level::Off, false, false));
+        assert!(!stage_missing(&pipe, &eq_on, Level::Light, false, false));
+        assert!(!stage_missing(
+            &bare,
+            &crate::eq::Settings::default(),
+            Level::Off,
+            false,
+            false
+        ));
+        assert!(!stage_missing(&bare, &eq_on, Level::Light, true, false));
+        if crate::crossfeed::available() {
+            assert!(stage_missing(
+                &bare,
+                &crate::eq::Settings::default(),
+                Level::Light,
+                false,
+                false
+            ));
+        }
     }
 
     #[test]
