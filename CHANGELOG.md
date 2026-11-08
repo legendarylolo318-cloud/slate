@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.8.0] - 2026-11-07
+
+### Added
+- Resume points: tracks of 20 minutes or more offer "Resume at mm:ss" when started again after you left them part-way.
+- Queue menu → Fill queue to… 15 / 30 / 45 / 60 / 90 minutes or a custom length (one undo step).
+- Settings → General → Personal data: export / import lyrics offsets and tags as one file (import merges).
+- Compact now-playing strip (right-click the mini-player button); kept on top on X11 and Windows, a normal window on Wayland.
+- Party host: requests per guest for the whole party, and "My picks play first". No protocol change.
+- Share card themes: Dark, Light, Album colour, Minimal.
+
+### Changed
+- Linux: glibc malloc arenas capped at 2 (about 8 MB less memory while playing).
+- Release builds use `lto = "fat"`: binary 6.6 % smaller, release build takes about twice as long.
+- Writing the queue file is about 4x faster (9,000 tracks: 13.7 ms to 3.0 ms).
+
+See HANDOFF-1.8.md for measurements and what was not tested.
+
 ## [1.7.0] - 2026-11-07
 
 A resource release: less memory for long queues and while hi-res plays, with no change to audio output or
