@@ -320,6 +320,41 @@ mod tests {
     }
 
     #[test]
+    fn hostile_files_on_disk_are_refused_with_a_sentence() {
+        let dir = tempfile::tempdir().expect("dir");
+        let at = |name: &str, bytes: &[u8]| {
+            let p = dir.path().join(name);
+            std::fs::write(&p, bytes).expect("write");
+            p
+        };
+        // Over the size cap: refused before it is read.
+        let big = at("big.json", &vec![b' '; (MAX_FILE_BYTES + 1) as usize]);
+        assert!(read_file(&big).unwrap_err().contains("too big"));
+        // Not UTF-8, another program's JSON, a JSON bomb nested past serde's limit.
+        let bin = at("bin.json", &[0xff, 0xfe, 0x00, 0x7b]);
+        assert!(read_file(&bin).is_err());
+        let other = at("other.json", br#"{"tracks": {"1": {"tags": ["x"]}}}"#);
+        assert!(read_file(&other).unwrap_err().contains("not a Slate"));
+        let deep = at("deep.json", "[".repeat(100_000).as_bytes());
+        assert!(read_file(&deep).unwrap_err().contains("not a Slate"));
+        // Wrong types inside a well-labelled file are refused as a whole, not half-applied.
+        let typed = at(
+            "typed.json",
+            br#"{"schema":"slate-personal-data","version":1,"tags":[{"track":"x","tags":7}]}"#,
+        );
+        assert!(read_file(&typed).is_err());
+        // Right-to-left, bidi overrides and CJK in a valid file: kept as text, overrides gone.
+        let rtl = at(
+            "rtl.json",
+            "{\"schema\":\"slate-personal-data\",\"version\":1,\"tags\":[{\"track\":1,\"title\":\"\u{05e9}\u{05dc}\u{05d5}\u{05dd}\u{202e}\",\"tags\":[\"\u{6771}\u{4eac}\u{2067}\"]}]}"
+                .as_bytes(),
+        );
+        let got = read_file(&rtl).expect("valid");
+        assert_eq!(got.tags[0].1.title, "\u{05e9}\u{05dc}\u{05d5}\u{05dd}");
+        assert_eq!(got.tags[0].2, vec!["\u{6771}\u{4eac}".to_string()]);
+    }
+
+    #[test]
     fn untagged_entries_are_dropped() {
         let raw = r#"{"schema":"slate-personal-data","version":1,"tags":[{"track":1,"tags":[]}]}"#;
         assert!(parse(raw).unwrap().tags.is_empty());
