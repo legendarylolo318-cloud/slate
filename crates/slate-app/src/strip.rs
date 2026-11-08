@@ -51,12 +51,25 @@ fn is_wayland(window: &slint::Window) -> bool {
         .unwrap_or(false)
 }
 
+/// Closes the strip if it is open. A shown Slint window keeps itself alive until it is
+/// hidden, so dropping the handle alone left the window on screen, no longer updated, and
+/// the next toggle opened a second one (#148). Hide first; drop the handle once the
+/// current event (possibly the strip's own button or close request) has finished.
+fn close() -> bool {
+    let Some(strip) = STRIP.with(|s| s.borrow_mut().take()) else {
+        return false;
+    };
+    let _ = strip.hide();
+    slint::Timer::single_shot(std::time::Duration::ZERO, move || drop(strip));
+    true
+}
+
 impl Backend {
     /// Opens the strip, or closes it if it is open (the menu entry toggles).
     pub fn toggle_strip(&self) {
         let this = self.clone();
         self.ui(move |main| {
-            if STRIP.with(|s| s.borrow_mut().take()).is_some() {
+            if close() {
                 return;
             }
             let Ok(strip) = StripWindow::new() else {
@@ -68,7 +81,7 @@ impl Backend {
             let b = this.clone();
             strip.on_next(move || b.next());
             strip.on_close_strip(|| {
-                STRIP.with(|s| s.borrow_mut().take());
+                close();
             });
             let weak = strip.as_weak();
             strip.on_drag(move || {
@@ -78,9 +91,12 @@ impl Backend {
                     });
                 }
             });
-            strip
-                .window()
-                .on_close_requested(|| slint::CloseRequestResponse::HideWindow);
+            // Closed by the window manager (Alt+F4): the same as the close button, so the
+            // next toggle opens it again instead of dropping a hidden window.
+            strip.window().on_close_requested(|| {
+                close();
+                slint::CloseRequestResponse::HideWindow
+            });
             let _ = strip.show();
             let wayland = is_wayland(strip.window());
             strip.set_on_top(can_stay_on_top(wayland));
