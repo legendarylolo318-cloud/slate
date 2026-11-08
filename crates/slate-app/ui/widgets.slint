@@ -160,7 +160,9 @@ export component Segmented inherits Rectangle {
             min-width: 44px;
             background: i == root.index ? Theme.surface-raised : (st.has-hover ? Theme.surface-raised.with-alpha(0.4) : transparent);
             // Padding around the label gives each option at least its text's width, so options
-            // never overlap; a row that does not fit scrolls (tab bar) or wraps (Row).
+            // never overlap; a row that does not fit scrolls (tab bar) or wraps (Row). Squeezed
+            // narrower than that anyway (long device names), each label ends in "…" instead of
+            // running over its neighbours.
             HorizontalLayout {
                 padding-left: 8px;
                 padding-right: 8px;
@@ -170,6 +172,7 @@ export component Segmented inherits Rectangle {
                 font-weight: i == root.index ? 700 : 400;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+                overflow: elide;
                 }
             }
             st := TouchArea {
