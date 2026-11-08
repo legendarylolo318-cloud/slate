@@ -3,7 +3,7 @@
 //! The file is read the first time a tag feature is used and written off the UI thread,
 //! debounced, after changes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -20,6 +20,11 @@ use crate::textutil::clean_line;
 
 /// Longest tag, in characters.
 pub const MAX_TAG: usize = 40;
+/// An import adds at most this many tags to one track…
+pub const MAX_IMPORTED_PER_TRACK: usize = 32;
+/// …and brings the store to at most this many different tags (a real store has far fewer;
+/// a hostile file could otherwise fill the sidebar with hundreds of thousands).
+pub const MAX_DISTINCT_TAGS: usize = 1000;
 /// Most suggestions shown under the field.
 const SUGGESTIONS: usize = 6;
 /// A write waits this long for further edits.
@@ -127,6 +132,58 @@ impl TagStore {
         self.tracks
             .iter()
             .map(|(id, e)| (*id, &e.snap, e.tags.as_slice()))
+    }
+
+    /// Merges imported tags (personal-data import): nothing is removed, a track's snapshot
+    /// is replaced when it gains a tag. One pass with a map of the spellings already used,
+    /// so a big file costs linear time, not one scan of the store per tag (#146). Returns
+    /// how many tracks were new and how many tags were added.
+    pub fn import(&mut self, items: Vec<(u64, Snapshot, Vec<String>)>) -> (usize, usize) {
+        let mut canon: HashMap<String, String> = self
+            .tracks
+            .values()
+            .flat_map(|e| &e.tags)
+            .map(|t| (t.to_lowercase(), t.clone()))
+            .collect();
+        let (mut new_tracks, mut added) = (0, 0);
+        for (id, snap, tags) in items {
+            let known = self.tracks.contains_key(&id);
+            let mut have: Vec<String> = self
+                .tracks
+                .get(&id)
+                .map(|e| e.tags.iter().map(|t| t.to_lowercase()).collect())
+                .unwrap_or_default();
+            let mut fresh = Vec::new();
+            for raw in tags {
+                if fresh.len() >= MAX_IMPORTED_PER_TRACK {
+                    break;
+                }
+                let Some(tag) = normalize(&raw) else { continue };
+                let low = tag.to_lowercase();
+                if have.contains(&low) {
+                    continue;
+                }
+                let spelled = match canon.get(&low) {
+                    Some(c) => c.clone(),
+                    None if canon.len() >= MAX_DISTINCT_TAGS => continue,
+                    None => {
+                        canon.insert(low.clone(), tag.clone());
+                        tag
+                    }
+                };
+                have.push(low);
+                fresh.push(spelled);
+            }
+            if fresh.is_empty() {
+                continue;
+            }
+            added += fresh.len();
+            new_tracks += usize::from(!known);
+            let e = self.tracks.entry(id).or_default();
+            e.snap = snap;
+            e.tags.extend(fresh);
+        }
+        (new_tracks, added)
     }
 
     /// Tags `id` (with a fresh snapshot). `false` when it already had the tag.
@@ -375,15 +432,7 @@ impl Backend {
     /// Merges imported tags into the store (nothing is removed); returns how many
     /// tracks and tags were new, and saves after the usual quiet period.
     pub(crate) fn tags_import(&self, items: Vec<(u64, Snapshot, Vec<String>)>) -> (usize, usize) {
-        let (mut tracks, mut added) = (0, 0);
-        with(|s| {
-            for (id, snap, tags) in items {
-                let known = s.tracks.contains_key(&id);
-                let n = tags.iter().filter(|t| s.add(id, snap.clone(), t)).count();
-                added += n;
-                tracks += usize::from(n > 0 && !known);
-            }
-        });
+        let (tracks, added) = with(|s| s.import(items));
         if added > 0 {
             self.tags_changed();
         }
@@ -623,6 +672,52 @@ mod tests {
             normalize(&"x".repeat(100)).unwrap().chars().count(),
             MAX_TAG
         );
+    }
+
+    #[test]
+    fn an_import_merges_like_adding_by_hand() {
+        let mut by_hand = TagStore::default();
+        by_hand.add(1, snap("a"), "Jazz");
+        let mut imported = by_hand.clone();
+        for (id, t) in [(1, "jazz"), (1, "Late"), (2, "JAZZ"), (2, "late")] {
+            by_hand.add(id, snap("b"), t);
+        }
+        let got = imported.import(vec![
+            (1, snap("b"), vec!["jazz".into(), "Late".into()]),
+            (
+                2,
+                snap("b"),
+                vec!["JAZZ".into(), "late".into(), "  ".into()],
+            ),
+        ]);
+        assert_eq!(got, (1, 3), "one new track; Late, Jazz and Late added");
+        assert_eq!(
+            imported, by_hand,
+            "same spellings and snapshots as typed tags"
+        );
+    }
+
+    #[test]
+    fn a_hostile_import_is_bounded_and_fast() {
+        // 20,000 tracks x 40 different tags: 800,000 tags, about 9 MB of JSON. Before #146
+        // this took over an hour (each tag scanned the whole store).
+        let items: Vec<_> = (0..20_000u64)
+            .map(|t| (t, snap("x"), (0..40).map(|k| format!("t{t}x{k}")).collect()))
+            .collect();
+        let mut s = TagStore::default();
+        let started = std::time::Instant::now();
+        let (_, added) = s.import(items);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(s.counts().len(), MAX_DISTINCT_TAGS);
+        assert_eq!(added, MAX_DISTINCT_TAGS);
+        assert!(s
+            .tracks
+            .values()
+            .all(|e| e.tags.len() <= MAX_IMPORTED_PER_TRACK));
+        // Existing tags still go onto more tracks once the distinct cap is reached.
+        let (_, more) = s.import(vec![(99_999, snap("y"), vec!["T0X0".into(), "new".into()])]);
+        assert_eq!(more, 1);
+        assert_eq!(s.tracks[&99_999].tags, vec!["t0x0".to_string()]);
     }
 
     #[test]
