@@ -2153,6 +2153,24 @@ fn apply_eq_live(pipeline: &gst::Pipeline, s: &crate::eq::Settings, on: bool) ->
     on
 }
 
+/// Whether a running pipeline's equalizer and crossfeed are acting: the element is there
+/// and the setting has it in the path. Reads only; nothing is changed.
+fn pipeline_stages(
+    pipeline: &gst::Pipeline,
+    eq: &crate::eq::Settings,
+    crossfeed: crate::crossfeed::Level,
+    exclusive: bool,
+    bit_perfect: bool,
+) -> (bool, bool) {
+    use gst::prelude::*;
+    let eq_on = eq.in_path(exclusive, bit_perfect)
+        && pipeline.by_name(EQ_NAME).is_some()
+        && pipeline.by_name(EQ_PREAMP_NAME).is_some();
+    let cf_on = crossfeed.in_path(exclusive, bit_perfect)
+        && pipeline.by_name(crate::crossfeed::ELEMENT_NAME).is_some();
+    (eq_on, cf_on)
+}
+
 /// The crossfeed element for `level`, or None when the level is Off or this GStreamer lacks
 /// the plugin (the track then plays without it).
 fn build_crossfeed_stage(level: crate::crossfeed::Level) -> Option<gst::Element> {
@@ -4318,6 +4336,25 @@ impl AudioPlayer {
                             &signal_path,
                         );
                         signal_path.reset_for_track();
+                        // The pipeline carries on into this track with whatever equalizer
+                        // and crossfeed it has: say so again, or the Signal Path would drop
+                        // them (and could read PRISTINE) from the second gapless track on.
+                        if let Some(PlaybackBackend::Normal { pipeline, .. }) = backend.as_ref() {
+                            let (eq_on, cf_on) = pipeline_stages(
+                                pipeline,
+                                &eq_setting,
+                                crossfeed_setting,
+                                exclusive,
+                                bit_perfect,
+                            );
+                            signal_path.set_equalizer(
+                                eq_on.then_some((
+                                    eq_setting.bands.len() as u32,
+                                    eq_setting.preamp_db,
+                                )),
+                            );
+                            signal_path.set_crossfeed(cf_on.then_some(crossfeed_setting));
+                        }
 
                         // Emit track-advanced (unchanged payload, C4). The lib.rs
                         // listener stores rg/peak + scrobbles; the frontend reconciles
@@ -6306,6 +6343,54 @@ mod proxy_source_tests {
         for (i, x) in l.iter().enumerate().skip(1024) {
             assert_eq!(*x, (i as f32 * 0.05).sin() * 0.5, "sample {i}");
         }
+    }
+
+    #[test]
+    fn a_pipeline_that_carries_on_still_reports_its_equalizer_and_crossfeed() {
+        use crate::crossfeed::Level;
+        use gst::prelude::*;
+        if gst::init().is_err() {
+            return;
+        }
+        let eq_on = crate::eq::Settings {
+            enabled: true,
+            preamp_db: -3.0,
+            ..Default::default()
+        };
+        let bare = gst::Pipeline::new();
+        assert_eq!(
+            pipeline_stages(&bare, &eq_on, Level::Strong, false, false),
+            (false, false),
+            "no elements: nothing to report"
+        );
+        let pipe = gst::Pipeline::new();
+        for name in [EQ_NAME, EQ_PREAMP_NAME, crate::crossfeed::ELEMENT_NAME] {
+            let el = gst::ElementFactory::make("identity")
+                .name(name)
+                .build()
+                .expect("identity");
+            pipe.add(&el).expect("add");
+        }
+        assert_eq!(
+            pipeline_stages(&pipe, &eq_on, Level::Light, false, false),
+            (true, true)
+        );
+        assert_eq!(
+            pipeline_stages(
+                &pipe,
+                &crate::eq::Settings::default(),
+                Level::Off,
+                false,
+                false
+            ),
+            (false, false),
+            "both switched off (flattened / bypassed)"
+        );
+        assert_eq!(
+            pipeline_stages(&pipe, &eq_on, Level::Light, true, false),
+            (false, false),
+            "exclusive takes both out"
+        );
     }
 
     #[test]
