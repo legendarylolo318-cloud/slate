@@ -433,9 +433,153 @@ impl Track {
     }
 }
 
+/// `{"tags": [...]}` of a track's media tags, written without building a `Value`.
+struct TagsOut<'a>(&'a [Arc<str>]);
+
+impl Serialize for TagsOut<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(Some(1))?;
+        m.serialize_entry("tags", &SeqOut(self.0))?;
+        m.end()
+    }
+}
+
+struct SeqOut<'a>(&'a [Arc<str>]);
+
+impl Serialize for SeqOut<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut q = s.serialize_seq(Some(self.0.len()))?;
+        for t in self.0 {
+            q.serialize_element(&**t)?;
+        }
+        q.end()
+    }
+}
+
+struct ArtistOut<'a>(&'a Artist);
+
+impl Serialize for ArtistOut<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        if let Some(id) = self.0.id {
+            m.serialize_entry("id", &id)?;
+        }
+        m.serialize_entry("name", &*self.0.name)?;
+        m.end()
+    }
+}
+
+struct ArtistsOut<'a>(&'a [Arc<Artist>]);
+
+impl Serialize for ArtistsOut<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut q = s.serialize_seq(Some(self.0.len()))?;
+        for a in self.0 {
+            q.serialize_element(&ArtistOut(a))?;
+        }
+        q.end()
+    }
+}
+
+struct AlbumOut<'a>(&'a Album);
+
+impl Serialize for AlbumOut<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let a = self.0;
+        let mut m = s.serialize_map(None)?;
+        if let Some(id) = a.id {
+            m.serialize_entry("id", &id)?;
+        }
+        m.serialize_entry("title", &*a.title)?;
+        if let Some(v) = &a.cover {
+            m.serialize_entry("cover", &**v)?;
+        }
+        if let Some(v) = &a.release_date {
+            m.serialize_entry("releaseDate", &**v)?;
+        }
+        m.end()
+    }
+}
+
+struct MixOut<'a>(&'a str);
+
+impl Serialize for MixOut<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(Some(1))?;
+        m.serialize_entry("TRACK_MIX", self.0)?;
+        m.end()
+    }
+}
+
+/// Written straight to the serializer (the queue file holds thousands of these): the same
+/// JSON as [`Track::to_map`], without a `Map` of owned keys and strings per track. A test
+/// keeps the two equal.
 impl Serialize for Track {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        self.to_map().serialize(s)
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        m.serialize_entry("id", &self.id)?;
+        if let Some(q) = &self.qid {
+            m.serialize_entry("_qid", q.as_str())?;
+        }
+        m.serialize_entry("title", &*self.title)?;
+        let opt = |m: &mut S::SerializeMap, k: &'static str, v: &Option<Arc<str>>| match v {
+            Some(v) => m.serialize_entry(k, &**v),
+            None => Ok(()),
+        };
+        opt(&mut m, "version", &self.version)?;
+        if let Some(a) = &self.artist {
+            m.serialize_entry("artist", &ArtistOut(a))?;
+        }
+        if !self.artists.is_empty() {
+            m.serialize_entry("artists", &ArtistsOut(&self.artists))?;
+        }
+        if let Some(a) = &self.album {
+            m.serialize_entry("album", &AlbumOut(a))?;
+        }
+        m.serialize_entry("duration", &f64::from(self.duration))?;
+        for (k, v) in [
+            ("explicit", self.explicit),
+            ("ai", self.ai),
+            ("streamReady", self.stream_ready),
+            ("allowStreaming", self.allow_streaming),
+        ] {
+            if let Some(v) = v {
+                m.serialize_entry(k, &v)?;
+            }
+        }
+        opt(&mut m, "isrc", &self.isrc)?;
+        for (k, v) in [
+            ("trackNumber", self.track_number),
+            ("volumeNumber", self.volume_number),
+        ] {
+            if let Some(v) = v {
+                m.serialize_entry(k, &v)?;
+            }
+        }
+        opt(&mut m, "audioQuality", &self.audio_quality)?;
+        if !self.media_tags.is_empty() {
+            m.serialize_entry("mediaMetadata", &TagsOut(&self.media_tags))?;
+        }
+        if !self.audio_modes.is_empty() {
+            m.serialize_entry("audioModes", &SeqOut(&self.audio_modes))?;
+        }
+        opt(&mut m, "streamStartDate", &self.stream_start_date)?;
+        opt(&mut m, "itemType", &self.item_type)?;
+        opt(&mut m, "imageId", &self.image_id)?;
+        if let Some(mix) = &self.track_mix {
+            m.serialize_entry("mixes", &MixOut(mix))?;
+        }
+        if let Some(src) = &self.source {
+            m.serialize_entry("_source", &**src)?;
+        }
+        m.end()
     }
 }
 
@@ -488,6 +632,35 @@ mod tests {
                                 "tracks": [full(1, "Africa"), full(4, "Waiting For Your Love")] },
             "contextSource": null
         })
+    }
+
+    #[test]
+    fn the_direct_serializer_writes_what_to_map_builds() {
+        let file = old_file();
+        let mut checked = 0;
+        for key in ["currentTrack", "history", "manualQueue", "queue"] {
+            let list = match &file[key] {
+                Value::Array(a) => a.clone(),
+                v => vec![v.clone()],
+            };
+            for v in list {
+                let t: Track = serde_json::from_value(v).expect("track");
+                let direct = serde_json::to_value(&t).expect("direct");
+                assert_eq!(direct, Value::Object(t.to_map()), "{key}");
+                // And through the text form, as the queue file is written.
+                let text = serde_json::to_string(&t).expect("text");
+                let back: Track = serde_json::from_str(&text).expect("back");
+                assert_eq!(back.to_map(), t.to_map());
+                checked += 1;
+            }
+        }
+        assert!(checked >= 4);
+        // A bare track (almost every field absent) too.
+        let bare: Track = serde_json::from_value(json!({ "id": 5 })).expect("bare");
+        assert_eq!(
+            serde_json::to_value(&bare).expect("v"),
+            Value::Object(bare.to_map())
+        );
     }
 
     #[test]

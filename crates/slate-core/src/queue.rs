@@ -1561,3 +1561,48 @@ mod tests {
         assert_eq!(parse_rfc3339_secs("nope"), None);
     }
 }
+
+/// On demand: `cargo test -p slate-core --release time_a_big_snapshot -- --ignored --nocapture`
+/// times serialising a 9,000-track queue file (the playing source holds a second copy).
+#[cfg(test)]
+mod save_timing {
+    use super::*;
+
+    #[test]
+    #[ignore = "timing; run on demand"]
+    fn time_a_big_snapshot() {
+        let tracks: Vec<Track> = (0..9000u64)
+            .map(|i| {
+                Track::from_serialized(&serde_json::json!({
+                    "id": i, "title": format!("Track {i} (Remastered 2011)"), "duration": 245.0,
+                    "artists": [{"id": i % 97, "name": format!("Artist {}", i % 97)}],
+                    "album": {"id": i % 700, "title": format!("Album {}", i % 700), "cover": "abcd-1234-ef56-7890"},
+                    "audioQuality": "HI_RES_LOSSLESS", "explicit": false, "isrc": format!("USAB{i:08}"),
+                    "mediaMetadata": {"tags": ["LOSSLESS", "HIRES_LOSSLESS"]}, "trackNumber": 3,
+                }))
+                .expect("track")
+            })
+            .collect();
+        let mut q = Queue::new();
+        q.set_tracks(tracks.clone(), None, false);
+        q.playback_source = Some(Source {
+            kind: "playlist".into(),
+            id: Value::from("x"),
+            name: "Big".into(),
+            image: None,
+            subtitle: None,
+            mix_type: None,
+            tracks: q.queue.iter().cloned().collect(),
+        });
+        let snap = q.snapshot();
+        let mut best = u128::MAX;
+        let mut len = 0;
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            let s = snap.to_json().expect("json");
+            best = best.min(t.elapsed().as_micros());
+            len = s.len();
+        }
+        eprintln!("SNAPSHOT 9000 tracks: {len} bytes, best of 5: {best} us");
+    }
+}
