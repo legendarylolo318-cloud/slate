@@ -234,6 +234,7 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(state) = this.state() else { return };
+            this.alarm_settings_opened();
             let snap = snapshot(&state).await;
             let prefs = UiPrefs::load();
             this.ui(move |w| {
@@ -328,6 +329,10 @@ impl Backend {
                     let mut prefs = crate::uiprefs::UiPrefs::load();
                     prefs.start_minimized = v;
                     prefs.save().map_err(|e| e.to_string())
+                }
+                k if k.starts_with("alarm-") => {
+                    this.alarm_edit(k, crate::alarm::AlarmEdit::Bool(v));
+                    return;
                 }
                 "device-memory" => {
                     let mut prefs = crate::uiprefs::UiPrefs::load();
@@ -426,6 +431,10 @@ impl Backend {
                     slate_core::crossfeed::Level::from_index(usize_i as i32),
                 )
                 .map_err(|e| e.log_safe()),
+                k if k.starts_with("alarm-") => {
+                    this.alarm_edit(k, crate::alarm::AlarmEdit::Int(usize_i as i32));
+                    return;
+                }
                 "shuffle-mode" => this.set_shuffle_mode(&state, usize_i == 1),
                 "suggest" => this.set_suggest_index(usize_i),
                 "ui-scale" => {
@@ -484,6 +493,14 @@ impl Backend {
                 this.eq_edited(&key, &v);
                 return;
             }
+            if key == "alarm-what-link" {
+                this.alarm_use_link(&v);
+                return;
+            }
+            if key == "alarm-time" {
+                this.alarm_edit("alarm-time", crate::alarm::AlarmEdit::Text(v));
+                return;
+            }
             if key == "party-name" {
                 let mut p = UiPrefs::load();
                 p.party_name = slate_core::party::proto::clean_name(&v);
@@ -539,6 +556,11 @@ impl Backend {
                 }
                 "discord-reset" => this.discord_reset_templates(),
                 n if n.starts_with("eq-") => this.eq_action(n),
+                "alarm-what-queue" => this.alarm_edit(
+                    "alarm-what",
+                    crate::alarm::AlarmEdit::What(Default::default()),
+                ),
+                "alarm-what-playing" => this.alarm_use_playing(),
                 "party-start" => this.party_start(),
                 "party-takeover" => this.party_takeover(),
                 "party-decline" => this.party_decline(),

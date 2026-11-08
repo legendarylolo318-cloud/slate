@@ -44,6 +44,7 @@ pub mod discord_template;
 pub mod discord_ipc {
     pub type SlateDiscordClient = discord_rich_presence::DiscordIpcClient;
 }
+pub mod alarm;
 pub mod crossfeed;
 pub mod device_memory;
 pub mod embedded_config;

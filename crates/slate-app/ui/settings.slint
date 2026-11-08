@@ -41,6 +41,14 @@ export global SettingsState {
     in-out property <bool> start-minimized;
     in-out property <bool> start-half-volume;
     in-out property <bool> device-memory;
+    in-out property <bool> alarm-enabled;
+    in-out property <string> alarm-time: "07:00";
+    in-out property <int> alarm-days: 127;
+    in-out property <string> alarm-what: "the queue";
+    in-out property <int> alarm-fade-index: 1;
+    in-out property <int> alarm-volume-index: 1;
+    in-out property <bool> alarm-keep-awake;
+    in-out property <string> alarm-status;
     in-out property <bool> remember-window;
     in-out property <bool> gapless-supported: true;
     in-out property <int> crossfade-index: 0;
@@ -393,6 +401,62 @@ export component SettingsPage inherits Rectangle {
                             Button { label: "Export…"; clicked => { SettingsState.action("personal-export"); } }
                             Button { label: "Import…"; clicked => { SettingsState.action("personal-import"); } }
                         }
+                    }
+                    Row {
+                        label: "Wake-up alarm";
+                        hint: SettingsState.alarm-status + ". Off by default and then nothing runs. One timer, set to the next ring. An alarm that Slate or the computer slept through by more than 5 minutes is skipped with a notice. Snooze 10 minutes from the bar, or by pausing while it rings.";
+                        Toggle { checked: SettingsState.alarm-enabled; toggled(v) => { SettingsState.alarm-enabled = v; SettingsState.changed-bool("alarm-enabled", v); } }
+                    }
+                    Row {
+                        label: "Alarm time";
+                        hint: "24-hour, like 07:30.";
+                        TextField { text <=> SettingsState.alarm-time; placeholder: "07:30"; field-width: 90px; accepted(t) => { SettingsState.changed-str("alarm-time", t); } }
+                    }
+                    Row {
+                        label: "Alarm days";
+                        hint: "Click a day to switch it on or off; at least one stays on.";
+                        HorizontalLayout {
+                            spacing: 4px;
+                            for d[i] in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]: Button {
+                                label: d;
+                                min-width: 44px;
+                                primary: mod(floor(SettingsState.alarm-days / pow(2, i)), 2) == 1;
+                                clicked => { SettingsState.changed-int("alarm-day", i); }
+                            }
+                        }
+                    }
+                    Row {
+                        label: "Alarm plays";
+                        hint: "Now: " + SettingsState.alarm-what + ". Paste a TIDAL playlist, album or mix link, or use what is playing now.";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { label: "The queue"; clicked => { SettingsState.action("alarm-what-queue"); } }
+                            Button { label: "What's playing"; clicked => { SettingsState.action("alarm-what-playing"); } }
+                            TextField { placeholder: "Paste a link"; field-width: 180px; accepted(t) => { SettingsState.changed-str("alarm-what-link", t); } }
+                        }
+                    }
+                    Row {
+                        label: "Alarm fade-in";
+                        hint: "From silence up to the alarm volume. Touching the volume ends the fade.";
+                        Segmented {
+                            options: ["30 s", "60 s", "90 s", "2 min"];
+                            index: SettingsState.alarm-fade-index;
+                            picked(i) => { SettingsState.alarm-fade-index = i; SettingsState.changed-int("alarm-fade", i); }
+                        }
+                    }
+                    Row {
+                        label: "Alarm volume";
+                        hint: "The volume the fade-in reaches, and the volume you are left with.";
+                        Segmented {
+                            options: ["25 %", "50 %", "75 %", "100 %"];
+                            index: SettingsState.alarm-volume-index;
+                            picked(i) => { SettingsState.alarm-volume-index = i; SettingsState.changed-int("alarm-volume", i); }
+                        }
+                    }
+                    Row {
+                        label: "Keep the computer awake while the alarm is armed";
+                        hint: "Off by default. Stops the computer sleeping, and the screen turning off, while an alarm is set; it also uses power. Without it, a sleeping computer misses the alarm.";
+                        Toggle { checked: SettingsState.alarm-keep-awake; toggled(v) => { SettingsState.alarm-keep-awake = v; SettingsState.changed-bool("alarm-keep-awake", v); } }
                     }
                     Row {
                         label: "Image cache";

@@ -7,6 +7,7 @@
 )]
 
 mod agent;
+mod alarm;
 mod backend;
 mod bootstrap;
 mod bulk;

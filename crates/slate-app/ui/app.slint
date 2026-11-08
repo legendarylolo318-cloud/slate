@@ -295,6 +295,11 @@ export component AppWindow inherits Window {
     in property <int> repeat;
     in property <string> error;
     in property <string> notice;
+    /// The wake-up alarm's bar: what it is doing, with Snooze / Stop while it rings.
+    in property <string> alarm-text;
+    in property <bool> alarm-ringing;
+    callback alarm-snooze();
+    callback alarm-stop();
     /// A paced playlist edit is running: the notice bar shows Cancel.
     in property <bool> bulk-running;
     callback cancel-bulk();
@@ -440,6 +445,19 @@ export component AppWindow inherits Window {
                             Text { text: root.update-notice; color: Theme.on-accent; font-weight: 600; vertical-alignment: center; overflow: elide; }
                             Button { label: "View release"; height: 28px; y: (parent.height - self.height) / 2; clicked => { root.open-update(); } }
                             Button { label: "Dismiss"; height: 28px; y: (parent.height - self.height) / 2; clicked => { root.dismiss-update(); } }
+                        }
+                    }
+                    if root.alarm-text != "": Rectangle {
+                        height: 40px;
+                        background: Theme.accent;
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 8px;
+                            spacing: 12px;
+                            alignment: center;
+                            Text { text: root.alarm-text; color: Theme.on-accent; font-weight: 600; vertical-alignment: center; overflow: elide; }
+                            if root.alarm-ringing: Button { label: "Snooze 10 min"; height: 28px; y: (parent.height - self.height) / 2; clicked => { root.alarm-snooze(); } }
+                            Button { label: root.alarm-ringing ? "Stop" : "Dismiss"; height: 28px; y: (parent.height - self.height) / 2; clicked => { root.alarm-stop(); } }
                         }
                     }
                     if root.notice != "": Rectangle {

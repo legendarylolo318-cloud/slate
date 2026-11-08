@@ -216,7 +216,7 @@ impl Backend {
         });
     }
 
-    fn mcp_play_source(&self, kind: String, id: String, shuffle: bool) {
+    pub(crate) fn mcp_play_source(&self, kind: String, id: String, shuffle: bool) {
         let this = self.clone();
         self.rt.spawn(async move {
             let (Some(state), Some(ctl)) = (this.state(), this.controller()) else {

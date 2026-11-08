@@ -55,6 +55,9 @@ pub struct UiPrefs {
     /// `ui.json` written before the setting existed).
     #[serde(default = "default_true")]
     pub start_half_volume: bool,
+    /// A wake-up alarm is set, so start-up reads it (off: nothing is read or armed).
+    #[serde(default)]
+    pub alarm_armed: bool,
     /// Remember volume and equalizer per output device (off by default; see `device_memory`).
     #[serde(default)]
     pub device_memory: bool,
@@ -138,6 +141,7 @@ impl Default for UiPrefs {
             start_minimized: false,
             start_half_volume: true,
             device_memory: false,
+            alarm_armed: false,
             remember_window: true,
             check_updates: true,
             last_update_check: 0,

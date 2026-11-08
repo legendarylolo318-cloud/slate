@@ -465,6 +465,7 @@ pub async fn logout(state: &AppState) -> Result<(), SlateError> {
         "modes.json",
         crate::resume::FILE,
         crate::device_memory::FILE,
+        crate::alarm::FILE,
     ] {
         fs::remove_file(state.cache_dir.join(name)).ok();
     }

@@ -65,7 +65,7 @@ pub(crate) struct Shared {
     /// The update notice on screen: version, release page.
     pub(crate) update: Mutex<Option<(String, String)>>,
     /// Bumped on every volume change so only the last of a drag is persisted.
-    volume_seq: AtomicU64,
+    pub(crate) volume_seq: AtomicU64,
     /// The volume (0..1) as `f32` bits, for the MPD server.
     pub(crate) volume: AtomicU32,
     /// A status read for MPD clients is already scheduled.
@@ -525,6 +525,7 @@ impl Backend {
             QUEUE_SAVE.cancel();
             crate::resume::forget();
             crate::device_memory::forget();
+            crate::alarm::forget();
             if let Some(ctl) = this.controller() {
                 ctl.stop_saving().await;
             }
@@ -1036,6 +1037,8 @@ impl Backend {
         }
         crate::resume::allow();
         crate::device_memory::allow();
+        crate::alarm::allow();
+        self.alarm_start();
         let pending = self.pending_link.lock().ok().and_then(|mut p| p.take());
         match pending {
             Some(link) => self.open_link(&link),
@@ -1118,6 +1121,9 @@ impl Backend {
         let pos = f32::from_bits(self.shared.position.load(Ordering::Relaxed));
         match c {
             Control::Play if !playing => self.toggle_play(),
+            // While an alarm rings, pausing it (the notice, MPRIS, a media key) is a snooze.
+            Control::Pause if playing && crate::alarm::ringing() => self.alarm_snooze(),
+            Control::PlayPause if playing && crate::alarm::ringing() => self.alarm_snooze(),
             Control::Pause if playing => self.toggle_play(),
             Control::PlayPause => self.toggle_play(),
             Control::Play | Control::Pause => {}
