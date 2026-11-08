@@ -262,12 +262,25 @@ mod tests {
 
     #[test]
     fn deep_nesting_and_a_deflate_bomb_are_refused_quickly() {
-        let deep = format!(
+        // Deep enough to matter yet under the link cap, so the parser (not the length check)
+        // sees it. (10,000 levels was refused as too long before parsing began.)
+        let deep_x = format!(
             "{{\"v\":1,\"ids\":[1],\"x\":{}{}}}",
-            "[".repeat(10_000),
-            "]".repeat(10_000)
+            "[".repeat(5_000),
+            "]".repeat(5_000)
         );
-        assert!(decode(&link_of(&deep), id).is_err());
+        let l = link_of(&deep_x);
+        assert!(l.len() <= MAX_LINK_BYTES);
+        // An unknown field is skipped without recursion: read, and only the ids count.
+        assert_eq!(decode(&l, id).unwrap().ids, vec![1]);
+        let deep_ids = format!(
+            "{{\"v\":1,\"ids\":{}1{}}}",
+            "[".repeat(5_000),
+            "]".repeat(5_000)
+        );
+        let l = link_of(&deep_ids);
+        assert!(l.len() <= MAX_LINK_BYTES);
+        assert!(decode(&l, id).is_err());
         // 10 MB of zeros deflates to ~10 KB.
         let mut z = flate2::write::DeflateEncoder::new(vec![b'z'], flate2::Compression::best());
         z.write_all(&vec![b' '; 10 * 1024 * 1024]).unwrap();
