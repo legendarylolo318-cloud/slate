@@ -102,17 +102,28 @@ pub fn save(path: &Path, offsets: &Offsets) -> io::Result<()> {
 /// unserialised the second could read before the first wrote (a lost nudge) or report
 /// its value after the first's newer one. Blocking file I/O: call off the UI thread.
 pub fn nudge_saved(path: &Path, track_id: u64, delta_ms: i32, then: impl FnOnce(i32)) {
-    let ms = update_saved(path, |all| all.nudge(track_id, delta_ms));
+    // `then` runs while the file lock is still held, so two nudges report their values in
+    // the order they were saved (1.8 called it after the lock was released: #150).
+    let _held = lock_file();
+    let mut all = load(path);
+    let ms = all.nudge(track_id, delta_ms);
+    if let Err(e) = save(path, &all) {
+        log::warn!("could not save the lyrics offsets: {e}");
+    }
     then(ms);
+}
+
+/// The one process-wide lock around reading and writing the offsets file.
+fn lock_file() -> std::sync::MutexGuard<'static, ()> {
+    static FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    FILE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Reads the saved offsets, lets `f` change them and writes them back, all under the
 /// one process-wide lock `nudge_saved` uses. Blocking file I/O: off the UI thread.
 pub fn update_saved<R>(path: &Path, f: impl FnOnce(&mut Offsets) -> R) -> R {
-    static FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _held = FILE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _held = lock_file();
     let mut all = load(path);
     let r = f(&mut all);
     if let Err(e) = save(path, &all) {

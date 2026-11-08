@@ -40,7 +40,7 @@ that work with the fixes below. Audio output is unchanged.
   next open made a second one.
 
 ### Found in review before release
-Each was fixed in its own commit; details in REVIEW.md #144–149.
+Each was fixed in its own commit; details in REVIEW.md #144–150.
 - The compact strip could not be closed: its close button and the menu toggle left the window
   on screen (no longer updated), and every reopen added another window and its open files.
   Closing it from the window manager made the next toggle do nothing.
@@ -53,6 +53,8 @@ Each was fixed in its own commit; details in REVIEW.md #144–149.
   the old account's `resume.json` back after it was deleted (found by reading; not reproduced).
 - With "My picks play first", MPD and MCP clients were told the queue order before it was
   applied.
+- Two quick lyrics-offset nudges could report their values out of order, leaving the older
+  offset on screen (the personal-data change had moved the report outside the file lock).
 
 ### Performance (measured)
 Measured on this machine (24 cores, AMD Radeon RX 9070 with amdgpu, PipeWire, GStreamer 1.28.8)
@@ -149,7 +151,7 @@ arena cap).
 - Writing the queue file is about 4x faster (9,000 tracks: 13.7 ms to 3.0 ms).
 
 Published from the handed-over tree before its review. Use 1.9.0: it is the same work after
-review, with seven fixes (see "Found in review" under 1.9.0), including a strip window that
+review, with eight fixes (see "Found in review" under 1.9.0), including a strip window that
 could not be closed.
 
 ## [1.7.0] - 2026-11-07
