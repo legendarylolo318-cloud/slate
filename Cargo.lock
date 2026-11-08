@@ -7116,6 +7116,7 @@ dependencies = [
  "rand 0.10.3",
  "reqwest 0.12.28",
  "rmcp",
+ "roxmltree 0.20.0",
  "schemars",
  "semver",
  "serde",

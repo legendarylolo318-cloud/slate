@@ -54,6 +54,7 @@ pub mod eq;
 pub mod error;
 pub mod http_util;
 pub mod idle_inhibit;
+pub mod import_lib;
 pub mod keymap;
 pub mod list_filter;
 pub mod logging;

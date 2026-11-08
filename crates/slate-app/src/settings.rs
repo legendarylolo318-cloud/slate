@@ -561,6 +561,7 @@ impl Backend {
                     crate::alarm::AlarmEdit::What(Default::default()),
                 ),
                 "alarm-what-playing" => this.alarm_use_playing(),
+                "service-import" => this.service_import(),
                 "party-start" => this.party_start(),
                 "party-takeover" => this.party_takeover(),
                 "party-decline" => this.party_decline(),

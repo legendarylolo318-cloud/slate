@@ -440,6 +440,10 @@ impl Backend {
             self.party_save_set(text);
             return;
         }
+        if kind == "import-review" {
+            self.service_import_create(target == "all");
+            return;
+        }
         if kind == "queue-link" {
             self.queue_link_accepted(target == "replace");
             return;

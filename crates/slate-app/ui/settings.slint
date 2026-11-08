@@ -459,6 +459,11 @@ export component SettingsPage inherits Rectangle {
                         Toggle { checked: SettingsState.alarm-keep-awake; toggled(v) => { SettingsState.alarm-keep-awake = v; SettingsState.changed-bool("alarm-keep-awake", v); } }
                     }
                     Row {
+                        label: "Import from Spotify or Apple Music";
+                        hint: "Pick your Spotify export (YourLibrary.json, Playlist*.json), an Exportify CSV, an Apple Music Library.xml or Apple's privacy-export CSV; several files at once are fine. Tracks are matched by ISRC first, then title, artist and length (3 s). You see what matched, what is uncertain and what was not found before anything is created; playlists are then made unlisted. Up to 50 MB, 200 playlists, 20,000 tracks. Matching goes about three tracks a second and can be cancelled.";
+                        Button { label: "Choose files…"; clicked => { SettingsState.action("service-import"); } }
+                    }
+                    Row {
                         label: "Image cache";
                         hint: "Cover art and metadata kept on disk.";
                         Button { label: "Clear"; clicked => { SettingsState.action("clear-cache"); } }

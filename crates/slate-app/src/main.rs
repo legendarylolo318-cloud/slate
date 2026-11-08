@@ -56,6 +56,7 @@ mod remote;
 mod resume;
 mod selection_ui;
 mod selftest;
+mod service_import;
 mod settings;
 mod settings_search;
 mod share_card;

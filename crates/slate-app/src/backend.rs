@@ -526,6 +526,7 @@ impl Backend {
             crate::resume::forget();
             crate::device_memory::forget();
             crate::alarm::forget();
+            crate::service_import::forget();
             if let Some(ctl) = this.controller() {
                 ctl.stop_saving().await;
             }

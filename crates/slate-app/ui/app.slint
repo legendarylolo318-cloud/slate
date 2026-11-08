@@ -1059,12 +1059,17 @@ export component AppWindow inherits Window {
                     padding: 16px;
                     spacing: 10px;
                     Text {
-                        text: root.dialog-kind == "snapshots" ? "Queue snapshots" : root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : root.dialog-kind == "compare" ? "Compare with…" : root.dialog-kind == "dup" ? "Already in playlist" : root.dialog-kind == "party-set" ? "Save set as playlist" : root.dialog-kind == "fill" ? "Fill queue to…" : root.dialog-kind == "queue-link" ? "Open queue link" : root.dialog-kind == "tags" ? (root.dialog-count > 1 ? "Tags (" + root.dialog-count + " tracks)" : "Tags") : "Move to folder";
+                        text: root.dialog-kind == "snapshots" ? "Queue snapshots" : root.dialog-kind == "rename" ? "Rename" : root.dialog-kind == "delete" ? "Delete this?" : root.dialog-kind == "dedupe" ? "Remove duplicates" : root.dialog-kind == "artists" ? "Go to artist" : root.dialog-kind == "compare" ? "Compare with…" : root.dialog-kind == "dup" ? "Already in playlist" : root.dialog-kind == "party-set" ? "Save set as playlist" : root.dialog-kind == "fill" ? "Fill queue to…" : root.dialog-kind == "queue-link" ? "Open queue link" : root.dialog-kind == "import-review" ? "Review the import" : root.dialog-kind == "tags" ? (root.dialog-count > 1 ? "Tags (" + root.dialog-count + " tracks)" : "Tags") : "Move to folder";
                         font-size: 18px; font-weight: 700; color: Theme.text;
                     }
                     if root.dialog-kind == "delete": Text {
                         text: "This cannot be undone.";
                         color: Theme.text-muted;
+                    }
+                    if root.dialog-kind == "import-review": Flickable {
+                        vertical-stretch: 1;
+                        content-height: import-text.preferred-height;
+                        import-text := Text { width: parent.width; text: root.dialog-text; color: Theme.text-muted; wrap: word-wrap; }
                     }
                     if root.dialog-kind == "queue-link": Text { text: root.dialog-text; color: Theme.text-muted; wrap: word-wrap; vertical-stretch: 1; }
                     if root.dialog-kind == "dup": Text { text: root.dialog-text; color: Theme.text-muted; wrap: word-wrap; vertical-stretch: 1; }
@@ -1211,6 +1216,8 @@ export component AppWindow inherits Window {
                         if root.dialog-kind == "tags": Button { label: "Add"; primary: true; enabled: root.dialog-text != ""; clicked => { root.tag-dialog("add", root.dialog-text); } }
                         if root.dialog-kind == "fill": Button { label: "Fill"; primary: true; enabled: root.dialog-text != ""; clicked => { root.dialog-accepted("fill", "", root.dialog-text); root.dialog-open = false; } }
                         if root.dialog-kind == "party-set": Button { label: "Save"; primary: true; clicked => { root.dialog-accepted("party-set", "", root.dialog-text); root.dialog-open = false; } }
+                        if root.dialog-kind == "import-review": Button { label: "Create matched + uncertain"; clicked => { root.dialog-accepted("import-review", "all", ""); root.dialog-open = false; } }
+                        if root.dialog-kind == "import-review": Button { label: "Create matched only"; primary: true; clicked => { root.dialog-accepted("import-review", "matched", ""); root.dialog-open = false; } }
                         if root.dialog-kind == "queue-link": Button { label: "Add to queue"; clicked => { root.dialog-accepted("queue-link", "add", ""); root.dialog-open = false; } }
                         if root.dialog-kind == "queue-link": Button { label: "Replace queue"; primary: true; clicked => { root.dialog-accepted("queue-link", "replace", ""); root.dialog-open = false; } }
                         if root.dialog-kind == "dup": Button { label: "Add anyway"; primary: true; clicked => { root.dialog-accepted("dup", root.dialog-target, ""); root.dialog-open = false; } }
