@@ -1,5 +1,138 @@
 # Changelog
 
+## [1.9.0] - 2026-11-08
+
+The reviewed release of the 1.8 work: six features, all off or dormant until used, and two
+memory and size changes. 1.8.0 was published from the same work before its review; 1.9.0 is
+that work with the fixes below. Audio output is unchanged.
+
+### Added
+- Resume points: a track of 20 minutes or more that you leave part-way (skip, another track,
+  Stop from MPRIS / MPD / MCP, quit) offers "Resume at mm:ss" when it starts again. One click
+  seeks; nothing seeks by itself. The offer goes after 20 s of playing or on any seek. Leaving
+  in the first minute keeps an older point, leaving in the last minute drops it. At most 500
+  tracks, kept in the encrypted state folder (`resume.json`), deleted at sign-out.
+- Queue "⋯" → Fill queue to… 15 / 30 / 45 / 60 / 90 minutes or Custom (1–600): adds tracks
+  from the playing album or playlist that have not been queued or played, else from the
+  playing track's radio, after everything already queued. One undo step.
+- Settings → General → Personal data: export the lyrics timing offsets and tags to one JSON
+  file, and import one. Import adds and never removes; text is cleaned like typed tags, sizes
+  are bounded, other files are refused with a sentence.
+- Compact now-playing strip: right-click the mini-player button → Compact strip. A 380×46
+  frameless window (title – artist, progress line, play / pause, next, close), kept on top on
+  X11 and Windows; on Wayland a normal window, and a notice says why.
+- Party host: "Requests per guest" (Off / 1 / 2 / 3 / 5 / 10 for the whole party; a request you
+  turn down does not count) and "My picks play first". Enforced by the host with the existing
+  refusal message, so guests on 1.7 and older see it; no protocol change.
+- Share card themes: right-click → Share card theme → Dark, Light, Album colour, Minimal. The
+  last choice is kept (`share_theme` in `ui.json`) and used by Copy share card.
+
+### Changed
+- Linux (glibc): malloc arenas capped at 2 (`MALLOC_ARENA_MAX` still wins): about 7 MB less
+  memory while playing and 8 MB idle.
+- Release builds use `lto = "fat"`: the binary is 6.6 % smaller (5.2 MB); release builds take
+  about twice as long (10 min 50 s here; the Windows release job 38 min instead of about 17).
+- The queue file is written about 4.5 times faster (9,000 tracks: 13.6–14.0 ms → 3.0–3.3 ms,
+  same bytes), on the worker thread that writes it.
+
+### Fixed
+- Mini player (since 0.1): the expand button left the mini window on screen, detached, and the
+  next open made a second one.
+
+### Found in review before release
+Each was fixed in its own commit; details in REVIEW.md #144–149.
+- The compact strip could not be closed: its close button and the menu toggle left the window
+  on screen (no longer updated), and every reopen added another window and its open files.
+  Closing it from the window manager made the next toggle do nothing.
+- Fill queue put its tracks in "next up", ahead of the rest of the album or playlist.
+- Importing a large or hostile personal-data file took time growing with the square of its
+  tags: a 9.4 MB file of 800,000 tags would have taken over an hour with the Tags page frozen.
+  Now linear, with at most 32 tags added per track and 1,000 different tags; that file takes
+  under a second.
+- Resume points were not shut during sign-out: a long track left while signing out could put
+  the old account's `resume.json` back after it was deleted (found by reading; not reproduced).
+- With "My picks play first", MPD and MCP clients were told the queue order before it was
+  applied.
+
+### Performance (measured)
+Measured on this machine (24 cores, AMD Radeon RX 9070 with amdgpu, PipeWire, GStreamer 1.28.8)
+with the 1.7 method: release builds of 1.7.0, 1.8.0 as handed over (`c3dad4e`, the published
+1.8.0) and 1.9.0, each started 12 s before a 60 s window, on a copy of a signed-in profile reset
+to default settings, headless KWin with a nested Xwayland, Skia/Vulkan. Playing = TOTO "Africa"
+(539204), FLAC 24-bit/192 kHz, into a null PipeWire sink. Interleaved runs: two idle, four
+playing. VRAM is `drm-memory-vram` from amdgpu's fdinfo; on this display it reads 110.3 or
+138.3 MB from run to run for every build, so no VRAM difference is claimed.
+
+| Default settings | 1.7.0 | 1.8.0 as handed over | 1.9.0 |
+|---|---|---|---|
+| Idle: threads, wakeups/s, CPU ticks in 60 s | 21, 0, 0 (both runs) | 21, 0, 0 | 21, 0, 0 |
+| Idle: anonymous / total PSS | 63.2 / 131.2, 62.0 / 129.5 MB | 55.9 / 122.4, 54.6 / 121.1 MB | 54.7 / 121.5, 54.1 / 120.4 MB |
+| Playing: threads (start / end of window) | 43 / 38, 42 / 38 | 42 / 38 | 42 / 38 |
+| Playing: wakeups/s | 293, 301, 301, 272 | 298, 298, 301, 296 | 287, 291, 282, 269 |
+| Playing: CPU ticks in 60 s | 82, 88, 81, 84 | 85, 88, 82, 79 | 81, 91, 89, 94 |
+| Playing: anonymous PSS | 110.7, 111.7, 112.3, 111.6 MB | 107.5, 101.9, 104.6, 104.7 MB | 105.8, 104.5, 104.8, 109.6 MB |
+| Playing: total PSS | 187.7, 187.8, 185.0, 188.4 MB | 182.1, 176.2, 178.8, 179.0 MB | 180.3, 179.0, 179.6, 184.5 MB |
+| Window mapped (7 launches ×2, median and range) | 302 (295–314), 306 (290–318) ms | 304 (298–311), 306 (301–312) ms | 304 (303–312), 303 (296–308) ms |
+| Binary | 78,180,632 B | 73,632,536 B | 73,639,192 B |
+| 9,000-track queue restored / after shuffle, two edits, three undos: anonymous PSS | 73.4 / 119.1, 72.3 / 117.4 MB | 67.6 / 108.1, 68.3 / 143.0 MB | 67.9 / 145.0, 69.2 / 105.1 MB |
+| VRAM shown / hidden in the tray / after restore, idle and playing; restore time | 84.4 / 84.4 / 84.4, 84.3 / 84.3 / 84.3 MB; 3–4 ms | 85.8 / 85.8 / 85.8, 84.3 / 84.3 / 84.3 MB; 4–7 ms | 84.4 / 84.4 / 84.4, 84.3 / 84.3 / 84.3 MB; 4 ms |
+| Track start (MPD play → audio running), six starts | 615, 627, 629, 639, 611, 632 ms | 613, 789, 754, 613, 606, 620 ms | 623, 636, 740, 625, 613, 615 ms (separate run) |
+
+Default settings cost nothing new: same idle threads, no idle wakeups or CPU, no new file read,
+timer or thread at start-up (checked by reading every new spawn and timer: each runs only when
+a feature is used or a track of 20 minutes or more changes). Wakeups and CPU while playing are
+inside run-to-run spread. Memory is lower than 1.7.0 by about 6–8 MB idle and playing (the
+arena cap).
+
+- E, malloc arenas, A/B on the same 1.9.0 binary while playing (anonymous PSS): capped
+  108.3, 106.3, 107.3, 105.5 MB vs glibc's default arenas (`MALLOC_ARENA_MAX=192`) 112.8, 112.1, 118.6, 116.7 MB; wakeups and CPU the
+  same. Kept.
+- K, `lto = "fat"`, A/B against the same tree with thin LTO: binary 73,639,192 vs 78,819,656 B;
+  playing anonymous PSS 105.8, 104.5, 104.8, 109.6 vs 107.5, 104.5, 106.9, 116.4 MB and idle
+  total 121.5, 120.4 vs 121.0, 123.5 MB (inside noise); CPU and wakeups the same. The size
+  win reproduces, the memory win does not clearly. Kept for the size, at the build-time cost
+  above.
+- D, queue file writer: 9,000 tracks, 6,032,079 bytes either way, best of 5 per run: 13.6, 14.0,
+  13.7 ms before vs 3.0, 3.3, 3.1 ms after. Kept.
+- Pause and resume reach PipeWire (stream corked / uncorked) in about 20 ms and a seek lands in
+  about 30 ms, the same as 1.7.0; no redraw artefacts or tearing were seen in the screenshots
+  taken during the review.
+- The 9,000-track queue after edits and undos varies between runs (105–145 MB for both 1.8.0 and
+  1.9.0); restored it is 5 MB below 1.7.0 (the arena cap). The edits and undos themselves did not
+  change (only the file writer did).
+- VRAM does not change when the window goes to the tray (no texture is freed while hidden, as
+  in 1.7.0); restoring from the tray takes under 10 ms.
+
+### Considered, not done
+- A (sink buffer / PipeWire quantum), B (fewer GStreamer queues), C (Skia partial rendering),
+  F (lazy CJK / fallback UI fonts), H (Skia GPU cache and glyph-atlas caps), I (freeing
+  textures while minimised), J (two swapchain images), L (prefetching the next stream URL):
+  not attempted. C, F, H, I and J have no setting or hook in Slint 1.18 / fontique and would
+  need a patched renderer; A and B change the audio path and need the gapless and latency
+  checks first; L is partly there already (the next track is armed before the end). G (no
+  party objects before a party) needed no change: an idle build has no UDP socket and no party
+  thread.
+- D part 2, storing the playing source's tracks as references into the queue (the file is
+  about half duplicates): changes the file format; not started.
+- `MALLOC_ARENA_MAX=4`: inconsistent between runs in the handed-over measurements; 2 kept.
+
+### Not tested before release
+- A per-thread wakeup breakdown was not re-taken (stopped to ship sooner); total wakeups while
+  playing are in the table, and no change targets wakeups.
+- Windows and macOS: not built in this review; the release workflow builds and self-tests
+  Windows (fat LTO on Windows builds: the 1.8.0 release job passed with it).
+- Signal Path PRISTINE in exclusive / bit-perfect mode: not checkable here without a real DAC
+  (on ALSA's `null` device the writer has no clock and races through the track, in 1.7.0 and
+  1.9.0 alike); that code is unchanged since 1.7.0. Gapless was checked: a 24/192 and a 16/44
+  pair through the branch pipeline's elements is bit-identical to the source (md5).
+- Personal-data export / import through the file dialogs (they open on the desktop portal,
+  not the headless display); the code behind them was run on real hostile files (16 MB+,
+  binary, 100,000-deep nesting, wrong schema, bidi and CJK text).
+- The strip's always-on-top and dragging on a real X11 window manager, Windows and Wayland.
+- Share cards: a **bold** Arabic title is still drawn as boxes on every theme (known since 1.6).
+- The party request limit counts guests by name: a guest who rejoins under another name gets
+  a new allowance.
+
 ## [1.8.0] - 2026-11-07
 
 ### Added
@@ -15,7 +148,9 @@
 - Release builds use `lto = "fat"`: binary 6.6 % smaller, release build takes about twice as long.
 - Writing the queue file is about 4x faster (9,000 tracks: 13.7 ms to 3.0 ms).
 
-See HANDOFF-1.8.md for measurements and what was not tested.
+Published from the handed-over tree before its review. Use 1.9.0: it is the same work after
+review, with seven fixes (see "Found in review" under 1.9.0), including a strip window that
+could not be closed.
 
 ## [1.7.0] - 2026-11-07
 

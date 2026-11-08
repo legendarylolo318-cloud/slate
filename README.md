@@ -64,7 +64,18 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
   `M` mute, `S` shuffle, `R` repeat, `Q` queue, `L` lyrics, `F` full screen, `/` search,
   `Ctrl+F` filter, `F11` full-screen lyrics, `Ctrl+Z` / `Ctrl+Shift+Z` queue undo / redo, `?` shortcut sheet.
 - Personal tags (right-click → Tags…, a Tags page in the sidebar), queue undo / redo (`Ctrl+Z` /
-  `Ctrl+Shift+Z`), and "Copy share card" / "Copy link" on any track.
+  `Ctrl+Shift+Z`), and "Copy share card" / "Copy link" on any track. Share cards come in four
+  themes (right-click → Share card theme: Dark, Light, Album colour, Minimal); the last one is kept.
+- Resume points for long tracks: leave a track of 20 minutes or more part-way (a DJ mix, a live
+  set, an audiobook chapter) and starting it again offers "Resume at mm:ss". Nothing seeks by
+  itself; points are kept for 500 tracks and forgotten at sign-out.
+- Queue "⋯" → Fill queue to… 15 / 30 / 45 / 60 / 90 minutes or a custom length: adds tracks from
+  what is playing (or its track radio) after everything queued, as one undo step.
+- Settings → General → Personal data: export your lyrics timing offsets and tags to one file and
+  import it on another computer (import adds, never removes).
+- Compact now-playing strip (right-click the mini-player button): a thin window with title,
+  progress, play / pause and next, kept on top on X11 and Windows (a normal window on Wayland,
+  where apps cannot keep a window on top).
 - Settings search, keyboard focus rings and Tab navigation, tooltips on icon buttons.
 - Single instance with `tidal://` and `slate://` links, profile editing, a daily update check
   against this repository's releases (can be turned off).
@@ -75,6 +86,13 @@ Settings → Party → Host gives you a `slate://party/…` link to copy. Friend
 link (or paste it under Join) and their Slate follows yours: track, play / pause, seek and
 the next few tracks. Guests can suggest tracks for you to approve. When you end the party you can save the tracks that
 played as a playlist.
+
+As host you can limit how many tracks each guest may request in the whole party (Settings →
+Party → Requests per guest; a request you turn down does not count) and let your own queued
+picks play before guests' requests ("My picks play first"). Both are enforced by the host only,
+so guests on older Slate versions see the limit as a normal refusal. The limit counts guests by
+name, so it keeps honest guests in check rather than stopping someone who rejoins under another
+name.
 
 - **Everyone needs their own TIDAL subscription.** Only playback state is shared; each person
   streams from their own account. A track not available in a guest's region is skipped for
