@@ -98,6 +98,7 @@ impl Backend {
             self.settings_status(format!("Could not change the equalizer: {}", e.log_safe()));
             return;
         }
+        self.device_note_eq(&s);
         let status = status.to_string();
         self.ui(move |w| {
             fill(&w, &s, blocked);

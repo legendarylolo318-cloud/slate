@@ -20,6 +20,7 @@ mod custom_themes;
 mod debounce;
 mod dedupe;
 mod deeplink;
+mod device_memory;
 mod discord_ctx;
 mod dj_ui;
 mod dnd;

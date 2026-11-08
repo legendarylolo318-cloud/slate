@@ -293,7 +293,9 @@ impl Backend {
             this.ui(move |w| w.set_volume(volume));
             // Settings → General "Start at half volume": set once here, before anything plays;
             // later changes (slider, keys, MPRIS, MPD) are left alone for the session.
-            if crate::uiprefs::UiPrefs::load().start_half_volume {
+            let prefs = crate::uiprefs::UiPrefs::load();
+            crate::device_memory::set_enabled(prefs.device_memory);
+            if prefs.start_half_volume {
                 this.set_volume(START_VOLUME);
             }
 
@@ -522,6 +524,7 @@ impl Backend {
             // `auth::logout` deletes this account's queue file.
             QUEUE_SAVE.cancel();
             crate::resume::forget();
+            crate::device_memory::forget();
             if let Some(ctl) = this.controller() {
                 ctl.stop_saving().await;
             }
@@ -659,6 +662,7 @@ impl Backend {
         }
         self.shared.current_id.store(track.id, Ordering::Relaxed);
         self.resume_track_changed(left, (track.id, track.duration_secs()));
+        self.device_check();
         self.party_track_changed(track, last_position);
         self.refresh_favorite_ui();
         self.load_lyrics(track.id);
@@ -977,6 +981,7 @@ impl Backend {
         // immediate; persisting settings (decrypt, encrypt, write) waits until
         // the drag settles, and a stale value can no longer land after a newer one.
         let _ = state.audio_player.set_volume(level);
+        self.device_note_volume(level);
         let seq = self.shared.volume_seq.fetch_add(1, Ordering::SeqCst) + 1;
         let this = self.clone();
         self.rt.spawn(async move {
@@ -1030,6 +1035,7 @@ impl Backend {
             ctl.resume_saving();
         }
         crate::resume::allow();
+        crate::device_memory::allow();
         let pending = self.pending_link.lock().ok().and_then(|mut p| p.take());
         match pending {
             Some(link) => self.open_link(&link),
@@ -1279,6 +1285,7 @@ impl Backend {
     pub fn shutdown(&self) {
         crate::tags::flush();
         if let Some(state) = self.state() {
+            crate::device_memory::flush(&state);
             if self.shared.has_track.load(Ordering::Relaxed) {
                 crate::resume::leave_at_quit(
                     &state,

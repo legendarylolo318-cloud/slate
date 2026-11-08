@@ -124,6 +124,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_hide_ai(s.content_filter.1);
     g.set_start_minimized(prefs.start_minimized);
     g.set_start_half_volume(prefs.start_half_volume);
+    g.set_device_memory(prefs.device_memory);
     g.set_remember_window(prefs.remember_window);
     g.set_crossfade_index(
         CROSSFADE_SECS
@@ -328,6 +329,16 @@ impl Backend {
                     prefs.start_minimized = v;
                     prefs.save().map_err(|e| e.to_string())
                 }
+                "device-memory" => {
+                    let mut prefs = crate::uiprefs::UiPrefs::load();
+                    prefs.device_memory = v;
+                    let saved = prefs.save().map_err(|e| e.to_string());
+                    crate::device_memory::set_enabled(v);
+                    if v {
+                        this.device_check();
+                    }
+                    saved
+                }
                 "start-half-volume" => {
                     let mut prefs = crate::uiprefs::UiPrefs::load();
                     prefs.start_half_volume = v;
@@ -338,7 +349,11 @@ impl Backend {
                     d.enabled = v;
                     utility::set_dj(&state, d).map_err(|e| e.log_safe())
                 }
-                "exclusive" => utility::set_exclusive_mode(&state, v).map_err(|e| e.log_safe()),
+                "exclusive" => {
+                    let r = utility::set_exclusive_mode(&state, v).map_err(|e| e.log_safe());
+                    this.device_check();
+                    r
+                }
                 "bit-perfect" => utility::set_bit_perfect(&state, v).map_err(|e| e.log_safe()),
                 "report-plays" => utility::set_report_plays(&state, v)
                     .await
@@ -430,8 +445,12 @@ impl Backend {
                 .map_err(|e| e.log_safe()),
                 "device" => match utility::list_audio_devices(&state) {
                     Ok(devs) => match devs.get(usize_i) {
-                        Some(d) => utility::set_exclusive_device(&state, d.id.clone())
-                            .map_err(|e| e.log_safe()),
+                        Some(d) => {
+                            let r = utility::set_exclusive_device(&state, d.id.clone())
+                                .map_err(|e| e.log_safe());
+                            this.device_check();
+                            r
+                        }
                         None => Ok(()),
                     },
                     Err(e) => Err(e.log_safe()),

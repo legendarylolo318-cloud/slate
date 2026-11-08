@@ -40,6 +40,7 @@ export global SettingsState {
     in-out property <bool> hide-ai;
     in-out property <bool> start-minimized;
     in-out property <bool> start-half-volume;
+    in-out property <bool> device-memory;
     in-out property <bool> remember-window;
     in-out property <bool> gapless-supported: true;
     in-out property <int> crossfade-index: 0;
@@ -343,6 +344,11 @@ export component SettingsPage inherits Rectangle {
                         label: "Start at half volume";
                         hint: "Every launch starts at 50 % instead of where you left it. Changing the volume afterwards works as usual.";
                         Toggle { checked: SettingsState.start-half-volume; toggled(v) => { SettingsState.start-half-volume = v; SettingsState.changed-bool("start-half-volume", v); } }
+                    }
+                    Row {
+                        label: "Remember volume and equalizer per output device";
+                        hint: "Each output device (headphones, speakers, a DAC) gets back the volume and equalizer it last had. Off by default and then nothing is read or written. The device is looked at when a track starts and when you pick an exclusive device, not continuously, so a device you plug in mid-track is noticed at the next track. Start at half volume still wins at launch. At most 50 devices, deleted at sign-out.";
+                        Toggle { checked: SettingsState.device-memory; toggled(v) => { SettingsState.device-memory = v; SettingsState.changed-bool("device-memory", v); } }
                     }
                     Row {
                         label: "Remember window size and position";

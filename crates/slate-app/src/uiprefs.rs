@@ -55,6 +55,9 @@ pub struct UiPrefs {
     /// `ui.json` written before the setting existed).
     #[serde(default = "default_true")]
     pub start_half_volume: bool,
+    /// Remember volume and equalizer per output device (off by default; see `device_memory`).
+    #[serde(default)]
+    pub device_memory: bool,
     /// Remember window size, position and maximized state (on by default).
     #[serde(default = "default_true")]
     pub remember_window: bool,
@@ -134,6 +137,7 @@ impl Default for UiPrefs {
             cover_colors: false,
             start_minimized: false,
             start_half_volume: true,
+            device_memory: false,
             remember_window: true,
             check_updates: true,
             last_update_check: 0,

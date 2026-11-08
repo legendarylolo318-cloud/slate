@@ -813,6 +813,14 @@ fn read_card_longname(card_name: &str) -> Option<String> {
     None
 }
 
+/// The name of the PipeWire / PulseAudio default sink, from one `pactl info`. Linux only;
+/// None when `pactl` is missing or answers nothing usable.
+pub fn default_sink_name() -> Option<String> {
+    let info = parse_pactl_info(&run_pactl(&["info"])?)?;
+    let name = info.sink_name.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 fn run_pactl(args: &[&str]) -> Option<String> {
     // Force C locale on the child so any future pactl release that decides to
     // localize field labels ("Mute:", "Volume:", "Sample Specification:",

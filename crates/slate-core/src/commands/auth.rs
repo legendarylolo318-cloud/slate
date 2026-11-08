@@ -460,7 +460,12 @@ pub async fn logout(state: &AppState) -> Result<(), SlateError> {
 
     // Clear all cached data, including the persisted queue of this account.
     state.disk_cache.clear().await;
-    for name in ["queue.json", "modes.json", crate::resume::FILE] {
+    for name in [
+        "queue.json",
+        "modes.json",
+        crate::resume::FILE,
+        crate::device_memory::FILE,
+    ] {
         fs::remove_file(state.cache_dir.join(name)).ok();
     }
 
