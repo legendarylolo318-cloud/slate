@@ -3,7 +3,10 @@
 //!
 //! Costs nothing while no alarm is set: no thread, no timer, no file is read at start-up
 //! (`ui.json`, which is read anyway, says whether one is armed). While one is armed there is
-//! exactly one sleeping task, set to the next ring — never a poll. It is checked again when
+//! exactly one sleeping task, set to the next ring. It sleeps on the wall clock in steps of at
+//! most [`WALL_STEP`] (one wakeup a minute while armed, none otherwise): tokio's clock stops
+//! while the computer is suspended and does not follow clock changes, so one long sleep would
+//! ring hours late after a suspend (and then be skipped as missed). It is checked again when
 //! it wakes (`slate_core::alarm::check`): a computer that slept through the time skips the
 //! ring with a notice, a clock that moved is followed. The alarm lives in the encrypted
 //! state folder (`alarm.json`), survives restarts and is forgotten at sign-out.
@@ -40,6 +43,25 @@ static EPOCH: AtomicU64 = AtomicU64::new(0);
 /// write cannot land after the core deleted the file (#139/#144).
 static SIGNED_OUT: AtomicBool = AtomicBool::new(false);
 static FILE: Mutex<()> = Mutex::new(());
+/// Longest single sleep while waiting for a wall-clock time.
+const WALL_STEP: i64 = 60;
+
+/// Sleeps until the wall clock reads `t` (Unix seconds), waking at most every [`WALL_STEP`]
+/// to look again, so a suspend or a clock change is noticed within a minute.
+async fn sleep_until_wall(t: i64) {
+    loop {
+        let left = wall_step(t - now());
+        if left == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_secs(left)).await;
+    }
+}
+
+/// The next sleep, in seconds, for `left` seconds to go: 0 when the time has come.
+fn wall_step(left: i64) -> u64 {
+    u64::try_from(left.clamp(0, WALL_STEP)).unwrap_or(0)
+}
 
 fn rt() -> std::sync::MutexGuard<'static, Option<Rt>> {
     RT.lock().unwrap_or_else(|e| e.into_inner())
@@ -199,9 +221,8 @@ impl Backend {
             r.alarm = Some(a.clone());
             if let Some(target) = target {
                 let this = self.clone();
-                let wait = u64::try_from((target - t).max(0)).unwrap_or(0);
                 let task = self.rt.spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(wait)).await;
+                    sleep_until_wall(target).await;
                     this.alarm_due(epoch, target);
                 });
                 r.timer = Some(task.abort_handle());
@@ -356,8 +377,9 @@ impl Backend {
         self.alarm_pause();
         let epoch = EPOCH.load(Ordering::Acquire);
         let this = self.clone();
+        let until = now() + alarm::SNOOZE_SECS;
         let task = self.rt.spawn(async move {
-            tokio::time::sleep(Duration::from_secs(alarm::SNOOZE_SECS as u64)).await;
+            sleep_until_wall(until).await;
             if EPOCH.load(Ordering::Acquire) != epoch || SIGNED_OUT.load(Ordering::Acquire) {
                 return;
             }
@@ -580,6 +602,28 @@ mod tests {
             clock_text_at(1_704_067_200 + 7 * 3600 + 1800, 0),
             "Mon 07:30"
         );
+    }
+
+    #[test]
+    fn the_wall_clock_wait_is_cut_into_steps_of_a_minute() {
+        // Eight hours to go is slept a minute at a time, so a suspend in between delays the
+        // ring by at most a minute after the computer wakes, not by the length of the suspend.
+        assert_eq!(wall_step(8 * 3600), 60);
+        assert_eq!(wall_step(61), 60);
+        assert_eq!(wall_step(42), 42);
+        assert_eq!(wall_step(0), 0);
+        assert_eq!(wall_step(-3600), 0, "a time gone by is due at once");
+    }
+
+    #[test]
+    fn waiting_for_a_wall_clock_time_that_has_passed_returns_at_once() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let t0 = std::time::Instant::now();
+        rt.block_on(sleep_until_wall(now() - 10));
+        assert!(t0.elapsed() < Duration::from_millis(100));
     }
 
     #[test]
