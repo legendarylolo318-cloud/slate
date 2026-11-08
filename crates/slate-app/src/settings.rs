@@ -125,6 +125,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_start_minimized(prefs.start_minimized);
     g.set_start_half_volume(prefs.start_half_volume);
     g.set_device_memory(prefs.device_memory);
+    g.set_reduce_motion_index(i32::from(prefs.reduce_motion));
     g.set_remember_window(prefs.remember_window);
     g.set_crossfade_index(
         CROSSFADE_SECS
@@ -434,6 +435,13 @@ impl Backend {
                 k if k.starts_with("alarm-") => {
                     this.alarm_edit(k, crate::alarm::AlarmEdit::Int(usize_i as i32));
                     return;
+                }
+                "reduce-motion" => {
+                    let mut p = UiPrefs::load();
+                    p.reduce_motion = u8::try_from(usize_i.min(2)).unwrap_or(0);
+                    let saved = p.save().map_err(|e| e.to_string());
+                    this.apply_motion(p.reduce_motion);
+                    saved
                 }
                 "shuffle-mode" => this.set_shuffle_mode(&state, usize_i == 1),
                 "suggest" => this.set_suggest_index(usize_i),

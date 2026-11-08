@@ -1,4 +1,4 @@
-import { Theme } from "theme.slint";
+import { Theme, Motion } from "theme.slint";
 import { CardItem, CardRow, QueueRow, LyricLine, PartyState } from "types.slint";
 import { IconButton, Button, Segmented } from "widgets.slint";
 import { ListView } from "std-widgets.slint";
@@ -240,7 +240,7 @@ export component QueuePanel inherits Rectangle {
                     }
                 }
             }
-            IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close(); } }
+            IconButton { accessible-label: "Close"; icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close(); } }
         }
         Text { text: "NOW PLAYING"; font-size: 11px; color: Theme.text-muted; }
         Text { text: root.now-title == "" ? "Nothing playing" : root.now-title + " — " + root.now-artist; color: Theme.accent; overflow: elide; }
@@ -260,7 +260,7 @@ export component QueuePanel inherits Rectangle {
                         Text { text: r.title; color: Theme.text; overflow: elide; }
                         Text { text: (r.manual ? "Added · " : "") + r.artist; color: Theme.text-muted; font-size: 11px; overflow: elide; }
                     }
-                    IconButton { icon: @image-url("icons/close.svg"); side: 28px; visible: qa.has-hover; clicked => { root.remove(i); } }
+                    IconButton { accessible-label: "Remove from queue"; icon: @image-url("icons/close.svg"); side: 28px; visible: qa.has-hover; clicked => { root.remove(i); } }
                 }
                 DragArea {
                     data: Dnd.make("queue:" + i);
@@ -331,7 +331,7 @@ export component LyricsPanel inherits Rectangle {
         HorizontalLayout {
             Text { text: "Lyrics"; font-size: 20px * root.scale; font-weight: 700; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; }
             IconButton { tip: "Full-screen lyrics"; icon: @image-url("icons/fullscreen.svg"); side: 28px; clicked => { root.expand(); } }
-            IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close(); } }
+            IconButton { accessible-label: "Close"; icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close(); } }
         }
         if root.synced: HorizontalLayout {
             spacing: 8px;
@@ -360,7 +360,7 @@ export component LyricsPanel inherits Rectangle {
                     color: l.active ? Theme.accent : Theme.text-muted;
                     font-size: (l.active ? 18px : 15px) * root.scale;
                     font-weight: l.active ? 700 : 400;
-                    animate color { duration: 150ms; }
+                    animate color { duration: Motion.dur(150ms); }
                 }
             }
         }

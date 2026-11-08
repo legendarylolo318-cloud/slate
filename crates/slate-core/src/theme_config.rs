@@ -39,6 +39,7 @@ pub const PRESET_NAMES: &[&str] = &[
     "Paper",
     "Meadow",
     "Blossom",
+    "High Contrast",
 ];
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]

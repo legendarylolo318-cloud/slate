@@ -1,4 +1,4 @@
-import { Theme } from "theme.slint";
+import { Theme, Motion } from "theme.slint";
 import { LoginScreen } from "login.slint";
 import { PlayerBar } from "player_bar.slint";
 import { Sidebar, TrackPage } from "library.slint";
@@ -16,7 +16,7 @@ import { ShortcutOverlay, Shortcut, Shortcuts } from "shortcuts.slint";
 import { ListView } from "std-widgets.slint";
 import { Dnd } from "dnd.slint";
 import { TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyState, PartyRequest, PartyGuest, CreditLine, EqBand } from "types.slint";
-export { MiniPlayerWindow, StripWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyRequest, PartyGuest, CreditLine, EqBand, Shortcut, Shortcuts, Dnd, SettingsState, PartyState, ProfileState, DjState, Theme }
+export { MiniPlayerWindow, StripWindow, TrackRow, PlaylistEntry, CardItem, CardRow, QueueRow, LyricLine, PresetTile, KeyValue, Choice, ShortcutRow, RoleRow, SmartRuleRow, VersionRow, PartyRequest, PartyGuest, CreditLine, EqBand, Shortcut, Shortcuts, Dnd, SettingsState, PartyState, ProfileState, DjState, Theme, Motion }
 
 export enum Screen { loading, login, main }
 
@@ -416,11 +416,11 @@ export component AppWindow inherits Window {
                             alignment: start;
                             VerticalLayout {
                                 alignment: center;
-                                IconButton { icon: @image-url("icons/chevron-left.svg"); enabled: root.can-back; clicked => { root.back(); } }
+                                IconButton { accessible-label: "Back"; icon: @image-url("icons/chevron-left.svg"); enabled: root.can-back; clicked => { root.back(); } }
                             }
                             VerticalLayout {
                                 alignment: center;
-                                IconButton { icon: @image-url("icons/chevron-right.svg"); enabled: root.can-forward; clicked => { root.forward(); } }
+                                IconButton { accessible-label: "Forward"; icon: @image-url("icons/chevron-right.svg"); enabled: root.can-forward; clicked => { root.forward(); } }
                             }
                             VerticalLayout {
                                 alignment: center;
@@ -754,7 +754,7 @@ export component AppWindow inherits Window {
                     spacing: 8px;
                     HorizontalLayout {
                         Text { text: root.picker-target == -1 ? "New playlist or folder" : "Add to playlist"; font-size: 18px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; }
-                        IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.picker-open = false; } }
+                        IconButton { accessible-label: "Close"; icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.picker-open = false; } }
                     }
                     HorizontalLayout {
                         spacing: 8px;
@@ -826,7 +826,7 @@ export component AppWindow inherits Window {
                     spacing: 8px;
                     HorizontalLayout {
                         Text { text: root.credits-title; font-size: 18px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; overflow: elide; }
-                        IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.credits-open = false; } }
+                        IconButton { accessible-label: "Close"; icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.credits-open = false; } }
                     }
                     if root.credits-status != "": Text {
                         text: root.credits-status;
@@ -962,7 +962,7 @@ export component AppWindow inherits Window {
                                 Button { label: r.field; min-width: 170px; clicked => { root.smart-edit("field", i, ""); } }
                                 Button { label: r.op; min-width: 100px; clicked => { root.smart-edit("op", i, ""); } }
                                 TextField { text: r.value; placeholder: r.hint; field-width: 170px; edited(t) => { root.smart-edit("value", i, t); } }
-                                IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.smart-edit("remove", i, ""); } }
+                                IconButton { accessible-label: "Remove rule"; icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.smart-edit("remove", i, ""); } }
                             }
                             Button { label: "＋ Add rule"; clicked => { root.smart-edit("add", 0, ""); } }
                         }
@@ -1261,7 +1261,7 @@ export component AppWindow inherits Window {
                     spacing: 10px;
                     HorizontalLayout {
                         Text { text: "Signal path"; font-size: 18px; font-weight: 700; color: Theme.text; horizontal-stretch: 1; }
-                        IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.sp-open = false; } }
+                        IconButton { accessible-label: "Close"; icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.sp-open = false; } }
                     }
                     Text {
                         text: root.sp-pristine ? "PRISTINE" : "MODIFIED";

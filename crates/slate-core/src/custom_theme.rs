@@ -510,4 +510,18 @@ mod tests {
             .upsert(CustomTheme::new("t1", "#333333", "#222222"))
             .is_ok());
     }
+
+    #[test]
+    fn every_preset_passes_wcag_aa_for_text() {
+        for (name, accent, bg) in theme::PRESETS {
+            let t = CustomTheme::new(name, accent, bg);
+            let w = contrast_warnings(&t.palette());
+            assert!(w.is_empty(), "{name}: {w:?}");
+        }
+        // The High Contrast preset is held to AAA (7:1) for its main text.
+        let hc = CustomTheme::new("High Contrast", "#FFFF00", "#000000").palette();
+        for (t, b) in TEXT_PAIRS {
+            assert!(contrast_ratio(&hc[t], &hc[b]).unwrap() >= 7.0, "{t} on {b}");
+        }
+    }
 }

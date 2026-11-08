@@ -1,4 +1,4 @@
-import { Theme } from "theme.slint";
+import { Theme, Motion } from "theme.slint";
 
 // Shared controls. Every clickable thing gets a pointer cursor and hover feedback.
 
@@ -11,14 +11,14 @@ export component Toggle inherits Rectangle {
     height: 22px;
     border-radius: 11px;
     background: root.checked ? Theme.accent : Theme.surface-raised;
-    animate background { duration: 120ms; }
+    animate background { duration: Motion.dur(120ms); }
     Rectangle {
         x: root.checked ? parent.width - self.width - 3px : 3px;
         width: 16px;
         height: 16px;
         border-radius: 8px;
         background: root.checked ? Theme.on-accent : Theme.text-muted;
-        animate x { duration: 120ms; }
+        animate x { duration: Motion.dur(120ms); }
     }
     ta := TouchArea {
         enabled: root.enabled;
@@ -80,6 +80,9 @@ export component IconButton inherits Rectangle {
     in property <bool> primary: false;
     in property <bool> active: false;
     in property <bool> enabled: true;
+    // Screen readers: the tip, unless the use gives a better name.
+    accessible-role: button;
+    accessible-label: root.tip;
     in property <length> side: primary ? 44px : 34px;
     callback clicked();
     /// Optional right-click menu with two entries.

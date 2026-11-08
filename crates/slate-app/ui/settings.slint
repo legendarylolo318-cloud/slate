@@ -41,6 +41,7 @@ export global SettingsState {
     in-out property <bool> start-minimized;
     in-out property <bool> start-half-volume;
     in-out property <bool> device-memory;
+    in-out property <int> reduce-motion-index: 0;
     in-out property <bool> alarm-enabled;
     in-out property <string> alarm-time: "07:00";
     in-out property <int> alarm-days: 127;
@@ -472,6 +473,15 @@ export component SettingsPage inherits Rectangle {
 
 
                 if SettingsState.tab == 1 && SettingsState.query == "": VerticalLayout {
+                    Row {
+                        label: "Reduce motion";
+                        hint: "No slides, fades or animated lyrics: everything changes at once. Off keeps the animations; Follow system uses the desktop's own setting (GNOME's animations switch; asked only when you pick it and at start-up while it is chosen). Windows does not follow the system setting yet.";
+                        Segmented {
+                            options: ["Off", "On", "Follow system"];
+                            index: SettingsState.reduce-motion-index;
+                            picked(i) => { SettingsState.reduce-motion-index = i; SettingsState.changed-int("reduce-motion", i); }
+                        }
+                    }
                     spacing: 12px;
                     padding-top: 8px;
                     Text { text: "Theme: " + SettingsState.theme-name; color: Theme.text; font-weight: 700; }

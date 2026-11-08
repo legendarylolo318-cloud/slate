@@ -55,6 +55,9 @@ pub struct UiPrefs {
     /// `ui.json` written before the setting existed).
     #[serde(default = "default_true")]
     pub start_half_volume: bool,
+    /// Reduce motion: 0 off (default), 1 on, 2 follow the system setting.
+    #[serde(default)]
+    pub reduce_motion: u8,
     /// A wake-up alarm is set, so start-up reads it (off: nothing is read or armed).
     #[serde(default)]
     pub alarm_armed: bool,
@@ -141,6 +144,7 @@ impl Default for UiPrefs {
             start_minimized: false,
             start_half_volume: true,
             device_memory: false,
+            reduce_motion: 0,
             alarm_armed: false,
             remember_window: true,
             check_updates: true,

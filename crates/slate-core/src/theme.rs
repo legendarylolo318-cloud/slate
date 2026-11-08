@@ -11,8 +11,8 @@ pub struct Theme {
     pub bg_base: String,
 }
 
-/// The 15 built-in presets, in the original order. `Violet Night` is the default.
-pub const PRESETS: [(&str, &str, &str); 15] = [
+/// The 16 built-in presets, in the original order. `Violet Night` is the default.
+pub const PRESETS: [(&str, &str, &str); 16] = [
     ("Violet Night", "#A855F7", "#130F1A"),
     ("Cyberpunk", "#FCE300", "#18180C"),
     ("Forest", "#22C55E", "#0E1410"),
@@ -28,6 +28,8 @@ pub const PRESETS: [(&str, &str, &str); 15] = [
     ("Paper", "#7C3AED", "#FAF5FF"),
     ("Meadow", "#16A34A", "#F2F6EE"),
     ("Blossom", "#E11D48", "#FEF3F2"),
+    // Pure black and yellow: every text pair is above 7:1 (WCAG AAA).
+    ("High Contrast", "#FFFF00", "#000000"),
 ];
 
 pub fn preset(name: &str) -> Option<Theme> {
@@ -192,6 +194,22 @@ pub struct Derived {
     pub warning: String,
 }
 
+/// Text on the accent: the usual black (dark theme) or white (light theme), unless the other
+/// reads better on this accent (a mid-tone accent such as #0891B2 fails with white).
+fn on_accent(accent: &str, dark: bool) -> &'static str {
+    let (usual, other) = if dark {
+        ("#000000", "#ffffff")
+    } else {
+        ("#ffffff", "#000000")
+    };
+    let ratio = |c: &str| crate::custom_theme::contrast_ratio(accent, c).unwrap_or(0.0);
+    if ratio(usual) >= crate::custom_theme::MIN_CONTRAST || ratio(usual) >= ratio(other) {
+        usual
+    } else {
+        other
+    }
+}
+
 pub fn derive(accent: &str, bg_base: &str) -> Derived {
     let (_, _, bg_l) = hex_to_hsl(bg_base);
     let dark = bg_l < 50.0;
@@ -215,14 +233,14 @@ pub fn derive(accent: &str, bg_base: &str) -> Derived {
         bg_button_hover: shift(bg_base, 19.0 * dir),
         accent: accent.into(),
         accent_hover: scale(accent, 0.88),
-        on_accent: if dark { "#000000" } else { "#ffffff" }.into(),
+        on_accent: on_accent(accent, dark).into(),
         text_primary: primary.into(),
         text_secondary: secondary.into(),
         text_muted: muted.into(),
         text_faint: faint.into(),
         text_disabled: disabled.into(),
         success: "#1ed760".into(),
-        error: "#ff6666".into(),
+        error: if dark { "#ff6666" } else { "#b00020" }.into(),
         warning: "#ffa726".into(),
     }
 }

@@ -1,4 +1,4 @@
-import { Theme, Metrics } from "theme.slint";
+import { Theme, Metrics, Motion } from "theme.slint";
 import { TrackRow, PlaylistEntry, PartyState } from "types.slint";
 import { ListView } from "std-widgets.slint";
 import { Button, Segmented, QualityBadges, TextField, IconButton } from "widgets.slint";
@@ -213,7 +213,7 @@ export component Sidebar inherits Rectangle {
 
     background: Theme.surface;
     width: root.collapsed ? 64px : 248px;
-    animate width { duration: 120ms; }
+    animate width { duration: Motion.dur(120ms); }
 
     VerticalLayout {
         padding: 10px;
@@ -703,7 +703,7 @@ export component TrackPage inherits Rectangle {
                     picked(i) => { root.filter-quality = i; root.filter-changed(root.filter-text, i); }
                 }
                 if root.filter-status != "": Text { text: root.filter-status; color: Theme.text-muted; vertical-alignment: center; }
-                if root.filter-open: IconButton { icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close-filter(); } }
+                if root.filter-open: IconButton { accessible-label: "Close filter"; icon: @image-url("icons/close.svg"); side: 28px; clicked => { root.close-filter(); } }
             }
         }
         HorizontalLayout {

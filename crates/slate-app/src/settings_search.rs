@@ -167,3 +167,67 @@ mod tests {
         assert!(fold(&r[0].label).contains("gapless"));
     }
 }
+
+#[cfg(test)]
+mod accessibility_tests {
+    /// Every icon-only button must have a name a screen reader can say: a `tip:` (which the
+    /// component uses as its accessible label) or its own `accessible-label:`.
+    #[test]
+    fn every_icon_button_has_an_accessible_label() {
+        let files: [(&str, &str); 14] = [
+            ("app", include_str!("../ui/app.slint")),
+            ("dj", include_str!("../ui/dj.slint")),
+            ("fullscreen", include_str!("../ui/fullscreen.slint")),
+            ("library", include_str!("../ui/library.slint")),
+            ("login", include_str!("../ui/login.slint")),
+            ("lyrics_full", include_str!("../ui/lyrics_full.slint")),
+            ("mini", include_str!("../ui/mini.slint")),
+            ("pages", include_str!("../ui/pages.slint")),
+            ("player_bar", include_str!("../ui/player_bar.slint")),
+            ("profile", include_str!("../ui/profile.slint")),
+            ("settings", include_str!("../ui/settings.slint")),
+            ("shortcuts", include_str!("../ui/shortcuts.slint")),
+            ("strip", include_str!("../ui/strip.slint")),
+            ("video", include_str!("../ui/video.slint")),
+        ];
+        let mut seen = 0;
+        let mut bad = Vec::new();
+        for (name, src) in files {
+            let mut from = 0;
+            while let Some(at) = src[from..].find("IconButton {") {
+                let start = from + at + "IconButton {".len();
+                let mut depth = 1;
+                let mut end = start;
+                for (i, c) in src[start..].char_indices() {
+                    match c {
+                        '{' => depth += 1,
+                        '}' => depth -= 1,
+                        _ => {}
+                    }
+                    if depth == 0 {
+                        end = start + i;
+                        break;
+                    }
+                }
+                let body = &src[start..end];
+                seen += 1;
+                if !body.contains("tip:") && !body.contains("accessible-label:") {
+                    let line = src[..start].matches('\n').count() + 1;
+                    bad.push(format!("{name}.slint:{line}"));
+                }
+                from = end.max(start);
+            }
+        }
+        assert!(seen > 40, "the scan found only {seen} icon buttons");
+        assert!(
+            bad.is_empty(),
+            "IconButton without an accessible label: {bad:?}"
+        );
+    }
+
+    #[test]
+    fn the_icon_button_component_names_itself_from_its_tip() {
+        let w = include_str!("../ui/widgets.slint");
+        assert!(w.contains("accessible-label: root.tip;"));
+    }
+}

@@ -38,6 +38,7 @@ mod library;
 mod lyrics_full;
 mod mini;
 mod models;
+mod motion;
 mod mpd_host;
 mod pages;
 mod panels;

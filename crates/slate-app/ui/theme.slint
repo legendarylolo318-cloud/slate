@@ -14,6 +14,15 @@ export global Theme {
     in-out property <color> danger: #ff6666;
 }
 
+/// Reduce motion (Settings → Appearance): every `animate` takes its duration from here, so
+/// with it on transitions are instant — no slides, fades or animated lyrics.
+export global Motion {
+    in-out property <bool> reduce: false;
+    pure public function dur(d: duration) -> duration {
+        root.reduce ? 0ms : d
+    }
+}
+
 /// Design scale shared by the components: spacing, radii and text sizes (one place to change).
 export global Metrics {
     out property <length> space-1: 4px;

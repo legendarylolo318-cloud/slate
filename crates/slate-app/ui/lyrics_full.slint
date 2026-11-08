@@ -1,4 +1,4 @@
-import { Theme } from "theme.slint";
+import { Theme, Motion } from "theme.slint";
 import { IconButton } from "widgets.slint";
 import { LyricLine } from "types.slint";
 
@@ -73,7 +73,7 @@ export component LyricsFullscreen inherits Rectangle {
             width: parent.width;
             height: col.preferred-height;
             y: parent.height / 2 - root.target;
-            animate y { duration: 280ms; easing: ease-in-out; }
+            animate y { duration: Motion.dur(280ms); easing: ease-in-out; }
             col := VerticalLayout {
                 padding-left: max(24px, parent.width * 0.1);
                 padding-right: max(24px, parent.width * 0.1);
@@ -114,6 +114,6 @@ export component LyricsFullscreen inherits Rectangle {
         y: 12px;
         width: 40px;
         height: 40px;
-        IconButton { icon: @image-url("icons/close.svg"); clicked => { root.close(); } }
+        IconButton { accessible-label: "Close"; icon: @image-url("icons/close.svg"); clicked => { root.close(); } }
     }
 }

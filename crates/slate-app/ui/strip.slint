@@ -54,9 +54,9 @@ export component StripWindow inherits Window {
             height: root.height;
             pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.drag(); } }
         }
-        IconButton { x: root.width - 3 * 30px - 8px; y: 5px; side: 28px; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); enabled: root.has-track; clicked => { root.toggle-play(); } }
-        IconButton { x: root.width - 2 * 30px - 8px; y: 5px; side: 28px; icon: @image-url("icons/next.svg"); enabled: root.has-track; clicked => { root.next(); } }
-        IconButton { x: root.width - 1 * 30px - 8px; y: 5px; side: 28px; icon: @image-url("icons/close.svg"); clicked => { root.close-strip(); } }
+        IconButton { accessible-label: root.playing ? "Pause" : "Play"; x: root.width - 3 * 30px - 8px; y: 5px; side: 28px; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); enabled: root.has-track; clicked => { root.toggle-play(); } }
+        IconButton { accessible-label: "Next track"; x: root.width - 2 * 30px - 8px; y: 5px; side: 28px; icon: @image-url("icons/next.svg"); enabled: root.has-track; clicked => { root.next(); } }
+        IconButton { accessible-label: "Close"; x: root.width - 1 * 30px - 8px; y: 5px; side: 28px; icon: @image-url("icons/close.svg"); clicked => { root.close-strip(); } }
         // The thin progress line along the bottom.
         Rectangle { x: 12px; y: root.height - 9px; width: root.width - 24px; height: 3px; border-radius: 1.5px; background: Theme.text-muted.with-alpha(0.3); }
         Rectangle { x: 12px; y: root.height - 9px; width: (root.width - 24px) * clamp(root.progress, 0, 1); height: 3px; border-radius: 1.5px; background: Theme.accent; }

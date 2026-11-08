@@ -1,4 +1,4 @@
-import { Theme } from "theme.slint";
+import { Theme, Motion } from "theme.slint";
 import { IconButton, Bar, QualityBadges } from "widgets.slint";
 import { SettingsState } from "settings.slint";
 
@@ -66,7 +66,7 @@ export component PlayerBar inherits Rectangle {
     // Very narrow windows drop the secondary buttons; transport and seek bar always stay.
     property <bool> narrow: root.width < 560px * root.scale;
     background: root.tint-on ? root.tint : Theme.surface;
-    animate background { duration: 300ms; }
+    animate background { duration: Motion.dur(300ms); }
 
     // Wide: info | transport | volume. Compact: info on top, transport below.
     VerticalLayout {
@@ -121,7 +121,7 @@ export component PlayerBar inherits Rectangle {
                     spacing: 10px * root.scale;
                     IconButton { tip: SettingsState.shuffle-mode == 1 ? "Shuffle albums" : "Shuffle"; menu-a: (SettingsState.shuffle-mode == 0 ? "✓ " : "") + "Shuffle tracks"; menu-b: (SettingsState.shuffle-mode == 1 ? "✓ " : "") + "Shuffle albums"; menu-picked(i) => { SettingsState.shuffle-mode = i; SettingsState.changed-int("shuffle-mode", i); } side: root.btn; icon: @image-url("icons/shuffle.svg"); active: root.shuffle; opacity: root.shuffle ? 1.0 : 0.6; clicked => { root.toggle-shuffle(); } }
                     IconButton { tip: "Previous"; side: root.btn; icon: @image-url("icons/previous.svg"); enabled: root.has-track; clicked => { root.previous(); } }
-                    IconButton { primary: true; side: root.btn-primary; enabled: root.has-track; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); clicked => { root.toggle-play(); } }
+                    IconButton { accessible-label: root.playing ? "Pause" : "Play"; primary: true; side: root.btn-primary; enabled: root.has-track; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); clicked => { root.toggle-play(); } }
                     IconButton { tip: "Next"; side: root.btn; icon: @image-url("icons/next.svg"); enabled: root.has-track; clicked => { root.next(); } }
                     IconButton { tip: "Repeat"; side: root.btn; icon: root.repeat == 2 ? @image-url("icons/repeat-one.svg") : @image-url("icons/repeat.svg"); active: root.repeat != 0; opacity: root.repeat == 0 ? 0.6 : 1.0; clicked => { root.cycle-repeat(); } }
                 }
@@ -170,7 +170,7 @@ export component PlayerBar inherits Rectangle {
             spacing: 6px * root.scale;
             IconButton { tip: SettingsState.shuffle-mode == 1 ? "Shuffle albums" : "Shuffle"; menu-a: (SettingsState.shuffle-mode == 0 ? "✓ " : "") + "Shuffle tracks"; menu-b: (SettingsState.shuffle-mode == 1 ? "✓ " : "") + "Shuffle albums"; menu-picked(i) => { SettingsState.shuffle-mode = i; SettingsState.changed-int("shuffle-mode", i); } icon: @image-url("icons/shuffle.svg"); side: 36px * root.scale; active: root.shuffle; clicked => { root.toggle-shuffle(); } }
             IconButton { tip: "Previous"; icon: @image-url("icons/previous.svg"); side: 40px * root.scale; enabled: root.has-track; clicked => { root.previous(); } }
-            IconButton { primary: true; side: root.btn-primary; enabled: root.has-track; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); clicked => { root.toggle-play(); } }
+            IconButton { accessible-label: root.playing ? "Pause" : "Play"; primary: true; side: root.btn-primary; enabled: root.has-track; icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg"); clicked => { root.toggle-play(); } }
             IconButton { tip: "Next"; icon: @image-url("icons/next.svg"); side: 40px * root.scale; enabled: root.has-track; clicked => { root.next(); } }
             IconButton { tip: "Repeat"; icon: root.repeat == 2 ? @image-url("icons/repeat-one.svg") : @image-url("icons/repeat.svg"); side: 36px * root.scale; active: root.repeat != 0; clicked => { root.cycle-repeat(); } }
         }
