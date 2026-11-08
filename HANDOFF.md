@@ -22,6 +22,8 @@ All four passed the full gate. F1's tests also passed 200 times pinned with `tas
 | `0f09ba1` | F5 import | `core/import_lib.rs` (Spotify JSON, Exportify/Apple CSV, Apple `Library.xml` via roxmltree, `judge()` matcher; 18 tests incl. XXE, entity bomb, node cap, 20k-track linear time) and `app/service_import.rs` (picker, paced ISRC-then-title matching, review dialog, unlisted playlists). Matcher never run against real TIDAL results. |
 | `a86ae09` | F6 accessibility | Reduce motion Off/On/Follow system (`Motion.dur` on all animate sites; Linux follow via gsettings; **no Windows follow**). High Contrast preset. WCAG AA test over all presets found and fixed two real failures in `derive()` (error red on light themes; white on mid-tone accents). `IconButton` takes its label from `tip`; 33 buttons got `accessible-label`; a test scans the .slint sources. |
 
+| `40a8b83` | P7 queue file | `Snapshot` is written with a source's tracks as ids when the same track is elsewhere in the file (format `"v":2`); old files (no `v`) load; unknown ids dropped; a differing copy stays full. Unit test asserts the file is under 60 % of the old size for a 2,000-track source. The stamp (`_qid`) on a source's own track copy no longer survives a round trip (assigned afresh when queued); `track.rs` round-trip test adjusted for that. **Not yet measured with `bigq.sh` in a release build, and the keep-only-if-it-reproduces A/B was not run.** Revert `40a8b83` if the A/B shows nothing. |
+
 All six features F1–F6 are committed and passed the full gate. Re-run F1's thread tests pinned to one core only if touched again; F4/F5 tests do not use threads or locks beyond what is described.
 
 ## Gate script
@@ -45,7 +47,7 @@ The script does not stop on failure. Read the output for `error`, not just the l
 - A test that every preset passes WCAG AA for text. `custom_theme.rs` already has `contrast_ratio` and `contrast_warnings`, and `derive()` in `theme.rs` makes the palette. Some existing presets may fail, e.g. `text_muted` `#a6a6a6` on the light themes, or accent on `on_accent`. Fix the palette or presets rather than loosening the test.
 - `accessible-label` on every icon-only `IconButton` (about 50 uses, none have one now), plus a test that scans the `.slint` sources and fails on an `IconButton` without one. `settings_search.rs` already reads `settings.slint` the same way.
 
-**P1–P7 performance A/Bs and the whole measurement table.** None started. They need release builds (`lto=fat`, about 11 min each), `~/slate-bench` (`run.sh`, `profreset`, `bigq.sh`, `gen.py`, `thrott_proxy.py`) and a headless KWin with nested Xwayland on `:88`. Rules from the brief: never launch Slate on the real profile (`XDG_CONFIG_HOME=<copy>`), interleave runs, delete profile copies after each run, keep a change only if the win reproduces.
+**P1–P6 performance A/Bs and the whole measurement table.** None started (P7 code is done, see above). P3 note: no event exists for un-minimise, so "minimised" can only be sampled; the tray/hidden case can be exact via the hide/show sites in `bootstrap.rs` (~398, ~467) and `backend.rs` (~1169, 1192, 1214). They need release builds (`lto=fat`, about 11 min each), `~/slate-bench` (`run.sh`, `profreset`, `bigq.sh`, `gen.py`, `thrott_proxy.py`) and a headless KWin with nested Xwayland on `:88`. Rules from the brief: never launch Slate on the real profile (`XDG_CONFIG_HOME=<copy>`), interleave runs, delete profile copies after each run, keep a change only if the win reproduces.
 
 ## Open questions and risks to put in the final handoff
 
