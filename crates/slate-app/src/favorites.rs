@@ -441,10 +441,18 @@ impl Backend {
             return;
         }
         if kind == "import-review" {
-            self.service_import_create(target == "all");
+            if target == "dismissed" {
+                crate::service_import::forget();
+            } else {
+                self.service_import_create(target == "all");
+            }
             return;
         }
         if kind == "queue-link" {
+            if target == "dismissed" {
+                crate::queue_link::forget();
+                return;
+            }
             self.queue_link_accepted(target == "replace");
             return;
         }
