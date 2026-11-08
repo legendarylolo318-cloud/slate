@@ -164,8 +164,13 @@ impl Backend {
                 restored.push(format!("volume {:.0} %", v * 100.0));
             }
             if let Some(eq) = entry.eq {
-                if utility::set_eq(&state, eq).is_ok() {
+                if utility::set_eq(&state, eq.clone()).is_ok() {
                     restored.push("equalizer".to_string());
+                    // The equalizer page shows what now plays, not the last device's bands
+                    // (an edit there applies to the restored settings).
+                    let blocked =
+                        utility::get_exclusive_mode(&state) || utility::get_bit_perfect(&state);
+                    this.ui(move |w| crate::eq_ui::fill(&w, &eq, blocked));
                 }
             }
             if DIRTY.load(Ordering::Acquire) {
