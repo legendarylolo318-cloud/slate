@@ -187,7 +187,8 @@ pub fn parse_time(s: &str) -> Option<u16> {
     let s = s.trim();
     let (h, m) = match s.split_once(':') {
         Some((h, m)) => (h.trim(), m.trim()),
-        None if s.len() == 4 => s.split_at(2),
+        // Four ASCII digits; `split_at` would panic inside a multi-byte character ("1é1").
+        None if s.len() == 4 && s.is_ascii() => s.split_at(2),
         None => return None,
     };
     if h.is_empty() || h.len() > 2 || m.len() != 2 {
@@ -281,7 +282,19 @@ mod tests {
         assert_eq!(parse_time("0730"), Some(450));
         assert_eq!(parse_time(" 23:59 "), Some(1439));
         for bad in [
-            "24:00", "7:5", "12:60", "", "ab:cd", "7", "007:30", "-1:30", "12:3a",
+            "24:00",
+            "7:5",
+            "12:60",
+            "",
+            "ab:cd",
+            "7",
+            "007:30",
+            "-1:30",
+            "12:3a",
+            "1é1",
+            "é1",
+            "0é",
+            "７:３０",
         ] {
             assert_eq!(parse_time(bad), None, "{bad:?}");
         }
