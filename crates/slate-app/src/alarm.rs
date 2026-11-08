@@ -84,19 +84,40 @@ fn local_offset_at(t: i64) -> i64 {
     }
     #[cfg(windows)]
     {
-        use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
-        let _ = t;
-        let mut tz = TIME_ZONE_INFORMATION::default();
-        // SAFETY: `tz` is a valid out-pointer; the call fills it.
-        let id = unsafe { GetTimeZoneInformation(&mut tz) };
-        // 2 = daylight time; the answer is for now, and is checked again when the timer fires.
-        let bias = tz.Bias
-            + if id == 2 {
-                tz.DaylightBias
-            } else {
-                tz.StandardBias
-            };
-        -i64::from(bias) * 60
+        // The offset in force at `t`, not now: across a daylight-saving switch they differ by
+        // an hour, and the ring is computed (and checked) with this one.
+        use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
+        use windows::Win32::System::Time::{
+            FileTimeToSystemTime, SystemTimeToFileTime, SystemTimeToTzSpecificLocalTime,
+        };
+        // Unix seconds to FILETIME (100 ns since 1601-01-01).
+        let Some(utc_ticks) = t
+            .checked_add(11_644_473_600)
+            .and_then(|s| s.checked_mul(10_000_000))
+            .and_then(|v| u64::try_from(v).ok())
+        else {
+            return 0;
+        };
+        let ft = FILETIME {
+            dwLowDateTime: utc_ticks as u32,
+            dwHighDateTime: (utc_ticks >> 32) as u32,
+        };
+        let (mut utc, mut local, mut lft) = (
+            SYSTEMTIME::default(),
+            SYSTEMTIME::default(),
+            FILETIME::default(),
+        );
+        // SAFETY: every pointer is to a valid local of the right type; the calls only fill them.
+        let ok = unsafe {
+            FileTimeToSystemTime(&ft, &mut utc).is_ok()
+                && SystemTimeToTzSpecificLocalTime(None, &utc, &mut local).is_ok()
+                && SystemTimeToFileTime(&local, &mut lft).is_ok()
+        };
+        if !ok {
+            return 0;
+        }
+        let local_ticks = (u64::from(lft.dwHighDateTime) << 32) | u64::from(lft.dwLowDateTime);
+        (local_ticks as i64 - utc_ticks as i64) / 10_000_000
     }
     #[cfg(not(any(unix, windows)))]
     {
