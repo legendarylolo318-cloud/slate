@@ -31,6 +31,8 @@ struct Review {
     playlists: Vec<ImportPlaylist>,
     /// By `Want::key`.
     results: HashMap<String, Resolved>,
+    /// The account it was matched for.
+    epoch: u64,
 }
 
 #[derive(Clone)]
@@ -197,6 +199,9 @@ impl Backend {
     }
 
     async fn run_service_import(&self) -> Result<(), String> {
+        // A sign-out while the picker is open, or during matching, ends the import: nothing
+        // of it may reach the next account (#124).
+        let epoch = self.account_epoch();
         let Some(files) = rfd::AsyncFileDialog::new()
             .set_title("Import from Spotify or Apple Music")
             .add_filter(
@@ -213,6 +218,9 @@ impl Backend {
             .await
             .map_err(|e| e.to_string())??;
         let state = self.state().ok_or("The core is still starting.")?;
+        if !self.same_account(epoch) {
+            return Ok(());
+        }
         // `begin_bulk` has said why when another edit is running.
         let Some(job) = self.begin_bulk() else {
             return Ok(());
@@ -231,7 +239,7 @@ impl Backend {
         let mut results: HashMap<String, Resolved> = HashMap::with_capacity(total);
         let mut searched = false;
         for (n, want) in wants.iter().enumerate() {
-            if job.cancelled() {
+            if job.cancelled() || !self.same_account(epoch) {
                 return Ok(());
             }
             let text = format!("Matching track {} of {total}…", n + 1);
@@ -276,9 +284,20 @@ impl Backend {
             results.insert(want.key(), Resolved { verdict, shown });
         }
         drop(job);
-        let r = Review { playlists, results };
+        let r = Review {
+            playlists,
+            results,
+            epoch,
+        };
         let text = review_text(&r);
-        *review() = Some(r);
+        {
+            // Checked under the review lock, which `forget` takes at sign-out.
+            let mut g = review();
+            if !self.same_account(epoch) {
+                return Ok(());
+            }
+            *g = Some(r);
+        }
         self.ui(move |w| {
             w.set_dialog_text(text.into());
             w.set_dialog_target("".into());
@@ -291,6 +310,9 @@ impl Backend {
     /// The review's Create buttons: `with_uncertain` adds the uncertain matches.
     pub(crate) fn service_import_create(&self, with_uncertain: bool) {
         let Some(r) = review().take() else { return };
+        if !self.same_account(r.epoch) {
+            return;
+        }
         if RUNNING.swap(true, Ordering::SeqCst) {
             *review() = Some(r);
             self.notify("An import is already running");
@@ -315,7 +337,7 @@ impl Backend {
         let (mut made, mut tracks, mut left_out) = (0usize, 0usize, 0usize);
         let total = r.playlists.len();
         for (n, p) in r.playlists.iter().enumerate() {
-            if job.cancelled() {
+            if job.cancelled() || !self.same_account(r.epoch) {
                 break;
             }
             let mut ids: Vec<u64> = Vec::new();
@@ -411,6 +433,7 @@ mod tests {
             },
         );
         let r = Review {
+            epoch: 0,
             playlists: vec![
                 ImportPlaylist {
                     name: "One".into(),
@@ -453,6 +476,7 @@ mod tests {
             );
         }
         let r = Review {
+            epoch: 0,
             playlists: vec![ImportPlaylist {
                 name: "P".into(),
                 tracks,

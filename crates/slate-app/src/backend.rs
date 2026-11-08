@@ -66,6 +66,9 @@ pub(crate) struct Shared {
     pub(crate) update: Mutex<Option<(String, String)>>,
     /// Bumped on every volume change so only the last of a drag is persisted.
     pub(crate) volume_seq: AtomicU64,
+    /// Bumped when sign-out starts: work begun before it (an import's matching, a queue link
+    /// loading) checks it before it shows or changes anything.
+    pub(crate) account_epoch: AtomicU64,
     /// The volume (0..1) as `f32` bits, for the MPD server.
     pub(crate) volume: AtomicU32,
     /// A status read for MPD clients is already scheduled.
@@ -520,6 +523,7 @@ impl Backend {
     }
 
     pub fn logout(&self) {
+        self.shared.account_epoch.fetch_add(1, Ordering::SeqCst);
         self.cancel_bulk();
         let this = self.clone();
         self.rt.spawn(async move {
@@ -531,6 +535,7 @@ impl Backend {
             crate::device_memory::forget();
             crate::alarm::forget();
             crate::service_import::forget();
+            crate::queue_link::forget();
             if let Some(ctl) = this.controller() {
                 ctl.stop_saving().await;
             }
@@ -1002,6 +1007,16 @@ impl Backend {
             })
             .await;
         });
+    }
+
+    /// The account generation now; compare with [`Self::same_account`] after waiting.
+    pub(crate) fn account_epoch(&self) -> u64 {
+        self.shared.account_epoch.load(Ordering::SeqCst)
+    }
+
+    /// No sign-out happened since `epoch` was read.
+    pub(crate) fn same_account(&self, epoch: u64) -> bool {
+        self.account_epoch() == epoch
     }
 
     pub(crate) fn current_track_id(&self) -> Option<u64> {

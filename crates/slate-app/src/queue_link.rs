@@ -14,9 +14,14 @@ use crate::backend::Backend;
 use crate::textutil::clean_line;
 
 /// The link waiting for "Replace / Add / Cancel". One at a time: a newer link replaces it.
-static PENDING: Mutex<Option<link::Decoded>> = Mutex::new(None);
+static PENDING: Mutex<Option<(link::Decoded, u64)>> = Mutex::new(None);
 
-fn pending() -> std::sync::MutexGuard<'static, Option<link::Decoded>> {
+/// Sign-out: a link waiting for its answer is dropped.
+pub fn forget() {
+    *pending() = None;
+}
+
+fn pending() -> std::sync::MutexGuard<'static, Option<(link::Decoded, u64)>> {
     PENDING.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -90,7 +95,7 @@ impl Backend {
             Err(sentence) => self.notify(&sentence),
             Ok(d) => {
                 let text = describe(&d);
-                *pending() = Some(d);
+                *pending() = Some((d, self.account_epoch()));
                 self.ui(move |w| {
                     w.set_dialog_text(text.into());
                     w.set_dialog_target("".into());
@@ -103,7 +108,12 @@ impl Backend {
 
     /// The dialog's Replace / Add button.
     pub(crate) fn queue_link_accepted(&self, replace: bool) {
-        let Some(d) = pending().take() else { return };
+        let Some((d, epoch)) = pending().take() else {
+            return;
+        };
+        if !self.same_account(epoch) {
+            return;
+        }
         let this = self.clone();
         self.rt.spawn(async move {
             let (Some(state), Some(ctl)) = (this.state(), this.controller()) else {
@@ -121,6 +131,10 @@ impl Backend {
                 .buffered(4)
                 .collect()
                 .await;
+            // Signed out while the tracks loaded: the queue is not touched.
+            if !this.same_account(epoch) {
+                return;
+            }
             let missing = fetched.iter().filter(|t| t.is_none()).count();
             let (tracks, blocked) = ctl.playable(fetched.into_iter().flatten().collect());
             let skipped = missing + blocked;
