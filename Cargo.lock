@@ -7103,6 +7103,7 @@ dependencies = [
  "gio",
  "gstreamer",
  "gstreamer-app",
+ "gstreamer-base",
  "image",
  "iroh",
  "keyring",

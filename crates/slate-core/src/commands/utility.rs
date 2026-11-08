@@ -291,6 +291,32 @@ pub fn set_eq(state: &AppState, eq: crate::eq::Settings) -> Result<(), SlateErro
     state.save_settings(&settings)
 }
 
+pub fn get_crossfeed(state: &AppState) -> crate::crossfeed::Level {
+    state.load_settings().unwrap_or_default().crossfeed
+}
+
+/// Headphone crossfeed level. A level change applies to the playing track; switching it on
+/// from Off applies from the next track. Refused with a sentence when the plugin is missing.
+pub fn set_crossfeed(state: &AppState, level: crate::crossfeed::Level) -> Result<(), SlateError> {
+    use crate::crossfeed::Level;
+    if level != Level::Off && !crate::crossfeed::available() {
+        return Err(SlateError::Parse(
+            crate::crossfeed::UNAVAILABLE_REASON.to_string(),
+        ));
+    }
+    let was = state.load_settings().unwrap_or_default().crossfeed;
+    // Off and never configured: nothing to tell the audio thread.
+    if level != Level::Off || was != Level::Off {
+        state
+            .audio_player
+            .set_crossfeed(level)
+            .map_err(SlateError::Audio)?;
+    }
+    let mut settings = state.load_settings().unwrap_or_default();
+    settings.crossfeed = level;
+    state.save_settings(&settings)
+}
+
 pub fn get_max_quality(state: &AppState) -> String {
     state.max_quality.lock_safe().clone()
 }

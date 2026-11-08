@@ -43,6 +43,7 @@ pub mod discord_template;
 pub mod discord_ipc {
     pub type SlateDiscordClient = discord_rich_presence::DiscordIpcClient;
 }
+pub mod crossfeed;
 pub mod embedded_config;
 pub mod embedded_lastfm;
 pub mod embedded_librefm;
@@ -264,6 +265,9 @@ pub struct Settings {
     /// Parametric equalizer (off by default; see `eq`).
     #[serde(default)]
     pub eq: crate::eq::Settings,
+    /// Headphone crossfeed level (Off by default; see `crossfeed`).
+    #[serde(default)]
+    pub crossfeed: crate::crossfeed::Level,
     #[serde(default = "defaults::max_quality")]
     pub max_quality: String,
     #[serde(default)]
@@ -352,6 +356,7 @@ impl Default for Settings {
             crossfade_secs: 0,
             crossfade_skip_same_album: true,
             eq: Default::default(),
+            crossfeed: Default::default(),
             max_quality: "HI_RES_LOSSLESS".to_string(),
             scrobble: Default::default(),
             proxy: Default::default(),

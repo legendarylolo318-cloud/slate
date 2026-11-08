@@ -37,6 +37,9 @@ pub async fn run_startup(app: &AppHandle) {
             if s.eq.enabled {
                 let _ = state.audio_player.set_eq(s.eq.clone());
             }
+            if s.crossfeed != crate::crossfeed::Level::Off {
+                let _ = state.audio_player.set_crossfeed(s.crossfeed);
+            }
         }
     }
 

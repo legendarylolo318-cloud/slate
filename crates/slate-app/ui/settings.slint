@@ -45,6 +45,10 @@ export global SettingsState {
     in-out property <int> crossfade-index: 0;
     in-out property <bool> crossfade-same-album: true;
     in-out property <bool> crossfade-blocked: false;
+    in-out property <int> crossfeed-index: 0;
+    in-out property <bool> crossfeed-available: false;
+    in-out property <bool> crossfeed-blocked: false;
+    in-out property <string> crossfeed-why: "";
     in-out property <int> quality-index;
     in-out property <bool> exclusive;
     in-out property <bool> bit-perfect;
@@ -582,6 +586,16 @@ export component SettingsPage inherits Rectangle {
                             options: ["Off", "2 s", "4 s", "6 s", "8 s", "10 s", "12 s"];
                             index: SettingsState.crossfade-index;
                             picked(i) => { SettingsState.crossfade-index = i; SettingsState.changed-int("crossfade", i); }
+                        }
+                    }
+                    Row {
+                        label: "Headphone crossfeed";
+                        hint: !SettingsState.crossfeed-available ? SettingsState.crossfeed-why : SettingsState.crossfeed-blocked ? "Crossfeed is off while exclusive or bit-perfect output is on, which must not alter the sound." : "Blends a little of each channel into the other, as speakers would, so headphone listening is less tiring. Off by default and then not in the audio path at all. While it is on the signal path reads MODIFIED. A level change applies at once; switching it on from Off applies from the next track.";
+                        if SettingsState.crossfeed-available : Segmented {
+                            enabled: !SettingsState.crossfeed-blocked;
+                            options: ["Off", "Light", "Medium", "Strong"];
+                            index: SettingsState.crossfeed-index;
+                            picked(i) => { SettingsState.crossfeed-index = i; SettingsState.changed-int("crossfeed", i); }
                         }
                     }
                     Row {

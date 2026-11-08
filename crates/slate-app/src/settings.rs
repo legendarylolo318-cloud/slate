@@ -25,6 +25,7 @@ struct Snapshot {
     content_filter: (bool, bool),
     crossfade: slate_core::crossfade::Settings,
     eq: slate_core::eq::Settings,
+    crossfeed: slate_core::crossfeed::Level,
     gapless_supported: bool,
     quality_index: i32,
     exclusive: bool,
@@ -62,6 +63,7 @@ async fn snapshot(state: &Arc<AppState>) -> Snapshot {
         content_filter: utility::get_content_filter(state),
         crossfade: utility::get_crossfade(state),
         eq: utility::get_eq(state),
+        crossfeed: utility::get_crossfeed(state),
         gapless_supported: utility::get_gapless_supported(),
         exclusive: utility::get_exclusive_mode(state),
         bit_perfect: utility::get_bit_perfect(state),
@@ -131,6 +133,10 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     );
     g.set_crossfade_same_album(s.crossfade.skip_same_album);
     g.set_crossfade_blocked(s.exclusive || s.bit_perfect);
+    g.set_crossfeed_index(s.crossfeed.index());
+    g.set_crossfeed_available(slate_core::crossfeed::available());
+    g.set_crossfeed_blocked(s.exclusive || s.bit_perfect);
+    g.set_crossfeed_why(slate_core::crossfeed::UNAVAILABLE_REASON.into());
     g.set_gapless_supported(s.gapless_supported);
     g.set_quality_index(s.quality_index);
     g.set_exclusive(s.exclusive);
@@ -400,6 +406,11 @@ impl Backend {
                     utility::set_crossfade(&state, secs, c.skip_same_album)
                         .map_err(|e| e.log_safe())
                 }
+                "crossfeed" => utility::set_crossfeed(
+                    &state,
+                    slate_core::crossfeed::Level::from_index(usize_i as i32),
+                )
+                .map_err(|e| e.log_safe()),
                 "shuffle-mode" => this.set_shuffle_mode(&state, usize_i == 1),
                 "suggest" => this.set_suggest_index(usize_i),
                 "ui-scale" => {

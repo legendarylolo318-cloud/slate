@@ -143,10 +143,12 @@ export component IconButton inherits Rectangle {
 export component Segmented inherits Rectangle {
     in property <[string]> options;
     in-out property <int> index;
+    in property <bool> enabled: true;
     callback picked(int);
     height: 32px;
     border-radius: 16px;
     background: Theme.surface;
+    opacity: root.enabled ? 1 : 0.45;
     HorizontalLayout {
         padding: 2px;
         spacing: 2px;
@@ -168,6 +170,7 @@ export component Segmented inherits Rectangle {
                 }
             }
             st := TouchArea {
+                enabled: root.enabled;
                 mouse-cursor: MouseCursor.pointer;
                 clicked => {
                     root.index = i;

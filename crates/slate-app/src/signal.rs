@@ -54,6 +54,8 @@ pub fn describe(sp: &SignalPath) -> (String, Vec<(String, String)>) {
         )
     } else if v.equalizer {
         format!("Equalizer applied ({} bands)", sp.eq_bands)
+    } else if let Some(level) = sp.crossfeed {
+        format!("Crossfeed applied ({})", level.label())
     } else if v.normalization_altered && v.user_volume_altered {
         "Volume and ReplayGain scaling applied".into()
     } else if v.normalization_altered {
@@ -113,6 +115,9 @@ pub fn describe(sp: &SignalPath) -> (String, Vec<(String, String)>) {
                 sp.eq_preamp_db
             ),
         ));
+    }
+    if let Some(level) = sp.crossfeed {
+        rows.push(("Crossfeed".into(), format!("On · {}", level.label())));
     }
     rows.push(("Volume".into(), format!("{:.0}%", sp.user_volume * 100.0)));
     rows.push((
@@ -219,6 +224,28 @@ mod tests {
             ..sp
         };
         assert!(!describe(&off).1.iter().any(|(k, _)| k == "Equalizer"));
+    }
+
+    #[test]
+    fn crossfeed_is_named_and_makes_the_path_modified() {
+        let sp = SignalPath {
+            backend: Some("Normal".into()),
+            crossfeed: Some(slate_core::crossfeed::Level::Medium),
+            user_volume: 1.0,
+            norm_gain_factor: 1.0,
+            ..Default::default()
+        };
+        let (h, rows) = describe(&sp);
+        assert_eq!(h, "Crossfeed applied (Medium)");
+        assert!(rows
+            .iter()
+            .any(|(k, v)| k == "Crossfeed" && v == "On · Medium"));
+        assert!(slate_core::signal_path::verdict(&sp).crossfeed);
+        let off = SignalPath {
+            crossfeed: None,
+            ..sp
+        };
+        assert!(!describe(&off).1.iter().any(|(k, _)| k == "Crossfeed"));
     }
 
     #[test]

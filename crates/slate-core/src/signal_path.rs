@@ -69,6 +69,10 @@ pub struct SignalPath {
     pub eq_bands: u32,
     pub eq_preamp_db: f32,
 
+    /// Headphone crossfeed is in the audio path (a level other than Off): the path is
+    /// MODIFIED while it is.
+    pub crossfeed: Option<crate::crossfeed::Level>,
+
     /// OS-mixer info (PulseAudio/PipeWire). None when probe failed or
     /// pactl is unavailable.
     pub os_mixer: Option<crate::pipeline_probe::OsMixerInfo>,
@@ -121,6 +125,7 @@ impl SignalPathTracker {
             s.equalizer = false;
             s.eq_bands = 0;
             s.eq_preamp_db = 0.0;
+            s.crossfeed = None;
             s.clone()
         };
         self.emit(snap);
@@ -162,6 +167,19 @@ impl SignalPathTracker {
             s.equalizer = on;
             s.eq_bands = n;
             s.eq_preamp_db = pre;
+            s.clone()
+        };
+        self.emit(snap);
+    }
+
+    /// The crossfeed element exists in the running pipeline (or no longer does).
+    pub fn set_crossfeed(&self, level: Option<crate::crossfeed::Level>) {
+        let snap = {
+            let mut s = self.state.lock_safe();
+            if s.crossfeed == level {
+                return;
+            }
+            s.crossfeed = level;
             s.clone()
         };
         self.emit(snap);
@@ -387,6 +405,7 @@ pub struct Verdict {
     pub lossy_format_change: bool,
     pub lossless_promotion: bool,
     pub equalizer: bool,
+    pub crossfeed: bool,
 }
 
 /// "Pristine" means every sample the decoder produced reaches the DAC with all
@@ -426,6 +445,7 @@ pub fn verdict(sp: &SignalPath) -> Verdict {
         && !norm_altered
         && !sp.crossfading
         && !sp.equalizer
+        && sp.crossfeed.is_none()
         && !lossy
         && dac_matches;
 
@@ -437,6 +457,7 @@ pub fn verdict(sp: &SignalPath) -> Verdict {
         lossy_format_change: lossy,
         lossless_promotion: format_changed && !lossy,
         equalizer: sp.equalizer,
+        crossfeed: sp.crossfeed.is_some(),
     }
 }
 
@@ -513,5 +534,20 @@ mod verdict_tests {
         sp.output_format = Some("S32LE".into());
         let v = verdict(&sp);
         assert!(v.lossless_promotion && v.pristine);
+    }
+}
+
+#[cfg(test)]
+mod crossfeed_tests {
+    use super::*;
+
+    #[test]
+    fn crossfeed_is_cleared_per_track_and_modifies_the_path() {
+        let sp = SignalPath {
+            crossfeed: Some(crate::crossfeed::Level::Light),
+            ..Default::default()
+        };
+        assert!(verdict(&sp).crossfeed && !verdict(&sp).pristine);
+        assert!(!verdict(&SignalPath::default()).crossfeed);
     }
 }

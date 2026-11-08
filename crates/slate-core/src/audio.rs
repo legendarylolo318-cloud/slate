@@ -2153,6 +2153,50 @@ fn apply_eq_live(pipeline: &gst::Pipeline, s: &crate::eq::Settings, on: bool) ->
     on
 }
 
+/// The crossfeed element for `level`, or None when the level is Off or this GStreamer lacks
+/// the plugin (the track then plays without it).
+fn build_crossfeed_stage(level: crate::crossfeed::Level) -> Option<gst::Element> {
+    let (fcut, feed) = level.params()?;
+    if !crate::crossfeed::available() {
+        return None;
+    }
+    match gst::ElementFactory::make(crate::crossfeed::FACTORY)
+        .name(crate::crossfeed::ELEMENT_NAME)
+        .property("fcut", fcut)
+        .property("feed", feed)
+        .build()
+    {
+        Ok(e) => Some(e),
+        Err(e) => {
+            log::warn!("[audio] crossfeed unavailable: {e}");
+            None
+        }
+    }
+}
+
+/// Applies `level` to a running pipeline's crossfeed element. Off bypasses it (passthrough
+/// hands the buffers on untouched). Returns whether the element exists and is acting.
+fn apply_crossfeed_live(
+    pipeline: &gst::Pipeline,
+    level: crate::crossfeed::Level,
+    in_path: bool,
+) -> bool {
+    use gst::prelude::*;
+    let Some(el) = pipeline.by_name(crate::crossfeed::ELEMENT_NAME) else {
+        return false;
+    };
+    let params = level.params().filter(|_| in_path);
+    if let Some((fcut, feed)) = params {
+        el.set_property("fcut", fcut);
+        el.set_property("feed", feed);
+    }
+    use gstreamer_base::prelude::BaseTransformExt;
+    if let Some(bt) = el.dynamic_cast_ref::<gstreamer_base::BaseTransform>() {
+        bt.set_passthrough(params.is_none());
+    }
+    params.is_some()
+}
+
 enum AudioCommand {
     PlayUrl {
         uri: String,
@@ -2207,6 +2251,10 @@ enum AudioCommand {
     },
     SetEq {
         settings: crate::eq::Settings,
+        reply: Reply<Result<(), String>>,
+    },
+    SetCrossfeed {
+        level: crate::crossfeed::Level,
         reply: Reply<Result<(), String>>,
     },
     SetProxySettings {
@@ -2301,6 +2349,8 @@ struct FadeState {
     /// The equalizer as last set; an incoming worker gets it only when it is on (with it off a
     /// worker never hears about it, as before the equalizer existed).
     eq: Mutex<crate::eq::Settings>,
+    /// Crossfeed level as last set; an incoming worker gets it only when it is not Off.
+    crossfeed: Mutex<crate::crossfeed::Level>,
     /// Settings: fade length in seconds (0 = off) and whether same-album neighbours stay gapless.
     secs: AtomicU32,
     skip_same_album: AtomicBool,
@@ -2333,6 +2383,7 @@ impl FadeState {
             gapless: AtomicBool::new(true),
             volume: Mutex::new(1.0),
             eq: Mutex::new(crate::eq::Settings::default()),
+            crossfeed: Mutex::new(crate::crossfeed::Level::Off),
             secs: AtomicU32::new(0),
             skip_same_album: AtomicBool::new(true),
             armed: Mutex::new(None),
@@ -2477,6 +2528,9 @@ impl AudioPlayer {
             // The equalizer's settings. The elements exist only in a pipeline built while
             // `in_path` was true, so with the equalizer off nothing here runs.
             let mut eq_setting = crate::eq::Settings::default();
+            // The crossfeed level; the element exists only in a pipeline built while it was
+            // not Off and output was not exclusive or bit-perfect.
+            let mut crossfeed_setting = crate::crossfeed::Level::Off;
             let cmd_tx_worker = cmd_tx_worker;
 
             // 2b-A2: the prerolled next bin. Shared between this worker (dedup /
@@ -2956,6 +3010,16 @@ impl AudioPlayer {
                                 signal_path.set_equalizer(eq_stage.as_ref().map(|_| {
                                     (eq_setting.bands.len() as u32, eq_setting.preamp_db)
                                 }));
+                                let crossfeed_stage = if !untouched
+                                    && crossfeed_setting.in_path(exclusive, bit_perfect)
+                                {
+                                    build_crossfeed_stage(crossfeed_setting)
+                                } else {
+                                    None
+                                };
+                                signal_path.set_crossfeed(
+                                    crossfeed_stage.as_ref().map(|_| crossfeed_setting),
+                                );
                                 let mut chain: Vec<&gst::Element> = if untouched {
                                     vec![&concat, &audioconvert, &sink]
                                 } else {
@@ -2970,6 +3034,11 @@ impl AudioPlayer {
                                 };
                                 if let Some((preamp, eq)) = &eq_stage {
                                     chain.splice(3..3, [preamp, eq]);
+                                }
+                                // After the resampler (and the equalizer), before the volume
+                                // stages; audioconvert upstream makes it stereo if it is not.
+                                if let Some(cf) = &crossfeed_stage {
+                                    chain.insert(3, cf);
                                 }
 
                                 pipe.add_many([&uridecodebin, &branch_queue])
@@ -3691,6 +3760,13 @@ impl AudioPlayer {
                             }
                             signal_path.set_equalizer(None);
                         }
+                        if enabled && crossfeed_setting != crate::crossfeed::Level::Off {
+                            if let Some(PlaybackBackend::Normal { pipeline, .. }) = backend.as_ref()
+                            {
+                                apply_crossfeed_live(pipeline, crossfeed_setting, false);
+                            }
+                            signal_path.set_crossfeed(None);
+                        }
 
                         // 2b-A3 (detach matrix): enabling exclusive invalidates any
                         // Normal-pipeline next bin. Detach it (gated on !next_active).
@@ -3734,6 +3810,22 @@ impl AudioPlayer {
                         let _ = reply.send(Ok(()));
                     }
 
+                    AudioCommand::SetCrossfeed { level, reply } => {
+                        crossfeed_setting = level;
+                        // A level change reaches a running element at once, and Off bypasses
+                        // it; switching it on when the pipeline has none applies from the
+                        // next track.
+                        let live = match backend.as_ref() {
+                            Some(PlaybackBackend::Normal { pipeline, .. }) => {
+                                let on = level.in_path(exclusive, bit_perfect);
+                                apply_crossfeed_live(pipeline, level, on)
+                            }
+                            _ => false,
+                        };
+                        signal_path.set_crossfeed(live.then_some(level));
+                        let _ = reply.send(Ok(()));
+                    }
+
                     AudioCommand::SetBitPerfect { enabled, reply } => {
                         bit_perfect = enabled;
                         if enabled {
@@ -3747,6 +3839,13 @@ impl AudioPlayer {
                                 apply_eq_live(pipeline, &eq_setting, false);
                             }
                             signal_path.set_equalizer(None);
+                        }
+                        if enabled && crossfeed_setting != crate::crossfeed::Level::Off {
+                            if let Some(PlaybackBackend::Normal { pipeline, .. }) = backend.as_ref()
+                            {
+                                apply_crossfeed_live(pipeline, crossfeed_setting, false);
+                            }
+                            signal_path.set_crossfeed(None);
                         }
 
                         // 2b-A3 (detach matrix): enabling bit-perfect invalidates any
@@ -4421,6 +4520,19 @@ impl AudioPlayer {
         }
         self.post_cmd(|reply| AudioCommand::SetEq { settings, reply })
     }
+    /// Headphone crossfeed level (see `crossfeed`).
+    pub fn set_crossfeed(&self, level: crate::crossfeed::Level) -> Result<(), String> {
+        *self
+            .fade
+            .crossfeed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = level;
+        if let Some(out) = self.outgoing_tx() {
+            let (reply, _rx) = mpsc::channel();
+            let _ = out.send(AudioCommand::SetCrossfeed { level, reply });
+        }
+        self.post_cmd(|reply| AudioCommand::SetCrossfeed { level, reply })
+    }
     pub fn set_bit_perfect(&self, enabled: bool) -> Result<(), String> {
         self.post_cmd(|reply| AudioCommand::SetBitPerfect { enabled, reply })
     }
@@ -4597,6 +4709,16 @@ impl AudioPlayer {
             if eq.enabled {
                 ask(&|reply| AudioCommand::SetEq {
                     settings: eq.clone(),
+                    reply,
+                })?;
+            }
+            let crossfeed = *fade
+                .crossfeed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if crossfeed != crate::crossfeed::Level::Off {
+                ask(&|reply| AudioCommand::SetCrossfeed {
+                    level: crossfeed,
                     reply,
                 })?;
             }
@@ -6075,6 +6197,120 @@ mod proxy_source_tests {
                 Route::NoProxy
             );
         }
+    }
+
+    // ---- crossfeed element ----
+
+    /// `(left, right)` output samples for a left-only test signal through the crossfeed stage
+    /// for `level`, built the way the player builds it. `bypass` applies the live "Off" path.
+    fn crossfeed_output(
+        level: crate::crossfeed::Level,
+        bypass: bool,
+    ) -> Option<(Vec<f32>, Vec<f32>)> {
+        use gst::prelude::*;
+        use gstreamer_app as gst_app;
+        gst::init().ok()?;
+        let cf = build_crossfeed_stage(level)?;
+        let pipe = gst::Pipeline::new();
+        let caps = gst::Caps::builder("audio/x-raw")
+            .field("format", "F32LE")
+            .field("layout", "interleaved")
+            .field("rate", 44100i32)
+            .field("channels", 2i32)
+            .build();
+        let src = gst_app::AppSrc::builder()
+            .caps(&caps)
+            .format(gst::Format::Time)
+            .build();
+        let sink = gst_app::AppSink::builder().sync(false).build();
+        pipe.add_many([src.upcast_ref(), &cf, sink.upcast_ref()])
+            .ok()?;
+        gst::Element::link_many([src.upcast_ref(), &cf, sink.upcast_ref()]).ok()?;
+        pipe.set_state(gst::State::Playing).ok()?;
+        let frames = 8192usize;
+        let signal = |from: usize, to: usize| {
+            let mut bytes = Vec::with_capacity((to - from) * 8);
+            for i in from..to {
+                let l = (i as f32 * 0.05).sin() * 0.5;
+                bytes.extend_from_slice(&l.to_le_bytes());
+                bytes.extend_from_slice(&0f32.to_le_bytes());
+            }
+            gst::Buffer::from_slice(bytes)
+        };
+        // The first buffer negotiates the element (as a pipeline that has been playing);
+        // the live change is applied after that, to what the second buffer finds.
+        src.push_buffer(signal(0, 1024)).ok()?;
+        let first = sink.try_pull_sample(gst::ClockTime::from_seconds(5))?;
+        let mut l = Vec::new();
+        let mut r = Vec::new();
+        let mut take = |sample: gst::Sample| -> Option<()> {
+            let map = sample.buffer()?.map_readable().ok()?;
+            for c in map.as_slice().as_chunks::<8>().0 {
+                l.push(f32::from_le_bytes(c[..4].try_into().ok()?));
+                r.push(f32::from_le_bytes(c[4..].try_into().ok()?));
+            }
+            Some(())
+        };
+        take(first)?;
+        if bypass {
+            apply_crossfeed_live(&pipe, crate::crossfeed::Level::Off, false);
+        }
+        src.push_buffer(signal(1024, frames)).ok()?;
+        src.end_of_stream().ok()?;
+        while let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_seconds(5)) {
+            take(sample)?;
+        }
+        pipe.set_state(gst::State::Null).ok()?;
+        Some((l, r))
+    }
+
+    fn rms(v: &[f32]) -> f64 {
+        (v.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>() / v.len().max(1) as f64).sqrt()
+    }
+
+    #[test]
+    fn crossfeed_bleeds_the_left_channel_into_the_right_more_at_stronger_levels() {
+        if !crate::crossfeed::available() {
+            eprintln!("bs2b not installed; skipping");
+            return;
+        }
+        use crate::crossfeed::Level;
+        let mut bleed = Vec::new();
+        for level in [Level::Light, Level::Medium, Level::Strong] {
+            let (l, r) = crossfeed_output(level, false).expect("pipeline");
+            assert_eq!(l.len(), 8192);
+            let (rl, rr) = (rms(&l), rms(&r));
+            assert!(rr > 0.001, "{level:?}: right stayed silent ({rr})");
+            assert!(
+                rl > rr,
+                "{level:?}: left {rl} should stay louder than right {rr}"
+            );
+            bleed.push(rr / rl);
+        }
+        assert!(
+            bleed.windows(2).all(|w| w[0] < w[1]),
+            "stronger levels must bleed more: {bleed:?}"
+        );
+        let _ = Level::Off;
+    }
+
+    #[test]
+    fn crossfeed_bypass_leaves_the_samples_untouched() {
+        if !crate::crossfeed::available() {
+            return;
+        }
+        let (l, r) = crossfeed_output(crate::crossfeed::Level::Strong, true).expect("pipeline");
+        assert_eq!(l.len(), 8192);
+        // The first 1024 frames went through the element before the bypass.
+        assert!(r[1024..].iter().all(|x| *x == 0.0), "bypass must not bleed");
+        for (i, x) in l.iter().enumerate().skip(1024) {
+            assert_eq!(*x, (i as f32 * 0.05).sin() * 0.5, "sample {i}");
+        }
+    }
+
+    #[test]
+    fn off_builds_no_stage() {
+        assert!(build_crossfeed_stage(crate::crossfeed::Level::Off).is_none());
     }
 
     // ---- equalizer element ----
