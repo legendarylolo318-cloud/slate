@@ -1,5 +1,164 @@
 # Changelog
 
+## [2.0.0] - 2026-11-08
+
+Six features, all off or dormant until used, and a smaller queue file. Audio output with
+default settings is unchanged (crossfeed off adds nothing to the pipeline; gapless output is
+bit-identical to the source, as in 1.9.0). The work was reviewed before release; the fixes
+are under "Found in review".
+
+### Added
+- Headphone crossfeed (Settings → Playback): Off / Light / Medium / Strong, through GStreamer's
+  `bs2b`. Off is the default and then nothing is added to the audio path. A level change applies
+  at once; switching it on from Off applies from the next track (which then starts its own
+  pipeline instead of following on gaplessly). Off while exclusive or bit-perfect output is on.
+  The Signal Path lists it and reads MODIFIED. The row hides itself, with a sentence, where
+  GStreamer has no `bs2b`; `slate --self-test` says whether it is there.
+- Queue "⋯" → Copy queue link: the queue (at most 500 tracks; the notice says when it was cut)
+  as a `slate://queue/…` link. Opening one asks Replace queue / Add to queue / Cancel and skips
+  tracks that are unavailable or hidden by your content filter, with a count. Links are read as
+  hostile: at most 16 KiB, 64 KiB unpacked, numbers only for tracks, a version check.
+- Remember volume and equalizer per output device (Settings → General, off by default). The
+  device is looked at when a track starts and when you pick an exclusive device, never on a
+  timer; a device plugged in mid-track is noticed at the next track. Linux: the PipeWire /
+  PulseAudio default sink, or the exclusive ALSA device. Windows: the exclusive WASAPI device
+  only (shared mode has no device name to go by yet). At most 50 devices, kept in the encrypted
+  state folder (`devices.json`), deleted at sign-out.
+- Wake-up alarm (Settings → General): a time, days of the week, what to play (the queue, a
+  playlist, album or mix from a link or from what is playing), a 30 s–2 min fade-in from silence
+  to a chosen volume, Snooze 10 min from the bar or by pausing while it rings. Nothing runs while
+  no alarm is set; while one is, a timer looks at the wall clock once a minute. An alarm missed
+  by more than 5 minutes (Slate closed, the computer asleep) is skipped with a notice. Optional
+  "keep the computer awake" (off by default; it also keeps the screen on). `alarm.json` in the
+  encrypted state folder, deleted at sign-out.
+- Import from Spotify or Apple Music (Settings → General): Spotify's `YourLibrary.json` and
+  `Playlist*.json`, Exportify CSV, Apple Music `Library.xml` and Apple's privacy-export CSV.
+  Tracks are matched by ISRC, then title, artist and length (±3 s), about three a second, and
+  you review matched / uncertain / not found per playlist before anything is created as an
+  unlisted playlist. Up to 50 MB, 200 playlists and 20,000 tracks per import; cancellable.
+- Accessibility: Reduce motion (Settings → Appearance: Off / On / Follow system, where "Follow
+  system" reads GNOME's animations switch on Linux; Windows does not follow the system yet), a
+  High Contrast theme preset (yellow on black, every text pair above 7:1), and screen-reader
+  names on every icon-only button.
+
+### Changed
+- The queue file stores the playing source's tracks as references to the same tracks in the
+  queue (format version 2): a 9,000-track queue file is half the size (6.0 → 3.1 MB before
+  encryption) and loads about 40 % faster. Older files still load. A queue file written by 2.0
+  read by 1.9 or older loses the source's track list (used for repeat-all), not the queue.
+- Theme presets: error red on light themes, and the text colour on mid-tone accent colours,
+  now pass WCAG AA (a test holds every preset to it).
+- Binary about 2.2 MB larger (flate2, roxmltree, gstreamer-base).
+
+### Fixed
+- Older bugs found in this review: the equalizer and Signal Path since 1.3 (the panel dropped
+  the equalizer after a gapless track change, and switching the equalizer on during an album
+  never took effect until playback restarted), and long exclusive-device names drawn over
+  each other in Settings → Playback (since 1.x).
+
+### Found in review before release
+Each was fixed in its own commit; details in REVIEW.md #151–164.
+- The alarm's timer ran on a clock that stops while the computer is suspended: after a
+  suspend it fired hours late and the ring was then skipped as missed (a laptop asleep from
+  23:30 to 06:50 would not have rung at 07:00). It now checks the wall clock once a minute.
+- Windows: across a daylight-saving change the alarm rang an hour early or late.
+- An alarm time like "1é1" crashed the settings task instead of being refused.
+- Crossfeed: never shipped in the Windows bundle (the plugin was not on its list); switching
+  it on during an album did not apply until playback restarted; the Signal Path dropped it
+  after a gapless track change. The self-test now says whether each bundle has `bs2b`.
+- Import: a hostile file under the 50 MB limit used 0.8–1.2 GB of memory before the 20,000
+  track limit was checked (48 MB of empty Spotify entries, a 50 MB line of CSV commas). Now
+  refused at about 110 MB, the file itself.
+- Sign-out did not end an import or queue link begun before it: matching could run on at the
+  login screen and its review be offered to the next account; a waiting link survived.
+  Sign-out also left the alarm flag set for the next account.
+- Closing the import review or the queue-link dialog kept what it held in memory.
+- A queue link's "Add to queue" put its tracks ahead of the rest of the playing playlist
+  instead of after everything queued, as the dialog says.
+- Per-device memory restored a device's equalizer without showing it on the equalizer page.
+- A queue-link test said it checked deep nesting but never reached the parser.
+
+### Performance (measured)
+Measured on this machine (24 cores, AMD Radeon RX 9070 with amdgpu, PipeWire 1.6.10, GStreamer
+1.28.8) with the 1.9 method: release builds of 1.9.0, 2.0 as handed over (`6117841`) and the
+final tree, each started 12 s before a 60 s window, on a copy of a signed-in profile reset to
+default settings, with its own `XDG_RUNTIME_DIR`, headless KWin with a nested Xwayland,
+Skia/Vulkan. Playing = TOTO "Africa" (539204), FLAC 24-bit/192 kHz, into a null PipeWire sink.
+Interleaved runs: two idle, four playing. VRAM is `drm-memory-vram` from amdgpu's fdinfo; it
+reads about 137.0 or 138.4 MB from run to run for every build, so no VRAM difference is claimed.
+
+| Default settings | 1.9.0 | 2.0 as handed over | 2.0.0 |
+|---|---|---|---|
+| Idle: threads, open files, wakeups/s, CPU ticks in 60 s | 21, 54, 0, 0 (both runs) | 21, 54, 0, 0 | 21, 54, 0, 0 |
+| Idle: anonymous / total PSS | 57.4 / 121.7, 56.3 / 121.2 MB | 56.6 / 121.8, 56.9 / 122.4 MB | 56.3 / 121.6, 56.1 / 121.7 MB |
+| Playing: threads (start / end of window), open files | 42 / 38 (one run 43), 73 / 72 | 42 / 38, 73 / 72 | 42 / 38, 73 / 72 |
+| Playing: wakeups/s | 336, 282, 270, 307 | 263, 292, 284, 282 | 273, 283, 290, 297 |
+| Playing: CPU ticks in 60 s | 84, 83, 95, 75 | 89, 82, 80, 85 | 80, 83, 85, 85 |
+| Playing: anonymous PSS | 102.2, 102.9, 105.7, 108.4 MB | 107.4, 102.6, 107.4, 107.6 MB | 104.5, 110.7, 107.3, 106.6 MB |
+| Playing: total PSS | 174.5, 175.2, 178.1, 180.3 MB | 180.8, 175.4, 180.3, 180.4 MB | 177.0, 183.6, 180.1, 179.3 MB |
+| Window mapped (7 launches ×2, median and range) | 299 (297–302), 295 (293–301) ms | 297 (289–304), 301 (293–305) ms | 297 (296–304), 298 (296–310) ms |
+| Binary | 73,639,192 B | 75,831,192 B | 75,899,672 B |
+| 9,000-track queue restored / after shuffle, two edits, three undos: anonymous PSS | 68.1 / 144.5 MB | 68.4 / 87.0 MB | 69.3 / 125.7 MB |
+| Hidden to the tray and restored (idle and playing): VRAM; restore time | unchanged; 47–50 ms | unchanged; 48–51 ms | unchanged; 46–51 ms |
+| Track start (MPD stop → play → stream running), six starts | 141, 231, 137, 127, 138, 146 ms | 167, 140, 133, 244, 131, 132 ms | 134, 136, 133, 172, 137, 143 ms |
+| Pause / resume (MPD → stream corked / running), seek (MPD → new position) | 0–2 / 0–3 / 2–4 ms | 0–1 / 1–3 / 2–3 ms | 0–2 / 0–3 / 2–3 ms |
+
+Default settings cost nothing new: same idle threads and open files, no idle wakeups or CPU,
+and no new timer, thread or file read at start-up (each new spawn and timer was read: the alarm
+timer exists only while an alarm is armed, device memory and crossfeed only when switched on).
+While playing, wakeups, CPU and threads are inside run-to-run spread; anonymous memory is
+2–3 MB higher in the medians (104.3 → 107.0 MB), inside the spread of single runs (the ranges
+overlap); the binary is 2.2 MB larger (flate2, roxmltree, gstreamer-base).
+
+Per thread while playing (wakeups/s, final build, same in all three): PipeWire `threaded-ml`
+52–58, `souphttpsrc` 40–81 and its pad task 19–31, GStreamer queues and multiqueues about 100,
+the tokio runtime 17–18, the UI thread 11–14, the Vulkan swapchain threads 16, MPRIS 2.
+
+- P7, the queue file with a source's tracks as references: kept. 9,000 tracks (the source
+  holding all of them), best of 5, three interleaved runs: 6,032,079 → 3,060,025 bytes;
+  writing 3.05–3.83 ms before vs 3.35–3.76 ms after (the same); reading 24.8, 24.8, 24.8 ms vs
+  14.5, 14.7, 14.6 ms. The 9,000-track queue in the app restores at the same memory (68–69 MB);
+  after edits and undos it varies between runs, as in 1.9.0.
+- Throttled connection (`thrott_proxy.py`), final build: 24/192 at 1 MB/s (66.3 MB through the
+  proxy in 69.5 s) and 16/44 at 250 kB/s each played 68.9 s of audio in 70 s with no buffering
+  drop after the start. The null sink reports no underruns itself; the position kept pace.
+- Gapless: a 24/192 and a 16/44 pair through the branch pipeline's elements (crossfeed off adds
+  none) is bit-identical to the source (md5).
+- Control latency stays far under 100 ms; restore from the tray shows the current track and
+  position (checked on screen). Restore and track-start times are measured from a separate
+  process and include its own start-up; they are for comparing the columns, and differ from the
+  1.9.0 notes' method.
+
+### Considered, not done
+- P1–P6 (the brief's other performance items): not started in the handed-over work, so
+  there is nothing to measure or keep; only P7 (the queue file) was implemented.
+- An Apple `Library.xml` at the 2,000,000-node cap peaks at 157 MB while it is read
+  (roxmltree's tree). A real 20,000-track library is about 600,000 nodes; the cap was left.
+- Following a device change mid-track would need a sink-change notification Slate does not
+  have in shared mode; the device is looked at when a track starts instead.
+
+### Not tested before release
+- Windows and macOS: not run here. The Windows-only alarm offset (#152) and the `bs2b`
+  bundling are built and self-tested by CI only; Windows shared-mode output has no device
+  name, so per-device memory works there only in exclusive mode; "Follow system" for reduce
+  motion does not read the Windows setting.
+- A real suspend and resume with an alarm armed (not possible on this machine); the wall-clock
+  wait is unit-tested and an alarm across an app restart and a missed alarm were checked live.
+- A real output-device change: simulated with a `pactl` stand-in that reports another
+  default sink (switching this machine's real default output was not acceptable).
+- Signal Path PRISTINE in exclusive / bit-perfect mode needs a real DAC (ALSA's `null` device
+  has no clock); that path's code is unchanged since 1.7.0 apart from crossfeed being kept
+  out of it.
+- The Spotify / Apple import through its file dialog (it opens on the desktop portal, not the
+  headless display) and the matcher against real TIDAL search results; the readers were run on
+  real hostile files, the matcher in unit tests.
+- Reduce motion was checked by reading every animation (all go through one setting) and
+  switching it on live, not frame by frame on every page.
+- A 2.0 queue file read by 1.9 or older loses the source's track list (repeat-all), not the
+  queue; not run.
+- The crossfade incoming player's Signal Path shows no decoded format (known since 1.3; not
+  changed here).
+
 ## [1.9.0] - 2026-11-08
 
 The reviewed release of the 1.8 work: six features, all off or dormant until used, and two

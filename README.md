@@ -43,7 +43,9 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
   ReplayGain normalisation, maximum-quality cap with automatic
   fallback, exclusive and bit-perfect output (ALSA with DAC detection on Linux, WASAPI exclusive
   on Windows), Signal Path
-  panel with a PRISTINE / MODIFIED verdict.
+  panel with a PRISTINE / MODIFIED verdict, a parametric equalizer and headphone crossfeed
+  (`bs2b`; Light / Medium / Strong, off by default), and optionally the volume and equalizer
+  remembered per output device.
 - Scrobbling to Last.fm, Libre.fm and ListenBrainz; TIDAL play reporting (toggleable);
   Discord Rich Presence with your own text templates and per-playlist hiding.
 - Listening party: listen together with friends, in sync, with emoji reactions (see below).
@@ -55,7 +57,7 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
   MCP server has queue, search, playlist and context tools, an optional access token,
   read-only mode, in-app approval of destructive calls and an activity log with undo for AI
   agents: see [docs-assets/MCP.md](docs-assets/MCP.md).
-- 15 theme presets plus your own themes (editor with contrast warnings, palette from the
+- 16 theme presets (one of them High Contrast) plus your own themes (editor with contrast warnings, palette from the
   album cover, `.slatetheme` import / export), `theme.json` with live reload, interface scale.
 - MPRIS and tray on Linux; media controls (SMTC), tray and sleep prevention on Windows (the
   Windows parts are built and tested in CI but have not been used on a real Windows desktop yet).
@@ -76,7 +78,15 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 - Compact now-playing strip (right-click the mini-player button): a thin window with title,
   progress, play / pause and next, kept on top on X11 and Windows (a normal window on Wayland,
   where apps cannot keep a window on top).
-- Settings search, keyboard focus rings and Tab navigation, tooltips on icon buttons.
+- Queue "⋯" → Copy queue link: share the queue (up to 500 tracks) as a `slate://queue/…` link;
+  opening one asks whether to replace the queue or add to it.
+- Wake-up alarm (Settings → General): a time and days, what to play, a fade-in from silence and a
+  10-minute snooze. Nothing runs until an alarm is set.
+- Import from Spotify (account export, Exportify CSV) or Apple Music (`Library.xml`, privacy
+  export CSV): tracks are matched by ISRC, then title, artist and length, and you review the
+  matches before any playlist is made.
+- Settings search, keyboard focus rings and Tab navigation, tooltips and screen-reader names on
+  icon buttons, Reduce motion (Settings → Appearance; can follow GNOME's setting).
 - Single instance with `tidal://` and `slate://` links, profile editing, a daily update check
   against this repository's releases (can be turned off).
 
@@ -150,6 +160,8 @@ Your TIDAL playlists appear as stored playlists, search uses TIDAL track search,
 ## Build
 
 Requirements: a recent stable Rust toolchain and GStreamer 1.20+ (1.24+ for gapless).
+Headphone crossfeed needs GStreamer's `bs2b` plugin (part of gst-plugins-bad, built with
+libbs2b); without it the setting hides itself.
 
 ### Arch Linux
 
