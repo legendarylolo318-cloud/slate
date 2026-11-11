@@ -61,7 +61,12 @@ impl MusicBrainzLookup {
             http,
             cache: Mutex::new(cache),
             cache_path,
-            last_request: Mutex::new(Instant::now() - MIN_REQUEST_INTERVAL),
+            last_request: Mutex::new(
+                // `Instant - Duration` panics this close to boot (the clock starts there).
+                Instant::now()
+                    .checked_sub(MIN_REQUEST_INTERVAL)
+                    .unwrap_or_else(Instant::now),
+            ),
             dirty: AtomicBool::new(false),
         }
     }

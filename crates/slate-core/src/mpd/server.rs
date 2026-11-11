@@ -249,7 +249,12 @@ pub async fn start(host: Arc<dyn Host>, cfg: Config) -> std::io::Result<Handle> 
             seen: None,
             version: 1,
         }),
-        search_gate: tokio::sync::Mutex::new(Instant::now() - SEARCH_SPACING),
+        search_gate: tokio::sync::Mutex::new(
+            // `Instant - Duration` panics this close to boot (the clock starts there).
+            Instant::now()
+                .checked_sub(SEARCH_SPACING)
+                .unwrap_or_else(Instant::now),
+        ),
         clients: AtomicUsize::new(0),
         started: Instant::now(),
         stop: stop_rx.clone(),
