@@ -1767,6 +1767,11 @@ impl TidalClient {
             }
             Some(_) => {}
         }
+        // Requests queued on this lock behind a refresh that was answered 429
+        // must not each send their own: the auth host's cooldown holds them too.
+        if let Some(secs) = self.gate.cooling_down() {
+            return Err(rate_limited_error(secs));
+        }
 
         // Build params — include client_secret only if available
         let mut form_params = vec![

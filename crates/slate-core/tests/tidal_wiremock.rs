@@ -669,3 +669,44 @@ async fn a_rate_limited_refresh_holds_back_every_other_request() {
     // The next request is refused locally instead of going out.
     assert!(c.get_track(3).await.expect_err("held").is_rate_limited());
 }
+
+/// Without the gate check under the refresh lock, every request queued behind a
+/// refresh that was answered 429 sent its own `POST /token`, each one another 429.
+#[tokio::test]
+async fn requests_queued_behind_a_rate_limited_refresh_do_not_each_refresh() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/v1/tracks/\d+$"))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .set_body_json(json!({"status": 401}))
+                .set_delay(Duration::from_millis(50)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/auth/token"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("Retry-After", "30")
+                .set_delay(Duration::from_millis(100)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut c = client(&server);
+    c.set_tokens(Some(tokens("old")));
+    let cell = Arc::new(ClientCell::new(c));
+    let mut tasks = Vec::new();
+    for id in 0..4u64 {
+        let cell = Arc::clone(&cell);
+        tasks.push(tokio::spawn(async move {
+            cell.lock().await.get_track(id).await
+        }));
+    }
+    for t in tasks {
+        let err = t.await.expect("join").expect_err("rate limited");
+        assert!(err.is_rate_limited(), "{err:?}");
+    }
+    // `expect(1)` on the token mock is checked when the server drops.
+}
