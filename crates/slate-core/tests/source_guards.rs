@@ -901,3 +901,26 @@ fn the_player_publishes_to_mcp_only_while_it_runs() {
         "publish_now must only write the MCP snapshot while the server runs"
     );
 }
+
+/// REVIEW #73: right after a create, TIDAL's edit host can answer 404/412 for
+/// the new playlist, so the first add must go through
+/// `add_tracks_to_new_playlist` (which waits for it). The MCP `create_playlist`
+/// tool was the one create path still adding straight away; an agent that saw
+/// the resulting error made the playlist again.
+#[test]
+fn the_mcp_create_playlist_tool_waits_for_the_new_playlist_before_adding() {
+    let src = fs::read_to_string("src/mcp/tools/playlists.rs").expect("read playlists.rs");
+    let src = without_comments(&src);
+    let at = src
+        .find("async fn create_playlist(")
+        .expect("the MCP create_playlist tool");
+    let body = &src[block_of(&src, at)];
+    assert!(
+        body.contains("add_tracks_to_new_playlist("),
+        "first add must wait for the edit host"
+    );
+    assert!(
+        !body.contains(".add_tracks_to_playlist("),
+        "no direct add straight after the create"
+    );
+}

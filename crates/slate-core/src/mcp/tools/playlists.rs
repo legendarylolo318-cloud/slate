@@ -4,6 +4,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::{tool_router, ErrorData};
 use serde::Deserialize;
 
+use crate::commands::library as lib_cmds;
 use crate::mcp::events::{
     PlaylistDeletedPayload, PlaylistTracksChangedPayload, PlaylistUpdatedPayload,
     EV_PLAYLIST_CREATED, EV_PLAYLIST_DELETED, EV_PLAYLIST_TRACKS_CHANGED, EV_PLAYLIST_UPDATED,
@@ -227,15 +228,25 @@ impl SlateMcpServer {
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         let uuid = playlist.uuid.clone();
-        let track_count = if let Some(ids) = args.track_ids.filter(|v| !v.is_empty()) {
-            client
-                .add_tracks_to_playlist(&uuid, &ids)
-                .await
-                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-            ids.len() as u32
+        drop(client);
+        // The first add goes through the path that waits for TIDAL's edit host
+        // to know the new playlist (REVIEW #73); the rest in paced batches. Once
+        // the playlist exists a failed add is reported, not returned as an error:
+        // an agent that saw "error" would create the playlist again.
+        let ids = args.track_ids.unwrap_or_default();
+        let first = ids.len().min(lib_cmds::ADD_BATCH);
+        let (added, add_error) = if ids.is_empty() {
+            (0, None)
         } else {
-            0
+            match lib_cmds::add_tracks_to_new_playlist(&state, &uuid, ids[..first].to_vec()).await {
+                Ok(()) => match lib_cmds::add_tracks_paced(&state, &uuid, &ids[first..]).await {
+                    Ok(n) => (first + n, None),
+                    Err(e) => (first, Some(e)),
+                },
+                Err(e) => (0, Some(e)),
+            }
         };
+        let track_count = u32::try_from(added).unwrap_or(u32::MAX);
         state
             .disk_cache
             .invalidate_tag(&format!("user:{}", user_id))
@@ -255,8 +266,19 @@ impl SlateMcpServer {
                 )
                 .map_err(|e| ErrorData::internal_error(format!("emit failed: {e}"), None))?;
         }
-        let json =
+        let mut json =
             serde_json::json!({ "uuid": uuid, "name": playlist.title, "trackCount": track_count });
+        if let Some(e) = add_error {
+            log::warn!(
+                "[mcp create_playlist] {uuid}: adding tracks failed: {}",
+                e.log_safe()
+            );
+            json["warning"] = serde_json::json!(format!(
+                "The playlist was created, but only {added} of {} tracks could be added ({}). Do not create it again; add the rest to this uuid.",
+                ids.len(),
+                e.log_safe()
+            ));
+        }
         Ok(CallToolResult::success(vec![
             rmcp::model::ContentBlock::text(json.to_string()),
         ]))
