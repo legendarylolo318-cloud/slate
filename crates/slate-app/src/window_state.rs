@@ -289,7 +289,7 @@ fn write(which: Which, g: Geom) {
         if let Some(dir) = p.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(&p, serde_json::to_string(&store)?)
+        slate_core::write_atomic(&p, serde_json::to_string(&store)?.as_bytes())
     })();
     if let Err(e) = result {
         tracing::debug!("could not save the window geometry: {e}");

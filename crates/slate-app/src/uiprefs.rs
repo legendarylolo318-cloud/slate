@@ -208,7 +208,14 @@ impl UiPrefs {
         if let Some(dir) = p.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(p, serde_json::to_string_pretty(self)?)
+        // Atomic (temp file + rename): a crash mid-write must not leave a
+        // truncated file that `load` reads as "all defaults".
+        let r = slate_core::write_atomic(&p, serde_json::to_string_pretty(self)?.as_bytes());
+        if let Err(e) = &r {
+            // Most callers drop the result; the log still says why prefs did not stick.
+            tracing::warn!("could not save ui.json: {e}");
+        }
+        r
     }
 
     pub fn bar_scale(&self) -> f32 {
