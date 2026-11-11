@@ -8,4 +8,6 @@ ignore = [
     "RUSTSEC-2026-0371", # zbus_names, unmaintained
     "RUSTSEC-2026-0372", # zvariant_derive, unmaintained
     "RUSTSEC-2026-0441", # pin-utils, unmaintained
+    "RUSTSEC-2026-0457", # rmcp OAuth client SSRF; client not built
+    "RUSTSEC-2026-0462", # rmcp HTTP client body size; client not built
 ]

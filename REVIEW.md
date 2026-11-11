@@ -209,6 +209,7 @@ Last updated 2026-11-10. Linux checks run on Arch (Wayland/Hyprland, AMD GPU); W
 | RUSTSEC-2026-0370/0371/0372 | zvariant, zbus_names, zvariant_derive | Unmaintained, via accesskit/zbus |
 | RUSTSEC-2026-0441 | pin-utils | Unmaintained (published 2026-11), no known vulnerability; only via `spin_on` 0.1.1, which Slint 1.18 uses. Found when the 1.6.0 push ran `cargo deny` |
 | RUSTSEC-2025-0141 | bincode | Unmaintained; in the lockfile, not in the built graph |
+| RUSTSEC-2026-0457, RUSTSEC-2026-0462 | rmcp 2.2 | Vulnerabilities in rmcp's MCP **client** (OAuth discovery SSRF; unbounded Streamable HTTP client response body). Slate builds only `server` + `transport-streamable-http-server` (`cargo tree -e features -i rmcp` shows no client or auth feature), so neither path is compiled. Fixed only in rmcp 3.x, a major API change; upgrade when the MCP tools are next reworked. Found when the 2.0.1 push ran `cargo deny`. `async-executor` 1.14.0 (yanked) updated to 1.14.1 at the same time |
 
 ## Release profile (0.3.0)
 `lto = "thin"`, `codegen-units = 1`, `strip = true`: binary 88.0 MB → 52.6 MB (−40 %). `--self-test` start-up unchanged (median ~11 ms over 10 runs), login-screen PSS/CPU within run-to-run noise. Cost: slower release builds (a full rebuild took 5 min 50 s on 16 threads).

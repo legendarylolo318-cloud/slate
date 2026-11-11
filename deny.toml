@@ -14,6 +14,11 @@ ignore = [
     { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained, via accesskit/zbus" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained, via accesskit/zbus" },
     { id = "RUSTSEC-2026-0441", reason = "pin-utils: unmaintained, via spin_on (Slint)" },
+    # rmcp 2.x: both are in the MCP *client* (OAuth discovery, Streamable HTTP client).
+    # Slate builds only the server features, so neither code path is compiled.
+    # Fixed only in rmcp 3.x (major API change); upgrade when the MCP tools are reworked.
+    { id = "RUSTSEC-2026-0457", reason = "rmcp OAuth client SSRF: client/auth features not built" },
+    { id = "RUSTSEC-2026-0462", reason = "rmcp Streamable HTTP client body size: client not built" },
 ]
 
 [licenses]
