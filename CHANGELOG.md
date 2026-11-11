@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.0.1] - 2026-11-10
+
+Bug fixes only. Audio output, playback and memory use are unchanged. Details in REVIEW.md
+#165–172.
+
+### Fixed
+- Sign-in and token refresh: when TIDAL's sign-in server rate-limited a token refresh, every
+  request that was waiting for that refresh sent its own, each one rate-limited again. Now one
+  refresh is sent and the rest wait out the cooldown. The same cooldown now covers the auth
+  server, not just the API.
+- Device-code sign-in kept polling at the same pace after TIDAL asked it to slow down.
+- MCP `create_playlist` with `track_ids`: the tracks were added the moment the playlist
+  existed, when TIDAL often does not know it yet, so the agent got an error for a playlist that
+  had been made and could create it again. It now waits for the playlist as the app's own
+  New playlist does, adds long lists in batches of 50, and reports a failed add as a warning
+  beside the new playlist's id.
+- A notice (the small line above the player bar) shown within 3 s of another disappeared early.
+- `ui.json` (theme, sizes, renderer choice, alarm flag) and the saved window geometry were
+  written in place: a crash or power cut mid-write could reset every interface preference.
+  They are now written atomically, and a failed `ui.json` save is logged.
+- Party guests: when the host edited the queue several times quickly, each guest kept looking
+  up the tracks of queues that had already been replaced.
+- Starting Slate within a second of booting could panic (MPD server and MusicBrainz lookups).
+
 ## [2.0.0] - 2026-11-08
 
 Six features, all off or dormant until used, and a smaller queue file. Audio output with
