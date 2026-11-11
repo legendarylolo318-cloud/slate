@@ -1364,6 +1364,13 @@ where
     Err(last.unwrap_or(SlateError::NotAuthenticated))
 }
 
+/// Extra wait a device-code poll owes the server: 5 s after a `slow_down`
+/// answer (RFC 8628 §3.5), nothing after `authorization_pending`.
+fn device_poll_backoff(body: &str) -> Option<std::time::Duration> {
+    body.contains("slow_down")
+        .then_some(std::time::Duration::from_secs(5))
+}
+
 pub fn retry_after_create(e: &SlateError) -> bool {
     matches!(e, SlateError::Api { status, .. } if matches!(*status, 404 | 409 | 412 | 500..=599))
 }
@@ -1779,6 +1786,19 @@ impl TidalClient {
         let response = self.dispatch(generation, request).await?;
 
         let status = response.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            // The auth host bypasses `send`, but its 429 is the same account's
+            // limit: hold every other request back too instead of letting each
+            // one earn its own 401 → refresh → 429.
+            let secs = crate::rate_gate::retry_after_or_default(response.headers());
+            self.gate.trip(secs);
+            let secs = self.gate.cooling_down().unwrap_or(secs);
+            log::warn!(
+                "[refresh_token] POST /token rate limited, cooling down {}s",
+                secs
+            );
+            return Err(rate_limited_error(secs));
+        }
         let body = response.text().await.unwrap_or_default();
 
         if !status.is_success() {
@@ -2040,6 +2060,11 @@ impl TidalClient {
         if status.as_u16() == 400
             && (body.contains("authorization_pending") || body.contains("slow_down"))
         {
+            // RFC 8628 §3.5: on "slow_down" the client must poll less often.
+            // The caller's loop sleeps the server's interval; this adds the 5 s.
+            if let Some(extra) = device_poll_backoff(&body) {
+                tokio::time::sleep(extra).await;
+            }
             return Ok(None); // Still waiting -- caller should retry
         }
 
@@ -7407,7 +7432,20 @@ mod profile_upload_tests {
 
 #[cfg(test)]
 mod rate_limit_error_tests {
-    use super::rate_limited_error;
+    use super::{device_poll_backoff, rate_limited_error};
+
+    #[test]
+    fn device_polling_slows_down_only_when_asked() {
+        assert_eq!(
+            device_poll_backoff(r#"{"status":400,"error":"slow_down"}"#),
+            Some(std::time::Duration::from_secs(5))
+        );
+        assert_eq!(
+            device_poll_backoff(r#"{"status":400,"error":"authorization_pending"}"#),
+            None
+        );
+    }
+
     use crate::SlateError;
 
     /// Pins the wire contract that src/lib/trackAvailability.ts parses:

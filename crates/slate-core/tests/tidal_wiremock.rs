@@ -640,3 +640,32 @@ async fn add_anyway_sends_on_dupes_add_and_a_plain_add_sends_fail() {
         .await
         .expect("added anyway");
 }
+
+#[tokio::test]
+async fn a_rate_limited_refresh_holds_back_every_other_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/tracks/3"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({"status": 401})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/auth/token"))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "30"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut c = client(&server);
+    c.set_tokens(Some(tokens("old")));
+    let err = c.get_track(3).await.expect_err("rate limited");
+    assert!(err.is_rate_limited(), "{err:?}");
+    let left = c
+        .gate()
+        .cooling_down()
+        .expect("gate tripped by the auth host");
+    assert!((29..=30).contains(&left), "{left}s");
+    // The next request is refused locally instead of going out.
+    assert!(c.get_track(3).await.expect_err("held").is_rate_limited());
+}
