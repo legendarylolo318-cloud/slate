@@ -473,12 +473,21 @@ impl Backend {
 
     /// Brief confirmation banner.
     pub fn notify(&self, text: &str) {
+        // Each notice clears only itself: a newer one (from here or from a
+        // progress line set elsewhere) stays up for its own full time.
+        static SHOWN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let gen = SHOWN.fetch_add(1, Ordering::Relaxed) + 1;
         let text = text.to_string();
-        self.ui(move |w| w.set_notice(text.into()));
+        let shown = text.clone();
+        self.ui(move |w| w.set_notice(shown.into()));
         let this = self.clone();
         self.rt.spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            this.ui(|w| w.set_notice("".into()));
+            this.ui(move |w| {
+                if SHOWN.load(Ordering::Relaxed) == gen && w.get_notice() == text.as_str() {
+                    w.set_notice("".into());
+                }
+            });
         });
     }
 }
