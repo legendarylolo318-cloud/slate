@@ -1210,6 +1210,11 @@ impl Backend {
             let now = slate_core::now_secs() as i64;
             let (mut tracks, mut lines) = (Vec::new(), Vec::new());
             for (i, id) in next.iter().enumerate() {
+                // A newer queue replaced this one: its own task looks those tracks up, so
+                // stop here instead of finishing lookups whose result is thrown away.
+                if PREFETCH_GEN.load(Ordering::Acquire) != gen {
+                    return;
+                }
                 let t = match metadata::get_track(&state, *id).await {
                     Ok(v) => serde_json::from_value::<Track>(v).ok(),
                     Err(e) if e.is_rate_limited() => break,
