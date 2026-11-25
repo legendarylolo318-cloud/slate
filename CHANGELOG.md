@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [2.1.0] - 2026-11-25
+
+Two small features and a sign-in fix. Also carries the 2.0.1 fixes below, which had no
+release of their own.
 
 ### Added
 - Queue "⋯" → Stop after this track: playback stops when the current track ends instead of
@@ -17,6 +20,13 @@
 - Device-code sign-in: after TIDAL asked it to slow down, polling went back to the old pace
   on the next check and was told to slow down again. Each "slow down" now adds 5 s for the
   rest of that sign-in (RFC 8628 §3.5), up to 60 s.
+- Security: `url` 2.5.8 → 2.5.9 (RUSTSEC-2026-0592, stack overflow in `Url::origin()` on
+  nested `blob:` URLs; reached only through dependencies).
+
+### Release process
+- A push to `main` whose CI passes now builds the AppImage and the Windows installer. When
+  the version in `Cargo.toml` has no release yet, the release (and its `v` tag) is published
+  automatically; otherwise the builds are kept as workflow artifacts only.
 
 ## [2.0.1] - 2026-11-10
 

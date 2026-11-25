@@ -3,16 +3,71 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # After CI passes on a push to main: build, and publish when the version is new.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:   # build artifacts without publishing
 
 env:
   GST_VERSION: "1.24.13"
 
+# One release build per commit; a newer CI success does not cancel a build in flight
+# (a half-published release is worse than a late one).
+concurrency:
+  group: release-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
 jobs:
+  # Decides whether to build and whether to publish. A CI run that failed, or was not a
+  # push to main (e.g. a pull request), builds nothing.
+  gate:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-22.04
+    outputs:
+      sha: ${{ steps.v.outputs.sha }}
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          V="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          case "$GITHUB_EVENT_NAME" in
+            push) publish=true ;;      # a v* tag pushed by hand
+            workflow_run)
+              # Publish only a version that has no release and no tag yet; an unchanged
+              # version just builds (the files stay on the workflow run).
+              if gh release view "v$V" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+                 || git ls-remote --exit-code --tags origin "refs/tags/v$V" >/dev/null 2>&1; then
+                publish=false
+                echo "v$V is already released: building only"
+              else
+                publish=true
+                echo "v$V is new: it will be published once the builds pass"
+              fi ;;
+            *) publish=false ;;
+          esac
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
   appimage:
+    needs: gate
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
       - name: Version
         run: echo "VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> $GITHUB_ENV
       - name: Install dependencies
@@ -86,9 +141,12 @@ jobs:
         with: { name: appimage, path: dist/*.AppImage }
 
   windows:
+    needs: gate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
       - name: Version
         shell: pwsh
         run: |
@@ -186,10 +244,12 @@ jobs:
             dist/*-setup.exe
 
   bundle:
-    needs: [appimage, windows]
+    needs: [gate, appimage, windows]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
       - uses: actions/download-artifact@v4
         with: { path: artifacts, merge-multiple: true }
       - name: Source tarball, checksums, notes
@@ -217,8 +277,8 @@ jobs:
             notes.md
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [bundle]
+    if: needs.gate.outputs.publish == 'true'
+    needs: [gate, bundle]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -226,9 +286,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: release, path: release }
       - name: Create release
-        env: { GH_TOKEN: "${{ github.token }}" }
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          TAG: v${{ needs.gate.outputs.version }}
+          SHA: ${{ needs.gate.outputs.sha }}
         run: |
-          # Published assets: the AppImage and the Windows installer only.
-          gh release create "$GITHUB_REF_NAME" release/artifacts/*.AppImage release/artifacts/*-setup.exe \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Slate $GITHUB_REF_NAME" --notes-file release/notes.md
+          # Published assets: the AppImage and the Windows installer only. After a CI run
+          # the tag does not exist yet: `--target` makes it on the commit that was built
+          # (a tag made with this token starts no other workflow, so no second build).
+          gh release create "$TAG" release/artifacts/*.AppImage release/artifacts/*-setup.exe \
+            --repo "$GITHUB_REPOSITORY" --target "$SHA" \
+            --title "Slate $TAG" --notes-file release/notes.md
