@@ -298,6 +298,8 @@ impl Backend {
             // later changes (slider, keys, MPRIS, MPD) are left alone for the session.
             let prefs = crate::uiprefs::UiPrefs::load();
             crate::device_memory::set_enabled(prefs.device_memory);
+            #[cfg(target_os = "linux")]
+            crate::platform::track_notify::set_enabled(prefs.track_notifications);
             crate::alarm::note_armed_pref(prefs.alarm_armed);
             // Off (the default) asks nothing and changes nothing.
             if prefs.reduce_motion != 0 {
@@ -579,6 +581,8 @@ impl Backend {
             Outcome::Playing(track) => {
                 self.shared.loaded.store(true, Ordering::Relaxed);
                 self.show_track(&track, true);
+                #[cfg(target_os = "linux")]
+                self.track_notification(&track);
                 let quality = self
                     .controller()
                     .and_then(|c| c.stream_info())
@@ -630,6 +634,48 @@ impl Backend {
         }
         self.refresh_queue_info().await;
         self.save().await;
+    }
+
+    /// Settings → General "Notify on track change": only when the main window is not in
+    /// front (someone looking at Slate already sees the new track).
+    #[cfg(target_os = "linux")]
+    fn track_notification(&self, track: &Track) {
+        use crate::platform::track_notify;
+        use slint::winit_030::WinitWindowAccessor;
+        if !track_notify::enabled() {
+            return;
+        }
+        let title = track.title().to_string();
+        let artist = track.artist_name().to_string();
+        let album = track.album_title().to_string();
+        let cover_url = track.cover_id().map(|c| images::tidal_image_url(c, 160));
+        let this = self.clone();
+        self.ui(move |w| {
+            let in_front = w.window().is_visible()
+                && w.window()
+                    .with_winit_window(|ww| ww.has_focus())
+                    .unwrap_or(false);
+            if in_front {
+                return;
+            }
+            let inner = this.clone();
+            this.rt.spawn(async move {
+                // Usually cached already: the player bar loaded the same cover.
+                let cover = match (inner.state(), cover_url) {
+                    (Some(state), Some(url)) => inner.images.get_fit(&state, &url, 128).await,
+                    _ => None,
+                }
+                .map(|p| {
+                    let px = p.to_rgba();
+                    track_notify::Cover {
+                        width: px.width(),
+                        height: px.height(),
+                        rgba: px.as_bytes().to_vec(),
+                    }
+                });
+                track_notify::show(&title, &artist, &album, cover).await;
+            });
+        });
     }
 
     pub(crate) fn shared_set_playing(&self, playing: bool) {
@@ -797,6 +843,9 @@ impl Backend {
         self.publish_queue().await;
         if let Some(ctl) = self.controller() {
             ctl.refresh_gapless().await;
+            // The checkmark follows the track it was set on (a track change drops it).
+            let on = ctl.stop_after_pending().await;
+            self.ui(move |w| w.set_stop_after_current(on));
         }
     }
 
@@ -829,6 +878,18 @@ impl Backend {
         let this = self.clone();
         self.rt.spawn(async move {
             let Some(ctl) = this.controller() else { return };
+            // "Stop after this track": the track ended on its own and was the last one.
+            // Not loaded any more, so Play starts it again instead of resuming.
+            if !explicit && ctl.finish_if_stop_after().await {
+                this.shared.loaded.store(false, Ordering::Relaxed);
+                this.ui(|w| {
+                    w.set_progress(0.0);
+                    w.set_position_text("0:00".into());
+                });
+                this.apply(Outcome::Stopped).await;
+                this.notify("Stopped after this track");
+                return;
+            }
             let outcome = ctl.next(explicit).await;
             this.apply(outcome).await;
         });

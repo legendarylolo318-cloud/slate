@@ -1364,8 +1364,11 @@ where
     Err(last.unwrap_or(SlateError::NotAuthenticated))
 }
 
-/// Extra wait a device-code poll owes the server: 5 s after a `slow_down`
-/// answer (RFC 8628 §3.5), nothing after `authorization_pending`.
+/// Most extra wait `slow_down` answers can add to the device-code poll.
+const DEVICE_POLL_EXTRA_MAX_SECS: u64 = 60;
+
+/// How much one device-code answer adds to the poll's extra wait: 5 s for a
+/// `slow_down` (RFC 8628 §3.5), nothing for `authorization_pending`.
 fn device_poll_backoff(body: &str) -> Option<std::time::Duration> {
     body.contains("slow_down")
         .then_some(std::time::Duration::from_secs(5))
@@ -1482,6 +1485,10 @@ struct ClientShared {
     foreground: std::sync::atomic::AtomicUsize,
     /// Background requests go one at a time.
     background: tokio::sync::Mutex<()>,
+    /// Seconds every device-code poll waits on top of the server's interval.
+    /// Each `slow_down` adds 5 and it stays for the rest of that sign-in
+    /// (RFC 8628 §3.5); a new sign-in starts from 0.
+    device_poll_extra_secs: std::sync::atomic::AtomicU64,
 }
 
 struct ForegroundGuard<'a>(&'a std::sync::atomic::AtomicUsize);
@@ -1535,6 +1542,7 @@ impl TidalClient {
                 permits: tokio::sync::Semaphore::new(MAX_IN_FLIGHT),
                 foreground: std::sync::atomic::AtomicUsize::new(0),
                 background: tokio::sync::Mutex::new(()),
+                device_poll_extra_secs: std::sync::atomic::AtomicU64::new(0),
             }),
         }
     }
@@ -1993,6 +2001,9 @@ impl TidalClient {
         if self.client_id.is_empty() {
             return Err(SlateError::NotConfigured("Client ID".into()));
         }
+        self.shared
+            .device_poll_extra_secs
+            .store(0, std::sync::atomic::Ordering::Relaxed);
 
         let mut form_params = vec![
             ("client_id", self.client_id.as_str()),
@@ -2065,10 +2076,21 @@ impl TidalClient {
         if status.as_u16() == 400
             && (body.contains("authorization_pending") || body.contains("slow_down"))
         {
-            // RFC 8628 §3.5: on "slow_down" the client must poll less often.
-            // The caller's loop sleeps the server's interval; this adds the 5 s.
-            if let Some(extra) = device_poll_backoff(&body) {
-                tokio::time::sleep(extra).await;
+            // RFC 8628 §3.5: each "slow_down" adds 5 s to the interval for this
+            // and every later poll. The caller's loop sleeps the server's
+            // interval; this adds the extra. No lock is held while it waits
+            // (the client is a copy).
+            let extra = &self.shared.device_poll_extra_secs;
+            if let Some(add) = device_poll_backoff(&body) {
+                extra.fetch_add(add.as_secs(), std::sync::atomic::Ordering::Relaxed);
+                extra.fetch_min(
+                    DEVICE_POLL_EXTRA_MAX_SECS,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
+            let secs = extra.load(std::sync::atomic::Ordering::Relaxed);
+            if secs > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
             }
             return Ok(None); // Still waiting -- caller should retry
         }

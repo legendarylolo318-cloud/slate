@@ -11,6 +11,8 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 > Licensed under **GPL-3.0-only**, same as the original. Slate is **not affiliated with
 > TIDAL**.
 
+[![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev)
+
 **What's new:** [CHANGELOG.md](CHANGELOG.md) · **For AI agents:** [docs-assets/MCP.md](docs-assets/MCP.md) ·
 **Downloads:** Linux AppImage and Windows installer on the
 [releases page](https://github.com/legendarylolo318-cloud/slate/releases).
@@ -78,6 +80,8 @@ A native desktop client for [TIDAL](https://tidal.com), written entirely in Rust
 - Compact now-playing strip (right-click the mini-player button): a thin window with title,
   progress, play / pause and next, kept on top on X11 and Windows (a normal window on Wayland,
   where apps cannot keep a window on top).
+- Queue "⋯" → Stop after this track, and optional desktop notifications on track change
+  (Settings → General; Linux).
 - Queue "⋯" → Copy queue link: share the queue (up to 500 tracks) as a `slate://queue/…` link;
   opening one asks whether to replace the queue or add to it.
 - Wake-up alarm (Settings → General): a time and days, what to play, a fade-in from silence and a

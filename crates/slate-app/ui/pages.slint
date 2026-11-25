@@ -207,6 +207,8 @@ export component QueuePanel inherits Rectangle {
     callback select(int, bool, bool);
     callback sel-action(string);
     in property <int> selection-size: 0;
+    /// "Stop after this track" is on (checkmark in the "⋯" menu).
+    in property <bool> stop-after: false;
     property <bool> m-ctrl: false;
     property <bool> m-shift: false;
     background: Theme.surface;
@@ -237,6 +239,7 @@ export component QueuePanel inherits Rectangle {
                         MenuItem { title: "Save queue as playlist"; activated => { root.menu("save-playlist"); } }
                         MenuItem { title: "Queue snapshots…"; activated => { root.menu("snapshots"); } }
                         MenuItem { title: "Copy queue link"; activated => { root.menu("copy-link"); } }
+                        MenuItem { title: "Stop after this track"; checked: root.stop-after; enabled: root.now-title != ""; activated => { root.menu("stop-after"); } }
                     }
                 }
             }

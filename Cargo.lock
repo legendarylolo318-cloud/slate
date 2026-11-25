@@ -7085,6 +7085,7 @@ dependencies = [
  "widestring",
  "windows",
  "winresource",
+ "zbus",
 ]
 
 [[package]]

@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Queue "⋯" → Stop after this track: playback stops when the current track ends instead of
+  going on (gapless and crossfade hold back for it). The setting belongs to that track:
+  pressing Next or playing something else turns it off. Play then starts the track again;
+  Next goes on with the queue.
+- Settings → General → Notify on track change (off by default, Linux only): a desktop
+  notification with the title, artist, album and cover when a new track starts and Slate's
+  window is not in front. Each one replaces the last.
+- Settings → About shows Slint's "About Slint" panel, and the README has the "Made with
+  Slint" badge.
+
+### Fixed
+- Device-code sign-in: after TIDAL asked it to slow down, polling went back to the old pace
+  on the next check and was told to slow down again. Each "slow down" now adds 5 s for the
+  rest of that sign-in (RFC 8628 §3.5), up to 60 s.
+
 ## [2.0.1] - 2026-11-10
 
 Bug fixes only. Audio output, playback and memory use are unchanged. Details in REVIEW.md

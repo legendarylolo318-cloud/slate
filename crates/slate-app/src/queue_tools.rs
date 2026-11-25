@@ -41,6 +41,7 @@ impl Backend {
             "save-playlist" => self.save_queue_as_playlist(),
             "snapshots" => self.open_snapshots(),
             "copy-link" => self.copy_queue_link(),
+            "stop-after" => self.toggle_stop_after(),
             "fill-custom" => self.ui(|w| {
                 w.set_dialog_text("".into());
                 w.set_dialog_target("".into());
@@ -53,6 +54,22 @@ impl Backend {
                 }
             }
         }
+    }
+
+    /// Queue "⋯" → Stop after this track (on / off for what is playing).
+    pub(crate) fn toggle_stop_after(&self) {
+        let this = self.clone();
+        self.rt.spawn(async move {
+            let Some(ctl) = this.controller() else { return };
+            let want = !ctl.stop_after_pending().await;
+            let on = ctl.set_stop_after(want).await;
+            this.ui(move |w| w.set_stop_after_current(on));
+            if want && !on {
+                this.notify("Nothing is playing");
+            } else if on {
+                this.notify("Playback stops when this track ends");
+            }
+        });
     }
 
     /// "Fill queue to N minutes" (one undo step).

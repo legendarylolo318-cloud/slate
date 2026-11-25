@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
 import { Toggle, Button, Segmented, TextField, ColorPicker } from "widgets.slint";
 import { PresetTile, ShortcutRow, RoleRow, PartyRequest, PartyGuest, PartyState, EqBand } from "types.slint";
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView, AboutSlint } from "std-widgets.slint";
 
 /// Everything the settings page shows. Rust fills it from the core and handles
 /// the callbacks; the page itself holds no logic.
@@ -39,6 +39,7 @@ export global SettingsState {
     in-out property <bool> hide-explicit;
     in-out property <bool> hide-ai;
     in-out property <bool> start-minimized;
+    in-out property <bool> track-notifications;
     in-out property <bool> start-half-volume;
     in-out property <bool> device-memory;
     in-out property <int> reduce-motion-index: 0;
@@ -348,6 +349,11 @@ export component SettingsPage inherits Rectangle {
                         label: "Start minimized to tray";
                         hint: "Open hidden in the system tray. The window opens normally if there is no tray.";
                         Toggle { checked: SettingsState.start-minimized; toggled(v) => { SettingsState.start-minimized = v; SettingsState.changed-bool("start-minimized", v); } }
+                    }
+                    Row {
+                        label: "Notify on track change";
+                        hint: "When a new track starts and Slate's window is not in front, show its title, artist and cover in a desktop notification. Each one replaces the last. Linux only for now.";
+                        Toggle { checked: SettingsState.track-notifications; toggled(v) => { SettingsState.track-notifications = v; SettingsState.changed-bool("track-notifications", v); } }
                     }
                     Row {
                         label: "Start at half volume";
@@ -1188,6 +1194,11 @@ export component SettingsPage inherits Rectangle {
                         wrap: word-wrap;
                         text: "Slate is a fork and port of SONE by lullabyX (github.com/lullabyX/sone). All credit for the original design and backend goes to lullabyX and SONE's contributors. Licensed GPL-3.0-only.";
                         color: Theme.text-muted;
+                    }
+                    Text { text: "Built with Slint"; color: Theme.text; font-weight: 700; }
+                    HorizontalLayout {
+                        alignment: start;
+                        AboutSlint { max-width: 320px; }
                     }
                 }
             }

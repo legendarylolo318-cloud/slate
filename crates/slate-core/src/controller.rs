@@ -161,6 +161,9 @@ pub struct Controller {
     /// Off from sign-out until the next sign-in: no queue or modes write may land then (a
     /// debounced save firing after sign-out would put the old account's queue back on disk).
     persist: std::sync::atomic::AtomicBool,
+    /// "Stop after this track": the id of the track that should be the last one. Tied to
+    /// that track, so playing something else drops it; never saved (a restart starts clean).
+    stop_after: std::sync::Mutex<Option<u64>>,
 }
 
 /// A DJ move and the TIDAL tracks found for it.
@@ -250,7 +253,55 @@ impl Controller {
             undo: std::sync::Mutex::new(crate::queue_undo::UndoStack::new()),
             save_gate: Mutex::new(()),
             persist: std::sync::atomic::AtomicBool::new(true),
+            stop_after: std::sync::Mutex::new(None),
         }
+    }
+
+    // ---------- stop after this track ----------
+
+    /// True when playback is set to stop once track `id` ends.
+    fn stops_after(&self, id: u64) -> bool {
+        self.stop_after.lock().ok().is_some_and(|s| *s == Some(id))
+    }
+
+    /// Whether "Stop after this track" is on for what is playing now.
+    pub async fn stop_after_pending(&self) -> bool {
+        let id = self.queue.lock().await.current.as_ref().map(|t| t.id);
+        id.is_some_and(|id| self.stops_after(id))
+    }
+
+    /// Turns "Stop after this track" on or off for the current track and returns the new
+    /// state (off when nothing is playing). While on, nothing is armed for gapless or
+    /// crossfade, so the track really ends.
+    pub async fn set_stop_after(&self, on: bool) -> bool {
+        let id = self.queue.lock().await.current.as_ref().map(|t| t.id);
+        let value = if on { id } else { None };
+        if let Ok(mut s) = self.stop_after.lock() {
+            *s = value;
+        }
+        self.refresh_gapless().await;
+        value.is_some()
+    }
+
+    /// The current track ended on its own: when it was meant to be the last one, finishes
+    /// it (scrobble, play report), stops playback, clears the setting and returns true.
+    /// The track stays current, as at the end of the queue; Next goes on from there.
+    pub async fn finish_if_stop_after(&self) -> bool {
+        let id = self.queue.lock().await.current.as_ref().map(|t| t.id);
+        let due = self
+            .stop_after
+            .lock()
+            .ok()
+            .and_then(|mut s| match (*s, id) {
+                (Some(a), Some(b)) if a == b => s.take(),
+                _ => None,
+            })
+            .is_some();
+        if due {
+            crate::startup::on_track_finished(&self.state).await;
+            let _ = playback::stop_track(&self.state).await;
+        }
+        due
     }
 
     pub fn set_content_prefs(&self, prefs: ContentPrefs) {
@@ -341,6 +392,12 @@ impl Controller {
 
     /// Tells scrobblers and TIDAL play reporting a track began.
     async fn notify_started(&self, q: &Queue, track: &Track, chosen_by_user: bool) {
+        // "Stop after this track" belongs to the track it was set on.
+        if let Ok(mut s) = self.stop_after.lock() {
+            if s.is_some_and(|id| id != track.id) {
+                *s = None;
+            }
+        }
         let source = q.playback_source.as_ref();
         let album = Some(track.album_title().to_string()).filter(|s| !s.is_empty());
         let payload = scrobble::TrackStartedPayload {
@@ -507,6 +564,11 @@ impl Controller {
         let mut q = self.lock_queue().await;
         let current = q.current.as_ref()?;
         let id = current.id;
+        // "Stop after this track": let it end instead of fading into the next one.
+        // Checked before the once-per-track mark, so turning it off still allows the fade.
+        if self.stops_after(id) {
+            return None;
+        }
         {
             let mut done = self.fade_checked.lock().ok()?;
             if *done == Some(id) {
@@ -542,7 +604,12 @@ impl Controller {
 
     /// Track ended on its own (`explicit == false`) or the user pressed Next.
     pub async fn next(&self, explicit: bool) -> Outcome {
-        if !explicit {
+        if explicit {
+            // Pressing Next moves past the track it was set on.
+            if let Ok(mut s) = self.stop_after.lock() {
+                *s = None;
+            }
+        } else {
             crate::startup::on_track_finished(&self.state).await;
         }
         let prepared = self.dj_prepare(explicit).await;
@@ -1348,7 +1415,11 @@ impl Controller {
         let wanted = {
             let q = self.lock_queue().await;
             let prefs = self.prefs();
-            if !self.gapless_enabled() || q.current.as_ref().is_none_or(|t| t.is_video()) {
+            if !self.gapless_enabled()
+                || q.current
+                    .as_ref()
+                    .is_none_or(|t| t.is_video() || self.stops_after(t.id))
+            {
                 None
             } else {
                 q.pick_gapless_next(now_secs(), |t| prefs.blocks(t))

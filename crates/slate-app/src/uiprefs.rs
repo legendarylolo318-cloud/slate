@@ -51,6 +51,10 @@ pub struct UiPrefs {
     /// Open hidden in the tray (off by default; the window shows if there is no tray).
     #[serde(default)]
     pub start_minimized: bool,
+    /// A desktop notification when the track changes and the window is not in front
+    /// (off by default; Linux only).
+    #[serde(default)]
+    pub track_notifications: bool,
     /// Every launch starts at 50 % volume instead of the last level (on by default, also for a
     /// `ui.json` written before the setting existed).
     #[serde(default = "default_true")]
@@ -142,6 +146,7 @@ impl Default for UiPrefs {
             global_shortcuts: false,
             cover_colors: false,
             start_minimized: false,
+            track_notifications: false,
             start_half_volume: true,
             device_memory: false,
             reduce_motion: 0,

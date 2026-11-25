@@ -12,6 +12,8 @@ pub mod global_keys;
 #[cfg(target_os = "linux")]
 pub mod mpris;
 #[cfg(target_os = "linux")]
+pub mod track_notify;
+#[cfg(target_os = "linux")]
 pub mod tray;
 #[cfg(windows)]
 pub mod win_smtc;

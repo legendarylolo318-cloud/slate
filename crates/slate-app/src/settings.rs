@@ -123,6 +123,7 @@ fn apply(w: &AppWindow, s: Snapshot, prefs: &UiPrefs) {
     g.set_hide_explicit(s.content_filter.0);
     g.set_hide_ai(s.content_filter.1);
     g.set_start_minimized(prefs.start_minimized);
+    g.set_track_notifications(prefs.track_notifications);
     g.set_start_half_volume(prefs.start_half_volume);
     g.set_device_memory(prefs.device_memory);
     g.set_reduce_motion_index(i32::from(prefs.reduce_motion));
@@ -329,6 +330,13 @@ impl Backend {
                 "start-minimized" => {
                     let mut prefs = crate::uiprefs::UiPrefs::load();
                     prefs.start_minimized = v;
+                    prefs.save().map_err(|e| e.to_string())
+                }
+                "track-notifications" => {
+                    let mut prefs = crate::uiprefs::UiPrefs::load();
+                    prefs.track_notifications = v;
+                    #[cfg(target_os = "linux")]
+                    crate::platform::track_notify::set_enabled(v);
                     prefs.save().map_err(|e| e.to_string())
                 }
                 k if k.starts_with("alarm-") => {

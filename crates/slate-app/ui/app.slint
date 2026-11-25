@@ -273,6 +273,7 @@ export component AppWindow inherits Window {
     callback queue-remove(int);
     callback queue-clear();
     in property <bool> queue-can-undo;
+    in property <bool> stop-after-current;
     in property <bool> queue-can-redo;
     callback queue-undo(bool);
     callback queue-action(string);
@@ -600,6 +601,7 @@ export component AppWindow inherits Window {
                     go(i, k) => { root.queue-go(i, k); }
                     clear => { root.queue-clear(); }
                     can-undo: root.queue-can-undo;
+                    stop-after: root.stop-after-current;
                     can-redo: root.queue-can-redo;
                     undo => { root.queue-undo(false); }
                     redo => { root.queue-undo(true); }
